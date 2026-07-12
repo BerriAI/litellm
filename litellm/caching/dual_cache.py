@@ -69,23 +69,15 @@ class DualCache(BaseCache):
         self.in_memory_cache = in_memory_cache or InMemoryCache()
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
-        self.last_redis_batch_access_time = LimitedSizeOrderedDict(
-            max_size=default_max_redis_batch_cache_size
-        )
+        self.last_redis_batch_access_time = LimitedSizeOrderedDict(max_size=default_max_redis_batch_cache_size)
         self._last_redis_batch_access_time_lock = Lock()
         self.redis_batch_cache_expiry = (
-            default_redis_batch_cache_expiry
-            or litellm.default_redis_batch_cache_expiry
-            or 10
+            default_redis_batch_cache_expiry or litellm.default_redis_batch_cache_expiry or 10
         )
-        self.default_in_memory_ttl = (
-            default_in_memory_ttl or litellm.default_in_memory_ttl
-        )
+        self.default_in_memory_ttl = default_in_memory_ttl or litellm.default_in_memory_ttl
         self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
 
-    def update_cache_ttl(
-        self, default_in_memory_ttl: Optional[float], default_redis_ttl: Optional[float]
-    ):
+    def update_cache_ttl(self, default_in_memory_ttl: Optional[float], default_redis_ttl: Optional[float]):
         if default_in_memory_ttl is not None:
             self.default_in_memory_ttl = default_in_memory_ttl
 
@@ -125,9 +117,7 @@ class DualCache(BaseCache):
         except Exception as e:
             print_verbose(e)
 
-    def increment_cache(
-        self, key, value: int, local_only: bool = False, **kwargs
-    ) -> int:
+    def increment_cache(self, key, value: int, local_only: bool = False, **kwargs) -> int:
         """
         Key - the key in cache
 
@@ -166,9 +156,7 @@ class DualCache(BaseCache):
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
-                redis_result = self.redis_cache.get_cache(
-                    key, parent_otel_span=parent_otel_span
-                )
+                redis_result = self.redis_cache.get_cache(key, parent_otel_span=parent_otel_span)
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
@@ -196,9 +184,7 @@ class DualCache(BaseCache):
             new_loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_batch_get_cache(**received_args)
-                )
+                return new_loop.run_until_complete(self.async_batch_get_cache(**received_args))
             finally:
                 new_loop.close()
                 asyncio.set_event_loop(None)
@@ -225,14 +211,10 @@ class DualCache(BaseCache):
     ):
         # Try to fetch from in-memory cache first
         try:
-            print_verbose(
-                f"async get cache: cache key: {key}; local_only: {local_only}"
-            )
+            print_verbose(f"async get cache: cache key: {key}; local_only: {local_only}")
             result = None
             if self.in_memory_cache is not None:
-                in_memory_result = await self.in_memory_cache.async_get_cache(
-                    key, **kwargs
-                )
+                in_memory_result = await self.in_memory_cache.async_get_cache(key, **kwargs)
 
                 print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
@@ -240,15 +222,11 @@ class DualCache(BaseCache):
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
-                redis_result = await self.redis_cache.async_get_cache(
-                    key, parent_otel_span=parent_otel_span
-                )
+                redis_result = await self.redis_cache.async_get_cache(key, parent_otel_span=parent_otel_span)
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    await self.in_memory_cache.async_set_cache(
-                        key, redis_result, **kwargs
-                    )
+                    await self.in_memory_cache.async_set_cache(key, redis_result, **kwargs)
 
                 result = redis_result
 
@@ -277,20 +255,15 @@ class DualCache(BaseCache):
 
                 if (
                     key not in self.last_redis_batch_access_time
-                    or current_time - self.last_redis_batch_access_time[key]
-                    >= self.redis_batch_cache_expiry
+                    or current_time - self.last_redis_batch_access_time[key] >= self.redis_batch_cache_expiry
                 ):
                     sublist_keys.append(key)
-                    previous_access_times[key] = self.last_redis_batch_access_time.get(
-                        key
-                    )
+                    previous_access_times[key] = self.last_redis_batch_access_time.get(key)
                     self.last_redis_batch_access_time[key] = current_time
 
         return sublist_keys, previous_access_times
 
-    def _rollback_redis_batch_key_reservations(
-        self, previous_access_times: Dict[str, Optional[float]]
-    ) -> None:
+    def _rollback_redis_batch_key_reservations(self, previous_access_times: Dict[str, Optional[float]]) -> None:
         with self._last_redis_batch_access_time_lock:
             for key, previous_time in previous_access_times.items():
                 if previous_time is None:
@@ -308,9 +281,7 @@ class DualCache(BaseCache):
         try:
             result = [None] * len(keys)
             if self.in_memory_cache is not None:
-                in_memory_result = await self.in_memory_cache.async_batch_get_cache(
-                    keys, **kwargs
-                )
+                in_memory_result = await self.in_memory_cache.async_batch_get_cache(keys, **kwargs)
 
                 if in_memory_result is not None:
                     result = in_memory_result
@@ -321,9 +292,7 @@ class DualCache(BaseCache):
                 - check the redis cache
                 """
                 current_time = time.time()
-                sublist_keys, previous_access_times = self._reserve_redis_batch_keys(
-                    current_time, keys, result
-                )
+                sublist_keys, previous_access_times = self._reserve_redis_batch_keys(current_time, keys, result)
 
                 # Only hit Redis if enough time has passed since last access.
                 if len(sublist_keys) > 0:
@@ -334,15 +303,11 @@ class DualCache(BaseCache):
                         )
                     except Exception:
                         # Do not throttle subsequent callers if the Redis read fails.
-                        self._rollback_redis_batch_key_reservations(
-                            previous_access_times
-                        )
+                        self._rollback_redis_batch_key_reservations(previous_access_times)
                         raise
 
                     # Short-circuit if redis_result is None or contains only None values
-                    if redis_result is None or all(
-                        v is None for v in redis_result.values()
-                    ):
+                    if redis_result is None or all(v is None for v in redis_result.values()):
                         return result
 
                     # Pre-compute key-to-index mapping for O(1) lookup
@@ -353,18 +318,14 @@ class DualCache(BaseCache):
                         result[key_to_index[key]] = value
 
                         if value is not None and self.in_memory_cache is not None:
-                            await self.in_memory_cache.async_set_cache(
-                                key, value, **kwargs
-                            )
+                            await self.in_memory_cache.async_set_cache(key, value, **kwargs)
 
             return result
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
-        print_verbose(
-            f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}"
-        )
+        print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
         try:
             if self.in_memory_cache is not None:
                 if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
@@ -374,36 +335,26 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
-            )
+            verbose_logger.exception(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
 
     # async_batch_set_cache
-    async def async_set_cache_pipeline(
-        self, cache_list: list, local_only: bool = False, **kwargs
-    ):
+    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
         """
         Batch write values to the cache
         """
-        print_verbose(
-            f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}"
-        )
+        print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
         try:
             if self.in_memory_cache is not None:
                 if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
                     kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, **kwargs
-                )
+                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache_pipeline(
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
-            )
+            verbose_logger.exception(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
 
     async def async_increment_cache(
         self,
@@ -428,9 +379,7 @@ class DualCache(BaseCache):
         result: Optional[float] = None
         try:
             if self.in_memory_cache is not None:
-                result = await self.in_memory_cache.async_increment(
-                    key, value, **kwargs
-                )
+                result = await self.in_memory_cache.async_increment(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
                 result = await self.redis_cache.async_increment(
@@ -478,9 +427,7 @@ class DualCache(BaseCache):
             )
             return result
 
-    async def async_set_cache_sadd(
-        self, key, value: List, local_only: bool = False, **kwargs
-    ) -> None:
+    async def async_set_cache_sadd(self, key, value: List, local_only: bool = False, **kwargs) -> None:
         """
         Add value to a set
 
@@ -492,14 +439,10 @@ class DualCache(BaseCache):
         """
         try:
             if self.in_memory_cache is not None:
-                _ = await self.in_memory_cache.async_set_cache_sadd(
-                    key, value, ttl=kwargs.get("ttl", None)
-                )
+                _ = await self.in_memory_cache.async_set_cache_sadd(key, value, ttl=kwargs.get("ttl", None))
 
             if self.redis_cache is not None and local_only is False:
-                _ = await self.redis_cache.async_set_cache_sadd(
-                    key, value, ttl=kwargs.get("ttl", None)
-                )
+                _ = await self.redis_cache.async_set_cache_sadd(key, value, ttl=kwargs.get("ttl", None))
 
             return None
         except Exception as e:

@@ -436,3 +436,123 @@ def test_convert_cached_responses_legacy_stream_path():
     )
 
     assert isinstance(result, CachedResponsesAPIStreamingIterator)
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_restores_stored_prompt_tokens_for_image_input():
+    """Image-embedding cache hit restores prompt_tokens=0 from the stored value
+    instead of recomputing a bogus count by tokenizing the base64 input."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    # base64-like blob — token_counter over this would return a large nonzero count
+    image_input = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk" * 50
+
+    cached_result = [
+        {
+            "embedding": [-0.025, -0.019],
+            "index": 0,
+            "object": "embedding",
+            "model": "amazon.titan-embed-image-v1",
+            "prompt_tokens": 0,
+            "prompt_tokens_details": {"image_count": 1},
+        }
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "amazon.titan-embed-image-v1", "input": image_input},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="amazon.titan-embed-image-v1",
+    )
+
+    assert cache_hit
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.image_count == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_sums_stored_prompt_tokens_across_items():
+    """A multi-item cache hit sums the stored per-item prompt_tokens back to the total."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    cached_result = [
+        {
+            "embedding": [-0.01],
+            "index": 0,
+            "object": "embedding",
+            "model": "text-embedding-3-small",
+            "prompt_tokens": 5,
+        },
+        {
+            "embedding": [-0.02],
+            "index": 1,
+            "object": "embedding",
+            "model": "text-embedding-3-small",
+            "prompt_tokens": 4,
+        },
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "text-embedding-3-small", "input": ["hello world", "foo bar"]},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-3-small",
+    )
+
+    assert cache_hit
+    assert response.usage.prompt_tokens == 9
+    assert response.usage.total_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_falls_back_to_token_counter_for_legacy_entries():
+    """Legacy cache entries with no stored prompt_tokens still recompute via token_counter
+    for str inputs (backward compatibility)."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    # No prompt_tokens key — pre-fix entry
+    cached_result = [
+        {
+            "embedding": [-0.025, -0.019],
+            "index": 0,
+            "object": "embedding",
+            "model": "text-embedding-ada-002",
+        },
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "text-embedding-ada-002", "input": "hello world"},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-ada-002",
+    )
+
+    assert cache_hit
+    # token_counter over "hello world" yields a nonzero count — fallback path still runs
+    assert response.usage.prompt_tokens > 0

@@ -18,6 +18,8 @@ resource "aws_s3_bucket" "this" {
   # cached responses, archived request logs, and /v1/files storage stay put.
   # Flip to true only for ephemeral / CI stacks (`var.s3_force_destroy`).
   force_destroy = var.s3_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_versioning" "this" {
@@ -72,9 +74,30 @@ data "aws_iam_policy_document" "s3_access" {
 resource "aws_iam_policy" "s3_access" {
   name   = "${local.name}-s3-access"
   policy = data.aws_iam_policy_document.s3_access.json
+
+  tags = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "task_s3_access" {
   role       = aws_iam_role.task.name
   policy_arn = aws_iam_policy.s3_access.arn
+}
+
+# proxy_config is uploaded as an S3 object so the gateway and backend
+# containers can fetch it at startup instead of carrying the YAML inline
+# as a base64 env var. ECS Fargate has no native S3 volume type, so
+# "mount" here is: container entrypoint runs a boto3 download_file into
+# /tmp/litellm-config.yaml before exec'ing uvicorn. The task role already
+# has s3:GetObject on this bucket via aws_iam_policy.s3_access.
+#
+# etag flows into the task definition (see locals.proxy_config_env in
+# ecs.tf) so a config edit produces a new task-def revision and ECS rolls
+# both services automatically.
+resource "aws_s3_object" "proxy_config" {
+  count = length(keys(var.proxy_config)) > 0 ? 1 : 0
+
+  bucket       = aws_s3_bucket.this.id
+  key          = "config/litellm-config.yaml"
+  content      = yamlencode(var.proxy_config)
+  content_type = "application/yaml"
 }

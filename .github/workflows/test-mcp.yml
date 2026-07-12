@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv lock --check
-          uv sync --frozen --group proxy-dev --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --group proxy-dev --extra proxy --extra semantic-router
 
       - name: Run MCP tests
         run: |

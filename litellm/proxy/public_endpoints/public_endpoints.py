@@ -4,9 +4,9 @@ import re
 from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
-import litellm
 from fastapi import APIRouter, HTTPException, Request
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPost,
@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.utils import get_custom_url
+from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -133,19 +135,13 @@ def _build_endpoints(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             for slug, pd in providers.items()
             if pd.get("endpoints", {}).get(key)
         ]
-        result.append(
-            {"key": key, "label": label, "endpoint": path, "providers": supporting}
-        )
+        result.append({"key": key, "label": label, "endpoint": path, "providers": supporting})
 
     return result
 
 
 def _load_endpoints() -> List[Dict[str, Any]]:
-    raw = json.loads(
-        files("litellm")
-        .joinpath("provider_endpoints_support_backup.json")
-        .read_text(encoding="utf-8")
-    )
+    raw = json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     return _build_endpoints(raw)
 
 
@@ -159,19 +155,17 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 )
 async def public_model_hub():
     import litellm
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _convert_health_check_to_dict,
+    )
     from litellm.proxy.proxy_server import (
         _get_model_group_info,
         llm_router,
         prisma_client,
     )
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
-    )
 
     if llm_router is None:
-        raise HTTPException(
-            status_code=400, detail=CommonProxyErrors.no_llm_router.value
-        )
+        raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
     model_groups: List[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
@@ -220,11 +214,10 @@ async def get_agents(request: Request):
     if litellm.public_agent_groups is None:
         return []
 
-    proxy_base = str(request.base_url).rstrip("/")
     return [
         {
             **(agent.agent_card_params or {}),
-            "url": f"{proxy_base}/a2a/{agent.agent_id}",
+            "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
         if agent.agent_id in litellm.public_agent_groups
@@ -266,9 +259,7 @@ async def public_skill_hub():
 
     try:
         prisma_client = await _get_prisma_client()
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
-            where={"enabled": True}
-        )
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
         items = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
@@ -392,9 +383,7 @@ async def get_litellm_blog_posts():
     try:
         posts_data = get_blog_posts(url=litellm.blog_posts_url)
     except Exception as e:
-        verbose_logger.warning(
-            "LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e)
-        )
+        verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         posts_data = GetBlogPosts.load_local_blog_posts()
 
     posts = [BlogPost(**p) for p in posts_data[:5]]
@@ -461,9 +450,7 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
                 field_copy["include_in_litellm_params"] = True
                 inherited_fields.append(field_copy)
             # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = (
-                agent.get("credential_fields", []) + inherited_fields
-            )
+            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
         # Remove the inherit field from response (not needed by frontend)
         agent.pop("inherit_credentials_from_provider", None)
 

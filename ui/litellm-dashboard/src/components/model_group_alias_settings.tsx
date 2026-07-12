@@ -57,7 +57,6 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         },
       };
 
-      console.log("Saving model group alias:", aliasObject);
       await setCallbacksCall(accessToken, payload);
 
       if (onAliasUpdate) {
@@ -261,13 +260,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                             <div className="flex space-x-2">
                               <button
                                 onClick={handleUpdateAlias}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-sm hover:bg-gray-100"
                               >
                                 Cancel
                               </button>
@@ -282,13 +281,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleEditAlias(alias)}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 <PencilIcon className="w-3 h-3" />
                               </button>
                               <button
                                 onClick={() => deleteAlias(alias.id)}
-                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
+                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-sm hover:bg-red-100"
                               >
                                 <TrashIcon className="w-3 h-3" />
                               </button>

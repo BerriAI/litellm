@@ -31,6 +31,7 @@ import type { SorterResult } from "antd/es/table/interface";
 import { KeyIcon, LayersIcon, SearchIcon, UsersIcon } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AntDLoadingSpinner } from "@/components/ui/AntDLoadingSpinner";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -51,16 +52,12 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import SearchToolSelector from "./SearchTools/SearchToolSelector";
+import SearchToolSelector from "./search_tools/SearchToolSelector";
 
 interface TeamProps {
-  teams: Team[] | null;
-  searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
-  organizations: Organization[] | null;
   premiumUser?: boolean;
 }
 
@@ -98,7 +95,6 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 
   if (organization) {
     if (organization.models.length > 0) {
-      console.log(`organization.models: ${organization.models}`);
       tempModelsToPick = organization.models;
     } else {
       // show all available models if the team has no models set
@@ -165,18 +161,10 @@ const getOrganizationAlias = (
 };
 
 // @deprecated
-const Teams: React.FC<TeamProps> = ({
-  teams,
-  searchParams,
-  accessToken,
-  setTeams,
-  userID,
-  userRole,
-  organizations,
-  premiumUser = false,
-}) => {
-  console.log(`organizations: ${JSON.stringify(organizations)}`);
+const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
+  const organizations = organizationsData ?? null;
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -263,9 +251,7 @@ const Teams: React.FC<TeamProps> = ({
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
-    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    console.log(`models: ${models}`);
     setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
@@ -274,14 +260,15 @@ const Teams: React.FC<TeamProps> = ({
   useEffect(() => {
     if (isTeamModalVisible) {
       const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
+      const isOrgAdmin = userRole !== "Admin";
 
-      // If there's exactly one organization the user is admin for, preselect it
-      if (adminOrgs.length === 1) {
+      // Org admins must scope a team to an org, so with exactly one we preselect it.
+      // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
+      if (isOrgAdmin && adminOrgs.length === 1) {
         const org = adminOrgs[0];
         form.setFieldValue("organization_id", org.organization_id);
         setCurrentOrgForCreateTeam(org);
       } else {
-        // Reset the organization selection for multiple orgs
         form.setFieldValue("organization_id", currentOrg?.organization_id || null);
         setCurrentOrgForCreateTeam(currentOrg);
       }
@@ -442,7 +429,6 @@ const Teams: React.FC<TeamProps> = ({
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
@@ -685,18 +671,8 @@ const Teams: React.FC<TeamProps> = ({
         key: "team_id",
         width: 170,
         ellipsis: true,
-        render: (id: string, record: Team) => (
-          <Tooltip title={id}>
-            <Text
-              ellipsis
-              className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-              style={{ fontSize: 14, padding: "1px 8px" }}
-              onClick={() => setSelectedTeamId(record.team_id)}
-              data-testid="team-id-cell"
-            >
-              {id}
-            </Text>
-          </Tooltip>
+        render: (id: string) => (
+          <IdCell value={id} onClick={(teamId) => setSelectedTeamId(teamId)} dataTestId="team-id-cell" />
         ),
       },
       {
@@ -721,7 +697,7 @@ const Teams: React.FC<TeamProps> = ({
         width: 160,
         ellipsis: true,
         render: (_: unknown, record: Team) => {
-          const orgAlias = getOrganizationAlias(record.organization_id, organizationsData || organizations);
+          const orgAlias = getOrganizationAlias(record.organization_id, organizations);
           return record.organization_id ? (
             <Text ellipsis style={{ fontSize: 14 }}>
               {orgAlias}
@@ -812,13 +788,7 @@ const Teams: React.FC<TeamProps> = ({
         width: 130,
         ellipsis: true,
         sorter: true,
-        render: (date: string | undefined) => (
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            {date
-              ? new Date(date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-              : "—"}
-          </Text>
-        ),
+        render: (date: string | undefined) => <DateCell value={date} precision="date" />,
       },
       {
         title: "Actions",
@@ -860,7 +830,7 @@ const Teams: React.FC<TeamProps> = ({
         ),
       },
     ],
-    [userRole, perTeamInfo, organizationsData, organizations],
+    [userRole, perTeamInfo, organizations],
   );
 
   const displayTeams = useMemo(() => teams ?? [], [teams]);
@@ -979,9 +949,9 @@ const Teams: React.FC<TeamProps> = ({
               const deleteKeyCount = teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0;
               return deleteKeyCount === 0
                 ? undefined
-                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`;
+                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys, along with any models created for this team. This action is irreversible.`;
             })()}
-            message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
+            message="Are you sure you want to delete this team, all its keys, and any models created for it? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
               { label: "Team ID", value: teamToDelete?.team_id, code: true },
@@ -1144,7 +1114,7 @@ const Teams: React.FC<TeamProps> = ({
                           : []
                       }
                       help={
-                        isSingleOrg
+                        isOrgAdmin && isSingleOrg
                           ? "You can only create teams within this organization"
                           : isOrgAdmin
                             ? "required"
@@ -1154,7 +1124,7 @@ const Teams: React.FC<TeamProps> = ({
                       <Select
                         showSearch
                         allowClear={!isOrgAdmin}
-                        disabled={isSingleOrg}
+                        disabled={isOrgAdmin && isSingleOrg}
                         placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
                         onChange={(value) => {
                           form.setFieldValue("organization_id", value);
@@ -1490,6 +1460,7 @@ const Teams: React.FC<TeamProps> = ({
                       value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                       accessToken={accessToken || ""}
                       placeholder="Select MCP servers or access groups (optional)"
+                      allowAllProxyMcpServers={isProxyAdminRole(userRole || "")}
                     />
                   </Form.Item>
 

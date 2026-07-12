@@ -508,6 +508,35 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["input"] == {"location": "Boston"}
 
 
+def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
+    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="functions.Bash:0",
+                        type="function",
+                        function=Function(
+                            name="Bash",
+                            arguments='{"command": "ls"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "functions_Bash_0"
+
+
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     """`translate_openai_response_to_anthropic` should surface assistant text even when tools fire."""
     openai_response = ModelResponse(
@@ -1295,6 +1324,12 @@ CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = (
     "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
 )
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
+# Bedrock Application Inference Profile ARN: the string contains neither
+# "anthropic" nor "claude", so the model can only be recognized via its ARN shape
+CACHE_CONTROL_BEDROCK_ARN_MODEL = (
+    "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:"
+    "application-inference-profile/abcdef123456"
+)
 
 
 def test_should_add_cache_control_for_anthropic_model():
@@ -1409,6 +1444,106 @@ def test_cache_control_not_preserved_for_non_claude_model():
 
     assert len(result) == 1
     assert "cache_control" not in result[0]["content"][0]
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        (CACHE_CONTROL_BEDROCK_ARN_MODEL, True),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123:application-inference-profile/x",
+            True,
+        ),
+        ("bedrock/amazon.titan-text-express-v1", False),
+        ("arn:aws:sagemaker:us-east-1:123:endpoint/my-endpoint", False),
+        ("arn:aws:sagemaker:us-east-1:123:endpoint/my-bedrock-transcriber", False),
+        (CACHE_CONTROL_NON_ANTHROPIC_MODEL, False),
+    ],
+)
+def test_is_bedrock_arn_model(model, expected):
+    """is_bedrock_arn_model requires an ARN with bedrock in the service field, not just anywhere."""
+    assert LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model) is expected
+
+
+def test_cache_control_preserved_for_bedrock_arn_inference_profile():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/26625
+
+    Bedrock Application Inference Profile ARNs hide the underlying Claude model
+    name, so cache_control must still be preserved through the /v1/messages adapter.
+    """
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_ARN_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_fix_does_not_broaden_claude_detection():
+    """
+    The cache_control fix is scoped to _add_cache_control_if_applicable; it must not
+    make is_anthropic_claude_model treat ARN profiles as Claude, which would route
+    thinking params through unmodified and break non-Claude Bedrock profiles.
+    """
+    assert (
+        LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
+            CACHE_CONTROL_BEDROCK_ARN_MODEL
+        )
+        is False
+    )
+
+
+def test_thinking_preserved_for_bedrock_arn_inference_profile():
+    """
+    Regression: opaque Bedrock Application Inference Profile ARNs hide the underlying
+    Claude model name, so on /v1/messages a `thinking` param must be preserved as
+    `thinking` (not rewritten to `reasoning_effort`). Otherwise `additional_drop_params:
+    ["thinking"]` runs after the rewrite and has nothing left to drop, and the Bedrock
+    Converse body re-expands reasoning_effort back into additionalModelRequestFields.thinking.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+
+    new_kwargs = {"model": CACHE_CONTROL_BEDROCK_ARN_MODEL}
+    adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+
+    assert new_kwargs["thinking"] == thinking
+    assert "reasoning_effort" not in new_kwargs
+
+    assert LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(thinking, CACHE_CONTROL_BEDROCK_ARN_MODEL) == {
+        "thinking": thinking
+    }
+
+
+def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
+    """
+    The bedrock-ARN gate must not broaden to every model: a genuine non-Claude model
+    still has `thinking` converted to `reasoning_effort` so it does not hit an
+    UnsupportedParamsError downstream.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+
+    new_kwargs = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+
+    assert "thinking" not in new_kwargs
+    assert new_kwargs["reasoning_effort"] == "low"
 
 
 def test_cache_control_preserved_in_image_content_for_claude():
@@ -2078,6 +2213,283 @@ def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_
     assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
 
 
+def test_translate_openai_usage_to_anthropic_cache_tokens_from_dict_details_with_integral_floats():
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+    )
+    usage.prompt_tokens_details = {
+        "cached_tokens": 30.0,
+        "cache_write_tokens": 20.0,
+    }
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+        usage
+    )
+
+    assert anthropic_usage["input_tokens"] == 70
+    assert anthropic_usage["output_tokens"] == 50
+    assert anthropic_usage["cache_read_input_tokens"] == 30
+    assert anthropic_usage["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_usage_to_anthropic_ignores_fractional_cache_tokens():
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+    )
+    usage.prompt_tokens_details = {
+        "cached_tokens": 30.5,
+        "cache_creation_tokens": 20.25,
+    }
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+        usage
+    )
+
+    assert anthropic_usage["input_tokens"] == 120
+    assert anthropic_usage["output_tokens"] == 50
+    assert "cache_read_input_tokens" not in anthropic_usage
+    assert "cache_creation_input_tokens" not in anthropic_usage
+
+
+def test_translate_openai_usage_to_anthropic_ignores_bool_cache_tokens():
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+    )
+    usage.cache_read_input_tokens = True
+    usage.cache_creation_input_tokens = True
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+        usage
+    )
+
+    assert anthropic_usage["input_tokens"] == 120
+    assert anthropic_usage["output_tokens"] == 50
+    assert "cache_read_input_tokens" not in anthropic_usage
+    assert "cache_creation_input_tokens" not in anthropic_usage
+
+
+def test_translate_openai_response_to_anthropic_cache_creation_from_prompt_tokens_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="gpt-4o-2024-08-06",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_response_to_anthropic_cache_tokens_from_usage_fields():
+    usage = Usage(prompt_tokens=120, completion_tokens=50, total_tokens=170)
+    usage.cache_read_input_tokens = 30
+    usage.cache_creation_input_tokens = 20
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_response_to_anthropic_cache_tokens_from_private_usage_fields():
+    usage = Usage(prompt_tokens=120, completion_tokens=50, total_tokens=170)
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    response.usage._cache_read_input_tokens = 30
+    response.usage._cache_creation_input_tokens = 20
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+    assert anthropic_response["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_details():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message_delta = adapter.translate_streaming_openai_response_to_anthropic(
+        response=response,
+        current_content_block_index=0,
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 50
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_hidden_params_usage():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason="stop",
+            )
+        ],
+    )
+    response._hidden_params = {"usage": usage}
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message_delta = adapter.translate_streaming_openai_response_to_anthropic(
+        response=response,
+        current_content_block_index=0,
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 50
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+
+
+def test_translate_streaming_openai_response_to_anthropic_cache_tokens_with_applied_edits():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        total_tokens=170,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    message_delta = adapter.translate_streaming_openai_response_to_anthropic(
+        response=response,
+        current_content_block_index=0,
+        applied_edits=[{"type": "compact_20260112"}],
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 50
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+    assert message_delta["context_management"]["applied_edits"][0]["type"] == (
+        "compact_20260112"
+    )
+
+
 # =====================================================================
 # Web Search Tool Transformation Tests
 # =====================================================================
@@ -2679,3 +3091,23 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
     cm = result.get("context_management")
     assert cm is not None
     assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
+    """Regression for #30557: the Anthropic tool `type` ("custom") must not be
+    merged into the OpenAI function `parameters`, overwriting parameters.type."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert new_tools[0]["type"] == "function"

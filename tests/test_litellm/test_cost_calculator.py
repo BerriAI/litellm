@@ -180,6 +180,43 @@ def test_openrouter_qwen36_plus_model_info():
     assert model_info["supports_vision"] is True
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "github_copilot/mai-code-1-flash",
+        "github_copilot/mai-code-1-flash-internal",
+    ],
+)
+def test_github_copilot_mai_code_1_flash_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get(model)
+
+    assert model_info is not None, f"Missing model pricing entry: {model}"
+    assert model_info["litellm_provider"] == "github_copilot"
+    assert model_info["mode"] == "chat"
+    assert model_info["input_cost_per_token"] == 7.5e-07
+    assert model_info["cache_read_input_token_cost"] == 7.5e-08
+    assert model_info["output_cost_per_token"] == 4.5e-06
+    assert model_info["supported_endpoints"] == ["/v1/chat/completions"]
+
+    prompt_usd, completion_usd = cost_per_token(
+        model=model,
+        prompt_tokens=1000,
+        completion_tokens=500,
+        custom_llm_provider="github_copilot",
+        usage_object=Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+        ),
+    )
+
+    assert prompt_usd == pytest.approx((800 * 7.5e-07) + (200 * 7.5e-08))
+    assert completion_usd == pytest.approx(500 * 4.5e-06)
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -310,6 +347,30 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_vertex_chirp_3_transcription_cost_from_duration():
+    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
+    and cost_per_second prefers output_cost_per_second whenever it is not None, so
+    every transcription priced to $0.00 instead of using input_cost_per_second."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 18.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/chirp_3",
+        custom_llm_provider="vertex_ai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 18.0 * 0.00026667
+    assert cost > 0
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
@@ -385,7 +446,65 @@ def test_handle_realtime_stream_cost_calculation():
     )
     assert cost == 0.0  # No usage, no cost
 
-    
+
+def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
+    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
+    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
+    /v1/realtime even though a total spend was computed)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4o-realtime-preview",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-cost-breakdown-test",
+        function_id="realtime-cost-breakdown-test",
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert total_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] > 0
+    assert logging_obj.cost_breakdown["output_cost"] > 0
+    assert (
+        abs(
+            logging_obj.cost_breakdown["input_cost"]
+            + logging_obj.cost_breakdown["output_cost"]
+            - total_cost
+        )
+        < 1e-9
+    )
+    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
+
+
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -463,12 +582,250 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
         usage=usage,
         results=results,
     )
-
     assert logging_result.usage.total_tokens == 18
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
     assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
 
 
-def test_custom_pricing_with_router_model_id():
+def test_realtime_logging_object_does_not_validate_unknown_event_types():
+    """
+    A realtime session emits events outside the OpenAIRealtimeEvents union (e.g.
+    rate_limits.updated, response.function_call_arguments.delta). Building the
+    logging object must not revalidate every event against the union; doing so
+    produces thousands of Pydantic ValidationErrors per session, blocks the event
+    loop, and the raised error discards the session's usage. The events must
+    survive verbatim, the combined usage must be preserved, and serialization
+    must stay clean.
+    """
+    import warnings
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "event_id": "ev0", "session": {"id": "s"}},
+    ]
+    for i in range(50):
+        results += [
+            {
+                "type": "rate_limits.updated",
+                "event_id": f"rl{i}",
+                "rate_limits": [{"name": "requests", "limit": 1000, "remaining": 900}],
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "event_id": f"fc{i}",
+                "delta": "{}",
+            },
+            {
+                "type": "response.done",
+                "event_id": f"rd{i}",
+                "response": {
+                    "usage": {
+                        "input_tokens": 4,
+                        "output_tokens": 6,
+                        "total_tokens": 10,
+                    }
+                },
+            },
+        ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    # On unfixed code this raises pydantic ValidationError instead of returning.
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 500
+    assert len(logging_result.results) == len(results)
+    unknown_types = {
+        r["type"]
+        for r in logging_result.results
+        if r["type"]
+        in ("rate_limits.updated", "response.function_call_arguments.delta")
+    }
+    assert unknown_types == {
+        "rate_limits.updated",
+        "response.function_call_arguments.delta",
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dumped = logging_result.model_dump()
+    assert len(dumped["results"]) == len(results)
+
+
+def test_realtime_transcription_duration_cost(monkeypatch):
+    """
+    gpt-realtime-whisper transcription sessions are billed by input audio duration
+    ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
+    cost must equal total_seconds * input_cost_per_second.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "session.created",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {"transcription": {"model": "gpt-realtime-whisper"}}
+                },
+            },
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "hello",
+            "usage": {"type": "duration", "seconds": 60.0},
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "world",
+            "usage": {"type": "duration", "seconds": 30.0},
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    logging_obj = Logging(
+        model="gpt-realtime-whisper",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-transcription-cost-breakdown-test",
+        function_id="realtime-transcription-cost-breakdown-test",
+    )
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-realtime-whisper",
+        litellm_logging_obj=logging_obj,
+    )
+
+    # 90 seconds at $0.017/minute.
+    expected = 90.0 * (0.017 / 60)
+    assert abs(cost - expected) < 1e-9
+    assert cost > 0  # guards against the duration branch being dropped
+    assert logging_obj.cost_breakdown is not None
+    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
+
+    # The transcription cost must be attributed in the breakdown, not just folded
+    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
+    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
+    assert additional_costs is not None
+    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
+    attributed_total = (
+        logging_obj.cost_breakdown["input_cost"]
+        + logging_obj.cost_breakdown["output_cost"]
+        + additional_costs["transcription_cost"]
+    )
+    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
+
+
+def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
+    monkeypatch,
+):
+    """When no session event carries the ASR model, the litellm_model_name is used."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "usage": {"type": "duration", "seconds": 120.0},
+        },
+    ]
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="azure",
+        litellm_model_name="azure/gpt-realtime-whisper",
+    )
+    assert abs(cost - 120.0 * (0.017 / 60)) < 1e-9
+
+
+def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
+    """A realtime stream without transcription completed events adds no extra cost."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+        {"type": "response.done", "response": {"usage": {}}},
+    ]
+    assert (
+        handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider="openai",
+            litellm_model_name="gpt-realtime-whisper",
+        )
+        == 0.0
+    )
+
+
+def test_realtime_transcription_token_billed_fallback(monkeypatch):
+    """
+    Token-billed transcription models price by audio/text tokens. Verify the
+    fallback path multiplies audio tokens by the model's audio token cost.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _transcription_usage_cost
+
+    # gpt-4o-transcribe: input_cost_per_audio_token = 2.5e-06, input_cost_per_token = 2.5e-06,
+    # output_cost_per_token = 1e-05
+    model_info = litellm.get_model_info(
+        model="gpt-4o-transcribe", custom_llm_provider="openai"
+    )
+    usage = {
+        "type": "tokens",
+        "input_tokens": 40,
+        "output_tokens": 10,
+        "total_tokens": 50,
+        "input_token_details": {"audio_tokens": 30, "text_tokens": 10},
+    }
+    cost = _transcription_usage_cost(usage, model_info)
+    expected = (
+        30 * 2.5e-06  # audio tokens
+        + 10 * 2.5e-06  # text tokens
+        + 10 * 1e-05  # output tokens
+    )
+    assert abs(cost - expected) < 1e-12
+
+
+def test_transcription_usage_cost_returns_zero_for_unknown_type():
+    """An unrecognized usage type yields 0 (safe fallback, no exception)."""
+    from litellm.cost_calculator import _transcription_usage_cost
+
+    assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
+    assert _transcription_usage_cost({}, {}) == 0.0
+
+
+def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
+    """session.model is used when transcription-specific model fields are absent."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _get_transcription_model_name_from_results
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+    ]
+    assert _get_transcription_model_name_from_results(results) == "gpt-realtime-whisper"
+
     from litellm import Router
 
     router = Router(
@@ -641,6 +998,110 @@ def test_per_request_custom_pricing_with_router():
     assert selected is not None
     assert router_model_id not in selected
     assert "gpt-3.5-turbo" in selected
+
+
+def test_tiered_pricing_only_deployment_selects_router_model_id():
+    """A deployment priced solely via ``tiered_pricing`` (no flat
+    input/output cost) must resolve cost against its ``router_model_id``
+    entry, which holds the tiered table, instead of the shared backend alias
+    that has custom pricing fields stripped. Regression for tier-only models
+    (e.g. dashscope/qwen3.7-plus) being billed as free.
+    """
+    from litellm import Router
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    entry = litellm.model_cost[router_model_id]
+    assert entry.get("input_cost_per_token") is None
+    assert entry.get("tiered_pricing") is not None
+    # The stripped shared alias must not carry tiered pricing.
+    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+
+    selected = _select_model_name_for_cost_calc(
+        model="dashscope/qwen3.7-plus",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="dashscope",
+        router_model_id=router_model_id,
+    )
+    assert selected is not None
+    assert router_model_id in selected
+
+
+def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
+    """End-to-end: a tier-only deployment must produce the tiered cost, not
+    $0. Mirrors the reported dashscope/qwen3.7-plus trace (12 prompt + 377
+    completion tokens).
+    """
+    from litellm import Router
+    from litellm.types.utils import Choices, Message
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 4.8e-06,
+                            "range": [256000, 1000000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    response = ModelResponse(
+        model="dashscope/qwen3.7-plus",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+        usage=Usage(prompt_tokens=12, completion_tokens=377, total_tokens=389),
+    )
+    response._hidden_params = {"custom_llm_provider": "dashscope", "model_id": router_model_id}
+
+    cost = completion_cost(
+        completion_response=response,
+        model="dashscope/qwen3.7-plus",
+        custom_llm_provider="dashscope",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    expected = 12 * 4e-07 + 377 * 1.6e-06
+    assert cost == pytest.approx(expected)
+    assert cost > 0
 
 
 def test_azure_realtime_cost_calculator():
@@ -1948,6 +2409,320 @@ def test_completion_cost_service_tier_for_bedrock():
     assert priority_cost > default_cost > flex_cost > 0
 
 
+def test_completion_cost_service_tier_for_anthropic():
+    """
+    Anthropic priority-tier requests must be priced at the priority rate.
+
+    Regression for LIT-3771: the Anthropic cost route dropped ``service_tier``,
+    so priority requests (whose tier is reported on the response usage) were
+    always billed at the standard rate. The tier is captured by the
+    transformation and must flow through to ``generic_cost_per_token``.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-service-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_tier(service_tier):
+        usage = AnthropicConfig().calculate_usage(
+            usage_object={
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "service_tier": service_tier,
+            },
+            reasoning_content=None,
+        )
+        response = ModelResponse(usage=usage, model=model)
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="anthropic",
+        )
+
+    standard_cost = _cost_for_tier("standard")
+    priority_cost = _cost_for_tier("priority")
+
+    expected_standard = 1000 * 3e-6 + 500 * 15e-6
+    assert standard_cost == pytest.approx(expected_standard)
+    # priority rates are exactly 2x standard for both input and output
+    assert priority_cost == pytest.approx(2 * standard_cost)
+
+
+def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
+    """
+    Proxy billing path regression for LIT-3771.
+
+    Priority is opted into with ``service_tier="auto"``; Anthropic then serves
+    "priority" and reports it on the response usage. The proxy forwards the
+    request-level "auto" into ``completion_cost`` (via ``_response_cost_calculator``),
+    and that preference must not shadow the served tier, otherwise priority
+    requests are silently billed at the standard rate.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-auto-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        service_tier="auto",
+        optional_params={"service_tier": "auto"},
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_completion_cost_non_string_service_tier_defers_to_served_tier():
+    """
+    Regression: a non-string request-level ``service_tier`` (reachable via
+    ``allowed_openai_params``/``drop_params``) must not crash cost tracking.
+
+    Before the fix, ``completion_cost`` called ``service_tier.lower()`` on the
+    request-level value, so a dict raised ``AttributeError``. ``_response_cost_calculator``
+    swallowed it and reported ``response_cost=None``, silently dropping the cost.
+    The non-string preference must be ignored so pricing defers to the tier the
+    provider actually served on the response usage.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        optional_params={"service_tier": {"name": "auto"}},
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_completion_cost_non_string_response_service_tier_defers_to_served_tier():
+    """
+    Regression: a non-string ``service_tier`` on the response object must not
+    crash cost tracking.
+
+    Before the fix ``completion_cost`` read the response-level value verbatim and
+    passed it to ``_get_service_tier_cost_key``, which called ``service_tier.lower()``
+    on the dict and raised ``AttributeError``. The non-string preference is not a
+    billable tier, so pricing defers to the concrete tier the provider served on
+    the usage object instead of crashing.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-response-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(
+        usage=usage, model=model, service_tier={"name": "priority"}
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_completion_cost_non_string_usage_service_tier_prices_standard():
+    """
+    Regression: a non-string ``service_tier`` on the usage object must not crash
+    cost tracking.
+
+    The dict reaches ``completion_cost`` via the usage extraction path with no
+    concrete tier to defer to, so pricing falls back to the standard rate instead
+    of raising ``AttributeError`` in ``_get_service_tier_cost_key``.
+    """
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-usage-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        service_tier={"name": "priority"},
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+
+    expected_standard = 1000 * 3e-6 + 500 * 15e-6
+    assert cost == pytest.approx(expected_standard)
+
+
+def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
+    """
+    Regression for the cache/tier interaction in the Anthropic geo/speed path.
+
+    When a request is served at "priority" and also carries a geo/speed
+    multiplier (here ``speed="fast"``), the cache portion is held out of the
+    multiplier so it is not scaled. That held-out cache cost must use the
+    served tier's cache rate; pricing it at the standard rate while the cache
+    embedded in ``prompt_cost`` is priced at the priority rate leaves a
+    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-priority-cache-fast-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 0.3e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "cache_read_input_token_cost_priority": 0.6e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"fast": 2.0},
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+    )
+    usage.speed = "fast"
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(
+        model=model, usage=usage, service_tier="priority"
+    )
+
+    # non-cache input priced at the priority rate and scaled by the fast
+    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
+    # and held out of the multiplier
+    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_completion = 500 * 30e-6 * 2
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching
@@ -2554,3 +3329,153 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_completion_cost_logs_reasoning_and_cache_breakdown():
+    """
+    completion_cost must surface explicit reasoning and cache-read costs into the
+    cost_breakdown stored on the logging object, so they end up in the spend logs
+    rather than being silently folded into the output/input totals.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    logging_obj = Logging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cache-breakdown",
+        function_id="f",
+    )
+
+    response = ModelResponse(
+        id="x",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="length",
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=209,
+            completion_tokens=3996,
+            total_tokens=4205,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=3114, text_tokens=882
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100, text_tokens=109
+            ),
+        ),
+    )
+
+    litellm.completion_cost(
+        completion_response=response,
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_cost_per_token_per_second_pricing(monkeypatch):
+    """
+    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "together_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(0.02 * 1.5)
+    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def _batch_cache_usage() -> Usage:
+    return Usage(
+        prompt_tokens=11000,
+        completion_tokens=200,
+        total_tokens=11200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=8000,
+            cache_creation_tokens=2000,
+            text_tokens=1000,
+        ),
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+
+def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
+    """
+    LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
+    Cache creation tokens must be priced at cache_creation_input_token_cost / 2,
+    not folded into the base input rate, and must not also be billed as base
+    input tokens.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)

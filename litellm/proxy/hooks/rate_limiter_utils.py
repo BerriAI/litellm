@@ -2,13 +2,10 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from typing import Any, Optional, Tuple, Union
-
-from fastapi import HTTPException
+from typing import Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import RateLimitError
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import PriorityReservationDict
 
@@ -29,11 +26,21 @@ def resolve_llm_provider_for_rate_limit(
     ``litellm_proxy_failed_requests_metric`` show up with
     ``exception_class="RateLimitError"`` and no provider attribution.
 
-    Wrapped defensively: if ``model`` is missing, malformed, or
-    ``get_llm_provider`` raises (unknown alias, router-only model, etc.) we
-    fall back to ``("", "litellm_proxy")`` so we never break the request path
-    by piling a second exception on top of the rate-limit one we're trying to
-    raise.
+    Resolution order:
+
+    1. ``litellm.get_llm_provider(model)`` — covers raw provider/model
+       strings the SDK already understands (``"gpt-4o-mini"``,
+       ``"anthropic/claude-3-5-sonnet"``, ``"bedrock/..."`` etc.).
+    2. **Router alias fallback** — nearly every real proxy deployment
+       routes through a router ``model_name`` alias (e.g.
+       ``"tpm-locked"`` → ``litellm_params.model: openai/gpt-4o-mini``).
+       ``get_llm_provider`` doesn't know router aliases, so without this
+       step every alias call ended up labeled ``"litellm_proxy"``,
+       defeating the field's purpose for the most common case.
+    3. Defensive fallback to ``("", "litellm_proxy")`` — used only when
+       ``model`` is missing, malformed, or both lookups fail. We never let
+       a secondary exception escape and mask the rate-limit error we're
+       trying to surface.
     """
     if not model:
         return "", PROXY_LLM_PROVIDER_FALLBACK
@@ -46,6 +53,9 @@ def resolve_llm_provider_for_rate_limit(
             custom_llm_provider or PROXY_LLM_PROVIDER_FALLBACK,
         )
     except Exception as e:
+        alias_resolution = _resolve_provider_from_router_alias(model)
+        if alias_resolution is not None:
+            return alias_resolution
         verbose_proxy_logger.debug(
             "rate_limiter_utils.resolve_llm_provider_for_rate_limit: "
             "could not resolve provider for model=%s, falling back to %s. err=%s",
@@ -56,50 +66,58 @@ def resolve_llm_provider_for_rate_limit(
         return model, PROXY_LLM_PROVIDER_FALLBACK
 
 
-class ProxyHTTPRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
+def _resolve_provider_from_router_alias(
+    model: str,
+) -> Optional[Tuple[str, str]]:
     """
-    HTTPException raised by proxy-side rate-limit hooks that *also* exposes
-    ``model`` and ``llm_provider`` attributes.
+    Resolve a router ``model_name`` alias to ``(underlying_model, provider)``
+    by scanning the active router's ``model_list``.
 
-    Why both base classes:
-
-    - The proxy server's exception handler keys off ``HTTPException`` to render
-      a 429 response, so we must remain an ``HTTPException``.
-    - Downstream loggers (Prometheus ``async_post_call_failure_hook``,
-      structured logging, observability callbacks) read ``exception.llm_provider``
-      via :meth:`litellm.integrations.prometheus.PrometheusLogger._get_exception_class_name`
-      and ``isinstance(exc, RateLimitError)`` for category routing. Inheriting
-      from :class:`litellm.exceptions.RateLimitError` keeps that wiring intact.
-
-    We intentionally do not call ``RateLimitError.__init__`` (which constructs
-    an httpx.Response) — it isn't needed here and just adds failure surface.
-    Attribute parity is what downstream consumers rely on.
+    Returns ``None`` if the router isn't initialized, the alias isn't
+    registered, the deployment has no usable ``litellm_params.model``, or
+    any underlying lookup raises. Callers fall through to the defensive
+    ``litellm_proxy`` fallback in that case — never raising secondary
+    exceptions out of the rate-limit raise path.
     """
-
-    def __init__(
-        self,
-        status_code: int,
-        detail: Any = None,
-        headers: Optional[dict] = None,
-        *,
-        model: str = "",
-        llm_provider: str = PROXY_LLM_PROVIDER_FALLBACK,
-    ) -> None:
-        HTTPException.__init__(
-            self, status_code=status_code, detail=detail, headers=headers
-        )
-        self.status_code = status_code
-        self.model = model or ""
-        self.llm_provider = llm_provider or PROXY_LLM_PROVIDER_FALLBACK
-        # `message` is what RateLimitError.__str__ would print and what some
-        # observability callbacks log. Keep it human-readable.
-        self.message = detail if isinstance(detail, str) else str(detail)
-        # `RateLimitError.__str__` (resolved via MRO since Starlette's
-        # HTTPException doesn't define `__str__`) unconditionally reads
-        # these attributes. Set them so `str(exc)` doesn't raise
-        # AttributeError from logging/traceback paths.
-        self.num_retries: Optional[int] = None
-        self.max_retries: Optional[int] = None
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return None
+    if llm_router is None:
+        return None
+    try:
+        model_list = getattr(llm_router, "model_list", None)
+        if not model_list:
+            return None
+        for deployment in model_list:
+            if not isinstance(deployment, dict):
+                continue
+            if deployment.get("model_name") != model:
+                continue
+            params = deployment.get("litellm_params")
+            if not isinstance(params, dict):
+                continue
+            underlying_model = params.get("model")
+            if not isinstance(underlying_model, str) or not underlying_model:
+                continue
+            try:
+                resolved_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=underlying_model,
+                )
+            except Exception:
+                continue
+            if not custom_llm_provider:
+                continue
+            # Prefer the underlying provider-qualified model so the failure
+            # callback / Prometheus label points at the actual deployment, not
+            # the alias.
+            return (
+                resolved_model or underlying_model,
+                custom_llm_provider,
+            )
+        return None
+    except Exception:
+        return None
 
 
 def convert_priority_to_percent(

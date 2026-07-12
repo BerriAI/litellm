@@ -114,3 +114,40 @@ async def test_async_completion_forwards_custom_llm_provider():
             "so the downstream get_llm_provider() call does not re-strip the "
             "provider prefix on a provider/provider/model deployment string"
         )
+
+
+@pytest.mark.asyncio
+async def test_async_completion_forwards_aws_region_name():
+    handler = ResponsesToCompletionBridgeHandler()
+    handler.transformation_handler = MagicMock()
+    handler.transformation_handler.transform_request.return_value = {
+        "model": "openai.gpt-5.5",
+        "input": [],
+        "aws_region_name": "us-east-2",
+        "api_base": "https://bedrock-mantle.us-east-1.api.aws/v1",
+        "custom_llm_provider": "bedrock_mantle",
+    }
+
+    async def _fake_aresponses(**kwargs):
+        _fake_aresponses.kwargs = kwargs
+        return MagicMock(spec=[])
+
+    _fake_aresponses.kwargs = {}
+
+    validated = _validated_kwargs()
+    validated["custom_llm_provider"] = "bedrock_mantle"
+    validated["litellm_params"] = {
+        "aws_region_name": "us-east-2",
+        "api_base": "https://bedrock-mantle.us-east-1.api.aws/v1",
+        "custom_llm_provider": "bedrock_mantle",
+    }
+
+    with (
+        patch.object(handler, "validate_input_kwargs", return_value=validated),
+        patch("litellm.aresponses", _fake_aresponses),
+    ):
+        try:
+            await handler.acompletion()
+        except Exception:
+            pass
+        assert _fake_aresponses.kwargs.get("aws_region_name") == "us-east-2"

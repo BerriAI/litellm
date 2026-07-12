@@ -10,7 +10,7 @@ per call; default timeout uses DEFAULT_A2A_AGENT_TIMEOUT).
 """
 
 import sys
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -231,57 +231,95 @@ async def test_each_agent_gets_only_its_own_static_headers():
 # ---------------------------------------------------------------------------
 
 
+def _fake_get_async_httpx_client_factory(captured_calls: list):
+    """Return a side_effect that records every (params, client) pair."""
+
+    def _fake_get_async_httpx_client(llm_provider, params, **kwargs):
+        client = MagicMock()
+        client.headers = MagicMock()
+        handler = MagicMock()
+        handler.client = client
+        captured_calls.append({"params": params.copy(), "client": client})
+        return handler
+
+    return _fake_get_async_httpx_client
+
+
+async def _fake_create_client(base_url, client_config=None, **kwargs):
+    client = MagicMock()
+    if client_config is not None:
+        client._litellm_httpx_client = client_config.httpx_client
+    return client
+
+
 @pytest.mark.asyncio
 async def test_create_a2a_client_uses_fresh_httpx_client():
     """
-    Two calls to create_a2a_client with different extra_headers must NOT
-    share the same underlying httpx.AsyncClient instance.
-    """
-    import httpx
+    Two calls to create_a2a_client with different extra_headers must produce
+    distinct underlying httpx clients — preventing header bleed between agents.
 
+    The test checks:
+    1. get_async_httpx_client was called twice (once per create_a2a_client call).
+    2. The two returned A2A clients carry distinct httpx client objects (direct
+       proof of header isolation, not just cache-key difference).
+    3. The cache-key param differs between calls (so the real LRU cache cannot
+       return the same httpx client even under load).
+    """
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
-    created_clients = []
-
-    fake_agent_card = MagicMock()
-    fake_agent_card.name = "test-agent"
-
-    class FakeResolver:
-        def __init__(self, **kw):
-            created_clients.append(kw.get("httpx_client"))
-
-        async def get_agent_card(self):
-            return fake_agent_card
-
-    class FakeA2AClient:
-        def __init__(self, httpx_client, agent_card):
-            self._client = httpx_client
-            self._litellm_agent_card = agent_card
+    captured_calls: list = []
 
     with (
         patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
-        patch("litellm.a2a_protocol.main.A2ACardResolver", FakeResolver),
-        patch("litellm.a2a_protocol.main._A2AClient", FakeA2AClient),
+        patch(
+            "litellm.a2a_protocol.main.get_async_httpx_client",
+            side_effect=_fake_get_async_httpx_client_factory(captured_calls),
+        ),
+        patch(
+            "litellm.a2a_protocol.main.create_client",
+            new=AsyncMock(side_effect=_fake_create_client),
+        ),
     ):
-        await create_a2a_client(
+        a2a_client_a = await create_a2a_client(
             base_url="http://agent-a:9999",
             extra_headers={"Authorization": "Bearer a"},
         )
-        await create_a2a_client(
+        a2a_client_b = await create_a2a_client(
             base_url="http://agent-b:9999",
             extra_headers={"Authorization": "Bearer b"},
         )
 
-    assert len(created_clients) == 2
-    # Must be distinct objects
     assert (
-        created_clients[0] is not created_clients[1]
-    ), "create_a2a_client reused a cached httpx client — headers will bleed between agents"
+        len(captured_calls) == 2
+    ), "create_a2a_client should call get_async_httpx_client once per invocation"
+
+    # Direct proof: the two A2A clients must carry distinct httpx client objects.
+    # If they share one, mutating agent-B's Authorization header would bleed into A.
+    httpx_a = getattr(a2a_client_a, "_litellm_httpx_client", None)
+    httpx_b = getattr(a2a_client_b, "_litellm_httpx_client", None)
+    assert httpx_a is not None, "a2a_client_a missing _litellm_httpx_client"
+    assert httpx_b is not None, "a2a_client_b missing _litellm_httpx_client"
+    assert httpx_a is not httpx_b, (
+        "create_a2a_client returned the same httpx client for two agents with "
+        "different headers — Authorization header will bleed between agents"
+    )
+
+    # Also verify the cache-key param differs so the LRU cache never conflates them.
+    key_a = captured_calls[0]["params"].get("disable_aiohttp_transport")
+    key_b = captured_calls[1]["params"].get("disable_aiohttp_transport")
+    assert key_a is not None, "cache-key param 'disable_aiohttp_transport' missing"
+    assert key_b is not None, "cache-key param 'disable_aiohttp_transport' missing"
+    assert key_a != key_b, (
+        f"create_a2a_client used the same cache key for two agents with different "
+        f"headers — headers will bleed: key_a={key_a!r}, key_b={key_b!r}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_create_a2a_client_default_timeout_matches_constant():
     """When timeout is omitted, httpx client params must use DEFAULT_A2A_AGENT_TIMEOUT."""
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
     captured: dict = {}
@@ -293,28 +331,16 @@ async def test_create_a2a_client_default_timeout_matches_constant():
         handler.client.headers = MagicMock()
         return handler
 
-    fake_agent_card = MagicMock()
-    fake_agent_card.name = "test-agent"
-
-    class _FakeResolver:
-        def __init__(self, **kw):
-            pass
-
-        async def get_agent_card(self):
-            return fake_agent_card
-
-    class _FakeA2AClient:
-        def __init__(self, httpx_client, agent_card):
-            pass
-
     with (
         patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
         patch(
             "litellm.a2a_protocol.main.get_async_httpx_client",
             side_effect=_capture_get_async_httpx_client,
         ),
-        patch("litellm.a2a_protocol.main.A2ACardResolver", _FakeResolver),
-        patch("litellm.a2a_protocol.main._A2AClient", _FakeA2AClient),
+        patch(
+            "litellm.a2a_protocol.main.create_client",
+            new=AsyncMock(side_effect=_fake_create_client),
+        ),
     ):
         await create_a2a_client(base_url="http://127.0.0.1:9")
 
@@ -324,6 +350,7 @@ async def test_create_a2a_client_default_timeout_matches_constant():
 @pytest.mark.asyncio
 async def test_create_a2a_client_explicit_timeout_overrides_default():
     """Explicit timeout= must be passed through to the httpx client params."""
+    pytest.importorskip("a2a.client")
     from litellm.a2a_protocol.main import create_a2a_client
 
     captured: dict = {}
@@ -335,28 +362,16 @@ async def test_create_a2a_client_explicit_timeout_overrides_default():
         handler.client.headers = MagicMock()
         return handler
 
-    fake_agent_card = MagicMock()
-    fake_agent_card.name = "test-agent"
-
-    class _FakeResolver:
-        def __init__(self, **kw):
-            pass
-
-        async def get_agent_card(self):
-            return fake_agent_card
-
-    class _FakeA2AClient:
-        def __init__(self, httpx_client, agent_card):
-            pass
-
     with (
         patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
         patch(
             "litellm.a2a_protocol.main.get_async_httpx_client",
             side_effect=_capture_get_async_httpx_client,
         ),
-        patch("litellm.a2a_protocol.main.A2ACardResolver", _FakeResolver),
-        patch("litellm.a2a_protocol.main._A2AClient", _FakeA2AClient),
+        patch(
+            "litellm.a2a_protocol.main.create_client",
+            new=AsyncMock(side_effect=_fake_create_client),
+        ),
     ):
         await create_a2a_client(base_url="http://127.0.0.1:9", timeout=42.5)
 

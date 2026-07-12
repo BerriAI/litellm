@@ -1,44 +1,46 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, Input, Modal, Popconfirm, Tooltip, Avatar, Typography } from "antd";
+import { Pencil, Trash2, Search, MessageSquare } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
-  EditOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  SearchOutlined,
-  UserOutlined,
-  MessageOutlined,
-} from "@ant-design/icons";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import dayjs from "dayjs";
 import { Conversation } from "./types";
-
-const { Text } = Typography;
 
 interface Props {
   conversations: Conversation[];
   activeConversationId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
-  onNewChat: () => void;
   onRename: (id: string, newTitle: string) => void;
 }
 
-// ---- Date grouping helpers ----
-
-type DateGroup = "Today" | "Yesterday" | "Last 7 Days" | "Older";
+type DateGroup = "Recents" | "Yesterday" | "Last 7 Days" | "Older";
 
 const getDateGroup = (timestamp: number): DateGroup => {
   const now = dayjs();
   const date = dayjs(timestamp);
-
-  if (date.isSame(now, "day")) return "Today";
+  if (date.isSame(now, "day")) return "Recents";
   if (date.isSame(now.subtract(1, "day"), "day")) return "Yesterday";
   if (date.isAfter(now.subtract(7, "day"))) return "Last 7 Days";
   return "Older";
 };
 
-const DATE_GROUP_ORDER: DateGroup[] = ["Today", "Yesterday", "Last 7 Days", "Older"];
+const DATE_GROUP_ORDER: DateGroup[] = ["Recents", "Yesterday", "Last 7 Days", "Older"];
 
 interface GroupedConversations {
   group: DateGroup;
@@ -47,20 +49,16 @@ interface GroupedConversations {
 
 const groupConversations = (conversations: Conversation[]): GroupedConversations[] => {
   const map = new Map<DateGroup, Conversation[]>();
-
   for (const conv of conversations) {
     const group = getDateGroup(conv.updatedAt);
     if (!map.has(group)) map.set(group, []);
     map.get(group)!.push(conv);
   }
-
   return DATE_GROUP_ORDER.filter((g) => map.has(g)).map((g) => ({
     group: g,
     items: map.get(g)!,
   }));
 };
-
-// ---- Single conversation row ----
 
 interface ConversationRowProps {
   conv: Conversation;
@@ -111,110 +109,100 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
     }
   };
 
-  const truncatedTitle = conv.title.length > 40 ? conv.title.slice(0, 40) + "…" : conv.title;
+  const truncatedTitle = conv.title.length > 40 ? conv.title.slice(0, 40) + "\u2026" : conv.title;
 
   return (
     <div
       onClick={() => !editing && onSelect(conv.id)}
-      className="conversation-row group"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        padding: "6px 8px",
-        borderRadius: 6,
-        cursor: editing ? "default" : "pointer",
-        backgroundColor: isActive ? "#e6f4ff" : "transparent",
-        transition: "background-color 0.15s",
-        minHeight: 34,
-        position: "relative",
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive) {
-          (e.currentTarget as HTMLDivElement).style.backgroundColor = "#f5f5f5";
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive) {
-          (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
-        }
-      }}
+      className={`group flex items-center px-2 py-1.5 rounded-md cursor-pointer transition-colors min-h-[34px] relative ${
+        isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+      }`}
     >
       {editing ? (
         <Input
-          ref={(node) => {
-            inputRef.current = node?.input ?? null;
-          }}
-          size="small"
+          ref={inputRef}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={commitRename}
           onClick={(e) => e.stopPropagation()}
-          style={{ flex: 1, fontSize: 13 }}
+          className="h-7 text-[13px] flex-1"
         />
       ) : (
         <>
-          <Text
-            style={{
-              flex: 1,
-              fontSize: 13,
-              color: isActive ? "#1677ff" : "#333",
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-              fontWeight: isActive ? 500 : 400,
-            }}
+          <span
+            className={`flex-1 text-[13px] overflow-hidden whitespace-nowrap text-ellipsis ${
+              isActive ? "font-medium" : ""
+            }`}
             title={conv.title}
           >
             {truncatedTitle}
-          </Text>
+          </span>
 
-          {/* Action icons — visible only on hover via CSS opacity */}
           <div
-            className="conversation-actions"
-            style={{
-              display: "flex",
-              gap: 2,
-              opacity: 0,
-              transition: "opacity 0.15s",
-              flexShrink: 0,
-            }}
+            className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
-            <Tooltip title="Rename">
-              <Button
-                type="text"
-                size="small"
-                icon={<EditOutlined style={{ fontSize: 12 }} />}
-                onClick={startEditing}
-                style={{ width: 22, height: 22, padding: 0, minWidth: 22 }}
-              />
-            </Tooltip>
-            <Popconfirm
-              title="Delete this conversation?"
-              onConfirm={() => onDelete(conv.id)}
-              okText="Delete"
-              cancelText="Cancel"
-              okButtonProps={{ danger: true }}
-            >
-              <Tooltip title="Delete">
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined style={{ fontSize: 12 }} />}
-                  style={{ width: 22, height: 22, padding: 0, minWidth: 22 }}
+            <TooltipProvider delay={300}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button onClick={startEditing} variant="ghost" size="icon-xs" className="text-muted-foreground">
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  }
                 />
+                <TooltipContent side="bottom">
+                  <p>Rename</p>
+                </TooltipContent>
               </Tooltip>
-            </Popconfirm>
+            </TooltipProvider>
+
+            <AlertDialog>
+              <TooltipProvider delay={300}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <AlertDialogTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        }
+                      />
+                    }
+                  />
+                  <TooltipContent side="bottom">
+                    <p>Delete</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
+                  <AlertDialogDescription>This action cannot be undone</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => onDelete(conv.id)}
+                    className="bg-destructive text-white hover:bg-destructive/90"
+                  >
+                    Delete
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </>
       )}
     </div>
   );
 };
-
-// ---- Cmd+K search modal ----
 
 interface SearchModalProps {
   open: boolean;
@@ -225,10 +213,12 @@ interface SearchModalProps {
 
 const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
   const [query, setQuery] = useState("");
+  const [wasOpen, setWasOpen] = useState(open);
 
-  useEffect(() => {
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (!open) setQuery("");
-  }, [open]);
+  }
 
   const filtered = query.trim()
     ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))
@@ -240,77 +230,49 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
   };
 
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      title={null}
-      width={480}
-      styles={{ body: { padding: "16px 16px 8px" } }}
-    >
-      <Input
-        autoFocus
-        prefix={<SearchOutlined style={{ color: "#bbb" }} />}
-        placeholder="Search conversations…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        style={{ marginBottom: 12 }}
-        allowClear
-      />
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-[480px] p-4 gap-0">
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            autoFocus
+            placeholder="Search conversations\u2026"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
 
-      <div style={{ maxHeight: 320, overflowY: "auto" }}>
-        {filtered.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>No conversations found</div>
-        ) : (
-          filtered.map((conv) => {
-            const truncated = conv.title.length > 55 ? conv.title.slice(0, 55) + "…" : conv.title;
-            return (
-              <div
-                key={conv.id}
-                onClick={() => handleSelect(conv.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 10px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  transition: "background-color 0.1s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.backgroundColor = "#f0f5ff";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
-                }}
-              >
-                <MessageOutlined style={{ color: "#999", flexShrink: 0 }} />
-                <Text style={{ fontSize: 13 }}>{truncated}</Text>
-                <Text type="secondary" style={{ fontSize: 11, marginLeft: "auto", flexShrink: 0 }}>
-                  {dayjs(conv.updatedAt).format("MMM D")}
-                </Text>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </Modal>
+        <ScrollArea className="max-h-[320px]">
+          {filtered.length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground text-sm">No conversations found</div>
+          ) : (
+            filtered.map((conv) => {
+              const truncated = conv.title.length > 55 ? conv.title.slice(0, 55) + "\u2026" : conv.title;
+              return (
+                <div
+                  key={conv.id}
+                  onClick={() => handleSelect(conv.id)}
+                  className="flex items-center gap-2 px-2.5 py-2 rounded-md cursor-pointer transition-colors hover:bg-accent/50"
+                >
+                  <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-[13px] flex-1 truncate">{truncated}</span>
+                  <span className="text-[11px] text-muted-foreground shrink-0 ml-auto">
+                    {dayjs(conv.updatedAt).format("MMM D")}
+                  </span>
+                </div>
+              );
+            })
+          )}
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
   );
 };
 
-// ---- Main ConversationList component ----
-
-const ConversationList: React.FC<Props> = ({
-  conversations,
-  activeConversationId,
-  onSelect,
-  onDelete,
-  onNewChat,
-  onRename,
-}) => {
+const ConversationList: React.FC<Props> = ({ conversations, activeConversationId, onSelect, onDelete, onRename }) => {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
 
-  // Cmd+K / Ctrl+K listener
   const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -327,69 +289,18 @@ const ConversationList: React.FC<Props> = ({
 
   return (
     <>
-      {/* Hover-reveal CSS for action icons */}
-      <style>{`
-        .conversation-row:hover .conversation-actions {
-          opacity: 1 !important;
-        }
-      `}</style>
-
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
-          width: "100%",
-          overflow: "hidden",
-        }}
-      >
-        {/* Top: New Chat button */}
-        <div style={{ padding: "12px 10px 8px" }}>
-          <Tooltip
-            title="Chats are saved locally in this browser. All requests are logged in Spend → Logs."
-            placement="right"
-          >
-            <Button type="primary" icon={<PlusOutlined />} onClick={onNewChat} style={{ width: "100%" }}>
-              New Chat
-            </Button>
-          </Tooltip>
-        </div>
-
-        {/* Conversation list (scrollable) */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "0 6px",
-          }}
-        >
+      <div className="flex flex-col h-full w-full overflow-hidden">
+        <ScrollArea className="flex-1 h-0 px-1.5 pt-2">
           {grouped.length === 0 ? (
-            <div
-              style={{
-                textAlign: "center",
-                color: "#bbb",
-                fontSize: 12,
-                marginTop: 32,
-                padding: "0 12px",
-              }}
-            >
-              No conversations yet.
+            <div className="text-center text-muted-foreground/60 text-xs mt-8 px-3">
+              No conversations yet
               <br />
-              Start a new chat above.
+              Start a new chat above
             </div>
           ) : (
             grouped.map(({ group, items }) => (
-              <div key={group} style={{ marginBottom: 8 }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "#999",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.04em",
-                    padding: "8px 8px 4px",
-                  }}
-                >
+              <div key={group} className="mb-2">
+                <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 pt-2 pb-1">
                   {group}
                 </div>
                 {items.map((conv) => (
@@ -405,38 +316,9 @@ const ConversationList: React.FC<Props> = ({
               </div>
             ))
           )}
-        </div>
-
-        {/* Bottom: user avatar placeholder */}
-        <div
-          style={{
-            padding: "10px 12px",
-            borderTop: "1px solid #f0f0f0",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <Avatar
-            size={28}
-            icon={<UserOutlined />}
-            style={{ backgroundColor: "#e0e7ff", color: "#4f46e5", flexShrink: 0 }}
-          />
-          <Text
-            style={{
-              fontSize: 13,
-              color: "#555",
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
-            My Account
-          </Text>
-        </div>
+        </ScrollArea>
       </div>
 
-      {/* Cmd+K search modal */}
       <SearchModal
         open={searchModalOpen}
         conversations={conversations}

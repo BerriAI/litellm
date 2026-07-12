@@ -3,20 +3,24 @@ import tseslint from "typescript-eslint";
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
+import local from "./scripts/eslint-rules/index.mjs";
 
 const eslintConfig = [
   {
-    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts"],
+    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...nextCoreWebVitals,
   prettier,
   {
-    plugins: { "unused-imports": unusedImports },
+    plugins: { "unused-imports": unusedImports, local },
     rules: {
       "unused-imports/no-unused-imports": "error",
+      "local/no-large-inline-object-arg": "warn",
+      "local/no-long-condition-chain": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
+      "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-unused-expressions": "off",
       "@typescript-eslint/ban-ts-comment": "off",
@@ -27,6 +31,7 @@ const eslintConfig = [
       "no-useless-escape": "off",
       "no-self-assign": "error",
       "no-var": "error",
+      "no-nested-ternary": "error",
       "react/no-danger": "error",
       complexity: ["warn", 20],
       "max-depth": ["warn", 4],

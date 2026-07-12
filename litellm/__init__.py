@@ -6,9 +6,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 # Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
 # This warning can accumulate during streaming and cause memory leaks
-warnings.filterwarnings(
-    "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
-)
+warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the instance is deprecated.*")
 ### INIT VARIABLES #########################
 import threading
 import os
@@ -16,8 +14,17 @@ import os
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
 
+
+def _dev_env_hot_reload_enabled() -> bool:
+    """The proxy exports this flag when started with ``--reload``. A reloaded
+    worker is a fresh process that inherits the reloader's environment, so an
+    edited ``.env`` value stays masked by the stale inherited one unless we
+    let the file win; overriding makes the edit take effect on reload."""
+    return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
+
+
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv()
+    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from typing import (
     Callable,
@@ -34,6 +41,7 @@ from typing import (
     Type,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -63,12 +71,14 @@ from litellm.constants import (
     replicate_models,
     clarifai_models,
     huggingface_models,
+    modelscope_models,
     empower_models,
     together_ai_models,
     baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
+    request_timeout_explicitly_set as request_timeout_explicitly_set,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
@@ -145,20 +155,18 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "mavvrik",
     "vantage",
     "posthog",
     "levo",
     "compression_interception",
+    "newrelic",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
-_known_custom_logger_compatible_callbacks: List = list(
-    get_args(_custom_logger_compatible_callbacks_literal)
-)
+_known_custom_logger_compatible_callbacks: List = list(get_args(_custom_logger_compatible_callbacks_literal))
 callbacks: List[
-    Union[
-        Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"
-    ]  # CustomLogger is lazy-loaded
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
@@ -169,26 +177,16 @@ prometheus_latency_buckets: Optional[List[float]] = None
 require_auth_for_metrics_endpoint: Optional[bool] = True
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
-gcs_pub_sub_use_v1: Optional[bool] = (
-    False  # if you want to use v1 gcs pubsub logged payload
-)
-generic_api_use_v1: Optional[bool] = (
-    False  # if you want to use v1 generic api logged payload
-)
+gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
+generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[
-    Union[str, Callable, "CustomLogger"]
-] = (  # CustomLogger is lazy-loaded
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[
-    Union[str, Callable, "CustomLogger"]
-] = (  # CustomLogger is lazy-loaded
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[
-    Union[str, Callable, "CustomLogger"]
-] = (  # CustomLogger is lazy-loaded
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -200,6 +198,15 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+# When True (default — preserves historical behavior), the Router appends
+# internal config names (model_group, fallback model groups, deployment
+# timeouts, fallback failure details) onto exception messages and surfaces
+# them to clients via ProxyException.message. Set to False if you do NOT
+# want the proxy's internal model_name / fallback wiring visible to clients.
+# Deprecation: planned to flip to False (redact by default) in a future
+# major release; opt in early with `litellm.expose_router_debug_in_errors
+# = False`.
+expose_router_debug_in_errors: bool = True
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
@@ -222,14 +229,23 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+# When True, strip the OpenAI-flavored `usage.total_tokens` field that
+# LiteLLM injects into non-streaming /v1/messages responses, bringing the
+# wire response into line with the Anthropic spec (matches the streaming
+# SSE path, which already omits total_tokens). Default False to preserve
+# backward compatibility for clients that read the LiteLLM-shaped
+# `usage.total_tokens` today. Planned to flip to True in a future major
+# release; opt in early via Python:
+#   `litellm.strip_anthropic_total_tokens = True`
+# Or via `litellm_settings.strip_anthropic_total_tokens: true` in
+# config.yaml.
+strip_anthropic_total_tokens: bool = False
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
 # Default False preserves historical behavior (auto-send setup on connect).
-gemini_live_defer_setup: bool = (
-    os.getenv("LITELLM_GEMINI_LIVE_DEFER_SETUP", "false").lower() == "true"
-)
+gemini_live_defer_setup: bool = os.getenv("LITELLM_GEMINI_LIVE_DEFER_SETUP", "false").lower() == "true"
 use_legacy_interactions_schema: bool = (
     os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
 )  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
@@ -247,6 +263,8 @@ azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
+gdc_key: Optional[str] = None
+gdc_api_base: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -283,9 +301,7 @@ common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
-use_litellm_proxy: bool = (
-    False  # when True, requests will be sent to the specified litellm proxy endpoint
-)
+use_litellm_proxy: bool = False  # when True, requests will be sent to the specified litellm proxy endpoint
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
@@ -293,9 +309,7 @@ ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
-ssl_ecdh_curve: Optional[str] = (
-    None  # Set to 'X25519' to disable PQC and improve performance
-)
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -336,9 +350,7 @@ prompt_name_config_map: Dict[str, PromptSpec] = {}
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
-return_response_headers: bool = (
-    False  # get response headers from LLM Api providers - example x-remaining-requests,
-)
+return_response_headers: bool = False  # get response headers from LLM Api providers - example x-remaining-requests,
 enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
@@ -350,18 +362,13 @@ enable_gemini_default_thinking_level_low: bool = (
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+require_managed_files: bool = False  # proxy only - require target_model_names on POST /v1/files
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
-caching: bool = (
-    False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-caching_with_models: bool = (
-    False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-cache: Optional["Cache"] = (
-    None  # cache object <- use this - https://docs.litellm.ai/docs/caching
-)
+caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+cache: Optional["Cache"] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
@@ -371,9 +378,8 @@ max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
-default_soft_budget: float = (
-    DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
-)
+default_soft_budget: float = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
+budget_exceeded_throttle_percentage: Optional[float] = None
 forward_traceparent_to_llm_provider: bool = False
 
 
@@ -397,12 +403,13 @@ anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
-suppress_debug_info = False
+suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -433,16 +440,19 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+# Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
+# `litellm_proxy_failed_requests_metric`. Off by default to preserve the
+# pre-unification label set so existing dashboards / recording rules keyed on
+# that metric keep matching after upgrade. Enable when downstream consumers
+# are ready to split 429s by source (vendor vs. litellm) and dimension
+# (RPM/TPM/concurrent/budget).
+prometheus_emit_rate_limit_labels: bool = False
 prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
-disable_add_prefix_to_prompt: bool = (
-    False  # used by anthropic, to disable adding prefix to prompt
-)
-disable_copilot_system_to_assistant: bool = (
-    False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
-)
+disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
+disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
@@ -452,9 +462,7 @@ public_agent_groups: Optional[List[str]] = None
 # Old format: { "displayName": "url" } (for backward compatibility)
 public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = (
-    None
-)
+priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
 # Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:
@@ -462,17 +470,11 @@ if TYPE_CHECKING:
 
 
 ######## Networking Settings ########
-use_aiohttp_transport: bool = (
-    True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
-)
+use_aiohttp_transport: bool = True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-disable_aiohttp_trust_env: bool = (
-    False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
-)
-force_ipv4: bool = (
-    False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-)
+disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -487,9 +489,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
-num_retries_per_request: Optional[int] = (
-    None  # for the request overall (incl. fallbacks + model retries)
-)
+num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
@@ -506,12 +506,10 @@ output_parse_pii: bool = False
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
-cost_discount_config: Dict[str, float] = (
-    {}
-)  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
-cost_margin_config: Dict[str, Union[float, Dict[str, float]]] = (
-    {}
-)  # Provider-specific or global cost margins. Examples:
+cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+cost_margin_config: Dict[
+    str, Union[float, Dict[str, float]]
+] = {}  # Provider-specific or global cost margins. Examples:
 # Percentage: {"openai": 0.10} = 10% margin
 # Fixed: {"openai": {"fixed_amount": 0.001}} = $0.001 per request
 # Global: {"global": 0.05} = 5% global margin on all providers
@@ -591,6 +589,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
+tencent_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
@@ -612,6 +611,7 @@ cerebras_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+soniox_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -628,6 +628,7 @@ elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
+darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -692,9 +693,7 @@ def is_openai_finetune_model(key: str) -> bool:
 def add_known_models(model_cost_map: Optional[Dict] = None):
     _map = model_cost_map if model_cost_map is not None else model_cost
     for key, value in _map.items():
-        if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
-            key
-        ):
+        if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
             open_ai_text_completion_models.add(key)
@@ -772,9 +771,7 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.add(key)
-        elif value.get(
-            "litellm_provider"
-        ) == "bedrock" and not is_bedrock_pricing_only_model(key):
+        elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":
             bedrock_converse_models.add(key)
@@ -806,6 +803,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "tencent":
+            tencent_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -844,6 +843,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "soniox":
+            soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -874,10 +875,14 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "modelscope":
+            modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
+        elif value.get("litellm_provider") == "darkbloom":
+            darkbloom_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -993,6 +998,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | modelscope_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1009,6 +1015,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | soniox_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -1024,6 +1031,7 @@ model_list = list(
     | dashscope_models
     | moonshot_models
     | publicai_models
+    | darkbloom_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1089,6 +1097,7 @@ models_by_provider: dict = {
     "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
+    "tencent": tencent_models,
     "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
@@ -1109,6 +1118,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
     "nvidia_riva": nvidia_riva_models,
+    "soniox": soniox_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
@@ -1124,8 +1134,10 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
     "dashscope": dashscope_models,
+    "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
+    "darkbloom": darkbloom_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -1289,6 +1301,8 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
+    RateLimitType,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1345,11 +1359,14 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .rust_bridge.ocr import use_litellm_rust
 from .rag.main import *
+from .sandbox.main import *
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
+    acreate_realtime_transcription_session,
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket
@@ -1393,9 +1410,7 @@ from . import rag
 from .types.llms.custom_llm import CustomLLMItem
 
 custom_provider_map: List[CustomLLMItem] = []
-_custom_providers: List[str] = (
-    []
-)  # internal helper util, used to track names of custom providers
+_custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
 disable_hf_tokenizer_download: Optional[bool] = (
     None  # disable huggingface tokenizer download. Defaults to openai clk100
 )
@@ -1700,6 +1715,9 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation_contextual import (
         VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig,
     )
+    from .llms.voyage.embedding.transformation_multimodal import (
+        VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig,
+    )
     from .llms.infinity.embedding.transformation import (
         InfinityEmbeddingConfig as InfinityEmbeddingConfig,
     )
@@ -1776,6 +1794,7 @@ if TYPE_CHECKING:
     from .llms.nvidia_nim.embed import (
         NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig,
     )
+    from .llms.gdc.chat.transformation import GDCGeminiConfig as GDCGeminiConfig
 
     # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
@@ -1789,6 +1808,9 @@ if TYPE_CHECKING:
     from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
+    )
+    from .llms.tencent.chat.transformation import (
+        TencentChatConfig as _TencentChatConfig,
     )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
@@ -1832,6 +1854,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
@@ -1861,9 +1884,6 @@ if TYPE_CHECKING:
     )
     from .llms.fireworks_ai.completion.transformation import (
         FireworksAITextCompletionConfig as FireworksAITextCompletionConfig,
-    )
-    from .llms.fireworks_ai.audio_transcription.transformation import (
-        FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig,
     )
     from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
         FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig,
@@ -1940,6 +1960,9 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.modelscope.chat.transformation import (
+        ModelScopeChatConfig as ModelScopeChatConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

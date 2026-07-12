@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
+import { migratedHref } from "@/utils/migratedPages";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -349,6 +350,20 @@ describe("UI config and public endpoints", () => {
     );
     expect(configCall).toBeDefined();
   });
+
+  it("updates serverRootPath so path-based nav links carry the root path", async () => {
+    const uiConfig = {
+      server_root_path: "/litellm",
+      proxy_base_url: "https://example.com",
+    };
+
+    setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+
+    expect(Networking.serverRootPath).toBe("/litellm");
+    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+  });
 });
 
 describe("individualModelHealthCheckCall", () => {
@@ -419,7 +434,7 @@ describe("teamInfoCall", () => {
   it("should URL-encode team_id query param to handle special characters safely", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({ team_id: "team with spaces & special?chars" }),
+      text: vi.fn().mockResolvedValue(JSON.stringify({ team_id: "team with spaces & special?chars" })),
     } as any);
     global.fetch = mockFetch as any;
 
@@ -432,16 +447,15 @@ describe("teamInfoCall", () => {
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
 
     expect(urlStr).toContain("/team/info");
-    // Encoded value is present in the raw URL string (verifies encodeURIComponent was used)
-    expect(urlStr).toContain(`team_id=${encodeURIComponent(teamID)}`);
-    // Round-trip parse returns the original team_id
+    // Special characters are encoded (not present raw) and round-trip back to the original
+    expect(urlStr).not.toContain("team with spaces");
     expect(parsed.searchParams.get("team_id")).toBe(teamID);
   });
 
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({}),
+      text: vi.fn().mockResolvedValue("{}"),
     } as any);
     global.fetch = mockFetch as any;
 
@@ -451,5 +465,68 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+  });
+});
+
+describe("sessionSpendLogsCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should request the first page with defaults so the caller can page through the session", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 100, total_pages: 1 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/spend/logs/session/ui");
+    expect(parsed.searchParams.get("session_id")).toBe("session-123");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+
+  it("should pass explicit page and page_size query params for later pages", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 250, page: 3, page_size: 100, total_pages: 3 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123", 3, 100);
+
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("page")).toBe("3");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+});
+
+describe("buildModelGroupTestRequest", () => {
+  it("builds a chat completion request with NO max_tokens (reasoning models 400 on a tiny cap)", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("o3", "chat");
+    expect(path).toBe("/v1/chat/completions");
+    expect(body).toEqual({ model: "o3", messages: [{ role: "user", content: "test from litellm" }] });
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("builds an embeddings request for embedding mode", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("text-embedding-3-small", "embedding");
+    expect(path).toBe("/v1/embeddings");
+    expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
   });
 });

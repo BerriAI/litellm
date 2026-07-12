@@ -1,9 +1,40 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["scripts/**/*.ts"],
-  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.ts", "e2e_tests/**/*.ts"],
+  "entry": ["scripts/**/*.{ts,mjs}", "src/components/ui/**/*.{ts,tsx}"],
+  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}", "e2e_tests/**/*.ts"],
+  "ignore": ["src/lib/http/schema.d.ts"],
+  "ignoreDependencies": [
+    "openapi-typescript",
+    "@headlessui/tailwindcss",
+    "@tailwindcss/forms",
+    "tailwindcss",
+    "tw-animate-css"
+  ],
   "playwright": {
-    "config": "e2e_tests/playwright.config.ts",
+    "config": [
+      "e2e_tests/playwright.config.ts",
+      "e2e_tests/serverRootPath.config.ts",
+      "e2e_tests/migration.serverRootPath.config.ts"
+    ],
     "entry": ["e2e_tests/**/*.spec.ts", "e2e_tests/**/*.setup.ts", "e2e_tests/globalSetup.ts"]
+  },
+  "vitest": {
+    "config": ["vitest.config.ts"]
+  },
+  "rules": {
+    "files": "error",
+    "dependencies": "error",
+    "devDependencies": "error",
+    "optionalPeerDependencies": "error",
+    "unlisted": "error",
+    "binaries": "error",
+    "unresolved": "error",
+    "exports": "warn",
+    "nsExports": "warn",
+    "types": "warn",
+    "nsTypes": "warn",
+    "enumMembers": "warn",
+    "classMembers": "warn",
+    "duplicates": "warn"
   }
 }

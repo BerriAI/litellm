@@ -76,9 +76,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
 
-            verbose_logger.debug(
-                f"GitHub Copilot Embedding API: Successfully configured headers for model {model}"
-            )
+            verbose_logger.debug(f"GitHub Copilot Embedding API: Successfully configured headers for model {model}")
 
             return merged_headers
 
@@ -185,11 +183,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Any
-    ) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
         from litellm.llms.openai.openai import OpenAIConfig
 
-        return OpenAIConfig().get_error_class(
-            error_message=error_message, status_code=status_code, headers=headers
-        )
+        return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

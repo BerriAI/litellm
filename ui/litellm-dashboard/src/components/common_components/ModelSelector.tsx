@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { TextInput, Text } from "@tremor/react";
 import { Select } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 interface ModelSelectorProps {
   accessToken: string;
@@ -42,7 +42,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for selector:", uniqueModels);
 
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);

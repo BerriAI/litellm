@@ -8,7 +8,7 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -27,9 +27,11 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import (
+from litellm.integrations.otel.plumbing.context import (  # noqa: E402
+    reset_mcp_message_trace_carrier,
+    set_mcp_message_trace_carrier,
     set_request_root_span,
-)  # noqa: E402
+)
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -53,8 +55,10 @@ def _reset_request_root_span():
     from litellm.integrations.otel.plumbing import context as _otel_context
 
     _otel_context._request_root_span.set(None)
+    _otel_context._mcp_message_trace_carrier.set(None)
     yield
     _otel_context._request_root_span.set(None)
+    _otel_context._mcp_message_trace_carrier.set(None)
 
 
 def _payload(**overrides):
@@ -164,6 +168,43 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.status.status_code is StatusCode.UNSET
 
 
+def test_streaming_span_carries_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
+
+
+def test_non_streaming_span_has_no_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(),
+        "optional_params": {},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 5, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
+def test_streaming_span_without_timing_omits_time_to_first_chunk():
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
 def test_async_log_failure_event_marks_error_status():
     logger, exporter = _logger()
     payload = _payload(
@@ -174,6 +215,61 @@ def test_async_log_failure_event_marks_error_status():
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "RateLimitError"
+
+
+def _logger_with_events(enable_events):
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=enable_events)
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=span_exporter)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider, logger_provider=logger_provider)
+    return logger, span_exporter, log_exporter
+
+
+def test_enable_events_records_operation_exception_through_failure_callback():
+    """With ``enable_events`` on, a real failure callback records the GenAI
+    ``gen_ai.client.operation.exception`` log event, carrying the traceback from
+    the standard logging payload and correlated to the LLM-call span."""
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    logger, span_exporter, log_exporter = _logger_with_events(enable_events=True)
+    payload = _payload(
+        status="failure",
+        error_information={
+            "error_class": "RateLimitError",
+            "error_message": "429 rate limited",
+            "traceback": "Traceback (most recent call last) ...",
+        },
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+
+    (span,) = span_exporter.get_finished_spans()
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+    assert record.attributes["event.name"] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "429 rate limited"
+    assert record.attributes[ExceptionEvent.STACKTRACE] == "Traceback (most recent call last) ..."
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+
+
+def test_events_off_by_default_records_no_log_event_on_failure():
+    """``enable_events`` defaults to off: even with a logs pipeline injected, a
+    failure records only the span-side error surface, no log event."""
+    logger, span_exporter, log_exporter = _logger_with_events(enable_events=False)
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_message": "429"},
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert log_exporter.get_finished_logs() == ()
+    assert OpenTelemetryV2Config(exporter="in_memory").enable_events is False
 
 
 def test_sync_log_event_is_noop():
@@ -385,6 +481,190 @@ def test_mcp_tool_call_metadata_read_from_nested_metadata_not_top_level():
     assert "mcp.session.id" not in span.attributes
     assert "gen_ai.tool.name" not in span.attributes
     assert LiteLLM.MCP_SERVER_NAME not in span.attributes
+
+
+def _mcp_list_payload(**overrides):
+    payload = {
+        "call_type": "list_mcp_tools",
+        "status": "success",
+        "litellm_call_id": "mcp_list_1",
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "spend_logs_metadata": {"mcp_operation": "list_tools"},
+        },
+        "hidden_params": {},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_mcp_list_tools_emits_client_span():
+    """An MCP ``tools/list`` discovery call becomes a CLIENT span named ``tools/list``,
+    carrying only the MCP method and the call id. Per the GenAI MCP semconv the list
+    span omits ``gen_ai.operation.name`` and ``gen_ai.tool.name`` (tool-call-only) and
+    ``mcp.session.id`` (the list path threads no session id), so a naive reuse of the
+    tool-call mapper would wrongly stamp them, and the pre-fix code emitted no span at
+    all for a ``list_mcp_tools`` payload."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_list_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/list"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["mcp.method.name"] == "tools/list"
+    assert span.attributes[LiteLLM.CALL_ID] == "mcp_list_1"
+    assert span.status.status_code is StatusCode.UNSET
+    # Bug-killers: no span pre-fix (empty exporter -> the unpack above raises), and a
+    # tool-call-shaped fix would leak execute_tool / tool name / session id here.
+    assert GenAI.OPERATION_NAME not in span.attributes
+    assert "gen_ai.tool.name" not in span.attributes
+    assert "mcp.session.id" not in span.attributes
+
+
+_MCP_SPAN_CASES = [
+    (_mcp_payload, "tools/call get_weather"),
+    (_mcp_list_payload, "tools/list"),
+]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_roots_and_links_transport_without_propagated_context(
+    make_payload, span_name
+):
+    """MCP and the HTTP transport are independent lifecycles (one streamable-HTTP
+    session multiplexes many messages), so per the MCP semconv the message span
+    must NOT nest under the session/transport span — that is what made it render
+    skewed at the session's start. With no propagated ``params._meta`` context it
+    starts its own root trace and records the transport span as a *link*, never
+    the parent."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is None
+    assert span.context.trace_id != transport.get_span_context().trace_id
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_parents_to_propagated_meta_trace_context(make_payload, span_name):
+    """When the client propagates W3C trace context in the request's
+    ``params._meta`` (SEP-414), the MCP span parents to it (one distributed trace)
+    and still links the transport span — never falling through to the
+    ambient/session span."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.context.trace_id == 0x11111111111111111111111111111111
+    assert span.parent is not None
+    assert span.parent.span_id == 0x2222222222222222
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
+    """The MCP span must NOT honor W3C Baggage from the client's ``params._meta``.
+
+    ``params._meta`` is caller-controlled and the baggage processor stamps
+    allowlisted baggage keys onto every span, so extracting remote baggage would
+    let a client spoof a span's identity (e.g. ``litellm.team.id``). The propagator
+    extracts trace context only, so the spoofed keys never reach the span while the
+    legitimate traceparent parenting still works."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier(
+        {
+            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+            "baggage": "litellm.team.id=spoofed-team,litellm.metadata.user_api_key_user_id=attacker",
+        }
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    # Trace context still honored: proves the carrier was processed, not dropped wholesale.
+    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
+    # Identity is the authenticated payload's team, never the client's spoofed value.
+    assert span.attributes[LiteLLM.TEAM_ID] == "t1"
+    assert "litellm.metadata.user_api_key_user_id" not in span.attributes
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
+    """An MCP span is labeled with the authenticated request's identity (team/key),
+    seeded from the parsed payload like the LLM-call span. Without this seeding the
+    span — parented to an empty remote context — would carry no team/key attribute at
+    all, so it couldn't be attributed or filtered by team in the traces backend."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.attributes[LiteLLM.TEAM_ID] == "t1"
+
+
+def test_mcp_span_malformed_traceparent_starts_root():
+    """A malformed traceparent in ``params._meta`` must not crash or parent to a
+    bogus span: the propagator ignores it, so the span starts its own root trace and
+    still links the transport span."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier({"traceparent": "not-a-valid-traceparent"})
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": _mcp_list_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
+    assert span.parent is None
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
 
 
 def test_pre_call_idempotent_keeps_first_span():
@@ -1058,6 +1338,97 @@ def test_proxy_global_first_registered_wins(monkeypatch):
     assert second is not first
 
 
+def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
+    """The global-provider selection must reuse the logger the callback factory
+    already built (e.g. an arize preset logger that folds the OTEL_* base exporter
+    and its own exporter into one logger), not mint a second generic one.
+
+    Regression for the orphan span: the startup publish used to search
+    ``service_callback`` (which a preset logger does not always reach), miss the
+    existing logger, and build a second generic ``OpenTelemetryV2`` whose provider
+    became the OTel global. The server span then exported through that generic
+    provider while the preset logger's gen-ai spans exported to the preset backend,
+    so on that backend the LLM span had no parent. Selecting from the loggers the
+    factory registered keeps one logger, one provider, one connected trace.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    chosen = select_global_otel_v2_logger([object(), preset_logger, object()])
+    assert chosen is preset_logger
+
+
+def test_select_global_otel_v2_logger_prefers_registered_owner_over_list_scan():
+    """Selection reuses the canonical owner the factory registered, not whatever
+    the ``in_memory_loggers`` scan happens to reach first.
+
+    The factory designates one logger as ``proxy_server.open_telemetry_logger`` the
+    moment it builds the first one, and every other v2 path (guardrail, seed,
+    phase spans) routes through that owner. With two presets configured, the list
+    scan's "first ``OpenTelemetryV2``" is order-dependent and could disagree with
+    that owner, publishing one backend's provider as the global while the rest of
+    the v2 code emits through another. Passing the registered owner pins the global
+    provider to the same logger the rest of the code already uses.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    owner = OpenTelemetryV2(
+        config=cfg,
+        callback_name="arize",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+    other = OpenTelemetryV2(
+        config=cfg,
+        callback_name="langfuse_otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+
+    chosen = select_global_otel_v2_logger([other, owner], registered=owner)
+    assert chosen is owner
+
+
+def test_select_global_otel_v2_logger_builds_one_when_none_registered():
+    """With no logger registered, selection builds exactly one generic logger so
+    the proxy still publishes a provider; it must not return ``None``."""
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    chosen = select_global_otel_v2_logger([])
+    assert isinstance(chosen, OpenTelemetryV2)
+
+
+def test_publish_global_otel_v2_provider_sets_selected_logger_provider():
+    """The startup publish must set the OTel global provider to the *selected*
+    logger's provider (the preset logger that owns every exporter), so the FastAPI
+    server span and the gen-ai spans share one provider and one trace.
+
+    Drives the publish step the proxy runs at startup, with the global-setter
+    injected so no real global OTel state is mutated. Guards the wiring that a unit
+    test would otherwise miss: that the published provider is the selected logger's,
+    not some other.
+    """
+    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    published = []
+    chosen = publish_global_otel_v2_provider(
+        [object(), preset_logger], published.append
+    )
+
+    assert chosen is preset_logger
+    assert published == [preset_logger._tracer_provider]
+
+
 def test_registers_into_litellm_service_callback(monkeypatch):
     """The logger must mutate ``litellm.service_callback`` in place. An empty
     list is falsy, so a ``getattr(..) or []`` would append to a throwaway local
@@ -1314,3 +1685,178 @@ def test_module_level_emit_guardrail_span_swallows_emit_errors(monkeypatch):
 
     monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: _Boom())
     otel_logger.emit_guardrail_span(_guardrail_entry(start=1.0, end=2.0))
+
+
+# --------------------------------------------------------------------------- #
+#  Metrics: invalid attribute-filter config is visible, not a silent no-op
+# --------------------------------------------------------------------------- #
+
+
+def _emitted_metric_names(reader) -> set:
+    data = reader.get_metrics_data()
+    if data is None:
+        return set()
+    return {
+        m.name
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if any(m.data.data_points)
+    }
+
+
+def _metric_success_kwargs() -> dict:
+    return {
+        "model": "gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_params": {"custom_llm_provider": "openai"},
+        "optional_params": {},
+        "response_cost": 0.001,
+        "standard_logging_object": {"metadata": {}, "hidden_params": {}},
+    }
+
+
+def test_invalid_metric_filter_logged_once_records_nothing(caplog, monkeypatch):
+    """An invalid ``callback_settings.otel.attributes`` (include_list + exclude_list
+    both set) must make the operator-fixable config error visible once at ERROR and
+    record no metrics — without raising out of the success path and without
+    per-request log spam. Mirrors the v1 fix against the silent-no-op failure mode.
+    """
+    import logging
+
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "otel": {
+                "attributes": {
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            }
+        },
+        raising=False,
+    )
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True)
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=1)
+    response_obj = {"usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        # Neither call may raise; the bad filter is caught in the logger.
+        asyncio.run(
+            logger.async_log_success_event(
+                _metric_success_kwargs(), response_obj, start, end
+            )
+        )
+        asyncio.run(
+            logger.async_log_success_event(
+                _metric_success_kwargs(), response_obj, start, end
+            )
+        )
+
+    assert _emitted_metric_names(reader) == set()  # nothing recorded
+    errors = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and "metric filter" in r.getMessage()
+    ]
+    assert len(errors) == 1  # logged once, second bad record does not re-log
+
+
+def test_valid_metric_filter_records_six_metrics(monkeypatch):
+    """The happy path: with no attribute filter, a successful LLM call records all
+    six GenAI histograms, and the token metric keeps its input/output split."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True)
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=2)
+    kwargs = _metric_success_kwargs()
+    kwargs["api_call_start_time"] = start.timestamp()
+    kwargs["completion_start_time"] = (start + timedelta(seconds=0.5)).timestamp()
+    kwargs["end_time"] = end.timestamp()
+    kwargs["optional_params"] = {"stream": True}
+    response_obj = {"usage": {"prompt_tokens": 5, "completion_tokens": 7}}
+
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert _emitted_metric_names(reader) == {
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+        "gen_ai.client.token.cost",
+        "gen_ai.client.response.time_to_first_token",
+        "gen_ai.client.response.time_per_output_token",
+        "gen_ai.client.response.duration",
+    }
+
+    data = reader.get_metrics_data()
+    token_types = {
+        dp.attributes.get("gen_ai.token.type")
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if m.name == "gen_ai.client.token.usage"
+        for dp in m.data.data_points
+    }
+    assert token_types == {"input", "output"}
+
+
+def test_metrics_disabled_by_default_records_nothing(monkeypatch):
+    """With ``enable_metrics`` off (the default), no meter is built and a success
+    event records nothing — the default behavior must stay unchanged."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")  # enable_metrics defaults False
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+    assert logger._metrics_recorder is None
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(seconds=1)
+    asyncio.run(
+        logger.async_log_success_event(
+            _metric_success_kwargs(),
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+            start,
+            end,
+        )
+    )
+    assert _emitted_metric_names(reader) == set()

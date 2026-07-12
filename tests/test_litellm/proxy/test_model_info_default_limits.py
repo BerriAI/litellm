@@ -146,9 +146,9 @@ class TestModelInfoEndpointWithRouter:
         deployment_dict = deployment.model_dump(exclude_none=True)
 
         mock_router = MagicMock()
+        mock_router.model_list = [deployment_dict]
         mock_router.get_model_names.return_value = ["model1"]
         mock_router.get_model_access_groups.return_value = {}
-        mock_router.get_model_list.return_value = [deployment_dict]
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
 
@@ -156,6 +156,7 @@ class TestModelInfoEndpointWithRouter:
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
             patch("litellm.proxy.proxy_server.llm_model_list", [deployment_dict]),
             patch("litellm.proxy.proxy_server.user_model", None),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
             patch("litellm.proxy.proxy_server.get_key_models", return_value=["model1"]),
             patch(
                 "litellm.proxy.proxy_server.get_team_models", return_value=["model1"]

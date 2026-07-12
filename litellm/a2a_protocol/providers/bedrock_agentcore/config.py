@@ -30,13 +30,13 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for BedrockAgentCoreA2AConfig "
-                "(must contain model with AgentCore ARN)"
+                "litellm_params is required for BedrockAgentCoreA2AConfig (must contain model with AgentCore ARN)"
             )
         return await BedrockAgentCoreA2AHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         )
 
     async def handle_streaming(
@@ -50,12 +50,12 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for BedrockAgentCoreA2AConfig "
-                "(must contain model with AgentCore ARN)"
+                "litellm_params is required for BedrockAgentCoreA2AConfig (must contain model with AgentCore ARN)"
             )
         async for chunk in BedrockAgentCoreA2AHandler.handle_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         ):
             yield chunk

@@ -6,6 +6,7 @@ from litellm.proxy._types import (
     Member,
     NewUserResponse,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 
@@ -22,16 +23,12 @@ class ScimTransformations:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise HTTPException(
-                status_code=500, detail={"error": "No database connected"}
-            )
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         # Get user's teams/groups
         groups = []
         for team_id in user.teams or []:
-            team = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
-            )
+            team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)
                 groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
@@ -49,8 +46,14 @@ class ScimTransformations:
         scim_active = metadata.get("scim_active")
         active = True if scim_active is None else bool(scim_active)
 
+        schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user = None
+        if metadata.get(SCIM_ENTERPRISE_METADATA_KEY):
+            enterprise_user = SCIMEnterpriseUser.model_validate(metadata[SCIM_ENTERPRISE_METADATA_KEY])
+            schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
         return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            schemas=schemas,
             id=user.user_id,
             userName=ScimTransformations._get_scim_user_name(user),
             displayName=ScimTransformations._get_scim_user_name(user),
@@ -61,6 +64,7 @@ class ScimTransformations:
             emails=emails,
             groups=groups,
             active=active,
+            enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
                 "created": user_created_at,
@@ -86,9 +90,7 @@ class ScimTransformations:
         """
         metadata = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
-                **metadata["scim_metadata"]
-            )
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
                 return scim_metadata.familyName
 
@@ -103,9 +105,7 @@ class ScimTransformations:
         """
         metadata = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
-                **metadata["scim_metadata"]
-            )
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
                 return scim_metadata.givenName
 
@@ -120,9 +120,7 @@ class ScimTransformations:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise HTTPException(
-                status_code=500, detail={"error": "No database connected"}
-            )
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         if isinstance(team, dict):
             team = LiteLLM_TeamTable(**team)

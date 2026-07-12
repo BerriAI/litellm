@@ -27,6 +27,11 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import (
+    WorkflowEventRepository,
+    WorkflowMessageRepository,
+    WorkflowRunRepository,
+)
 
 router = APIRouter()
 
@@ -96,13 +101,13 @@ class WorkflowMessageCreateRequest(BaseModel):
 async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str) -> int:
     """Return MAX(sequence_number) + 1 for the given run, for either events or messages."""
     if table == "events":
-        rows = await prisma_client.db.litellm_workflowevent.find_many(
+        rows = await WorkflowEventRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "desc"},
             take=1,
         )
     else:
-        rows = await prisma_client.db.litellm_workflowmessage.find_many(
+        rows = await WorkflowMessageRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "desc"},
             take=1,
@@ -116,9 +121,7 @@ async def _require_run(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Any:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
-    run = await prisma_client.db.litellm_workflowrun.find_unique(
-        where={"run_id": run_id}
-    )
+    run = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     if user_api_key_dict is not None and not _is_admin(user_api_key_dict):
@@ -150,9 +153,7 @@ async def create_workflow_run(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         create_data: Dict[str, Any] = {
@@ -163,7 +164,7 @@ async def create_workflow_run(
             create_data["input"] = _json(data.input)
         if data.metadata is not None:
             create_data["metadata"] = _json(data.metadata)
-        run = await prisma_client.db.litellm_workflowrun.create(data=create_data)
+        run = await WorkflowRunRepository(prisma_client).table.create(data=create_data)
         return run
     except Exception as e:
         verbose_proxy_logger.exception("Error creating workflow run: %s", e)
@@ -188,9 +189,7 @@ async def list_workflow_runs(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     where: Dict[str, Any] = {}
     if workflow_type:
@@ -206,7 +205,7 @@ async def list_workflow_runs(
             where["created_by"] = caller
 
     try:
-        runs = await prisma_client.db.litellm_workflowrun.find_many(
+        runs = await WorkflowRunRepository(prisma_client).table.find_many(
             where=where,
             order={"created_at": "desc"},
             take=limit,
@@ -230,12 +229,10 @@ async def get_workflow_run(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        run = await prisma_client.db.litellm_workflowrun.find_unique(
+        run = await WorkflowRunRepository(prisma_client).table.find_unique(
             where={"run_id": run_id},
             include={"events": {"order_by": {"sequence_number": "desc"}, "take": 1}},
         )
@@ -267,9 +264,7 @@ async def update_workflow_run(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     update: Dict[str, Any] = {}
     if data.status is not None:
@@ -286,7 +281,7 @@ async def update_workflow_run(
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
     try:
-        run = await prisma_client.db.litellm_workflowrun.update(
+        run = await WorkflowRunRepository(prisma_client).table.update(
             where={"run_id": run_id},
             data=update,
         )
@@ -319,9 +314,7 @@ async def append_workflow_event(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
@@ -365,9 +358,7 @@ async def append_workflow_event(
             verbose_proxy_logger.exception("Error appending workflow event: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    raise HTTPException(
-        status_code=500, detail="Failed to append event"
-    )  # pragma: no cover
+    raise HTTPException(status_code=500, detail="Failed to append event")  # pragma: no cover
 
 
 @router.get(
@@ -384,14 +375,12 @@ async def list_workflow_events(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
     try:
-        events = await prisma_client.db.litellm_workflowevent.find_many(
+        events = await WorkflowEventRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,
@@ -419,9 +408,7 @@ async def append_workflow_message(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
@@ -436,7 +423,7 @@ async def append_workflow_message(
             }
             if data.session_id is not None:
                 msg_data["session_id"] = data.session_id
-            msg = await prisma_client.db.litellm_workflowmessage.create(data=msg_data)
+            msg = await WorkflowMessageRepository(prisma_client).table.create(data=msg_data)
             return msg
 
         except Exception as e:
@@ -455,9 +442,7 @@ async def append_workflow_message(
             verbose_proxy_logger.exception("Error appending workflow message: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    raise HTTPException(
-        status_code=500, detail="Failed to append message"
-    )  # pragma: no cover
+    raise HTTPException(status_code=500, detail="Failed to append message")  # pragma: no cover
 
 
 @router.get(
@@ -474,14 +459,12 @@ async def list_workflow_messages(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
     try:
-        messages = await prisma_client.db.litellm_workflowmessage.find_many(
+        messages = await WorkflowMessageRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,
