@@ -32,7 +32,7 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
-TEXT_PART_TYPES: Frozenset[str] = frozenset({"text", "input_text", "output_text", "summary_text"})
+TEXT_PART_TYPES: frozenset[str] = frozenset({"text", "input_text", "output_text", "summary_text"})
 
 
 def _iter_summary_texts(summary: Any) -> Iterator[str]:
