@@ -113,19 +113,16 @@ METRIC_METADATA_KEYS: Tuple[str, ...] = (
 )
 
 
-def _prune_none(value: "AnyValue") -> "AnyValue":
-    """Recursively drop ``None`` entries from dicts and lists.
+_PRUNE_MAX_DEPTH = 16
 
-    The OTLP exporter encodes a log record's body as ``AnyValue``, which has no
-    representation for ``None`` and raises ``Invalid type NoneType`` on it. That
-    aborts the export and makes ``BatchLogRecordProcessor`` drop the whole batch,
-    so a content event carrying a ``None`` (e.g. a ``content=None`` assistant
-    message) is silently lost. Pruning ``None`` first keeps it (Issue #32996).
-    """
+
+def _prune_none(value: "AnyValue", _depth: int = 0) -> "AnyValue":
+    if _depth >= _PRUNE_MAX_DEPTH:
+        return safe_dumps(value)
     if isinstance(value, dict):
-        return {key: _prune_none(val) for key, val in value.items() if val is not None}
+        return {key: _prune_none(val, _depth + 1) for key, val in value.items() if val is not None}
     if isinstance(value, list):
-        return [_prune_none(item) for item in value if item is not None]
+        return [_prune_none(item, _depth + 1) for item in value if item is not None]
     return value
 
 
