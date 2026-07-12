@@ -722,6 +722,11 @@ class RouteChecks:
         The Claude Code CLI fetches this route without custom headers, so it
         allows passing key=api_key in the query params (mirrors the Google
         generateContent carve-out above).
+
+        Known tradeoff, shared with the Google carve-out: a key passed this
+        way can end up unredacted in web-server access logs. Recommend admins
+        use a scoped, rotatable key for marketplace URLs rather than the
+        master key.
         """
         return route == "/claude-code/marketplace.json"
 

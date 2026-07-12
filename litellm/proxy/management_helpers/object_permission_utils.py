@@ -707,6 +707,46 @@ async def validate_key_vector_stores_against_team(
     )
 
 
+def _extract_requested_allowed_skills(
+    object_permission: Optional[ObjectPermissionDict],
+) -> set[str]:
+    """Return allowed_skills names from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return set()
+    raw = object_permission.get("allowed_skills")
+    if isinstance(raw, list):
+        return {str(x) for x in raw if x}
+    return set()
+
+
+async def validate_key_allowed_skills_against_team(
+    object_permission: Optional[ObjectPermissionDict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    is_proxy_admin: bool = False,
+) -> None:
+    """
+    Reject allowed_skills requested on a personal (no team) key by a non-admin
+    caller. Claude Code skill access is granted at use-time from the key's
+    object_permission.allowed_skills list, so the assignment is the
+    authorization boundary. Team keys and proxy admins are unaffected.
+    """
+    requested = _extract_requested_allowed_skills(object_permission)
+    if not requested:
+        return
+    if team_obj is not None or is_proxy_admin:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": (
+                "Key is not in a team. Skills cannot be assigned to "
+                "personal keys by non-admin callers. Disallowed skills: "
+                f"{sorted(requested)}."
+            )
+        },
+    )
+
+
 def _extract_requested_search_tools(
     object_permission: Optional[ObjectPermissionDict],
 ) -> list[str]:

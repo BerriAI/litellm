@@ -78,6 +78,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_key_allowed_skills_against_team,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -974,6 +975,11 @@ async def _common_key_generation_helper(
         is_proxy_admin=_is_proxy_admin_caller,
     )
     await validate_key_vector_stores_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
+    )
+    await validate_key_allowed_skills_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         is_proxy_admin=_is_proxy_admin_caller,
@@ -2231,6 +2237,11 @@ async def _validate_mcp_servers_for_key_update(
         is_proxy_admin=is_proxy_admin,
     )
     await validate_key_vector_stores_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
+    )
+    await validate_key_allowed_skills_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         is_proxy_admin=is_proxy_admin,
@@ -4748,6 +4759,11 @@ async def regenerate_key_fn(
                 is_proxy_admin=_regen_is_proxy_admin,
             )
             await validate_key_vector_stores_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            await validate_key_allowed_skills_against_team(
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,
                 is_proxy_admin=_regen_is_proxy_admin,

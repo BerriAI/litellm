@@ -37,7 +37,10 @@ from litellm.proxy.auth.user_api_key_auth import (
     google_ai_studio_api_key_header,
     user_api_key_auth,
 )
-from litellm.repositories.table_repositories import ClaudeCodePluginRepository
+from litellm.repositories.table_repositories import (
+    ClaudeCodePluginRepository,
+    SkillMarketplaceRepository,
+)
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,
@@ -118,17 +121,30 @@ async def get_marketplace(
         prisma_client = await _get_prisma_client()
 
         allowed_skills: FrozenSet[str] = (
-            await get_allowed_skills(user_api_key_dict, prisma_client)
-            if user_api_key_dict is not None
-            else frozenset()
+            await get_allowed_skills(user_api_key_dict, prisma_client) if user_api_key_dict is not None else frozenset()
         )
         where = (
-            {"OR": [{"enabled": True}, {"name": {"in": list(allowed_skills)}}]}
-            if allowed_skills
-            else {"enabled": True}
+            {"OR": [{"enabled": True}, {"name": {"in": list(allowed_skills)}}]} if allowed_skills else {"enabled": True}
         )
 
         plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
+
+        # A per-skill grant (allowed_skills) is a standing entry on a
+        # key/team/org's object_permission - it isn't cleared just because an
+        # admin later disables the marketplace that owned the skill. Without
+        # this, a disabled marketplace's skills stay reachable forever by
+        # anyone previously granted one by name. Plugins with no
+        # marketplace_id (hand-registered) are unaffected.
+        marketplace_ids = {p.marketplace_id for p in plugins if p.marketplace_id}
+        if marketplace_ids:
+            disabled_marketplace_ids = {
+                m.id
+                for m in await SkillMarketplaceRepository(prisma_client).table.find_many(
+                    where={"id": {"in": list(marketplace_ids)}, "enabled": False}
+                )
+            }
+            if disabled_marketplace_ids:
+                plugins = [p for p in plugins if p.marketplace_id not in disabled_marketplace_ids]
 
         plugin_list = []
         for plugin in plugins:

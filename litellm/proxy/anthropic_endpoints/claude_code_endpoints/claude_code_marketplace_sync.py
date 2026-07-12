@@ -564,10 +564,7 @@ async def _fetch_entries_for_docs(
 ) -> tuple[tuple[ResolvedPluginEntry, ...], int]:
     """Returns (successfully-fetched entries, count skipped after retries)."""
     fetched = await asyncio.gather(
-        *(
-            _fetch_skill_entry(client, repo, branch, marketplace_name, doc, timeout=timeout)
-            for doc in docs
-        )
+        *(_fetch_skill_entry(client, repo, branch, marketplace_name, doc, timeout=timeout) for doc in docs)
     )
     entries = tuple(entry for entry in fetched if entry is not None)
     return entries, len(docs) - len(entries)
@@ -657,11 +654,59 @@ def _build_plugin_manifest_json(entry: ResolvedPluginEntry) -> str:
     )
 
 
+def _existing_source_changed(existing_manifest_json: str, entry: ResolvedPluginEntry) -> bool:
+    try:
+        existing_source = json.loads(existing_manifest_json).get("source")
+    except json.JSONDecodeError:
+        return True
+    return existing_source != entry.source.model_dump()
+
+
 async def _upsert_single_plugin(
     repository: ClaudeCodePluginRepository, marketplace_id: str, entry: ResolvedPluginEntry
-) -> None:
+) -> bool:
+    """Upsert one synced entry. Returns False (and writes nothing) if it was
+    skipped because ``entry.stored_name`` collides with a row owned by a
+    different marketplace - see the collision-guard comment below."""
     now = datetime.now(timezone.utc)
     manifest_json = _build_plugin_manifest_json(entry)
+
+    existing = await repository.table.find_unique(where={"name": entry.stored_name})
+
+    # `name` is globally unique but namespacing skills as "{marketplace}--{skill}"
+    # is only a convention, not schema-enforced - a marketplace slug or skill
+    # name chosen (or supplied by a compromised upstream repo) to collide with
+    # another marketplace's, or a hand-registered plugin's, stored_name must
+    # not silently overwrite that other row. Refuse and leave it untouched.
+    if existing is not None and existing.marketplace_id != marketplace_id:
+        verbose_proxy_logger.warning(
+            "skill-marketplace-sync: %r already registered under a different "
+            "marketplace (marketplace_id=%r), refusing to overwrite from marketplace_id=%r",
+            entry.stored_name,
+            existing.marketplace_id,
+            marketplace_id,
+        )
+        return False
+
+    # A skill an admin has already reviewed and published (enabled=True) must
+    # not have its git source silently swapped by whoever controls the
+    # upstream marketplace repo on the next sync - that would let a
+    # compromised/malicious upstream repoint an already-trusted, publicly
+    # served skill without any re-review. Demote it back to unpublished so an
+    # admin has to look at it again before it's public with the new source.
+    update_data: dict[str, Any] = {
+        "description": entry.description,
+        "manifest_json": manifest_json,
+        "marketplace_id": marketplace_id,
+        "updated_at": now,
+    }
+    if existing is not None and existing.enabled and _existing_source_changed(existing.manifest_json, entry):
+        verbose_proxy_logger.warning(
+            "skill-marketplace-sync: %r changed source on re-sync, unpublishing pending admin re-review",
+            entry.stored_name,
+        )
+        update_data["enabled"] = False
+
     await repository.table.upsert(
         where={"name": entry.stored_name},
         data={
@@ -675,14 +720,10 @@ async def _upsert_single_plugin(
                 "created_at": now,
                 "updated_at": now,
             },
-            "update": {
-                "description": entry.description,
-                "manifest_json": manifest_json,
-                "marketplace_id": marketplace_id,
-                "updated_at": now,
-            },
+            "update": update_data,
         },
     )
+    return True
 
 
 # prisma_client has no importable type stubs in this codebase (generated at
@@ -692,9 +733,12 @@ async def _upsert_plugin_entries(
     prisma_client: Any,  # noqa: ANN401  # see comment above
     marketplace_id: str,
     entries: tuple[ResolvedPluginEntry, ...],
-) -> None:
+) -> int:
+    """Returns the number of entries skipped due to a stored_name collision
+    with a row owned by a different marketplace."""
     repository = ClaudeCodePluginRepository(prisma_client)
-    await asyncio.gather(*(_upsert_single_plugin(repository, marketplace_id, entry) for entry in entries))
+    written = await asyncio.gather(*(_upsert_single_plugin(repository, marketplace_id, entry) for entry in entries))
+    return sum(1 for ok in written if not ok)
 
 
 async def _soft_disable_stale_plugins(
@@ -758,15 +802,23 @@ async def resolve_and_sync(
         await _record_sync_failure(prisma_client, marketplace_row, str(exc))
         return SyncResult(status="error", error=str(exc), plugin_count=0)
 
-    if skipped_count:
+    collision_skipped_count = await _upsert_plugin_entries(prisma_client, marketplace_row.id, entries)
+    total_skipped_count = skipped_count + collision_skipped_count
+    if total_skipped_count:
         verbose_proxy_logger.warning(
-            "skill-marketplace-sync: %r imported %d skill(s), skipped %d after retries",
+            "skill-marketplace-sync: %r imported %d skill(s), skipped %d (%d after retries, %d name collisions)",
             marketplace_row.name,
-            len(entries),
+            len(entries) - collision_skipped_count,
+            total_skipped_count,
             skipped_count,
+            collision_skipped_count,
         )
 
-    await _upsert_plugin_entries(prisma_client, marketplace_row.id, entries)
     await _soft_disable_stale_plugins(prisma_client, marketplace_row.id, entries)
-    await _record_sync_success(prisma_client, marketplace_row, source_type, skipped_count)
-    return SyncResult(status="success", error=None, plugin_count=len(entries), skipped_count=skipped_count)
+    await _record_sync_success(prisma_client, marketplace_row, source_type, total_skipped_count)
+    return SyncResult(
+        status="success",
+        error=None,
+        plugin_count=len(entries) - collision_skipped_count,
+        skipped_count=total_skipped_count,
+    )

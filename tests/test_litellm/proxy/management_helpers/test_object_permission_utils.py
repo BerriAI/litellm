@@ -22,6 +22,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _rewrite_object_permission_mcp_servers,
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
+    validate_key_allowed_skills_against_team,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -1211,6 +1212,58 @@ async def test_empty_object_permission_passes_for_personal_non_admin():
     )
     await validate_key_search_tools_against_team(
         object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_non_admin_cannot_assign_allowed_skills():
+    """
+    Regression test: a non-admin caller with no team must not be able to
+    self-assign Claude Code skill access on their own key - allowed_skills
+    is the authorization boundary get_allowed_skills() reads from directly,
+    with no team/org ceiling to fall back on for a personal key.
+    """
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_allowed_skills_against_team(
+            object_permission={"allowed_skills": ["anthropic-agent-skills--private-skill"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "anthropic-agent-skills--private-skill" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_personal_admin_can_assign_allowed_skills():
+    await validate_key_allowed_skills_against_team(
+        object_permission={"allowed_skills": ["anthropic-agent-skills--private-skill"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_key_allowed_skills_unrestricted_at_create():
+    """Team-scoped keys retain their existing trust model at create time."""
+    team_obj = _make_team_obj_search()
+    await validate_key_allowed_skills_against_team(
+        object_permission={"allowed_skills": ["anthropic-agent-skills--anything"]},
+        team_obj=team_obj,
+        is_proxy_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_allowed_skills_passes_for_personal_non_admin():
+    await validate_key_allowed_skills_against_team(
+        object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+    await validate_key_allowed_skills_against_team(
+        object_permission={"allowed_skills": []},
         team_obj=None,
         is_proxy_admin=False,
     )

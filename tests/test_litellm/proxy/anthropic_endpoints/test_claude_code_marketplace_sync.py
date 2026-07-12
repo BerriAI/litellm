@@ -636,3 +636,115 @@ async def test_resolve_and_sync_soft_disables_stale_plugin(monkeypatch):
     refreshed_stale = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": stale_name})
     assert refreshed_stale is not None
     assert refreshed_stale.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_refuses_to_overwrite_row_owned_by_another_marketplace(monkeypatch):
+    """Regression test: `name` is only conventionally namespaced as
+    "{marketplace}--{skill}", not schema-enforced, so a marketplace slug or
+    skill name that collides with an existing row owned by a *different*
+    marketplace (or a hand-registered plugin with no marketplace_id) must be
+    skipped, never silently overwritten."""
+    client = _make_fake_prisma_client()
+
+    colliding_name = "anthropic-agent-skills--claude-api"
+    hand_registered = await client.db.litellm_claudecodeplugintable.create(
+        data={
+            "name": colliding_name,
+            "description": "trusted, hand-registered plugin",
+            "manifest_json": json.dumps({"source": {"source": "github", "repo": "trusted/repo"}}),
+            "files_json": "{}",
+            "enabled": True,
+            "marketplace_id": None,
+            "created_at": datetime(2023, 1, 1),
+            "updated_at": datetime(2023, 1, 1),
+        }
+    )
+
+    marketplace = await _create_marketplace(client, name="anthropic-agent-skills", source_ref="anthropics/skills")
+
+    async def _get(http_client, url, **kwargs):
+        return httpx.Response(200, json=_ANTHROPIC_SKILLS_MANIFEST)
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+    assert result.plugin_count == 2  # document-skills, example-skills - claude-api collided and was skipped
+    assert result.skipped_count == 1
+
+    untouched = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": colliding_name})
+    assert untouched.marketplace_id is None
+    assert untouched.enabled is True
+    assert json.loads(untouched.manifest_json)["source"] == {"source": "github", "repo": "trusted/repo"}
+    assert untouched.id == hand_registered.id
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_unpublishes_skill_whose_source_changed(monkeypatch):
+    """Regression test: an already-public (enabled=True) skill must not have
+    its git source silently swapped by a re-sync of the marketplace that owns
+    it - that would let a compromised/malicious upstream repoint an
+    already-trusted skill with no admin re-review. The sync should demote it
+    back to enabled=False instead of overwriting the source in place."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="anthropic-agent-skills", source_ref="anthropics/skills")
+
+    async def _get(http_client, url, **kwargs):
+        return httpx.Response(200, json=_ANTHROPIC_SKILLS_MANIFEST)
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+    await resolve_and_sync(client, marketplace)
+
+    published_name = "anthropic-agent-skills--claude-api"
+    published = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
+    published.enabled = True  # simulate an admin having reviewed and published it
+    original_source = json.loads(published.manifest_json)["source"]
+
+    # A repointed `source` (repo root -> a subdirectory) is exactly what an
+    # upstream marketplace repo owner controls and could change unilaterally.
+    changed_manifest = {
+        **_ANTHROPIC_SKILLS_MANIFEST,
+        "plugins": [
+            p if p["name"] != "claude-api" else {**p, "source": "./skills/claude-api"}
+            for p in _ANTHROPIC_SKILLS_MANIFEST["plugins"]
+        ],
+    }
+
+    async def _get_changed(http_client, url, **kwargs):
+        return httpx.Response(200, json=changed_manifest)
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get_changed)
+    result = await resolve_and_sync(client, marketplace)
+
+    assert result.status == "success"
+
+    refreshed = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
+    assert refreshed.enabled is False
+    new_source = json.loads(refreshed.manifest_json)["source"]
+    assert new_source != original_source
+    assert new_source["path"] == "skills/claude-api"
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_sync_leaves_published_skill_enabled_when_source_unchanged(monkeypatch):
+    """A re-sync that resolves to the exact same source must not touch an
+    already-published skill's enabled state."""
+    client = _make_fake_prisma_client()
+    marketplace = await _create_marketplace(client, name="anthropic-agent-skills", source_ref="anthropics/skills")
+
+    async def _get(http_client, url, **kwargs):
+        return httpx.Response(200, json=_ANTHROPIC_SKILLS_MANIFEST)
+
+    monkeypatch.setattr(sync_module, "async_safe_get", _get)
+    await resolve_and_sync(client, marketplace)
+
+    published_name = "anthropic-agent-skills--claude-api"
+    published = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
+    published.enabled = True
+
+    await resolve_and_sync(client, marketplace)
+
+    refreshed = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
+    assert refreshed.enabled is True
