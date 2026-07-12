@@ -3841,11 +3841,8 @@ def get_optional_params(
     supported_params = supported_params or []
     allowed_openai_params = allowed_openai_params or []
     supported_params.extend(allowed_openai_params)
-    # ``max_retries`` is supported across all providers (OpenAI/Azure retry at
-    # the SDK layer; non-OpenAI providers retry at LiteLLM's httpx transport
-    # layer when ``max_retries`` is set). Declare it supported everywhere so it
-    # is no longer silently dropped for non-OpenAI providers.
-    if "max_retries" not in supported_params:
+    providers_with_retry_support = {"openai", "azure", "anthropic"}
+    if custom_llm_provider in providers_with_retry_support and "max_retries" not in supported_params:
         supported_params.append("max_retries")
 
     _check_valid_arg(
