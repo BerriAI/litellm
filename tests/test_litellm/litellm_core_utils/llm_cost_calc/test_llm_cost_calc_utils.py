@@ -563,6 +563,49 @@ def test_generic_cost_per_token_gpt56(
 
 
 @pytest.mark.parametrize(
+    "model,input_cost,output_cost,cache_read_cost",
+    [
+        ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7),
+        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
+        ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
+        ("azure/eu/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
+        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt56(
+    model, input_cost, output_cost, cache_read_cost
+):
+    """Azure gpt-5.6 (global + us/eu regional): pricing mirrors the openai
+    family for global deployments and carries the standard 10% regional uplift.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["litellm_provider"] == "azure"
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+    )
+    assert round(prompt_cost, 10) == round(input_cost * prompt_tokens, 10)
+    assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
+
+
+@pytest.mark.parametrize(
     "model,expected_none,expected_xhigh,expected_minimal",
     [
         # Verified against OpenAI's live API on 2026-04-24:

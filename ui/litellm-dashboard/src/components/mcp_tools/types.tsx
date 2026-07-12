@@ -96,6 +96,54 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
 // edit forms so what gets wiped cannot drift.
 export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
 
+// The declared-app filter over form.credentials. It is a pure key filter with no mode/transition
+// guard because the surrounding code establishes that a client_id/client_secret in form.credentials
+// is ALWAYS admin-typed in every reachable state: the create form holds the DCR-minted client in a
+// ref and never writes it into the form store, the edit form's onTokenReceived never writes client
+// keys, and the invalidation reset clears the whole object atomically. So preserving the string
+// client keys across any invalidation (URL/endpoint edit, true_passthrough<->oauth_delegate switch,
+// or a round trip through another mode) is always legitimate, while the output key filter excludes
+// token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
+const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
+
+// Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
+// snapshots and from any credentials that transit to the temp-session preview so a stale token never
+// reaches the backend or a client-forwarded server row.
+export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
+
+export const preservedDeclaredAppCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
+      (key) => [key, credentials[key] as string],
+    ),
+  );
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// Drop minted token keys, keeping everything else (the declared app plus any non-token config).
+export const withoutMintedTokenCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    Object.entries(credentials).filter(([key]) => !(MINTED_TOKEN_CREDENTIAL_KEYS as readonly string[]).includes(key)),
+  );
+  // Return undefined (not {}) when only minted keys were present, so a restore spreads `credentials:
+  // undefined` (the fields keep their placeholder / keep-existing state) rather than blanking them.
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// The client-forwarded modes share one credential class (same declared app, same authorize relay), so
+// a switch between them must NOT be treated as an app change. Mirrors the backend _credential_auth_class
+// in db.py; kept in sync so the UI's keep-existing copy and the backend's merge cannot disagree.
+export const credentialAuthClass = (authType: string | null | undefined): string | null => {
+  if (authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE) return "client_forwarded";
+  return authType ?? null;
+};
+
 // True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
 // form's current identity no longer matches it. Every invalidation decision in both forms goes through
 // this single check: onValuesChange for user edits, and an explicit recheck after any programmatic
@@ -319,7 +367,10 @@ export interface MCPServer {
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
+  dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
+  /** Redacted to null in server responses; present when constructing a server locally. */
+  credentials?: Record<string, unknown> | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
