@@ -742,19 +742,24 @@ envelope caps it, the by-design behaviour for an upstream that omits the field."
 
 def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
     """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
-    or unparseable, so the envelope caps it), or ``"expired"`` (a parseable non-positive value the
-    upstream reports as already elapsed). Telling "we do not know the lifetime" apart from "the upstream
-    says it is already dead" is what stops an explicitly-expired token from silently receiving the
-    envelope's 1h cap. ``bool`` is excluded (an ``int`` subclass but never a real lifetime), and
-    ``int(float(...))`` can raise on ``NaN`` / ``Infinity`` / oversized input, which reads as
-    unparseable rather than surfacing as a 500."""
+    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
+    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
+    envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
+    (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
+    ``Infinity`` / oversized input, which reads as unparseable rather than surfacing as a 500."""
     if raw_expires_in is None or isinstance(raw_expires_in, bool) or not isinstance(raw_expires_in, (int, float, str)):
         return "unspecified"
     try:
-        seconds = int(float(raw_expires_in))
+        numeric = float(raw_expires_in)
+        seconds = int(numeric)
     except (ValueError, TypeError, OverflowError):
         return "unspecified"
-    return seconds if seconds > 0 else "expired"
+    if numeric <= 0:
+        return "expired"
+    return max(1, seconds)
 
 
 def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenGrant | _UpstreamGrantRejection":

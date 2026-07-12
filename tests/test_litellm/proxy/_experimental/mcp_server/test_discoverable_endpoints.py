@@ -4662,6 +4662,22 @@ async def test_bridge_mint_upstream_expired_lifetime_is_502():
 
 
 @pytest.mark.asyncio
+async def test_bridge_mint_positive_sub_second_lifetime_mints_not_502():
+    """A positive fractional expires_in in (0, 1) is a live token, not an elapsed one, so it mints a
+    (1s-floored) envelope rather than being truncated to 0 and rejected with 502 after the single-use
+    code was already consumed. Regression for classifying a sub-second remaining lifetime as expired."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 0.5}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["access_token"].startswith("llm_env_")
+    assert body["expires_in"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_bridge_mint_unknown_lifetime_is_capped_not_rejected():
     """An absent or unparseable expires_in leaves the lifetime unknown, which the envelope caps (never
     inventing a longer life than the upstream stated); it is NOT rejected. Only an explicitly-dead
@@ -4742,6 +4758,13 @@ def test_classify_upstream_lifetime():
     # explicit, parseable, non-positive -> the upstream says the token is already dead
     assert _classify_upstream_lifetime(0) == "expired"
     assert _classify_upstream_lifetime(-5) == "expired"
+    assert _classify_upstream_lifetime(-0.5) == "expired"
+    # a positive sub-second lifetime is alive, not elapsed; it clamps up to the envelope's 1s floor
+    # rather than truncating to 0 and being misread as expired
+    assert _classify_upstream_lifetime(0.5) == 1
+    assert _classify_upstream_lifetime(0.001) == 1
+    # a positive value >= 1 truncates toward zero (never overstating the stated lifetime)
+    assert _classify_upstream_lifetime(1.9) == 1
     # unknown lifetime -> cap (never invent a longer life than the upstream stated)
     assert _classify_upstream_lifetime(None) == "unspecified"
     assert _classify_upstream_lifetime(True) == "unspecified"
