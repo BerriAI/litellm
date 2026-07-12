@@ -1676,6 +1676,33 @@ class TestXecGuardLoggingHook:
         assert info_list[1]["guardrail_response"]["trace_id"] == "lg-4"
 
     @pytest.mark.asyncio
+    async def test_async_logging_hook_sanitizes_scan_result(
+        self, xecguard_guardrail, mock_request_data
+    ):
+        resp = _make_response(
+            {
+                "decision": "SAFE",
+                "trace_id": "lg-5",
+                "secret_fields": {"authorization": "Bearer xgs_raw"},
+                "detections": [{"match": "raw matched span", "policy": "pii"}],
+                "api_key": "xgs_super_secret_value",
+            }
+        )
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
+            kwargs = {**mock_request_data, "standard_logging_object": {}}
+            await xecguard_guardrail.async_logging_hook(
+                kwargs=kwargs,
+                result=_build_model_response("some answer"),
+                call_type="acompletion",
+            )
+        info = kwargs["standard_logging_object"]["guardrail_information"][0]
+        guardrail_response = info["guardrail_response"]
+        assert "secret_fields" not in guardrail_response
+        assert guardrail_response["detections"][0]["match"] == "[REDACTED]"
+        assert guardrail_response["api_key"] != "xgs_super_secret_value"
+        assert guardrail_response["trace_id"] == "lg-5"
+
+    @pytest.mark.asyncio
     async def test_async_logging_hook_without_response_records_info(
         self, xecguard_guardrail, mock_request_data
     ):
