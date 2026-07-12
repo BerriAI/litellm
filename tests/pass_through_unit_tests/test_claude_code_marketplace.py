@@ -219,18 +219,12 @@ async def test_register_plugin(mock_prisma_client):
     assert response["plugin"]["enabled"] is True
 
     # Verify the plugin was stored in the mock
-    stored_plugin = (
-        await mock_prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": plugin_name}
-        )
-    )
+    stored_plugin = await mock_prisma_client.db.litellm_claudecodeplugintable.find_unique(where={"name": plugin_name})
     assert stored_plugin is not None
     assert stored_plugin.name == plugin_name
 
     # Cleanup - delete the plugin
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": plugin_name}
-    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": plugin_name})
 
 
 @pytest.mark.asyncio
@@ -281,9 +275,7 @@ async def test_get_marketplace(mock_prisma_client):
     assert our_plugin["version"] == "2.0.0"
 
     # Cleanup
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": plugin_name}
-    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": plugin_name})
 
 
 @pytest.mark.asyncio
@@ -323,9 +315,7 @@ async def test_get_marketplace_no_key_unaffected_by_imported_disabled_skills(
             "name": imported_disabled_name,
             "version": "1.0.0",
             "description": "Imported but not yet enabled",
-            "manifest_json": json.dumps(
-                {"source": {"source": "github", "repo": "org/private-skill"}}
-            ),
+            "manifest_json": json.dumps({"source": {"source": "github", "repo": "org/private-skill"}}),
             "enabled": False,
         }
     )
@@ -344,12 +334,8 @@ async def test_get_marketplace_no_key_unaffected_by_imported_disabled_skills(
     assert imported_disabled_name not in names
 
     # Cleanup
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": public_plugin_name}
-    )
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": imported_disabled_name}
-    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": public_plugin_name})
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": imported_disabled_name})
 
 
 @pytest.mark.asyncio
@@ -371,9 +357,7 @@ async def test_get_marketplace_with_key_unlocks_allowed_imported_skill(
             "name": imported_disabled_name,
             "version": "1.0.0",
             "description": "Imported, granted to one key only",
-            "manifest_json": json.dumps(
-                {"source": {"source": "github", "repo": "org/scoped-skill"}}
-            ),
+            "manifest_json": json.dumps({"source": {"source": "github", "repo": "org/scoped-skill"}}),
             "enabled": False,
         }
     )
@@ -396,9 +380,7 @@ async def test_get_marketplace_with_key_unlocks_allowed_imported_skill(
     assert imported_disabled_name in names_with_key
 
     # Cleanup
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": imported_disabled_name}
-    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": imported_disabled_name})
 
 
 @pytest.mark.asyncio
@@ -430,9 +412,7 @@ async def test_get_marketplace_hides_skill_from_disabled_marketplace_even_with_g
             "name": skill_name,
             "version": "1.0.0",
             "description": "Skill owned by a since-disabled marketplace",
-            "manifest_json": json.dumps(
-                {"source": {"source": "github", "repo": "org/untrusted-skill"}}
-            ),
+            "manifest_json": json.dumps({"source": {"source": "github", "repo": "org/untrusted-skill"}}),
             "enabled": True,  # cascade-disable races aside, this asserts the belt-and-suspenders check too
             "marketplace_id": marketplace_id,
         }
@@ -442,9 +422,7 @@ async def test_get_marketplace_hides_skill_from_disabled_marketplace_even_with_g
         user_role=LitellmUserRoles.INTERNAL_USER,
         api_key="sk-granted",
         user_id="granted-user",
-        object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="perm-2", allowed_skills=[skill_name]
-        ),
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="perm-2", allowed_skills=[skill_name]),
     )
     response = await get_marketplace(user_api_key_dict=granted_key)
     body = json.loads(response.body.decode())
@@ -492,14 +470,9 @@ async def test_register_plugin_git_subdir(mock_prisma_client):
     assert response["action"] == "created"
     assert response["plugin"]["name"] == plugin_name
     assert response["plugin"]["source"]["source"] == "git-subdir"
-    assert (
-        response["plugin"]["source"]["url"]
-        == "https://github.com/test-org/monorepo.git"
-    )
+    assert response["plugin"]["source"]["url"] == "https://github.com/test-org/monorepo.git"
     assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
     assert response["plugin"]["enabled"] is True
 
     # Cleanup
-    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
-        where={"name": plugin_name}
-    )
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(where={"name": plugin_name})
