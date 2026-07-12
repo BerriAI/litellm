@@ -1448,6 +1448,33 @@ class TestRouterPreRoutingAliasOverrides:
         assert result is None
         assert request_kwargs == {}
 
+    def test_adaptive_router_alias_overrides_survive_reload(self):
+        """set_model_list() (e.g. /config/reload) clears pre_routing_alias_overrides
+        every time, but _finalize_adaptive_router_if_configured() skips rebuilding an
+        AdaptiveRouter that already exists - the alias's overrides must still get
+        re-registered on that skip path, not just on first init."""
+        model_list = [
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "drop_params": True,
+                    "adaptive_router_config": {"available_models": ["gpt-4o-mini"]},
+                },
+            },
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+            },
+        ]
+        router = Router(model_list=model_list)
+        assert router.pre_routing_alias_overrides["smart-router"] == {"drop_params": True}
+
+        router.set_model_list(model_list)
+
+        assert "smart-router" in router.adaptive_routers
+        assert router.pre_routing_alias_overrides["smart-router"] == {"drop_params": True}
+
 
 class TestLexicalKeywordTierRules:
     """Test deterministic (literal) keyword_tier_rules overrides."""

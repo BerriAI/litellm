@@ -7641,13 +7641,17 @@ class Router:
             model_name = entry.get("model_name") if isinstance(entry, dict) else entry.model_name
             if not model_name or not lp:
                 continue
-            if model_name in self.adaptive_routers:
-                continue
             deployment = Deployment(
                 model_name=model_name,
                 litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
+            if model_name in self.adaptive_routers:
+                # AdaptiveRouter itself survives a set_model_list() reload, but
+                # pre_routing_alias_overrides is cleared on every reload - re-register
+                # it here even though the (expensive) AdaptiveRouter build is skipped.
+                self._register_pre_routing_alias_overrides(deployment=deployment)
+                continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
