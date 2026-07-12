@@ -15,6 +15,7 @@ import httpx
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.litellm_core_utils.url_utils import async_safe_request, SSRFError
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -468,10 +469,27 @@ async def http_request(
         params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
     )
 
+    # Prepare the arguments for async_safe_request
+    json_body, data_body = _prepare_http_body(body)
+    kwargs: Dict[str, Any] = {}
+    if json_body is not None:
+        kwargs["json"] = json_body
+    if data_body is not None:
+        kwargs["data"] = data_body
+
     try:
-        response = await _execute_http_request(client, method, url, headers, body, timeout)
+        response = await async_safe_request(
+            client=client,
+            method=method,
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            **kwargs
+        )
         return _http_success_response(response)
 
+    except SSRFError as e:
+        return _http_error_response(f"SSRF validation failed: {str(e)}")
     except httpx.TimeoutException as e:
         verbose_proxy_logger.warning(f"Custom code http_request timeout: {e}")
         return _http_error_response(f"Request timeout after {timeout}s")
@@ -484,31 +502,6 @@ async def http_request(
     except Exception as e:
         verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
         return _http_error_response(f"Unexpected error: {str(e)}")
-
-
-async def _execute_http_request(
-    client: Any,
-    method: str,
-    url: str,
-    headers: Optional[Dict[str, str]],
-    body: Optional[Any],
-    timeout: float,
-) -> httpx.Response:
-    """Execute the HTTP request using the appropriate client method."""
-    json_body, data_body = _prepare_http_body(body)
-
-    if method == "GET":
-        return await client.get(url=url, headers=headers)
-    elif method == "POST":
-        return await client.post(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
-    elif method == "PUT":
-        return await client.put(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
-    elif method == "DELETE":
-        return await client.delete(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
-    elif method == "PATCH":
-        return await client.patch(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
-    else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
 
 
 async def http_get(

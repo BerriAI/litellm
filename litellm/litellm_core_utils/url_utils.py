@@ -388,7 +388,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         kwargs.setdefault("follow_redirects", True)
         return client.get(url, **kwargs)
     kwargs.pop("follow_redirects", None)
-    caller_headers = kwargs.pop("headers", {})
+    caller_headers = kwargs.pop("headers", {}) or {}
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = client.get(
@@ -411,7 +411,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         kwargs.setdefault("follow_redirects", True)
         return await client.get(url, **kwargs)
     kwargs.pop("follow_redirects", None)
-    caller_headers = kwargs.pop("headers", {})
+    caller_headers = kwargs.pop("headers", {}) or {}
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = await client.get(
@@ -426,3 +426,69 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         # relative Location headers keep the original hostname.
         url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
+
+
+_ALLOWED_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+
+
+async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) -> Any:
+    """
+    Multi-method version of async_safe_get with SSRF protection.
+
+    Validates every hop via ``validate_url`` (DNS resolution, IP blocklist,
+    URL rewrite) and follows redirects manually so each target is checked.
+
+    On 301/302/303 the method is downgraded to GET and the body is stripped
+    per RFC 7231 §6.4.2-4.  307/308 preserve the original method and body.
+
+    Note: only ``AsyncHTTPHandler.get()`` accepts ``follow_redirects``.
+    POST/PUT/DELETE/PATCH use ``build_request`` + ``client.send`` internally,
+    which doesn't follow redirects, so we don't pass ``follow_redirects``
+    to those methods.
+    """
+    method = method.upper()
+    if method not in _ALLOWED_HTTP_METHODS:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+    # Always strip follow_redirects from caller kwargs — we manage it ourselves
+    kwargs.pop("follow_redirects", None)
+
+    if not getattr(litellm, "user_url_validation", True):
+        # SSRF protection disabled — delegate directly, let httpx handle redirects
+        if method == "GET":
+            for k in ("data", "json", "content", "files"):
+                kwargs.pop(k, None)
+            kwargs["follow_redirects"] = True
+            
+        return await getattr(client, method.lower())(url, **kwargs)
+
+    caller_headers = kwargs.pop("headers", {}) or {}
+
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        call_headers = {**caller_headers, "Host": original_host}
+
+        method_kwargs = dict(kwargs)
+        if method == "GET":
+            for k in ("data", "json", "content", "files"):
+                method_kwargs.pop(k, None)
+            method_kwargs["follow_redirects"] = False
+
+        response = await getattr(client, method.lower())(validated_url, headers=call_headers, **method_kwargs)
+
+        if not response.is_redirect:
+            return response
+
+        # RFC 7231 §6.4.2-4: 301/302/303 redirects SHOULD downgrade to GET
+        if response.status_code in (301, 302, 303) and method not in ("GET", "HEAD"):
+            method = "GET"
+            # Strip body arguments for the downgraded GET request
+            kwargs.pop("data", None)
+            kwargs.pop("json", None)
+            kwargs.pop("content", None)
+            kwargs.pop("files", None)
+
+        url = _extract_redirect_url(response, url)
+
+    raise SSRFError("Too many redirects")
+
