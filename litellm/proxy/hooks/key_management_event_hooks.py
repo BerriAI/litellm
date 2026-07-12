@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
@@ -21,6 +22,41 @@ from litellm.proxy._types import (
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
+
+# Reuse the project-wide sensitive-data masker to redact API keys when an
+# audit log is written. The default ``visible_prefix=4`` / ``visible_suffix=4``
+# gives the same ``sk-****XXXX`` shape already used in LiteLLM_VerificationToken
+# ``key_name`` and a number of admin-UI fields, so audit log rows are consistent
+# with every other place API keys are referenced.
+_audit_log_object_id_masker = SensitiveDataMasker(
+    visible_prefix=4,
+    visible_suffix=4,
+)
+
+
+def _obfuscate_audit_log_object_id(value: Any) -> Any:
+    """Obfuscate an ``AuditLog.object_id`` value if it looks like an API key.
+
+    Audit logs are intended to record *which* object was acted on, never to
+    expose the raw value of that object. Other paths that build
+    ``LiteLLM_AuditLogs.object_id`` for the key table already pass the hashed
+    token (``existing_key_row.token`` / ``response.token_id``), but
+    ``async_key_updated_hook`` receives the raw key from the request body
+    (``UpdateKeyRequest.key``) and previously stored it verbatim — see
+    https://github.com/BerriAI/litellm/issues/31620.
+
+    Non-string values and values that don't look like an API key are passed
+    through untouched, so the helper is safe to apply unconditionally at any
+    call site that ends up writing ``object_id`` for the key table.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    # Only treat values that look like an OpenAI/LiteLLM virtual key as
+    # sensitive. Anything else (e.g. a ``key_alias`` that ended up routed
+    # here, a ``team_id``) is left as-is.
+    if not value.startswith("sk-"):
+        return value
+    return _audit_log_object_id_masker._mask_value(value)
 
 
 class KeyManagementEventHooks:
@@ -124,7 +160,7 @@ class KeyManagementEventHooks:
                         ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=data.key,
+                        object_id=_obfuscate_audit_log_object_id(data.key),
                         action="updated",
                         updated_values=_updated_values,
                         before_value=_before_value,
