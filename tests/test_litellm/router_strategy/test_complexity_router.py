@@ -876,6 +876,59 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    def test_register_pre_routing_alias_overrides(self):
+        """_register_pre_routing_alias_overrides stores non-routing-config
+        litellm_params and excludes reserved routing-config keys."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        deployment = Deployment(
+            model_name="smart-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                drop_params=True,
+                complexity_router_default_model="gpt-4o-mini",
+                complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            ),
+        )
+        router._register_pre_routing_alias_overrides(deployment=deployment)
+
+        overrides = router.pre_routing_alias_overrides["smart-router"]
+        assert overrides["drop_params"] is True
+        assert "model" not in overrides
+        assert "complexity_router_config" not in overrides
+        assert "complexity_router_default_model" not in overrides
+
+    def test_register_pre_routing_alias_overrides_skips_empty(self):
+        """A deployment with no non-routing-config litellm_params registers nothing."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        deployment = Deployment(
+            model_name="bare-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_default_model="gpt-4o-mini",
+            ),
+        )
+        router._register_pre_routing_alias_overrides(deployment=deployment)
+
+        assert "bare-router" not in router.pre_routing_alias_overrides
+
 
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""

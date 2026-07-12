@@ -198,7 +198,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def translate_tool_choice_to_responses_api(
         tool_choice: AnthropicMessagesToolChoice,
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Union[str, dict[str, Any]]:
         """Convert Anthropic tool_choice to Responses API tool_choice."""
         tc_type = tool_choice.get("type")
         if tc_type == "any":

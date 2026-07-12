@@ -481,7 +481,7 @@ class Router:
         # auto_router/complexity_router`) that aren't routing config itself -
         # applied to whichever deployment a pre-routing hook ends up selecting,
         # since the alias deployment itself is never the one actually called.
-        self.pre_routing_alias_overrides: Dict[str, Dict[str, Any]] = {}
+        self.pre_routing_alias_overrides: dict[str, dict[str, Any]] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
