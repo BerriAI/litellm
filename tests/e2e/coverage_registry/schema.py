@@ -45,6 +45,7 @@ LlmRoute = Literal[
     "azure_foundry",
     "azure_openai",
     "bedrock_converse",
+    "bedrock_invoke",
     "cohere",
     "openai",
     "together_ai",
@@ -53,6 +54,7 @@ LlmRoute = Literal[
 
 LlmCapability = Literal[
     "basic",
+    "mid_conversation_system",
     "prompt_cache_5m",
     "service_tier",
     "structured_output",
