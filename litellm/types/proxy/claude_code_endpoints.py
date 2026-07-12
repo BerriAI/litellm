@@ -157,9 +157,7 @@ class RegisterMarketplaceRequest(BaseModel):
 
     source: str = Field(
         ...,
-        description=(
-            "'org/repo' shorthand, a github/gitlab/bitbucket URL, or a direct URL to a marketplace.json file"
-        ),
+        description=("'org/repo' shorthand, a github/gitlab/bitbucket URL, or a direct URL to a marketplace.json file"),
     )
     name: Optional[str] = Field(
         None, description="Marketplace slug to register under. Defaults to a slug derived from the source."

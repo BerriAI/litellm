@@ -90,7 +90,11 @@ describe("SkillPermissionsPicker", () => {
     renderWithProviders(
       <SkillPermissionsPicker
         accessToken="tok"
-        value={["anthropic-agent-skills--document-skills", "anthropic-agent-skills--pdf-skills", "other-marketplace--some-skill"]}
+        value={[
+          "anthropic-agent-skills--document-skills",
+          "anthropic-agent-skills--pdf-skills",
+          "other-marketplace--some-skill",
+        ]}
         onChange={onChange}
       />,
     );

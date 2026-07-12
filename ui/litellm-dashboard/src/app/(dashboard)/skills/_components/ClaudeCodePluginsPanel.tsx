@@ -15,7 +15,12 @@ import PluginTable from "./plugin_table";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { Plugin, ListPluginsResponse, MarketplaceSource, ListMarketplacesResponse } from "@/components/claude_code_plugins/types";
+import {
+  Plugin,
+  ListPluginsResponse,
+  MarketplaceSource,
+  ListMarketplacesResponse,
+} from "@/components/claude_code_plugins/types";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;

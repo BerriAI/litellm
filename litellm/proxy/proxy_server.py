@@ -6458,9 +6458,7 @@ class ProxyConfig:
             await backfill_default_skill_marketplace(prisma_client=prisma_client)
         except Exception as e:  # noqa: BLE001  # startup backfill must never block proxy boot
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.py::ProxyConfig:_init_skill_marketplace_backfill_in_db - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_skill_marketplace_backfill_in_db - {}".format(str(e))
             )
 
     async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):

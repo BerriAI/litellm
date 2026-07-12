@@ -40,9 +40,7 @@ const SkillPermissionsPicker: React.FC<SkillPermissionsPickerProps> = ({ value, 
 
   const handleToggleSkill = (skillName: string, checked: boolean) => {
     if (disabled) return;
-    onChange(
-      checked ? Array.from(new Set([...selected, skillName])) : selected.filter((name) => name !== skillName),
-    );
+    onChange(checked ? Array.from(new Set([...selected, skillName])) : selected.filter((name) => name !== skillName));
   };
 
   if (marketplacesLoading) {

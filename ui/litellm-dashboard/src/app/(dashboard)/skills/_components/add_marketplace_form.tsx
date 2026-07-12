@@ -144,8 +144,8 @@ const AddMarketplaceForm: React.FC<AddMarketplaceFormProps> = ({ visible, onClos
             {skippedCount > 0 && (
               <p className="mt-1 flex items-center gap-1 text-sm text-amber-600">
                 <ExclamationCircleFilled />
-                {skippedCount} skill{skippedCount === 1 ? "" : "s"} could not be fetched after retries. Use
-                &quot;Sync now&quot; on the marketplace to try again.
+                {skippedCount} skill{skippedCount === 1 ? "" : "s"} could not be fetched after retries. Use &quot;Sync
+                now&quot; on the marketplace to try again.
               </p>
             )}
           </div>
