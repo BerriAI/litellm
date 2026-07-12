@@ -2850,6 +2850,7 @@ def _complete_cohere_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
 
 
 def _complete_maritalk(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
     custom_prompt_dict = ctx.custom_prompt_dict
@@ -2879,10 +2880,12 @@ def _complete_maritalk(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
         logging_obj=logging,
         custom_llm_provider="maritalk",
         custom_prompt_dict=custom_prompt_dict,
+        acompletion=acompletion,
     )
 
 
 def _complete_amazon_nova(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
     custom_llm_provider = ctx.custom_llm_provider
@@ -2915,6 +2918,7 @@ def _complete_amazon_nova(ctx: _CompletionDispatchContext) -> _CompletionDispatc
         timeout=timeout,
         custom_llm_provider=custom_llm_provider,
         custom_prompt_dict=custom_prompt_dict,
+        acompletion=acompletion,
     )
 
 
