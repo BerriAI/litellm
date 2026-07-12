@@ -601,43 +601,11 @@ class ComplexityRouter(CustomLogger):
         Uses the guardrail translation handler dispatch to convert Responses API
         ``input`` (or other non-chat-completions formats) into OpenAI-spec messages.
         """
-        if messages:
-            return messages
-
-        from litellm.litellm_core_utils.api_route_to_call_types import (
-            get_call_types_for_route,
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            resolve_structured_messages,
         )
-        from litellm.llms import load_guardrail_translation_mappings
-        from litellm.types.utils import CallTypes
 
-        mappings = load_guardrail_translation_mappings()
-        call_type: Optional[CallTypes] = None
-
-        # 1. Try route-based inference from proxy metadata
-        route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
-        if route:
-            call_types_list = get_call_types_for_route(route)
-            if call_types_list:
-                for ct in call_types_list:
-                    if ct in mappings:
-                        call_type = ct
-                        break
-
-        # 2. Fallback: try each mapped handler until one produces messages
-        handlers_to_try: List[Any] = []
-        if call_type is not None and call_type in mappings:
-            handlers_to_try.append(mappings[call_type]())
-        else:
-            handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
-
-        for handler in handlers_to_try:
-            structured = handler.get_structured_messages(request_kwargs)
-            if structured:
-                return [
-                    msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
-                    for msg in structured
-                ]
-        return None
+        return resolve_structured_messages(messages=messages, request_kwargs=request_kwargs)
 
     @staticmethod
     def _extract_user_message_and_system_prompt(

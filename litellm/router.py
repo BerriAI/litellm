@@ -179,7 +179,9 @@ from litellm.types.router import (
     RouterModelGroupAliasItem,
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
+    RoutingContext,
     RoutingGroup,
+    RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
 )
@@ -299,6 +301,7 @@ class Router:
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
+        plugins: list[RoutingPlugin] | None = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[Union[RetryPolicy, dict]] = None,  # set custom retries for different exceptions
         model_group_retry_policy: Dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
@@ -477,6 +480,7 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -10321,6 +10325,12 @@ class Router:
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
         )
 
+        # narrow to whatever `self.routing_plugins` left in candidate_models
+        healthy_deployments = self._filter_by_routing_plugin_candidates(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
@@ -10596,6 +10606,76 @@ class Router:
                     )
             raise e
 
+    async def _run_routing_plugins(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None,
+    ) -> RoutingContext:
+        """
+        Build a RoutingContext for `model`, run it through `self.routing_plugins`
+        in order, then stash the narrowed candidate list and accumulated signals
+        onto `request_kwargs["metadata"]` so `_filter_by_routing_plugin_candidates`
+        (called later, during healthy-deployment filtering) can consume them.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            resolve_structured_messages,
+        )
+
+        deployments = self.get_model_list(model_name=model) or []
+        candidate_models = [
+            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
+        ]
+
+        metadata_key = self._get_metadata_variable_name_from_kwargs(request_kwargs)
+        metadata = request_kwargs.setdefault(metadata_key, {})
+
+        context = RoutingContext(
+            raw_messages=messages or [],
+            structured_messages=resolve_structured_messages(messages=messages, request_kwargs=request_kwargs) or [],
+            candidate_models=candidate_models,
+            metadata=metadata,
+        )
+
+        for plugin in self.routing_plugins:
+            context = await plugin.run(context)
+
+        metadata["routing_plugin_signals"] = context.signals
+        if len(context.candidate_models) < len(candidate_models):
+            metadata["_routing_plugin_candidate_models"] = context.candidate_models
+
+        return context
+
+    def _filter_by_routing_plugin_candidates(
+        self,
+        healthy_deployments: Union[list[dict], dict],
+        request_kwargs: dict,
+    ) -> Union[list[dict], dict]:
+        """
+        Narrow `healthy_deployments` to whatever `self.routing_plugins` left in
+        `context.candidate_models`. Raises rather than silently falling back to
+        the unfiltered pool -- a plugin narrowing to nothing is a policy decision
+        (e.g. no model this tenant's budget allows), not something to bypass.
+        """
+        if not self.routing_plugins or not isinstance(healthy_deployments, list):
+            return healthy_deployments
+
+        metadata_key = self._get_metadata_variable_name_from_kwargs(request_kwargs)
+        candidate_models = (request_kwargs.get(metadata_key) or {}).get("_routing_plugin_candidate_models")
+        # `is None` (not falsy-check): a plugin narrowing to an empty list must
+        # still hit the "no deployments left" raise below, not be treated the
+        # same as "no plugin ever set this key".
+        if candidate_models is None:
+            return healthy_deployments
+
+        candidate_set = set(candidate_models)
+        filtered = [d for d in healthy_deployments if d.get("litellm_params", {}).get("model") in candidate_set]
+
+        if not filtered:
+            raise ValueError(f"No deployments left after routing-plugin filtering. candidate_models={candidate_models}")
+
+        return filtered
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -10609,6 +10689,15 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
+        #########################################################
+        # Run the routing-plugin pipeline, if any plugins are configured.
+        # Plugins narrow the candidate deployment pool (consumed later by
+        # `_filter_by_routing_plugin_candidates`) and may attach signals for
+        # downstream strategies (auto-router, complexity-router, ...) to read.
+        #########################################################
+        if self.routing_plugins:
+            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
+
         #########################################################
         # Check if any auto-router should be used
         #########################################################
@@ -10671,6 +10760,18 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
+        if self.routing_plugins:
+            raise ValueError(
+                "Router(plugins=[...]) is configured, but this call resolved to the synchronous "
+                "deployment-selection path, which never runs the routing-plugin pipeline. This "
+                "happens for sync Router methods (e.g. Router.completion()) and for async calls "
+                "with a routing_strategy that has no async-native selector (e.g. legacy "
+                "'usage-based-routing', v1). Silently skipping "
+                "configured plugins would let a policy plugin (e.g. a deny-all rule) be bypassed. "
+                "Use an async Router method with a supported routing_strategy (simple-shuffle, "
+                "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
+                "or remove `plugins` from the Router config."
+            )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
