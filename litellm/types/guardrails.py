@@ -56,6 +56,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HeadroomGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
+    CompresrGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -123,6 +126,7 @@ class SupportedGuardrailIntegrations(Enum):
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     HEADROOM = "headroom"
+    COMPRESR = "compresr"
 
 
 class Role(Enum):
@@ -697,7 +701,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', and 'headroom'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -790,6 +794,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
+    CompresrGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
