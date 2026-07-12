@@ -906,6 +906,44 @@ class TestRouterComplexityDeploymentMethods:
         assert "complexity_router_config" not in overrides
         assert "complexity_router_default_model" not in overrides
 
+    def test_register_pre_routing_alias_overrides_excludes_deployment_management_fields(
+        self,
+    ):
+        """Deployment-management fields (tpm/rpm/weight/tags/max_budget/...) live on
+        the same LiteLLM_Params object as drop_params/cache_control_injection_points
+        but must never be forwarded as request kwargs to the LLM call - only the
+        known request-shaping params are."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        deployment = Deployment(
+            model_name="smart-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                drop_params=True,
+                tpm=1000,
+                rpm=10,
+                weight=2,
+                tags=["prod"],
+                max_budget=100.0,
+                budget_duration="30d",
+                use_in_pass_through=True,
+                litellm_credential_name="my-cred",
+                complexity_router_default_model="gpt-4o-mini",
+            ),
+        )
+        router._register_pre_routing_alias_overrides(deployment=deployment)
+
+        overrides = router.pre_routing_alias_overrides["smart-router"]
+        assert overrides == {"drop_params": True}
+
     def test_register_pre_routing_alias_overrides_skips_empty(self):
         """A deployment with no non-routing-config litellm_params registers nothing."""
         router = Router(
@@ -1409,6 +1447,8 @@ class TestRouterPreRoutingAliasOverrides:
 
         assert result is None
         assert request_kwargs == {}
+
+
 class TestLexicalKeywordTierRules:
     """Test deterministic (literal) keyword_tier_rules overrides."""
 
@@ -1422,9 +1462,7 @@ class TestLexicalKeywordTierRules:
         }
 
     @pytest.mark.asyncio
-    async def test_matching_rule_overrides_scoring(
-        self, mock_router_instance, rule_config
-    ):
+    async def test_matching_rule_overrides_scoring(self, mock_router_instance, rule_config):
         """A prompt hitting a rule keyword routes to that tier, not the scored tier."""
         router = ComplexityRouter(
             model_name="test-router",
@@ -1510,9 +1548,7 @@ class TestLexicalKeywordTierRules:
         assert router._lexical_tier_override("nothing relevant here") is None
 
     @pytest.mark.asyncio
-    async def test_no_rule_match_falls_back_to_scoring(
-        self, mock_router_instance, basic_config
-    ):
+    async def test_no_rule_match_falls_back_to_scoring(self, mock_router_instance, basic_config):
         """A prompt that matches no rule is classified by the scorer as usual."""
         config = {
             **basic_config,
@@ -1533,9 +1569,7 @@ class TestLexicalKeywordTierRules:
         assert result is not None
         assert result.model == "gpt-4o-mini"  # SIMPLE via scoring, rule did not fire
 
-    def test_word_boundary_avoids_substring_false_positive(
-        self, mock_router_instance, basic_config
-    ):
+    def test_word_boundary_avoids_substring_false_positive(self, mock_router_instance, basic_config):
         """A single-word rule keyword must not match inside a larger word."""
         config = {
             **basic_config,
@@ -1553,10 +1587,7 @@ class TestLexicalKeywordTierRules:
 def _make_embedding_response(vectors: List[List[float]]) -> "litellm.EmbeddingResponse":
     return litellm.EmbeddingResponse(
         model="fake-embed",
-        data=[
-            {"embedding": vec, "index": idx, "object": "embedding"}
-            for idx, vec in enumerate(vectors)
-        ],
+        data=[{"embedding": vec, "index": idx, "object": "embedding"} for idx, vec in enumerate(vectors)],
         object="list",
     )
 
@@ -1583,8 +1614,7 @@ class FakeEmbeddingRouter:
 
     def _vectors(self, docs: List[str]) -> List[List[float]]:
         return [
-            [1.0, 0.0] if any(marker in doc.lower() for marker in self._CLUSTER_MARKERS) else [0.0, 1.0]
-            for doc in docs
+            [1.0, 0.0] if any(marker in doc.lower() for marker in self._CLUSTER_MARKERS) else [0.0, 1.0] for doc in docs
         ]
 
     @staticmethod
@@ -2123,9 +2153,7 @@ class TestRoutingDecisionCauseLogging:
             verbose_router_logger.removeHandler(caplog.handler)
 
     @pytest.mark.asyncio
-    async def test_literal_keyword_match_logs_its_cause(
-        self, mock_router_instance, basic_config, router_log_capture
-    ):
+    async def test_literal_keyword_match_logs_its_cause(self, mock_router_instance, basic_config, router_log_capture):
         config = {
             **basic_config,
             "keyword_tier_rules": [{"keywords": ["deploy to k8s"], "tier": "REASONING"}],
@@ -2171,9 +2199,7 @@ class TestRoutingDecisionCauseLogging:
         assert "cause=literal_keyword_match" not in router_log_capture.text
 
     @pytest.mark.asyncio
-    async def test_complexity_scorer_logs_its_cause(
-        self, mock_router_instance, basic_config, router_log_capture
-    ):
+    async def test_complexity_scorer_logs_its_cause(self, mock_router_instance, basic_config, router_log_capture):
         # No keyword rules -> the scorer decides, and its line must be tagged as such.
         router = ComplexityRouter(
             model_name="test-router",

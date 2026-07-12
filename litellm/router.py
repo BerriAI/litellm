@@ -7467,29 +7467,19 @@ class Router:
             else:
                 raise e
 
-    # Router-strategy config fields consumed at init time by the corresponding
-    # init_*_router_deployment() below - never forwarded to the LLM call itself.
-    _PRE_ROUTING_ALIAS_RESERVED_PARAMS = frozenset(
-        {
-            "model",
-            "auto_router_config_path",
-            "auto_router_config",
-            "auto_router_default_model",
-            "auto_router_embedding_model",
-            "complexity_router_config",
-            "complexity_router_default_model",
-            "adaptive_router_default_model",
-            "adaptive_router_config",
-            "quality_router_config",
-            "quality_router_default_model",
-        }
-    )
+    # Request-shaping litellm params that a router-alias deployment (e.g. `model:
+    # auto_router/complexity_router`) can set for every call routed through it.
+    # Deliberately a tight allowlist, not "everything except routing config" -
+    # GenericLiteLLMParams also holds deployment-management fields (tpm, rpm,
+    # weight, tags, max_budget, ...) that must never be forwarded as request
+    # kwargs to the LLM call.
+    _PRE_ROUTING_ALIAS_FORWARDED_PARAMS = ("drop_params", "cache_control_injection_points")
 
     def _register_pre_routing_alias_overrides(self, deployment: Deployment) -> None:
         """
-        Store non-routing-config litellm_params set on a router-alias deployment
-        (e.g. `model: auto_router/complexity_router`) so they can be applied to
-        whichever underlying deployment a pre-routing hook ends up selecting.
+        Store the alias's own request-shaping litellm_params so they can be
+        applied to whichever underlying deployment a pre-routing hook ends up
+        selecting.
 
         The alias deployment itself is never the one actually called - a
         pre-routing hook swaps `model` to the selected tier/route's deployment
@@ -7497,9 +7487,11 @@ class Router:
         `cache_control_injection_points` or `drop_params` configured on the
         alias would otherwise be silently dropped.
         """
-        overrides = deployment.litellm_params.model_dump(exclude_defaults=True, exclude_none=True)
-        for reserved_param in self._PRE_ROUTING_ALIAS_RESERVED_PARAMS:
-            overrides.pop(reserved_param, None)
+        overrides = {
+            param: value
+            for param in self._PRE_ROUTING_ALIAS_FORWARDED_PARAMS
+            if (value := getattr(deployment.litellm_params, param, None)) is not None
+        }
         if overrides:
             self.pre_routing_alias_overrides[deployment.model_name] = overrides
 
