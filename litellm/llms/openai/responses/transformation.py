@@ -256,7 +256,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 additional_args={"complete_input_dict": {}},
             )
             raw_response_json = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            if "created_at" in raw_response_json:
+                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers = dict(raw_response.headers)
