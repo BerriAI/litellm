@@ -1,7 +1,7 @@
 """Registry row schema: the contract every denominator cell validates against.
 
 A cell is one customer-noticeable behavior a single e2e test can assert pass/fail
-on. `module` is the id's segment-1 prefix (seven of them); dashboard rollups can
+on. `module` is the id's segment-1 prefix (eight of them); dashboard rollups can
 split or merge those prefixes. The union is discriminated on `module`, so an LLM
 row cannot carry a guardrail field and vice versa.
 """
@@ -100,6 +100,13 @@ class ReliabilityCell(_Base):
     exercised_on: tuple[str, ...]
 
 
+class QuotaCell(_Base):
+    module: Literal["quota_management"]
+    behavior: Literal["ratelimit", "budget", "spend_tracking"]
+    variant: str
+    exercised_on: tuple[str, ...]
+
+
 class LoggingCell(_Base):
     module: Literal["logging"]
     event: str
@@ -122,6 +129,7 @@ Cell = Annotated[
     | MgmtCell
     | McpCell
     | ReliabilityCell
+    | QuotaCell
     | LoggingCell
     | GuardrailCell
     | OtherCell,
@@ -142,6 +150,7 @@ PREFIX_ROLLUP: dict[str, str] = {
     "mcp": "MCPs",
     "mgmt": "Management/UI",
     "reliability": "Reliability & Performance",
+    "quota_management": "Quota Management",
     "logging": "Logging & Guardrails",
     "guardrail": "Logging & Guardrails",
     "other": "Other",
@@ -153,6 +162,7 @@ MODULE_ORDER: tuple[str, ...] = (
     "MCPs",
     "Management/UI",
     "Reliability & Performance",
+    "Quota Management",
     "Logging & Guardrails",
     "Other",
 )
@@ -163,6 +173,7 @@ LOKI_MODULE_LABELS: dict[str, str] = {
     "MCPs": "mcp",
     "Management/UI": "management_ui",
     "Reliability & Performance": "reliability_performance",
+    "Quota Management": "quota_management",
     "Logging & Guardrails": "logging_guardrails",
     "Other": "other",
 }

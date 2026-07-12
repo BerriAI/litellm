@@ -17,14 +17,15 @@ transcript, and that `response.done` carries normalized usage.
 normalized `response.function_call_arguments.done` with valid JSON arguments and
 a matching `function_call` output item, the test sends a `function_call_output`
 back, and the follow-up response incorporates the result (the temperature 72
-appears).
+appears). That raw-websocket tool path is the source of truth for tool calling.
 
-`test_realtime_pipecat_e2e` is a realism layer that drives the same providers
-through pipecat's GA `OpenAIRealtimeLLMService` (base_url pointed at the proxy)
-rather than speaking the protocol by hand. Its assertions are coarse (the tool
-callback fired, assistant text was produced); the raw-websocket suite is the
-source of truth. It skips unless `pipecat-ai` is installed
-(`uv pip install "pipecat-ai[openai]"`).
+`test_pipecat_tool_smoke` is a realism layer through pipecat for openai, azure,
+and gemini only (not vertex_ai: native-audio live is flaky under pipecat tool
+calling while raw-ws tools pass; see pipecat-ai/pipecat#2544). Assertions are
+coarse; raw-ws remains authoritative. Requires `pipecat-ai`.
+
+Pipecat audio coverage lives in `test_realtime_pipecat_audio_e2e.py` (VAD / audio
+I/O).
 
 ## Provisioning
 
@@ -43,7 +44,7 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
 | vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025` |
 
-Bedrock and xai (`xai/grok-4-1-fast`) are supported by the proxy but
+Bedrock and xai (`xai/grok-4-1-fast-non-reasoning`) are supported by the proxy but
 kept commented out in `PROVIDERS` until they pass end-to-end here; re-enable them by
 uncommenting their entry.
 
