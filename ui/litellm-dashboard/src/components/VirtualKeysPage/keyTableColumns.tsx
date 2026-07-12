@@ -118,13 +118,30 @@ export const getKeyTableColumns = ({
   onSelectKey,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
-    id: "key",
+    id: "key_alias",
     accessorKey: "key_alias",
-    meta: { title: "Key" },
+    meta: { title: "Key", skeleton: "twoLine" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Key" variant="header-cycle" />,
-    size: 240,
+    size: 260,
     enableSorting: true,
-    cell: ({ row }) => <IdentityCell title={row.original.key_alias || "-"} subtitle={row.original.key_name} />,
+    cell: ({ row }) => {
+      const status = getKeyStatus(row.original);
+      return (
+        <IdentityCell
+          title={row.original.key_alias || "-"}
+          subtitle={row.original.key_name}
+          badge={
+            <StatusBadge
+              tone={status.tone}
+              label={status.label}
+              tooltip={status.tooltip}
+              dataTestId={`key-status-${row.original.token_id}`}
+            />
+          }
+          onClick={() => onSelectKey(row.original)}
+        />
+      );
+    },
   },
   {
     id: "token",
@@ -134,24 +151,6 @@ export const getKeyTableColumns = ({
     size: 120,
     enableSorting: true,
     cell: (info) => <IdCell value={info.getValue() as string | null} onClick={() => onSelectKey(info.row.original)} />,
-  },
-  {
-    id: "status",
-    meta: { title: "Status" },
-    header: "Status",
-    size: 110,
-    enableSorting: false,
-    cell: ({ row }) => {
-      const status = getKeyStatus(row.original);
-      return (
-        <StatusBadge
-          tone={status.tone}
-          label={status.label}
-          tooltip={status.tooltip}
-          dataTestId={`key-status-${row.original.token_id}`}
-        />
-      );
-    },
   },
   {
     id: "team_alias",
@@ -279,7 +278,7 @@ export const getKeyTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend / Budget" },
+    meta: { title: "Spend / Budget", skeleton: "meter" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Spend / Budget" variant="header-cycle" />,
     size: 180,
     enableSorting: true,
@@ -307,7 +306,7 @@ export const getKeyTableColumns = ({
   {
     id: "models",
     accessorKey: "models",
-    meta: { title: "Models" },
+    meta: { title: "Models", skeleton: "chips" },
     header: "Models",
     size: 220,
     enableSorting: false,

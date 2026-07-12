@@ -13,6 +13,15 @@ describe("SpendBudgetCell", () => {
     expect(indicator(container)).toBeNull();
   });
 
+  it("shows $0.00 for zero or undefined spend, never a hyphen", () => {
+    const { rerender } = render(<SpendBudgetCell spend={0} maxBudget={100} />);
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.queryByText("-")).not.toBeInTheDocument();
+    rerender(<SpendBudgetCell spend={null} maxBudget={null} />);
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.queryByText("-")).not.toBeInTheDocument();
+  });
+
   it("renders a meter carrying the spend and budget when a budget exists", () => {
     render(<SpendBudgetCell spend={25} maxBudget={100} />);
     const meter = screen.getByRole("meter");

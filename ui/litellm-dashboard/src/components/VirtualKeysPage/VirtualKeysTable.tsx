@@ -9,15 +9,15 @@ import {
   DataTableFilterField,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
+import { Combobox } from "@/components/shared/Combobox";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
-import { Select } from "antd";
 import { KeyRound } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
+import { KeyAliasCombobox } from "../KeyAliasSelect/KeyAliasCombobox";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
@@ -165,7 +165,6 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         filterMode="server"
         columnFilters={columnFilters}
         onColumnFiltersChange={handleColumnFiltersChange}
-        onRowClick={setSelectedKey}
         enableColumnResizing
         columnResizeMode="onChange"
         isLoading={isLoading}
@@ -195,34 +194,30 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               {({ get, set }) => (
                 <>
                   <DataTableFilterField label="Team ID">
-                    <Select
-                      showSearch
-                      allowClear
-                      className="w-full"
-                      placeholder="Search Team ID…"
-                      optionFilterProp="label"
-                      value={(get("team_id") as string) || undefined}
-                      onChange={(value) => set("team_id", value ?? "")}
+                    <Combobox
                       options={teamOptions}
+                      value={(get("team_id") as string) || undefined}
+                      onValueChange={(value) => set("team_id", value)}
+                      placeholder="Select Team ID…"
+                      searchPlaceholder="Search teams…"
+                      emptyText="No teams found"
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="Organization ID">
-                    <Select
-                      showSearch
-                      allowClear
-                      className="w-full"
-                      placeholder="Search Organization ID…"
-                      optionFilterProp="label"
-                      value={(get("org_id") as string) || undefined}
-                      onChange={(value) => set("org_id", value ?? "")}
+                    <Combobox
                       options={orgOptions}
+                      value={(get("org_id") as string) || undefined}
+                      onValueChange={(value) => set("org_id", value)}
+                      placeholder="Select Organization ID…"
+                      searchPlaceholder="Search organizations…"
+                      emptyText="No organizations found"
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="Key Alias">
-                    <PaginatedKeyAliasSelect
+                    <KeyAliasCombobox
                       value={(get("key_alias") as string) || undefined}
-                      onChange={(value) => set("key_alias", value ?? "")}
-                      placeholder="Select Key Alias…"
+                      onValueChange={(value) => set("key_alias", value)}
+                      teamId={(get("team_id") as string) || undefined}
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="User ID">

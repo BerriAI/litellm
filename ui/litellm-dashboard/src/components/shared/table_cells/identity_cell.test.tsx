@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { IdentityCell } from "./identity_cell";
 
@@ -9,17 +10,29 @@ describe("IdentityCell", () => {
     expect(screen.getByText("prod-gateway")).toBeInTheDocument();
   });
 
-  it("renders the subtitle when provided", () => {
-    render(<IdentityCell title="prod-gateway" subtitle="sk-...v0Pw" />);
+  it("renders the subtitle and an inline badge together", () => {
+    render(<IdentityCell title="prod-gateway" subtitle="sk-...v0Pw" badge={<span>Active</span>} />);
     expect(screen.getByText("sk-...v0Pw")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
   });
 
-  it("omits the subtitle when it is empty, null, or undefined", () => {
-    const { rerender } = render(<IdentityCell title="a" subtitle="" />);
-    expect(screen.queryByText("", { selector: "span.font-mono" })).not.toBeInTheDocument();
-    rerender(<IdentityCell title="a" subtitle={null} />);
+  it("omits the subtitle row when there is no subtitle or badge", () => {
+    render(<IdentityCell title="a" />);
     expect(document.querySelector("span.font-mono")).toBeNull();
-    rerender(<IdentityCell title="a" />);
-    expect(document.querySelector("span.font-mono")).toBeNull();
+  });
+
+  it("renders a static div (no button) when not clickable", () => {
+    render(<IdentityCell title="a" subtitle="b" />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("renders a clickable button and fires onClick", async () => {
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+    render(<IdentityCell title="prod-gateway" subtitle="sk-...v0Pw" onClick={onClick} />);
+    const button = screen.getByRole("button");
+    expect(button.querySelector(".lucide-chevron-right")).not.toBeNull();
+    await user.click(button);
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });

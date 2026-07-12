@@ -241,13 +241,23 @@ it("should render the redesigned table headers", () => {
   renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("Key")).toBeInTheDocument();
-  expect(screen.getByText("Status")).toBeInTheDocument();
   expect(screen.getByText("Team")).toBeInTheDocument();
   expect(screen.getByText("Models")).toBeInTheDocument();
   expect(screen.getByText("Spend / Budget")).toBeInTheDocument();
 });
 
-it("should open KeyInfoView when clicking a key row", async () => {
+it("sorts by the backend key_alias field (not the column label) when the Key header is clicked", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+
+  const keyHeader = screen.getByText("Key").closest("button") as HTMLElement;
+  fireEvent.click(keyHeader);
+
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "key_alias" }));
+  });
+});
+
+it("should open KeyInfoView when clicking the key cell", async () => {
   renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
