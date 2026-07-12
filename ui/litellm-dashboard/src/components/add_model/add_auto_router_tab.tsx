@@ -238,7 +238,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       <Card className="mb-4">
         <div className="mb-4">
           <Text className="text-sm font-medium mb-2 block">Router Type</Text>
-          <Radio.Group value={routerType} onChange={(e) => setRouterType(e.target.value)} className="w-full">
+          <Radio.Group
+            value={routerType}
+            onChange={(e) => {
+              setRouterType(e.target.value);
+              setShowValidationErrors(false);
+            }}
+            className="w-full"
+          >
             <Space direction="vertical" className="w-full">
               <Radio value="recommended" className="w-full">
                 <div className="flex items-center gap-2">
