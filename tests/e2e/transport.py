@@ -7,7 +7,7 @@ client touches requests.* or builds raw dicts; they pass pydantic models here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -79,8 +79,12 @@ class Transport(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HttpTransport:
+    """`master_key` is excluded from repr: pytest prints fixture values verbatim
+    into failure output, so a repr carrying the key leaks it into CI logs and any
+    log aggregator they ship to."""
+
     base_url: str
-    master_key: str
+    master_key: str = field(repr=False)
     request_timeout: float = 60.0
 
     def _url(self, path: str) -> URL:
