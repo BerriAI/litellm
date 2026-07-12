@@ -135,8 +135,8 @@ lint-ruff: $(LINT_DEP_INSTALL)
 # inspiration from:
 # https://github.com/astral-sh/ruff/discussions/10977
 # https://github.com/astral-sh/ruff/discussions/4049
-lint-format-changed: install-dev
-	@git diff origin/main --unified=0 --no-color -- '*.py' | \
+lint-format-changed: install-dev lint-fetch-base
+	@git diff origin/litellm_internal_staging --unified=0 --no-color -- '*.py' | \
 	perl -ne '\
 		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
 		if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { \
@@ -150,16 +150,16 @@ lint-format-changed: install-dev
 			$(UV_RUN) ruff format --range "$$lines" "$$file"; \
 		done
 
-lint-ruff-dev: install-dev
+lint-ruff-dev: install-dev lint-fetch-base
 	@tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
 	cd litellm && \
 	($(UV_RUN) ruff check . --output-format=pylint || true) > "$$tmpfile" && \
-	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
+	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/litellm_internal_staging && \
 	cd .. ; \
 	rm -f "$$tmpfile"
 
-lint-ruff-FULL-dev: install-dev
-	@files=$$(git diff --name-only origin/main -- '*.py'); \
+lint-ruff-FULL-dev: install-dev lint-fetch-base
+	@files=$$(git diff --name-only origin/litellm_internal_staging -- '*.py'); \
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
