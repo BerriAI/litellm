@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
-import { MetricWithMetadata } from "../../../types";
+import { MetricWithMetadata } from "@/components/UsagePage/types";
 import EndpointUsageBarChart from "./EndpointUsageBarChart";
 
 const metric = (successful: number, failed: number): MetricWithMetadata => ({

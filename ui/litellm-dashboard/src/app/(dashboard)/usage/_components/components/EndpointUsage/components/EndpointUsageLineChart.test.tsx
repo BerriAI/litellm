@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
-import { DailyData, MetricWithMetadata, SpendMetrics } from "../../../types";
+import { DailyData, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import EndpointUsageLineChart from "./EndpointUsageLineChart";
 
 const spendMetrics = (apiRequests: number): SpendMetrics => ({
