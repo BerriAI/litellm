@@ -633,9 +633,9 @@ For detailed contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 LiteLLM follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
 
 Our automated checks include:
-- **Black** for code formatting
+- **ruff format** for code formatting
 - **Ruff** for linting and code quality
-- **MyPy** for type checking
+- **basedpyright** for type checking
 - **Circular import detection**
 - **Import safety checks**
 
