@@ -4375,6 +4375,7 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_clie
     fake_http_response.raise_for_status = MagicMock()
     fake_http_client = MagicMock()
     fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    key_resolver = AsyncMock(return_value=key_hash)
     if fake_client_out is not None:
         fake_client_out["client"] = fake_http_client
 
@@ -4385,11 +4386,11 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_clie
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
-            new=AsyncMock(return_value=key_hash),
+            new=key_resolver,
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
     ):
-        return await exchange_token_with_server(
+        response = await exchange_token_with_server(
             request=_bridge_mock_request(),
             mcp_server=server,
             grant_type="authorization_code",
@@ -4399,6 +4400,11 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_clie
             client_secret=None,
             code_verifier="verifier",
         )
+    if server.is_oauth_delegate and server.is_dcr_bridge:
+        key_resolver.assert_awaited_once()
+    else:
+        key_resolver.assert_not_awaited()
+    return response
 
 
 @pytest.mark.asyncio
@@ -4457,15 +4463,16 @@ async def test_oauth_delegate_bridge_token_exchange_fails_closed_without_litellm
 @pytest.mark.asyncio
 async def test_bridge_envelope_too_large_upstream_token_is_502():
     """An upstream token too large to seal into the envelope is an upstream-payload condition, so the
-    mint surfaces a 502 rather than a 500 (build_bridge_token_response returns EnvelopeTooLarge as a
-    value, and the caller maps it to a truthful status)."""
+    mint surfaces a 502 (as an RFC 6749 §5.2 error body, not a raised HTTPException) rather than a 500:
+    build_bridge_token_response returns EnvelopeTooLarge as a value, _finish_bridge_mint returns the
+    "too_large" failure, and _bridge_mint_error_response maps it to a truthful status."""
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
     upstream = {"access_token": "x" * 40000, "token_type": "Bearer", "expires_in": 3600}
-    with pytest.raises(HTTPException) as exc:
-        await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
-    assert exc.value.status_code == 502
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"] == "server_error"
 
 
 @pytest.mark.asyncio
@@ -4544,8 +4551,10 @@ async def test_bridge_refresh_grant_fails_closed_before_upstream_when_no_identit
 
 @pytest.mark.asyncio
 async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
-    """master_key is validated BEFORE the upstream exchange, so a misconfigured gateway 500s without
-    consuming the single-use code, avoiding the burn-then-fail the pre-exchange gate exists to prevent."""
+    """master_key is validated BEFORE the upstream exchange (in _prepare_bridge_mint), so a
+    misconfigured gateway returns a 500 server_error without consuming the single-use code, avoiding
+    the burn-then-fail the pre-exchange phase exists to prevent. The failure is returned as an RFC 6749
+    error body, not raised."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
     from litellm.types.mcp import MCPAuth
 
@@ -4563,19 +4572,19 @@ async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
         ),
         patch("litellm.proxy.proxy_server.master_key", None),
     ):
-        with pytest.raises(HTTPException) as exc:
-            await exchange_token_with_server(
-                request=_bridge_mock_request(),
-                mcp_server=server,
-                grant_type="authorization_code",
-                code="auth-code",
-                redirect_uri="https://claude.ai/api/mcp/auth_callback",
-                client_id="dcr-client-123",
-                client_secret=None,
-                code_verifier="verifier",
-            )
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
 
-    assert exc.value.status_code == 500
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"] == "server_error"
     fake_http_client.post.assert_not_called()
 
 
@@ -4647,18 +4656,18 @@ async def test_bridge_token_exchange_honors_short_float_expires_in_ttl():
 @pytest.mark.asyncio
 async def test_oauth_delegate_bridge_token_exchange_missing_access_token_is_502_not_keyerror():
     """When the upstream token response has no access_token, a dcr_bridge oauth_delegate exchange
-    returns a clean 502 rather than raising a KeyError. The eager access_token extraction used to run
-    before the bridge branch, so a missing token raised KeyError and _bridge_grant_from_token_response's
-    nil guard (which maps to 502) was dead code; the extraction now lives on the non-bridge path only."""
+    returns a clean 502 error body rather than raising a KeyError. _finish_bridge_mint asks
+    _bridge_grant_from_token_response for a typed grant, gets None, and returns the "no_upstream_token"
+    failure, which maps to 502; nothing indexes token_response["access_token"] on the bridge path."""
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
     upstream = {"token_type": "Bearer", "expires_in": 3600}
 
-    with pytest.raises(HTTPException) as exc:
-        await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
 
-    assert exc.value.status_code == 502
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"] == "server_error"
 
 
 @pytest.mark.asyncio

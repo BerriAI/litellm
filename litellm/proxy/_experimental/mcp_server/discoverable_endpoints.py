@@ -4,6 +4,7 @@ import json
 import math
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -12,6 +13,7 @@ import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, SecretStr, ValidationError
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -39,6 +41,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        EnvelopeKeys,
         UpstreamTokenGrant,
     )
     from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
@@ -757,73 +760,112 @@ def _bridge_grant_from_token_response(token_response: object) -> Optional["Upstr
     )
 
 
-def _bridge_invalid_request_response() -> JSONResponse:
-    """RFC 6749 §5.2-shaped ``invalid_request`` for a bridge token exchange that carries no resolvable
-    litellm identity. Returned (not raised) so the OAuth error members sit at the top level rather than
-    wrapped in FastAPI's ``detail``, with the no-store token-endpoint headers, matching the BYOK OAuth
-    endpoint and what a strict DCR client parses per RFC 6749 §5.2."""
-    return JSONResponse(
-        status_code=400,
-        content={
-            "error": "invalid_request",
-            "error_description": (
+# ---------------------------------------------------------------------------
+# DCR-bridge oauth_delegate mint: a three-phase pipeline whose failures are values.
+#
+#   prepare  (before the upstream exchange) -> validate every precondition and resolve identity+keys
+#   exchange (the single-use upstream code is consumed here, in exchange_token_with_server)
+#   finish   (after the exchange)           -> seal the upstream grant into the client-held envelope
+#
+# Every precondition lives in ``prepare``, which runs BEFORE the exchange, so no failure can burn the
+# single-use code or rotate a refresh token, for either grant type -- that whole class of bug is gone
+# by construction rather than guarded case by case. Failures are values mapped to an OAuth-shaped
+# response in one place (``_bridge_mint_error_response``), so status codes and the RFC 6749 §5.2 body
+# shape are uniform. Adding a failure mode is a new literal plus a match arm the type checker forces.
+# ---------------------------------------------------------------------------
+
+_BridgeMintError = Literal["not_configured", "no_identity", "no_upstream_token", "too_large"]
+
+
+@dataclass(frozen=True, slots=True)
+class _BridgeMintReady:
+    """Everything the seal needs, resolved once before the exchange: the authorizing key hash and the
+    master-key-derived envelope keys. Passing this forward means identity resolution and key derivation
+    happen exactly once, and ``_finish_bridge_mint`` has no preconditions left that could fail."""
+
+    key_hash: str
+    keys: "EnvelopeKeys"
+
+
+def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
+    """Map a bridge-mint failure value to its token-endpoint response. One place, RFC 6749 §5.2 shape
+    (top-level ``error``, no-store) for every case, with a status truthful about where the failure is:
+    the caller's request (400), the gateway config (500), or the upstream (502)."""
+    if error == "no_identity":
+        status, code, desc = (
+            400,
+            "invalid_request",
+            (
                 "this server issues a gateway-bound credential; send a litellm credential "
                 "(x-litellm-api-key or Authorization) on the token request"
             ),
-        },
-        headers=TOKEN_NO_CACHE_HEADERS,
+        )
+    elif error == "not_configured":
+        status, code, desc = (
+            500,
+            "server_error",
+            ("the gateway is not configured to mint a gateway-bound credential (master_key is not set)"),
+        )
+    elif error == "no_upstream_token":
+        status, code, desc = 502, "server_error", "the upstream token response has no usable access_token"
+    elif error == "too_large":
+        status, code, desc = (
+            502,
+            "server_error",
+            ("the upstream token is too large to seal into a gateway-bound credential"),
+        )
+    else:
+        assert_never(error)
+    return JSONResponse(
+        status_code=status, content={"error": code, "error_description": desc}, headers=TOKEN_NO_CACHE_HEADERS
     )
 
 
-async def _mint_bridge_delegate_token_response(
-    request: Request, mcp_server: MCPServer, token_response: object
-) -> JSONResponse:
-    """Return the client-held envelope bearer for a DCR-bridge ``oauth_delegate`` token exchange.
+async def _prepare_bridge_mint(request: Request, mcp_server: MCPServer) -> "_BridgeMintReady | _BridgeMintError":
+    """Phase 1, BEFORE the upstream exchange: validate that the gateway can mint (master_key set) and
+    that the request carries a resolvable litellm identity, and derive the envelope keys. Returns a
+    ready context or a failure value. Running before the exchange is what makes a missing master_key or
+    an unresolvable identity fail closed without consuming the single-use code / rotating a refresh
+    token, for both grant types."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        master_key,
+    )
 
-    The envelope binds the authorizing litellm key (its hash, resolved from the token request) to the
-    upstream grant, so the client holds one bearer that later admits it and forwards the upstream
-    token, with nothing stored server-side. Admission reloads the live key by that hash, so the key's
-    current restrictions and revocation gate the request. Fails closed with an OAuth
-    ``invalid_request`` when no active litellm key accompanies the token request rather than minting
-    an unbound credential.
-    """
+    if not master_key:
+        return "not_configured"
+    key_hash = await _extract_active_key_hash_from_request(request)
+    if not key_hash:
+        return "no_identity"
+    return _BridgeMintReady(key_hash=key_hash, keys=envelope_keys_from_master_key(master_key))
+
+
+def _finish_bridge_mint(
+    ready: "_BridgeMintReady", mcp_server: MCPServer, token_response: object, now: datetime
+) -> "JSONResponse | _BridgeMintError":
+    """Phase 3, AFTER the upstream exchange: seal the upstream grant into the client-held envelope using
+    the pre-resolved identity and keys, so the client holds one bearer that admits it and forwards the
+    upstream token with nothing stored server-side. The only failures here are properties of the
+    upstream response (no usable token, or a token too large to seal), returned as values."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         build_bridge_token_response,
-        envelope_keys_from_master_key,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         EnvelopeIdentity,
         SealedEnvelope,
     )
-    from litellm.proxy.proxy_server import (
-        master_key,  # noqa: PLC0415  # inline import avoids a module-load circular import
-    )
-
-    if not master_key:
-        raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
-
-    key_hash = await _extract_active_key_hash_from_request(request)
-    if not key_hash:
-        return _bridge_invalid_request_response()
 
     grant = _bridge_grant_from_token_response(token_response)
     if grant is None:
-        raise HTTPException(status_code=502, detail="Upstream token response has no usable access_token")
-
-    now = datetime.now(timezone.utc)
-    keys = envelope_keys_from_master_key(master_key)
-    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=key_hash)
-    sealed = build_bridge_token_response(identity, grant, keys, now)
+        return "no_upstream_token"
+    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=ready.key_hash)
+    sealed = build_bridge_token_response(identity, grant, ready.keys, now)
     if not isinstance(sealed, SealedEnvelope):
-        # build_bridge_token_response returns EnvelopeTooLarge as a value when the upstream token is
-        # too large to seal; that is an upstream-payload condition, so surface a 502, not a 500.
-        raise HTTPException(
-            status_code=502, detail="Upstream token is too large to seal into a gateway-bound credential"
-        )
-
-    # The JWT exp is int(expires_at.timestamp()) (second-truncated), and admission expires the envelope
-    # against that exp. Report expires_in from the same truncated exp, rounding the elapsed portion up,
-    # so the client is never told the bearer lives past the point admission already rejects it.
+        return "too_large"
+    # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the
+    # client is never told the bearer lives past the point admission (which uses that exp) rejects it.
     expires_in = max(1, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
     body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
@@ -902,19 +944,15 @@ async def exchange_token_with_server(
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
-    # A bridge oauth_delegate mint must fail closed BEFORE the upstream exchange consumes or rotates the
-    # single-use code (or refresh token): confirm the gateway can mint at all (master_key set) and that
-    # the request carries a resolvable litellm identity. Applies to both grant types, so an invalid key
-    # or a misconfigured gateway never burns the upstream credential. The mint below re-checks
-    # authoritatively; get_key_object is cache-first, so the identity re-resolution is a cache hit and
-    # adds no extra database round-trip.
+    # Phase 1: for a bridge oauth_delegate mint, validate all preconditions and resolve identity+keys
+    # BEFORE the exchange below consumes the single-use upstream code, and carry the ready context to
+    # phase 3. A failure here returns without ever touching the upstream credential.
+    bridge_mint_ready: _BridgeMintReady | None = None
     if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
-        from litellm.proxy.proxy_server import master_key as _bridge_master_key  # noqa: PLC0415
-
-        if not _bridge_master_key:
-            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
-        if not await _extract_active_key_hash_from_request(request):
-            return _bridge_invalid_request_response()
+        prepared = await _prepare_bridge_mint(request, mcp_server)
+        if not isinstance(prepared, _BridgeMintReady):
+            return _bridge_mint_error_response(prepared)
+        bridge_mint_ready = prepared
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
@@ -982,8 +1020,11 @@ async def exchange_token_with_server(
     # A DCR-bridge oauth_delegate server hands the client a gateway-bound envelope (identity plus the
     # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
     # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
-    if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
-        return await _mint_bridge_delegate_token_response(request, mcp_server, token_response)
+    if bridge_mint_ready is not None:
+        # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
+        # OAuth-shaped response as the phase-1 preconditions.
+        minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
+        return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
 
     result = {
         "access_token": token_response["access_token"],
