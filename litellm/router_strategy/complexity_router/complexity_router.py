@@ -153,7 +153,7 @@ class ComplexityRouter(CustomLogger):
         ]
 
         self.adaptive_router: Optional[Any] = None
-        self._model_home_tier: Dict[str, ComplexityTier] = {}
+        self._model_tiers: Dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
@@ -455,15 +455,10 @@ class ComplexityRouter(CustomLogger):
 
         pools = self._tier_pools()
         available_models = list(dict.fromkeys(model for models in pools.values() for model in models))
-        home_tier: Dict[str, ComplexityTier] = {}
-        for tier_name, models in pools.items():
-            tier = ComplexityTier(tier_name)
-            tier_idx = TIER_SEVERITY_ORDER.index(tier)
-            for model in models:
-                prev = home_tier.get(model)
-                if prev is None or TIER_SEVERITY_ORDER.index(prev) < tier_idx:
-                    home_tier[model] = tier
-        self._model_home_tier = home_tier
+        self._model_tiers = {
+            model: tuple(ComplexityTier(tier_name) for tier_name, models in pools.items() if model in models)
+            for model in available_models
+        }
 
         model_to_prefs: Dict[str, AdaptiveRouterPreferences] = {}
         model_to_cost: Dict[str, float] = {}
@@ -520,8 +515,35 @@ class ComplexityRouter(CustomLogger):
         request_type = classify_prompt(user_message)
         classified_idx = TIER_SEVERITY_ORDER.index(classified_tier)
         pools = self._tier_pools()
+        classified_candidates = tuple(pools.get(classified_tier.value, ()))
+        cold_start_candidates = tuple(
+            model for model in classified_candidates if adaptive._cells[(request_type, model)].total_samples == 0
+        )
+        if cold_start_candidates:
+            chosen_model = random.choice(cold_start_candidates)
+            if request_kwargs is not None:
+                metadata = request_kwargs.setdefault("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata["adaptive_router_decision"] = {
+                        "phase": "cold_start",
+                        "classified_tier": classified_tier.value,
+                        "request_type": request_type.value,
+                        "eligible_mode": "classified_tier",
+                        "quality_weight": self.config.adaptive_weights.quality,
+                        "cost_weight": self.config.adaptive_weights.cost,
+                        "tier_distance_penalty": self.config.tier_distance_penalty,
+                        "chosen_model": chosen_model,
+                        "candidates": [
+                            {
+                                "model": model,
+                                "total_samples": adaptive._cells[(request_type, model)].total_samples,
+                            }
+                            for model in cold_start_candidates
+                        ],
+                    }
+            return chosen_model
         if self.config.adaptive_eligible == "classified_tier":
-            candidates = list(pools.get(classified_tier.value, []))
+            candidates = list(classified_candidates)
             if not candidates:
                 return self.get_model_for_tier(classified_tier)
         else:
@@ -542,8 +564,10 @@ class ComplexityRouter(CustomLogger):
             if self.config.adaptive_eligible == "classified_tier":
                 distance = 0
             else:
-                home = self._model_home_tier.get(model, classified_tier)
-                distance = abs(TIER_SEVERITY_ORDER.index(home) - classified_idx)
+                model_tiers = self._model_tiers.get(model, (classified_tier,))
+                distance = min(
+                    abs(TIER_SEVERITY_ORDER.index(model_tier) - classified_idx) for model_tier in model_tiers
+                )
             score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
             candidate_scores.append(
                 {
@@ -563,6 +587,7 @@ class ComplexityRouter(CustomLogger):
             metadata = request_kwargs.setdefault("metadata", {})
             if isinstance(metadata, dict):
                 metadata["adaptive_router_decision"] = {
+                    "phase": "adaptive",
                     "classified_tier": classified_tier.value,
                     "request_type": request_type.value,
                     "eligible_mode": self.config.adaptive_eligible,

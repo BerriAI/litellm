@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import statistics
 import sys
 import time
@@ -474,6 +475,7 @@ async def amain() -> None:
     )
     parser.add_argument("--skip-hybrid", action="store_true")
     parser.add_argument("--skip-judge", action="store_true")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     _load_dotenv_files()
@@ -513,6 +515,8 @@ async def amain() -> None:
         _emit(f"\n=== {problem['id']} ===")
         for arm_name, router_model, direct in arms:
             _emit(f"  {arm_name} ...", end=" ", flush=True)
+            if arm_name in {"complexity", "hybrid"}:
+                random.seed(f"{args.seed}:{problem['id']}")
             result = await acall_arm(
                 arm=arm_name,
                 router=None if arm_name == "premium_baseline" else router,
@@ -545,6 +549,7 @@ async def amain() -> None:
         "cheap_model": args.cheap_model,
         "mid_model": args.mid_model,
         "judge_model": JUDGE_MODEL,
+        "seed": args.seed,
         "num_problems": len(problems),
         "summaries": [asdict(s) for s in summaries],
         "results": {arm: [asdict(r) for r in rows] for arm, rows in all_results.items()},
