@@ -552,12 +552,12 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
-1. (In root) provision the checkout with `make bootstrap` (installs the Python env with proxy extras, generates the Prisma client, and installs the dashboard's node_modules)
-2. Start proxy backend `uv run python litellm/proxy/proxy_cli.py`
+1. Run `make bootstrap`
+2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard` (dependencies were already installed by `make bootstrap`)
-2. Run `npm run dev` to start the dashboard
+1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
 
