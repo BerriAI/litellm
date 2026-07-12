@@ -22,6 +22,12 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeConfig,
+)
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+    VertexAIAnthropicConfig,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import ServerToolUse
 
@@ -2514,6 +2520,35 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
     )
 
     assert result["thinking"] == {"type": "adaptive"}
+
+
+@pytest.mark.parametrize(
+    "config,model",
+    [
+        (AnthropicConfig(), "claude-opus-4-8"),
+        (
+            AmazonAnthropicClaudeConfig(),
+            "global.anthropic.claude-opus-4-8",
+        ),
+        (VertexAIAnthropicConfig(), "claude-opus-4-8"),
+    ],
+    ids=["anthropic", "bedrock-invoke", "vertex"],
+)
+def test_legacy_thinking_maps_to_adaptive_thinking_for_chat_routes(config, model):
+    result = config.map_openai_params(
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
 
 
 @pytest.fixture

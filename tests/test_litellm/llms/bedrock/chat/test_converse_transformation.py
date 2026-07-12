@@ -341,6 +341,25 @@ def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
     assert optional_params["output_config"] == {"effort": expected_effort}
 
 
+def test_legacy_thinking_maps_to_adaptive_thinking_for_converse():
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 4096,
+            }
+        },
+        optional_params={"output_config": {"effort": "low"}},
+        model="bedrock/converse/global.anthropic.claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": "low"}
+
+
 @pytest.mark.parametrize(
     "model",
     [
