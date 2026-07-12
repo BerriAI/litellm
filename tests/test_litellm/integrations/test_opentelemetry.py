@@ -866,6 +866,19 @@ class TestOpenTelemetryContentEventsNonePruning(unittest.TestCase):
         self.assertEqual(attrs["finish_reason"], "stop")
         self.assertEqual(completion.body["finish_reason"], "stop")
 
+    def test_prune_none_caps_recursion_depth(self):
+        from litellm.integrations.opentelemetry import _PRUNE_MAX_DEPTH, _prune_none
+
+        deep = current = {}
+        for _ in range(_PRUNE_MAX_DEPTH + 5):
+            child = {"content": None}
+            current["nested"] = child
+            current = child
+
+        pruned = _prune_none(deep)
+        self.assertFalse(_contains_none(pruned))
+        self.assertIsInstance(_prune_none(deep, _depth=_PRUNE_MAX_DEPTH), str)
+
 
 class TestOpenTelemetrySemconvStability(unittest.TestCase):
     """OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental opts into
