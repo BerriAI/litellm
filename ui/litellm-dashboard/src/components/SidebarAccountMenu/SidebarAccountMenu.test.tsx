@@ -179,7 +179,7 @@ describe("SidebarAccountMenu", () => {
     expect(screen.queryByTitle("Thanks for using LiteLLM!")).not.toBeInTheDocument();
   });
 
-  it("should copy the email to the clipboard", async () => {
+  it("wires the email row to the shared copy button", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -187,9 +187,11 @@ describe("SidebarAccountMenu", () => {
     renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
     await openMenu(user);
 
-    await user.click(screen.getByRole("button", { name: "Copy email" }));
+    const copyButton = screen.getByRole("button", { name: "Copy email" });
+    await user.click(copyButton);
 
     expect(writeText).toHaveBeenCalledWith("test@example.com");
+    await waitFor(() => expect(copyButton.querySelector(".lucide-check")).toBeInTheDocument());
   });
 
   it("should call onLogout when logout is clicked", async () => {
