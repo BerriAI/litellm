@@ -4384,12 +4384,21 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     - `allowed_model_pattern=anthropic/*`
     """
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        resolved_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         return False
 
+    # Only infer a provider for a bare model name (e.g. "gpt-4o" -> "openai/gpt-4o").
+    # When get_llm_provider cannot strip an explicit provider prefix (e.g. an
+    # unrecognized "bedrockz/...") it leaves the prefix on the resolved model while
+    # still guessing a provider ("bedrock"), so re-prefixing would build a bogus
+    # "bedrock/bedrockz/..." that spuriously matches "bedrock/*" and grant access to
+    # a model the key/team is not allowed to call.
+    if "/" in resolved_model:
+        return False
+
     return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{model}",
+        model=f"{custom_llm_provider}/{resolved_model}",
         allowed_model_pattern=allowed_model_pattern,
     )
 

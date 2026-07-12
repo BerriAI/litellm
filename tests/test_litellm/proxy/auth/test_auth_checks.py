@@ -4413,3 +4413,41 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
                 request=MagicMock(spec=Request),
             )
     assert "User=u1" in str(over.value)
+
+
+@pytest.mark.parametrize(
+    "model, allowed_models, expected",
+    [
+        # bare model name resolves its provider and matches a provider wildcard
+        ("gpt-4", ["openai/*"], True),
+        # explicit, correct provider prefix matches
+        ("bedrock/anthropic.claude-3-5-sonnet-20240620", ["bedrock/*"], True),
+        # explicit but WRONG provider prefix must NOT match, even though
+        # get_llm_provider loosely resolves "bedrockz/..." to the "bedrock" provider
+        ("bedrockz/anthropic.claude-3-5-sonnet-20240620", ["bedrock/*"], False),
+        ("openaiz/gpt-4o-mini", ["openai/*"], False),
+        # sub-pattern precision is preserved
+        ("bedrock/claude-3-5-sonnet-20240620", ["bedrock/claude-*"], True),
+        ("bedrock/claude-3-6-sonnet-20240620", ["bedrock/claude-3-5-*"], False),
+    ],
+)
+def test_model_matches_any_wildcard_pattern_in_list_respects_provider_prefix(
+    model, allowed_models, expected
+):
+    """
+    A wildcard like "bedrock/*" must not grant access to a different, unrecognized
+    provider prefix such as "bedrockz/...". get_llm_provider loosely resolves
+    "bedrockz/..." to the "bedrock" provider without stripping the prefix, so the
+    provider-inference matcher must skip re-prefixing an already-prefixed model to
+    avoid a "bedrock/bedrockz/..." string that spuriously matches "bedrock/*".
+    """
+    from litellm.proxy.auth.auth_checks import (
+        _model_matches_any_wildcard_pattern_in_list,
+    )
+
+    assert (
+        _model_matches_any_wildcard_pattern_in_list(
+            model=model, allowed_model_list=allowed_models
+        )
+        is expected
+    )
