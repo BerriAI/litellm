@@ -4,7 +4,7 @@ Each test sends a NATIVE provider request through the proxy's passthrough route
 and verifies the proxy still logged a costed SpendLogs row
 (call_type="pass_through_endpoint"), correlated by the x-litellm-call-id header.
 
-Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
+Covered: gemini ("gemini-2.5-flash") + anthropic (CHEAP_ANTHROPIC_MODEL), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
 
 A passthrough call returning non-2xx fails hard (never a skip); once it returns
