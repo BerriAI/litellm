@@ -32,6 +32,30 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 
 
+class KeywordTierRule(BaseModel):
+    """A deterministic override: if any keyword matches, route to this tier."""
+
+    keywords: List[str] = Field(
+        min_length=1,
+        description="Keywords/phrases that trigger this rule (lexical or semantic match)",
+    )
+    tier: ComplexityTier = Field(
+        description="Tier to route to when this rule matches",
+    )
+
+    @model_validator(mode="after")
+    def _normalize_keywords(self) -> "KeywordTierRule":
+        # Strip and drop blank keywords. An empty/whitespace keyword is a routing foot-gun:
+        # _keyword_matches treats "" / " " as a substring that matches essentially every
+        # prompt, so a single stray blank would silently force this rule's tier for all
+        # traffic. Require at least one real keyword to remain.
+        cleaned = [stripped for keyword in self.keywords if (stripped := keyword.strip())]
+        if not cleaned:
+            raise ValueError("keyword_tier_rules entries must contain at least one non-empty keyword")
+        self.keywords = cleaned
+        return self
+
+
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
@@ -315,6 +339,28 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    # Deterministic keyword -> tier overrides, evaluated before weighted scoring
+    keyword_tier_rules: Optional[List[KeywordTierRule]] = Field(
+        default=None,
+        description="Rules that force a specific tier when their keywords match the prompt",
+    )
+
+    # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
+    semantic_keyword_matching: bool = Field(
+        default=False,
+        description="Match keyword_tier_rules by embedding similarity instead of literal text",
+    )
+    embedding_model: Optional[str] = Field(
+        default=None,
+        description="Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled",
+    )
+    match_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine similarity for a semantic keyword match",
+    )
+
     model_config = ConfigDict(extra="allow")  # Allow additional fields
 
     @field_validator("tiers", mode="before")
@@ -349,6 +395,16 @@ class ComplexityRouterConfig(BaseModel):
         if empty:
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized
+        return self
+
+    @model_validator(mode="after")
+    def _validate_semantic_matching(self) -> "ComplexityRouterConfig":
+        if not self.semantic_keyword_matching:
+            return self
+        if not self.embedding_model:
+            raise ValueError("embedding_model is required when semantic_keyword_matching is enabled")
+        if not self.keyword_tier_rules:
+            raise ValueError("keyword_tier_rules must be non-empty when semantic_keyword_matching is enabled")
         return self
 
 

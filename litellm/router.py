@@ -7576,23 +7576,6 @@ class Router:
             )
         self.complexity_routers[deployment.model_name] = complexity_router
 
-        if getattr(complexity_router.config, "adaptive", False):
-            adaptive = complexity_router._ensure_adaptive_router()
-            if adaptive is not None:
-                if deployment.model_name in self.adaptive_routers:
-                    raise ValueError(
-                        f"Adaptive-router deployment {deployment.model_name} already exists. "
-                        "Please use a different model name for the hybrid complexity router."
-                    )
-                from litellm.router_strategy.adaptive_router.hooks import (
-                    AdaptiveRouterPostCallHook,
-                )
-
-                self.adaptive_routers[deployment.model_name] = adaptive
-                litellm.logging_callback_manager.add_litellm_callback(
-                    AdaptiveRouterPostCallHook(adaptive_router=adaptive)
-                )
-
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
         return litellm_params.model.startswith("auto_router/adaptive_router")
@@ -7636,8 +7619,13 @@ class Router:
             )
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        # Hybrid complexity registers hooks before this finalize wipe; re-attach
-        # exactly one hook per live AdaptiveRouter afterward.
+        for model_name, complexity_router in self.complexity_routers.items():
+            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
+                continue
+            adaptive_router = complexity_router._ensure_adaptive_router()
+            if adaptive_router is not None:
+                self.adaptive_routers[model_name] = adaptive_router
+
         for _cb_list in (
             litellm.callbacks,
             litellm.success_callback,
