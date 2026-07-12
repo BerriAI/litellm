@@ -725,26 +725,54 @@ async def validate_key_allowed_skills_against_team(
     is_proxy_admin: bool = False,
 ) -> None:
     """
-    Reject allowed_skills requested on a personal (no team) key by a non-admin
-    caller. Claude Code skill access is granted at use-time from the key's
-    object_permission.allowed_skills list, so the assignment is the
-    authorization boundary. Team keys and proxy admins are unaffected.
+    Validate key object_permission.allowed_skills is a subset of the team's
+    allowlist. Claude Code skill access is granted at use-time directly from
+    the key's (or its team/org's) object_permission.allowed_skills list with
+    no id-resolution step in between, so the assignment itself is the
+    authorization boundary - unlike mcp_servers, there's no downstream check
+    that could still catch an over-broad grant.
+
+    Empty team allowlist means no restriction at team layer (skip), matching
+    get_allowed_skills' own intersection semantics. Non-admin callers cannot
+    assign allowed_skills to a personal (no team) key at all.
     """
     requested = _extract_requested_allowed_skills(object_permission)
     if not requested:
         return
-    if team_obj is not None or is_proxy_admin:
+
+    if team_obj is None and not is_proxy_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "Key is not in a team. Skills cannot be assigned to "
+                    "personal keys by non-admin callers. Disallowed skills: "
+                    f"{sorted(requested)}."
+                )
+            },
+        )
+
+    team_skills: List[str] = []
+    if team_obj is not None and team_obj.object_permission is not None:
+        skills = team_obj.object_permission.allowed_skills
+        if skills:
+            team_skills = list(skills)
+
+    if not team_skills:
         return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "error": (
-                "Key is not in a team. Skills cannot be assigned to "
-                "personal keys by non-admin callers. Disallowed skills: "
-                f"{sorted(requested)}."
-            )
-        },
-    )
+
+    disallowed = requested - set(team_skills)
+    if disallowed:
+        team_id = team_obj.team_id if team_obj is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests skills not allowed by team '{team_id}': "
+                    f"{sorted(disallowed)}. Team allows: {sorted(team_skills)}."
+                )
+            },
+        )
 
 
 def _extract_requested_search_tools(

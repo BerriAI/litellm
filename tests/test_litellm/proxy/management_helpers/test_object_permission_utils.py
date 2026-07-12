@@ -1207,6 +1207,56 @@ async def test_empty_allowed_skills_passes_for_personal_non_admin():
     )
 
 
+def _make_team_obj_allowed_skills(team_id="team-1", allowed_skills=None):
+    mock_team = MagicMock()
+    mock_team.team_id = team_id
+    if allowed_skills is not None:
+        mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+        mock_team.object_permission.allowed_skills = allowed_skills
+    else:
+        mock_team.object_permission = None
+    return mock_team
+
+
+@pytest.mark.asyncio
+async def test_validate_allowed_skills_subset_ok():
+    await validate_key_allowed_skills_against_team(
+        object_permission={"allowed_skills": ["marketplace--skill-a"]},
+        team_obj=_make_team_obj_allowed_skills(allowed_skills=["marketplace--skill-a", "marketplace--skill-b"]),
+        is_proxy_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_allowed_skills_raises_when_not_subset():
+    """
+    Regression test: once a team has an explicit allowed_skills allowlist,
+    a member of that team must not be able to self-assign a skill outside
+    it - get_allowed_skills() reads allowed_skills directly with no
+    downstream id-resolution step to catch an over-broad grant later.
+    """
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_allowed_skills_against_team(
+            object_permission={"allowed_skills": ["marketplace--private-skill"]},
+            team_obj=_make_team_obj_allowed_skills(allowed_skills=["marketplace--skill-a"]),
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "marketplace--private-skill" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_validate_allowed_skills_team_unrestricted_allows_any():
+    """Empty team allowed_skills allowlist means unrestricted at the team
+    layer, matching get_allowed_skills' own intersection semantics - the
+    subset check is skipped, not treated as deny-all."""
+    await validate_key_allowed_skills_against_team(
+        object_permission={"allowed_skills": ["marketplace--anything"]},
+        team_obj=_make_team_obj_allowed_skills(allowed_skills=[]),
+        is_proxy_admin=False,
+    )
+
+
 def test_object_permission_dict_mirrors_pydantic_model():
     """ObjectPermissionDict must stay field-for-field aligned with
     LiteLLM_ObjectPermissionBase. If a new field is added to the Pydantic
