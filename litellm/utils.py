@@ -6139,6 +6139,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "zai":
+            if "ZAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ZAI_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
