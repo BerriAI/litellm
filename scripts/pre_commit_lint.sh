@@ -89,6 +89,11 @@ EOF
 
 status=0
 
+bootstrap_hint() {
+    echo "  This checkout looks unprovisioned (fresh worktree or clone)." >&2
+    echo "  Fix: make bootstrap" >&2
+}
+
 if [ -n "$litellm_py_files" ]; then
     echo "pre-commit: linting Python (make lint)"
     make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
@@ -109,7 +114,13 @@ fi
 
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
-    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+    if [ ! -d ui/litellm-dashboard/node_modules ]; then
+        echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
+        bootstrap_hint
+        status=1
+    else
+        lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+    fi
 fi
 
 if [ -n "$spec_files" ]; then
@@ -118,7 +129,15 @@ if [ -n "$spec_files" ]; then
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
-    if ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
+    if [ ! -d ui/litellm-dashboard/node_modules ]; then
+        echo "✗ ui/litellm-dashboard/node_modules is missing; the gen:api sync check cannot run." >&2
+        bootstrap_hint
+        status=1
+    elif ! uv run --no-sync python -c "import orjson, prisma" 2>/dev/null; then
+        echo "✗ The Python env lacks the proxy deps (orjson/prisma) that gen:api needs." >&2
+        bootstrap_hint
+        status=1
+    elif ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
         echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
