@@ -7556,7 +7556,11 @@ class Router:
         if default_model is None and complexity_router_config:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
-            default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            medium = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            if isinstance(medium, list):
+                default_model = medium[0] if medium else None
+            else:
+                default_model = medium
 
         if default_model is None:
             raise ValueError(
@@ -7593,15 +7597,6 @@ class Router:
             AdaptiveRouterPostCallHook,
         )
 
-        for _cb_list in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            litellm.logging_callback_manager.remove_callbacks_by_type(_cb_list, AdaptiveRouterPostCallHook)
-
         for entry in self.model_list or []:
             lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
             lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
@@ -7618,6 +7613,20 @@ class Router:
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
             self.init_adaptive_router_deployment(deployment=deployment)
+
+        for model_name, complexity_router in self.complexity_routers.items():
+            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
+                continue
+            adaptive_router = complexity_router._ensure_adaptive_router()
+            if adaptive_router is not None:
+                self.adaptive_routers[model_name] = adaptive_router
+
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
+            litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
+        for adaptive_router in self.adaptive_routers.values():
+            litellm.logging_callback_manager.add_litellm_callback(
+                AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
+            )
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
