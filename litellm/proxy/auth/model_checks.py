@@ -118,10 +118,7 @@ def get_key_models(
         all_models = list(
             user_api_key_dict.models
         )  # copy to avoid mutating cached objects
-        if (
-            SpecialModelNames.all_team_models.value in all_models
-            and user_api_key_dict.team_id is not None
-        ):
+        if SpecialModelNames.all_team_models.value in all_models:
             all_models = list(
                 user_api_key_dict.team_models
             )  # copy to avoid mutating cached objects
