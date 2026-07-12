@@ -1,4 +1,5 @@
 import createFetchClient, { type Middleware } from "openapi-fetch";
+import createQueryClient from "openapi-react-query";
 import type { paths } from "./schema";
 import { ApiError, deriveErrorMessage } from "./client";
 import { getAuthHeaderName, getAuthToken, getRequestBaseUrl, reportError } from "./runtime";
@@ -46,3 +47,11 @@ const middleware: Middleware = {
  */
 export const fetchClient = createFetchClient<paths>({ baseUrl: globalThis.location?.origin ?? "" });
 fetchClient.use(middleware);
+
+/**
+ * TanStack Query bound to the typed client. Callers write
+ * `$api.useQuery("get", "/path", init, options)`; the query key is derived from
+ * method + path + init (no hand-maintained key), the request signal is
+ * forwarded for cancellation, and the response type comes from schema.d.ts.
+ */
+export const $api = createQueryClient(fetchClient);
