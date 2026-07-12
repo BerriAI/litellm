@@ -29,7 +29,7 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
     ComplexityTier.REASONING,
 )
 
-DEFAULT_TIER_DISTANCE_PENALTY: float = 0.15
+DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 
 
 # ─── Default Keyword Lists ───
@@ -299,7 +299,7 @@ class ComplexityRouterConfig(BaseModel):
         description="Enable adaptive bandit selection with soft complexity floors",
     )
     adaptive_weights: AdaptiveRouterWeights = Field(
-        default_factory=AdaptiveRouterWeights,
+        default_factory=lambda: AdaptiveRouterWeights(quality=0.3, cost=0.7),
         description="Quality vs cost weights for adaptive selection (used when adaptive=True)",
     )
     tier_distance_penalty: float = Field(

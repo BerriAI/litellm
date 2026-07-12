@@ -1238,6 +1238,15 @@ class TestLLMClassifier:
 
 
 class TestAdaptiveSoftFloors:
+    def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
+        config = ComplexityRouterConfig(
+            adaptive=True,
+            tiers={"SIMPLE": ["cheap"]},
+        )
+        assert config.adaptive_weights.quality == pytest.approx(0.3)
+        assert config.adaptive_weights.cost == pytest.approx(0.7)
+        assert config.tier_distance_penalty == pytest.approx(0.5)
+
     @pytest.fixture
     def adaptive_router_instance(self):
         router = MagicMock()

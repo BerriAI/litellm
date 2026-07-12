@@ -37,7 +37,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import litellm
 from litellm import Router, completion_cost
-from litellm.types.router import AdaptiveRouterPreferences, AdaptiveRouterWeights, RequestType
+from litellm.types.router import RequestType
 
 from scripts.eval_compression import PROBLEMS, SYSTEM_MSG, extract_code, run_tests
 
@@ -48,6 +48,12 @@ JUDGE_SYSTEM = (
     'Reply with JSON only: {"score": <1-5 integer>, "reason": "<one sentence>"}. '
     "5 = fully correct, 3 = partial, 1 = wrong or empty."
 )
+
+
+def _emit(text: str = "", *, end: str = "\n", flush: bool = False) -> None:
+    sys.stdout.write(text + end)
+    if flush:
+        sys.stdout.flush()
 
 
 @dataclass
@@ -180,7 +186,7 @@ def _model_list_for_bakeoff(
                     "complexity_router_default_model": "mid",
                     "complexity_router_config": {
                         "adaptive": False,
-                        "tiers": {k: v[0] for k, v in tiers.items()},
+                        "tiers": tiers,
                         "default_model": "mid",
                     },
                 },
@@ -209,7 +215,6 @@ def _model_list_for_bakeoff(
                     "complexity_router_default_model": "mid",
                     "complexity_router_config": {
                         "adaptive": True,
-                        "adaptive_weights": {"quality": 0.7, "cost": 0.3},
                         "tiers": tiers,
                         "default_model": "mid",
                     },
@@ -277,20 +282,6 @@ def _logical_model_name(router: Optional[Router], chosen: str) -> str:
     if isinstance(deployment, dict):
         return str(deployment.get("model_name") or chosen)
     return str(getattr(deployment, "model_name", None) or chosen)
-    hidden = getattr(response, "_hidden_params", None) or {}
-    if isinstance(hidden, dict):
-        for key in ("model", "custom_llm_provider"):
-            pass
-        additional = hidden.get("additional_headers") or {}
-        if isinstance(additional, dict):
-            header = additional.get("x-litellm-adaptive-router-model")
-            if header:
-                return str(header)
-        model_id = hidden.get("model_id") or hidden.get("litellm_model")
-        if model_id:
-            return str(model_id)
-    model = getattr(response, "model", None)
-    return str(model or fallback)
 
 
 def call_arm(
@@ -460,7 +451,7 @@ def _probe_premium_model(preferred: str, fallbacks: list[str]) -> str:
             )
             return model
         except Exception as e:
-            print(f"premium probe failed for {model}: {str(e)[:140]}")
+            _emit(f"premium probe failed for {model}: {str(e)[:140]}")
     raise RuntimeError("No premium baseline model available")
 
 
@@ -479,7 +470,7 @@ async def amain() -> None:
         "--premium-fallback",
         type=str,
         default="openai/gpt-5.5",
-        help="Used when --premium-model is unavailable (e.g. Anthropic out of credits)",
+        help="Used when --premium-model is unavailable",
     )
     parser.add_argument("--skip-hybrid", action="store_true")
     parser.add_argument("--skip-judge", action="store_true")
@@ -495,7 +486,7 @@ async def amain() -> None:
 
     premium = await asyncio.to_thread(_probe_premium_model, args.premium_model, [args.premium_fallback, args.mid_model])
     if premium != args.premium_model:
-        print(f"NOTE: premium baseline falling back to {premium} (requested {args.premium_model} unavailable)")
+        _emit(f"NOTE: premium baseline falling back to {premium} (requested {args.premium_model} unavailable)")
 
     include_hybrid = not args.skip_hybrid
     model_list = _model_list_for_bakeoff(
@@ -519,9 +510,9 @@ async def amain() -> None:
     all_results: dict[str, list[ArmResult]] = {name: [] for name, _, _ in arms}
 
     for problem in problems:
-        print(f"\n=== {problem['id']} ===")
+        _emit(f"\n=== {problem['id']} ===")
         for arm_name, router_model, direct in arms:
-            print(f"  {arm_name} ...", end=" ", flush=True)
+            _emit(f"  {arm_name} ...", end=" ", flush=True)
             result = await acall_arm(
                 arm=arm_name,
                 router=None if arm_name == "premium_baseline" else router,
@@ -534,7 +525,7 @@ async def amain() -> None:
             all_results[arm_name].append(result)
             status = "PASS" if result.passed else f"FAIL:{result.error[:40]}"
             judge = result.judge_score if result.judge_score is not None else "-"
-            print(
+            _emit(
                 f"{status} judge={judge} cost=${result.cost_usd:.6f} "
                 f"lat={result.latency_ms:.0f}ms model={result.chosen_model}"
             )
@@ -561,17 +552,17 @@ async def amain() -> None:
     report_path = out_dir / f"{ts}_summary.json"
     report_path.write_text(json.dumps(report, indent=2))
 
-    print("\n" + "=" * 88)
-    print(f"{'arm':18} {'pass%':>7} {'judge':>6} {'cost$':>10} {'avg_lat':>10} {'overhead':>10}")
-    print("-" * 88)
+    _emit("\n" + "=" * 88)
+    _emit(f"{'arm':18} {'pass%':>7} {'judge':>6} {'cost$':>10} {'avg_lat':>10} {'overhead':>10}")
+    _emit("-" * 88)
     for s in summaries:
-        print(
+        _emit(
             f"{s.arm:18} {s.pass_rate:7.1f} {s.avg_judge_score:6.2f} "
             f"{s.total_cost_usd:10.6f} {s.avg_latency_ms:10.1f} "
             f"{s.latency_overhead_ms_vs_baseline:10.1f}"
         )
-    print("=" * 88)
-    print(f"Wrote {report_path}")
+    _emit("=" * 88)
+    _emit(f"Wrote {report_path}")
 
 
 if __name__ == "__main__":
