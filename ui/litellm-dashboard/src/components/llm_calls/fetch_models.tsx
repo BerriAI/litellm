@@ -13,7 +13,6 @@ export interface ModelGroup {
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
-    console.log("model_info:", fetchedModels);
 
     if (fetchedModels?.data.length > 0) {
       const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({

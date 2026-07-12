@@ -127,7 +127,7 @@ def mock_responses_api_response(
                 "input_tokens": 36,
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens": 87,
-                "output_tokens_details": {"reasoning_tokens": 0},
+                "output_tokens_details": {},
                 "total_tokens": 123,
             },
             "user": None,
@@ -212,6 +212,7 @@ async def aresponses_api_with_mcp(
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
@@ -327,6 +328,7 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
+                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
             )
 
             if tool_results:
@@ -382,6 +384,7 @@ async def aresponses_api_with_mcp(
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
+                        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
                     )
                     final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                         response=final_response,

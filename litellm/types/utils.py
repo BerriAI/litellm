@@ -143,6 +143,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_adaptive_thinking: Optional[bool]
+    supports_mid_conversation_system: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
     supports_minimal_reasoning_effort: Optional[bool]
@@ -152,6 +153,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
+    bedrock_converse_supports_strict_tools: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -2522,6 +2524,23 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     the client is driving a stateful session. Absent for stateless calls.
     """
 
+    mcp_auth_mode: Optional[str]
+    """
+    The server's auth_type for this call (e.g. `true_passthrough`, `oauth_delegate`,
+    `oauth2`). For the client-forwarded token modes this records that the caller's own
+    upstream token was relayed, so an audit can attribute a relayed request to its mode
+    without logging any credential.
+    """
+
+    mcp_server_resource: Optional[str]
+    """
+    The origin (scheme + host + port) of the upstream MCP server the tool call was forwarded
+    to. Redacted for logging: userinfo, the path, the query string, and the fragment are all
+    stripped, because hosted MCP servers routinely embed the credential in the URL path and
+    this value is readable by callers via request logs.
+    Records which upstream received a relayed request; never a credential.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -2680,7 +2699,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
-    guardrail_request: Optional[dict]
+    guardrail_request: Optional[Union[str, dict]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
     start_time: Optional[float]
@@ -2711,10 +2730,10 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     confidence_score: Optional[float]
     """For LLM-judge guardrails: confidence score 0.0-1.0"""
 
-    classification: Optional[dict]
+    classification: Optional[Union[str, dict]]
     """For LLM-judge guardrails: structured classification output"""
 
-    match_details: Optional[List[dict]]
+    match_details: Optional[Union[str, List[dict]]]
     """Detailed match information for each detected pattern"""
 
     patterns_checked: Optional[int]
@@ -3047,6 +3066,17 @@ class CustomPricingLiteLLMParams(BaseModel):
     regional_processing_uplift_multiplier_eu: Optional[float] = None
     regional_processing_uplift_multiplier_us: Optional[float] = None
 
+    @classmethod
+    def strip_custom_pricing_fields(cls, model_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of ``model_info`` without per-deployment custom pricing fields.
+
+        Used when registering a deployment's info under the shared
+        ``{provider}/{model}`` key in ``litellm.model_cost``, so one deployment's
+        pricing overrides don't pollute sibling deployments that share the same
+        backend model. Full pricing stays under the deployment's unique model id.
+        """
+        return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
 # (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
@@ -3062,6 +3092,7 @@ agentic_loop_internal_litellm_params = [
     "max_agentic_loops",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
 ]
 
@@ -3118,6 +3149,8 @@ all_litellm_params = (
         "client",
         "rpm",
         "tpm",
+        "itpm",
+        "otpm",
         "max_parallel_requests",
         "input_cost_per_token",
         "output_cost_per_token",
@@ -3309,6 +3342,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    TENCENT = "tencent"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
@@ -3365,9 +3399,11 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
+    GDC = "gdc"
 
 
 # Create a set of all provider values for quick lookup

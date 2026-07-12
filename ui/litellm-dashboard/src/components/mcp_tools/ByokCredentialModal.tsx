@@ -102,11 +102,11 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
           <div className="text-center">
             {/* Logos */}
             <div className="flex items-center justify-center gap-3 mb-6">
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow">
+              <div className="w-14 h-14 rounded-xl bg-linear-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                 L
               </div>
               <ArrowRightOutlined className="text-gray-400 text-lg" />
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow">
+              <div className="w-14 h-14 rounded-xl bg-linear-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                 {firstLetter}
               </div>
             </div>
@@ -146,7 +146,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
                 <ul className="space-y-2">
                   {server.byok_description.map((item, i) => (
                     <li key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                      <CheckOutlined className="text-green-500 flex-shrink-0" />
+                      <CheckOutlined className="text-green-500 shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -211,7 +211,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
 
             {/* Security note */}
             <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3 mb-6">
-              <LockOutlined className="text-blue-400 mt-0.5 flex-shrink-0" />
+              <LockOutlined className="text-blue-400 mt-0.5 shrink-0" />
               <p className="text-sm text-blue-700">
                 Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
               </p>

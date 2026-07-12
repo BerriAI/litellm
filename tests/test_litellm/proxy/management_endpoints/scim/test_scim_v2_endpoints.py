@@ -258,6 +258,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
     )
 
     import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
 
     settings = DefaultInternalUserParams(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -266,6 +267,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
         settings=settings,
         settings_key="default_internal_user_params",
         success_message="ok",
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-admin"),
     )
 
     # Verify the in-memory variable was actually updated

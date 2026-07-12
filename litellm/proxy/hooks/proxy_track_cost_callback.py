@@ -190,6 +190,11 @@ class _ProxyDBLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {}) or {}
             end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
+            # Avoids a cache/DB lookup on every normal LLM request.
+            if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
+                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+                _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation = _get_budget_reservation_from_metadata(metadata=metadata)
             user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
             team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
@@ -386,6 +391,20 @@ class _ProxyDBLogger(CustomLogger):
         if general_settings.get("disable_error_logs") is True:
             return False
         return
+
+
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+    patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
+    if not patch:
+        return
+
+    litellm_params = kwargs.setdefault("litellm_params", {})
+    for bucket_name in ("litellm_metadata", "metadata"):
+        bucket = litellm_params.get(bucket_name)
+        if isinstance(bucket, dict):
+            for key, value in patch.items():
+                if bucket.get(key) is None:
+                    bucket[key] = value
 
 
 def _should_track_cost_callback(

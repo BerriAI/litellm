@@ -67,6 +67,29 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_prisma_data_error(e: Exception) -> bool:
+        """True iff ``e`` is a base prisma ``DataError``: the database processed
+        the statement and refused the data itself (e.g. ``invalid byte sequence
+        for encoding "UTF8": 0x00``), as opposed to a connectivity failure.
+
+        Matched by exact type, not ``isinstance``: the specific data-layer
+        subclasses (``UniqueViolationError``, ``TableNotFoundError``,
+        ``MissingRequiredValueError`` ...) all derive from ``DataError`` but
+        carry their own semantics, and a systemic one like a missing table must
+        not be mistaken for a single poison row and bisected away. A raw
+        Postgres execution error with no prisma P-code surfaces as the base
+        ``DataError``.
+
+        prisma also wraps the P1001 "can't reach database server" outage as a
+        base ``DataError``, so a caller that must not treat an outage as a
+        per-row data rejection has to additionally consult
+        ``is_database_service_unavailable_error`` before acting on a True here.
+        """
+        import prisma
+
+        return type(e) is prisma.errors.DataError
+
+    @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
         """
         Returns True only for transport/connectivity failures where a reconnect

@@ -148,6 +148,37 @@ def test_is_database_service_unavailable_error_prisma_p1001_masquerades_as_datae
     )
 
 
+def test_is_prisma_data_error_only_true_for_dataerror():
+    """The spend-log poison-row isolation gates on this: only a prisma
+    ``DataError`` (the DB refused the data, e.g. a NUL byte) may be bisected
+    into a per-row drop. A connectivity failure or any non-prisma exception
+    must not be treated as a data rejection, so the whole batch surfaces."""
+    import httpx
+
+    data_error = DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}})
+    assert PrismaDBExceptionHandler.is_prisma_data_error(data_error) is True
+
+    for non_data in (
+        httpx.ConnectError("conn refused"),
+        PrismaError("can't reach database server"),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "t"}}}),
+        RuntimeError("boom"),
+    ):
+        assert PrismaDBExceptionHandler.is_prisma_data_error(non_data) is False
+
+
+def test_is_prisma_data_error_true_for_connection_masquerade_dataerror():
+    """The P1001 outage prisma mislabels as a ``DataError`` is still a
+    ``DataError`` by type, so this returns True; the spend-log helper relies on
+    ``is_database_service_unavailable_error`` (not this check) to keep that
+    outage on the retry path instead of dropping rows."""
+    p1001_as_dataerror = DataError(
+        data={"user_facing_error": {"message": "Can't reach database server at `127.0.0.1`:`5499`"}}
+    )
+    assert PrismaDBExceptionHandler.is_prisma_data_error(p1001_as_dataerror) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(p1001_as_dataerror) is True
+
+
 def test_is_database_service_unavailable_error_cached_plan_escapes_as_503():
     """Composes with the cached-plan retry: when that recovery fails and the
     Postgres "cached plan must not change result type" error escapes (raised by

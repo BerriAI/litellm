@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -3626,6 +3626,7 @@ class BedrockImageProcessor:
 
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
+    model: Optional[str] = None,
 ) -> List[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -3701,7 +3702,13 @@ def _convert_to_bedrock_tool_call_invoke(
                             # cache_control applies to the whole original
                             # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
-                                _parts_list.append(BedrockContentBlock(cachePoint=CachePointBlock(type="default")))
+                                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    {"cache_control": tool["cache_control"]},
+                                    block_type="content_block",
+                                    model=model,
+                                )
+                                if _cache_point_block is not None:
+                                    _parts_list.append(_cache_point_block)
                             continue
                         # Fallback: no objects extracted — use empty dict.
                         arguments_dict = {}
@@ -3712,8 +3719,13 @@ def _convert_to_bedrock_tool_call_invoke(
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    _parts_list.append(cache_point_block)
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool["cache_control"]},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -4377,6 +4389,7 @@ class BedrockConverseMessagesProcessor:
                             _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
+                                model=model,
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
@@ -4384,7 +4397,7 @@ class BedrockConverseMessagesProcessor:
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
                     _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                        message_block, block_type="content_block"
+                        message_block, block_type="content_block", model=model
                     )
                     user_content.append(_part)
                     if _cache_point_block is not None:
@@ -4416,22 +4429,27 @@ class BedrockConverseMessagesProcessor:
                 tool_content.append(tool_call_result)
 
                 # Check if we need to add a separate cachePoint block
-                has_cache_control = False
+                tool_msg_cache_control = None
 
                 # Check for message-level cache_control
                 if current_message.get("cache_control", None) is not None:
-                    has_cache_control = True
+                    tool_msg_cache_control = current_message["cache_control"]
                 # Check for content-level cache_control in list content
                 elif isinstance(current_message.get("content"), list):
                     for content_element in current_message["content"]:
                         if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                            has_cache_control = True
+                            tool_msg_cache_control = content_element["cache_control"]
                             break
 
                 # Add a separate cachePoint block if cache_control is present
-                if has_cache_control:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    tool_content.append(cache_point_block)
+                if tool_msg_cache_control is not None:
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool_msg_cache_control},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        tool_content.append(cache_point_block)
 
                 msg_i += 1
             # Deduplicate toolResult blocks with the same toolUseId
@@ -4509,6 +4527,7 @@ class BedrockConverseMessagesProcessor:
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -4520,14 +4539,14 @@ class BedrockConverseMessagesProcessor:
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                        assistant_message_block, block_type="content_block"
+                        assistant_message_block, block_type="content_block", model=model
                     )
                     if _cache_point_block is not None:
                         assistant_content.append(_cache_point_block)
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
-                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
                 msg_i += 1
 
@@ -4745,6 +4764,7 @@ def _bedrock_converse_messages_pt(
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
@@ -4752,7 +4772,7 @@ def _bedrock_converse_messages_pt(
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
                 _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                    message_block, block_type="content_block"
+                    message_block, block_type="content_block", model=model
                 )
                 user_content.append(_part)
                 if _cache_point_block is not None:
@@ -4786,22 +4806,27 @@ def _bedrock_converse_messages_pt(
             tool_content.append(tool_call_result)
 
             # Check if we need to add a separate cachePoint block
-            has_cache_control = False
+            tool_msg_cache_control = None
 
             # Check for message-level cache_control
             if current_message.get("cache_control", None) is not None:
-                has_cache_control = True
+                tool_msg_cache_control = current_message["cache_control"]
             # Check for content-level cache_control in list content
             elif isinstance(current_message.get("content"), list):
                 for content_element in current_message["content"]:
                     if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                        has_cache_control = True
+                        tool_msg_cache_control = content_element["cache_control"]
                         break
 
             # Add a separate cachePoint block if cache_control is present
-            if has_cache_control:
-                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                tool_content.append(cache_point_block)
+            if tool_msg_cache_control is not None:
+                cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    {"cache_control": tool_msg_cache_control},
+                    block_type="content_block",
+                    model=model,
+                )
+                if cache_point_block is not None:
+                    tool_content.append(cache_point_block)
 
             msg_i += 1
         # Deduplicate toolResult blocks with the same toolUseId
@@ -4882,6 +4907,7 @@ def _bedrock_converse_messages_pt(
                         _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
+                            model=model,
                         )
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
@@ -4892,13 +4918,13 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
-                    assistant_message_block, block_type="content_block"
+                    assistant_message_block, block_type="content_block", model=model
                 )
                 if _cache_point_block is not None:
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
-                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
             msg_i += 1
 
@@ -5035,15 +5061,18 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
     ]
     """
     from litellm.llms.bedrock.common_utils import (
-        get_bedrock_base_model,
+        bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     _valid_json_schema_root_types = frozenset(("array", "boolean", "integer", "null", "number", "object", "string"))
     # Only Claude on Bedrock honours strict tool schemas; other families
-    # (Nova, Llama, GPT-OSS) reject the strict field outright.
-    supports_strict_tools = bool(model and get_bedrock_base_model(model).startswith("anthropic"))
+    # (Nova, Llama, GPT-OSS) reject the strict field outright. Opus 4.7/4.8
+    # also reject `strict` on Bedrock Converse (see #31582) — their validator
+    # maps toolSpec to the native Anthropic tool shape, which has no strict
+    # field, even though Anthropic's native API accepts it as a top-level key.
+    supports_strict_tools = bool(model and bedrock_converse_supports_strict_tools(model))
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
@@ -5322,3 +5351,199 @@ def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
         return getattr(tool_or_function, attribute)
     return tool_or_function.get(attribute, default)
+
+
+class NormalizedToolCall(TypedDict):
+    id: Optional[str]
+    name: Optional[str]
+    arguments: dict[str, Any]
+
+
+def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str) -> dict[str, Any]:
+    # Anthropic's tool_use blocks already carry a parsed dict in "input";
+    # chat completions and the Responses API carry a JSON string that may be
+    # truncated by the model, so route those through the repair-aware parser.
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    try:
+        parsed = parse_tool_call_arguments(raw, tool_name=tool_name, context=context)
+    except ValueError as e:
+        verbose_logger.warning("Failed to parse tool call arguments: %s", e)
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _tool_calls_from_chat_completion_response(response: Any) -> list[NormalizedToolCall]:
+    choices = get_attribute_or_key(response, "choices", None)
+    if not (isinstance(choices, list) and choices):
+        return []
+    message = get_attribute_or_key(choices[0], "message", None)
+    tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
+    if not isinstance(tool_calls, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for tc in tool_calls:
+        fn = get_attribute_or_key(tc, "function", None)
+        if fn is None:
+            continue
+        name = get_attribute_or_key(fn, "name")
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(tc, "id"),
+                name=name,
+                arguments=_parse_tool_call_arguments(
+                    get_attribute_or_key(fn, "arguments", "{}"),
+                    tool_name=name,
+                    context="chat completions",
+                ),
+            )
+        )
+    return result
+
+
+def _tool_calls_from_responses_api_response(response: Any) -> list[NormalizedToolCall]:
+    output = get_attribute_or_key(response, "output", None)
+    if not isinstance(output, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for item in output:
+        if get_attribute_or_key(item, "type") != "function_call":
+            continue
+        name = get_attribute_or_key(item, "name")
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
+                name=name,
+                arguments=_parse_tool_call_arguments(
+                    get_attribute_or_key(item, "arguments", "{}"),
+                    tool_name=name,
+                    context="responses API",
+                ),
+            )
+        )
+    return result
+
+
+def _tool_calls_from_anthropic_messages_response(response: Any) -> list[NormalizedToolCall]:
+    content = get_attribute_or_key(response, "content", None)
+    if not isinstance(content, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for block in content:
+        if get_attribute_or_key(block, "type") != "tool_use":
+            continue
+        raw_input = get_attribute_or_key(block, "input", {})
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(block, "id"),
+                name=get_attribute_or_key(block, "name"),
+                arguments=raw_input if isinstance(raw_input, dict) else {},
+            )
+        )
+    return result
+
+
+def get_tool_calls_from_response(response: Any) -> list[NormalizedToolCall]:
+    """
+    Extract tool/function calls from a response object into a normalized
+    ``{"id", "name", "arguments"}`` shape, regardless of which API surface
+    produced it: chat completions (``choices[].message.tool_calls``),
+    the Responses API (``output`` items of type ``function_call``), or the
+    Anthropic Messages API (``content`` blocks of type ``tool_use``).
+
+    Callers that only care about a specific tool should filter the result by
+    ``name`` themselves -- this returns every tool call found.
+    """
+    for extractor in (
+        _tool_calls_from_chat_completion_response,
+        _tool_calls_from_responses_api_response,
+        _tool_calls_from_anthropic_messages_response,
+    ):
+        tool_calls = extractor(response)
+        if tool_calls:
+            return tool_calls
+    return []
+
+
+def has_tool_with_name(tools: Any, tool_name: str) -> bool:
+    """
+    Check whether a tools list (as sent to an LLM) includes a tool with the
+    given name, regardless of shape: OpenAI-style function tools
+    (``{"type": "function", "function": {"name": ...}}``) or Anthropic's
+    native tool shape (a top-level ``"name"``, e.g.
+    ``{"name": ..., "input_schema": ...}``). Anthropic's documented client
+    tool format doesn't require a ``"type"`` key at all -- ``"custom"`` is
+    only one of several possible values -- so any non-OpenAI-shaped tool is
+    matched on its top-level ``"name"``.
+    """
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if tool.get("type") == "function" and isinstance(function, dict):
+            if function.get("name") == tool_name:
+                return True
+        elif tool.get("name") == tool_name:
+            return True
+    return False
+
+
+def resolve_structured_messages(
+    messages: list[dict[str, Any]] | None,
+    request_kwargs: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """
+    Normalize a request's messages to OpenAI-spec chat-completions shape,
+    regardless of which API surface produced them (chat completions,
+    Anthropic /v1/messages, Responses API ``input``, etc).
+
+    Returns ``messages`` unchanged if already present. Otherwise dispatches
+    through the guardrail translation handlers (the same per-surface
+    conversion logic guardrails use) to convert e.g. Responses API ``input``
+    into a message list. Returns ``None`` if no messages could be resolved.
+    """
+    if messages:
+        return messages
+
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
+    from litellm.llms import load_guardrail_translation_mappings
+    from litellm.types.utils import CallTypes
+
+    mappings = load_guardrail_translation_mappings()
+    call_type: CallTypes | None = None
+
+    # 1. Try route-based inference from proxy metadata
+    route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
+    if route:
+        call_types_list = get_call_types_for_route(route)
+        if call_types_list:
+            for ct in call_types_list:
+                if ct in mappings:
+                    call_type = ct
+                    break
+
+    # 2. Fallback: try each mapped handler until one produces messages
+    handlers_to_try: list[Any] = []
+    if call_type is not None and call_type in mappings:
+        handlers_to_try.append(mappings[call_type]())
+    else:
+        handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+
+    for handler in handlers_to_try:
+        structured = handler.get_structured_messages(request_kwargs)
+        if structured:
+            return [
+                msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                for msg in structured
+            ]
+    return None

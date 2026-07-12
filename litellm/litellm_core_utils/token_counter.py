@@ -407,6 +407,37 @@ def token_counter(
     return num_tokens
 
 
+def _count_function_call_tokens(
+    key: str,
+    value: Any,
+    message: Mapping[str, Any],
+    count_function: TokenCounterFunction,
+) -> int:
+    """
+    Count tokens contributed by an assistant message's tool/function call payload.
+
+    Handles both the modern `tool_calls` list and the legacy OpenAI
+    `function_call` dict. Only the `arguments` string is counted (matching the
+    existing tool_calls behavior); names are accounted for elsewhere via the
+    tool/function definitions and `tool_choice`.
+    """
+    if key == "tool_calls":
+        if not isinstance(value, List):
+            raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
+        total = 0
+        for tool_call in value:
+            if "function" not in tool_call:
+                raise ValueError(f"Unsupported tool call {tool_call} must contain a function key")
+            function_arguments = tool_call["function"].get("arguments", "")
+            total += count_function(str(function_arguments))
+        return total
+    if key == "function_call":
+        if not isinstance(value, Mapping):
+            raise ValueError(f"Unsupported type {type(value)} for key function_call in message {message}")
+        return count_function(str(value.get("arguments", "")))
+    raise ValueError(f"Unexpected key {key!r}; expected 'tool_calls' or 'function_call'")
+
+
 def _count_messages(
     params: _MessageCountParams,
     messages: List[AllMessageValues],
@@ -430,16 +461,8 @@ def _count_messages(
         for key, value in message.items():
             if value is None:
                 pass
-            elif key == "tool_calls":
-                if isinstance(value, List):
-                    for tool_call in value:
-                        if "function" in tool_call:
-                            function_arguments = tool_call["function"].get("arguments", [])
-                            num_tokens += params.count_function(str(function_arguments))
-                        else:
-                            raise ValueError(f"Unsupported tool call {tool_call} must contain a function key")
-                else:
-                    raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
+            elif key in ("tool_calls", "function_call"):
+                num_tokens += _count_function_call_tokens(key, value, message, params.count_function)
             elif isinstance(value, str):
                 num_tokens += params.count_function(value)
                 if key == "name":

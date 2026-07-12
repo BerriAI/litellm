@@ -347,6 +347,30 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_vertex_chirp_3_transcription_cost_from_duration():
+    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
+    and cost_per_second prefers output_cost_per_second whenever it is not None, so
+    every transcription priced to $0.00 instead of using input_cost_per_second."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 18.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/chirp_3",
+        custom_llm_provider="vertex_ai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 18.0 * 0.00026667
+    assert cost > 0
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
@@ -421,6 +445,64 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
     assert cost == 0.0  # No usage, no cost
+
+
+def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
+    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
+    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
+    /v1/realtime even though a total spend was computed)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4o-realtime-preview",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-cost-breakdown-test",
+        function_id="realtime-cost-breakdown-test",
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert total_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] > 0
+    assert logging_obj.cost_breakdown["output_cost"] > 0
+    assert (
+        abs(
+            logging_obj.cost_breakdown["input_cost"]
+            + logging_obj.cost_breakdown["output_cost"]
+            - total_cost
+        )
+        < 1e-9
+    )
+    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -579,6 +661,10 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
     cost must equal total_seconds * input_cost_per_second.
     """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -609,17 +695,41 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
         results=results
     )
+    logging_obj = Logging(
+        model="gpt-realtime-whisper",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-transcription-cost-breakdown-test",
+        function_id="realtime-transcription-cost-breakdown-test",
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
         combined_usage_object=combined,
         custom_llm_provider="openai",
         litellm_model_name="gpt-realtime-whisper",
+        litellm_logging_obj=logging_obj,
     )
 
     # 90 seconds at $0.017/minute.
     expected = 90.0 * (0.017 / 60)
     assert abs(cost - expected) < 1e-9
     assert cost > 0  # guards against the duration branch being dropped
+    assert logging_obj.cost_breakdown is not None
+    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
+
+    # The transcription cost must be attributed in the breakdown, not just folded
+    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
+    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
+    assert additional_costs is not None
+    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
+    attributed_total = (
+        logging_obj.cost_breakdown["input_cost"]
+        + logging_obj.cost_breakdown["output_cost"]
+        + additional_costs["transcription_cost"]
+    )
+    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
 
 
 def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
@@ -888,6 +998,110 @@ def test_per_request_custom_pricing_with_router():
     assert selected is not None
     assert router_model_id not in selected
     assert "gpt-3.5-turbo" in selected
+
+
+def test_tiered_pricing_only_deployment_selects_router_model_id():
+    """A deployment priced solely via ``tiered_pricing`` (no flat
+    input/output cost) must resolve cost against its ``router_model_id``
+    entry, which holds the tiered table, instead of the shared backend alias
+    that has custom pricing fields stripped. Regression for tier-only models
+    (e.g. dashscope/qwen3.7-plus) being billed as free.
+    """
+    from litellm import Router
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    entry = litellm.model_cost[router_model_id]
+    assert entry.get("input_cost_per_token") is None
+    assert entry.get("tiered_pricing") is not None
+    # The stripped shared alias must not carry tiered pricing.
+    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+
+    selected = _select_model_name_for_cost_calc(
+        model="dashscope/qwen3.7-plus",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="dashscope",
+        router_model_id=router_model_id,
+    )
+    assert selected is not None
+    assert router_model_id in selected
+
+
+def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
+    """End-to-end: a tier-only deployment must produce the tiered cost, not
+    $0. Mirrors the reported dashscope/qwen3.7-plus trace (12 prompt + 377
+    completion tokens).
+    """
+    from litellm import Router
+    from litellm.types.utils import Choices, Message
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 4.8e-06,
+                            "range": [256000, 1000000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    response = ModelResponse(
+        model="dashscope/qwen3.7-plus",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+        usage=Usage(prompt_tokens=12, completion_tokens=377, total_tokens=389),
+    )
+    response._hidden_params = {"custom_llm_provider": "dashscope", "model_id": router_model_id}
+
+    cost = completion_cost(
+        completion_response=response,
+        model="dashscope/qwen3.7-plus",
+        custom_llm_provider="dashscope",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    expected = 12 * 4e-07 + 377 * 1.6e-06
+    assert cost == pytest.approx(expected)
+    assert cost > 0
 
 
 def test_azure_realtime_cost_calculator():
@@ -3176,3 +3390,92 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_cost_per_token_per_second_pricing(monkeypatch):
+    """
+    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "together_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(0.02 * 1.5)
+    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def _batch_cache_usage() -> Usage:
+    return Usage(
+        prompt_tokens=11000,
+        completion_tokens=200,
+        total_tokens=11200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=8000,
+            cache_creation_tokens=2000,
+            text_tokens=1000,
+        ),
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+
+def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
+    """
+    LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
+    Cache creation tokens must be priced at cache_creation_input_token_cost / 2,
+    not folded into the base input rate, and must not also be billed as base
+    input tokens.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info={  # type: ignore[arg-type]
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+        },
+    )
+
+    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)

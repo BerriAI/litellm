@@ -23,7 +23,9 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -4095,11 +4097,22 @@ class PrismaClient:
             raise e
 
     def _get_engine_pid(self) -> int:
+        """Get the PID of the writer's engine subprocess, or 0 if unavailable.
+
+        Must never raise: prisma's ``_engine`` property raises
+        ``ClientNotConnectedError`` on a disconnected client, and an exception
+        escaping from the reconnect path would leave it unable to recover.
+        """
         try:
-            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            prisma_obj = self.writer_db._original_prisma
+            if prisma_obj.is_connected() is not True:
+                return 0
+            engine = prisma_obj._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                return process.pid
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -4525,6 +4538,8 @@ class PrismaClient:
                         "Writer healthy on probe; skipping recreate (engine "
                         "likely already replaced by a token refresh)."
                     )
+                    if isinstance(self.db, RoutingPrismaWrapper):
+                        self.db.mark_writer_recovered()
                     await self._start_engine_watcher()
                     return
                 except Exception as probe_err:
@@ -4717,6 +4732,11 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_writer_unavailable",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -5194,8 +5214,10 @@ class ProxyUpdateSpend:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
-                            await SpendLogsRepository(prisma_client).table.create_many(
-                                data=batch_with_dates, skip_duplicates=True
+                            await _create_spend_logs_with_poison_isolation(
+                                SpendLogsRepository(prisma_client),
+                                batch_with_dates,
+                                MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH,
                             )
                             verbose_proxy_logger.debug(f"Flushed {len(batch)} logs to the DB.")
                             # Explicitly clear batch memory
@@ -5460,6 +5482,65 @@ async def _monitor_spend_logs_queue(
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)
+
+
+MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH = 256
+
+
+async def _create_spend_logs_with_poison_isolation(
+    repo: SpendLogsRepository,
+    rows: Sequence[Mapping[str, object]],
+    attempts_left: int,
+) -> int:
+    """Write spend-log rows, isolating any row Postgres rejects on its data.
+
+    ``create_many`` writes the whole batch in a single statement, so one row
+    carrying bytes Postgres refuses (a residual NUL byte is the canonical case)
+    fails the entire insert and drops every good row alongside it. On a genuine
+    data-layer rejection the batch is bisected so the good rows still persist
+    and only the offending row is dropped and logged. Transport failures,
+    including the "can't reach database server" outage that prisma mislabels as
+    a ``DataError``, are re-raised unchanged so the caller's connection-retry
+    path still runs.
+
+    ``attempts_left`` is a hard ceiling on the number of ``create_many`` calls
+    the isolation may issue for this batch, so an authenticated caller flooding
+    poisoned rows cannot amplify one failed bulk insert into unbounded failed
+    inserts and log lines. It is checked before any insert (so an exhausted
+    budget never even attempts a write), decremented once per ``create_many``
+    call, and threaded through the recursion so the whole bisection shares one
+    allowance; total inserts are therefore bounded by the initial value
+    regardless of how many rows are poisoned. When it runs out the still-failing
+    remainder is dropped wholesale (the pre-existing drop-the-batch behavior)
+    under one log line. Returns the budget left after this subtree.
+    """
+    if attempts_left <= 0:
+        spend_log_error(
+            "Spend tracking - dropping %d spend log rows without per-row isolation; "
+            "isolation attempt budget exhausted for this flush",
+            len(rows),
+        )
+        return 0
+    try:
+        await repo.table.create_many(data=rows, skip_duplicates=True)
+        return attempts_left - 1
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_prisma_data_error(e):
+            raise
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise
+        if len(rows) == 1:
+            request_id = rows[0].get("request_id")
+            spend_log_error(
+                "Spend tracking - dropping spend log row Postgres rejected. request_id=%s error=%s",
+                request_id,
+                str(e),
+                exc=e,
+            )
+            return attempts_left - 1
+        mid = len(rows) // 2
+        remaining = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], attempts_left - 1)
+        return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
 
 
 def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_logging_obj: ProxyLogging):
