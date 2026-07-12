@@ -7,7 +7,8 @@ Specifically guards the four bugs found when wiring the example config
    semantic auto-router init path (which would crash on missing fields).
 2. The same prefix MUST trigger the adaptive-router init path.
 3. `init_adaptive_router_deployment` must read `input_cost_per_token`
-   from `litellm_params` (where users put it), not just `model_info`.
+   from `litellm_params` or `model_info` (custom pricing is commonly
+   declared under `model_info`).
 4. `Router.async_pre_routing_hook` must dispatch to the matching entry in
    `self.adaptive_routers` when the inbound model matches a configured
    adaptive-router name, returning the underlying model the bandit picked.
@@ -126,6 +127,71 @@ def test_init_adaptive_router_reads_cost_from_litellm_params():
         "fast": 0.00000015,
         "smart": 0.0000050,
     }
+
+
+def test_init_adaptive_router_reads_cost_from_model_info():
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["cheap", "expensive"],
+                    },
+                },
+            },
+            {
+                "model_name": "cheap",
+                "litellm_params": {"model": "openai/some-cheap-model"},
+                "model_info": {
+                    "input_cost_per_token": 0.0,
+                    "adaptive_router_preferences": {
+                        "quality_tier": 1,
+                        "strengths": ["general"],
+                    },
+                },
+            },
+            {
+                "model_name": "expensive",
+                "litellm_params": {"model": "anthropic/claude-opus-4-x"},
+                "model_info": {
+                    "input_cost_per_token": 0.000005,
+                    "adaptive_router_preferences": {
+                        "quality_tier": 3,
+                        "strengths": ["general"],
+                    },
+                },
+            },
+        ]
+    )
+    assert r.adaptive_routers["smart-cheap-router"].model_to_cost == {
+        "cheap": 0.0,
+        "expensive": 0.000005,
+    }
+
+
+def test_init_adaptive_router_prefers_litellm_params_cost_over_model_info():
+    r = Router(
+        model_list=[
+            {
+                "model_name": "router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {"available_models": ["m1"]},
+                },
+            },
+            {
+                "model_name": "m1",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0.00000015,
+                },
+                "model_info": {"input_cost_per_token": 0.99},
+            },
+        ]
+    )
+    assert r.adaptive_routers["router"].model_to_cost == {"m1": 0.00000015}
 
 
 # ---- Fix 4: pre-routing dispatch ---------------------------------------
