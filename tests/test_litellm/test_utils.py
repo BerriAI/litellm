@@ -4710,3 +4710,21 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+class TestValidateEnvironmentZai:
+    """Tests that validate_environment resolves ZAI_API_KEY for the zai provider."""
+
+    def test_reports_key_present(self):
+        with patch.dict(os.environ, {"ZAI_API_KEY": "sk-zai"}):
+            result = litellm.validate_environment(model="zai/glm-5.1")
+
+        assert result["keys_in_environment"] is True
+        assert result["missing_keys"] == []
+
+    def test_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="zai/glm-5.1")
+
+        assert result["keys_in_environment"] is False
+        assert "ZAI_API_KEY" in result["missing_keys"]
+
+
