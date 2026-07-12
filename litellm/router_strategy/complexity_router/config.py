@@ -248,8 +248,7 @@ class ComplexityRouterConfig(BaseModel):
     tiers: Dict[str, Union[str, List[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description=(
-            "Mapping of complexity tiers to a model or model pool. "
-            "A list is randomly picked from for that tier"
+            "Mapping of complexity tiers to a model or model pool. A list is randomly picked from for that tier"
         ),
     )
 
