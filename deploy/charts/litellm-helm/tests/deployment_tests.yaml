@@ -319,6 +319,20 @@ tests:
     asserts:
       - notExists:
           path: spec.minReadySeconds
+  - it: should default revisionHistoryLimit to 10
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 10
+  - it: should be able to set revisionHistoryLimit
+    template: deployment.yaml
+    set:
+      revisionHistoryLimit: 3
+    asserts:
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 3
   - it: should work with extraInitContainers
     template: deployment.yaml
     set:

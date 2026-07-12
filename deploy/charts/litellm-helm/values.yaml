@@ -33,6 +33,10 @@ deploymentAnnotations: {}
 deploymentLabels: {}
 deploymentMinReadySeconds: 0
 
+# -- Number of old ReplicaSets to retain for rollback history. Matches the
+# Kubernetes default so existing installs see no behavior change.
+revisionHistoryLimit: 10
+
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
