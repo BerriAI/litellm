@@ -111,6 +111,23 @@ describe("loginCall - storeLoginToken integration", () => {
     await Networking.loginCall("admin", "pass");
     expect(storeLoginToken).not.toHaveBeenCalled();
   });
+
+  it("sends auth_method when loginCall receives an auth method", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success", token: "ldap-jwt" }),
+    }) as any;
+
+    await Networking.loginCall("alice", "ldap-password", false, "ldap");
+
+    expect(global.fetch).toHaveBeenCalledOnce();
+    const body = JSON.parse((global.fetch as any).mock.calls[0][1].body);
+    expect(body).toEqual({
+      username: "alice",
+      password: "ldap-password",
+      auth_method: "ldap",
+    });
+  });
 });
 
 describe("daily activity helpers", () => {

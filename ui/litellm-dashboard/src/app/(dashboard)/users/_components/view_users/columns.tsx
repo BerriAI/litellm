@@ -5,6 +5,14 @@ import { UserInfo } from "@/components/networking";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 
+const getLdapDn = (metadata: Record<string, unknown> | null | undefined): string | null => {
+  if (metadata?.auth_provider !== "ldap") {
+    return null;
+  }
+
+  return typeof metadata.ldap_dn === "string" && metadata.ldap_dn.length > 0 ? metadata.ldap_dn : null;
+};
+
 interface SelectionOptions {
   selectedUsers: UserInfo[];
   onSelectUser: (user: UserInfo, isSelected: boolean) => void;
@@ -97,6 +105,23 @@ export const columns = (
       cell: ({ row }) => (
         <span className="text-xs">{row.original.sso_user_id !== null ? row.original.sso_user_id : "-"}</span>
       ),
+    },
+    {
+      header: () => (
+        <div className="flex items-center gap-2">
+          <span>LDAP DN</span>
+          <Tooltip title="LDAP DN is the distinguished name from the LDAP directory for users authenticated via LDAP. If the user is not using LDAP, this will be null.">
+            <InformationCircleIcon className="w-4 h-4" />
+          </Tooltip>
+        </div>
+      ),
+      id: "ldap_dn",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const ldapDn = getLdapDn(row.original.metadata as Record<string, unknown> | null | undefined);
+
+        return <span className="text-xs">{ldapDn ?? "-"}</span>;
+      },
     },
     {
       header: "Virtual Keys",

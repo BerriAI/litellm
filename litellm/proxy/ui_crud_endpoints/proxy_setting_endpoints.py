@@ -1,7 +1,7 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Annotated, Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -12,6 +12,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
+from litellm.proxy.auth.ldap_auth import (
+    LDAP_SENSITIVE_FIELDS,
+    LDAP_SETTINGS_PARAM_NAME,
+    LDAPConfig,
+    _parse_db_param_value,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -68,6 +74,12 @@ class SettingsResponse(BaseModel):
 
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
+
+    pass
+
+
+class LDAPSettingsResponse(SettingsResponse):
+    """Response model for LDAP settings"""
 
     pass
 
@@ -703,6 +715,120 @@ async def update_default_team_settings(
         success_message="Default team settings updated successfully",
         user_api_key_dict=user_api_key_dict,
     )
+
+
+@router.get(
+    "/get/ldap_settings",
+    tags=["LDAP Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LDAPSettingsResponse,
+)
+async def get_ldap_settings():
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    db_record = await ConfigRepository(prisma_client).table.find_unique(where={"param_name": LDAP_SETTINGS_PARAM_NAME})
+    ldap_settings_dict: Dict[str, Any] = {}
+    if db_record and db_record.param_value:
+        ldap_settings_dict = _parse_db_param_value(db_record.param_value)
+
+    decrypted_settings = proxy_config._decrypt_db_variables(ldap_settings_dict)
+    ldap_config = LDAPConfig(**decrypted_settings)
+
+    from pydantic import TypeAdapter
+
+    schema = TypeAdapter(LDAPConfig).json_schema(by_alias=True)
+    ldap_dict = mask_sensitive_keys(ldap_config.model_dump(), LDAP_SENSITIVE_FIELDS)
+
+    result = {
+        "values": ldap_dict,
+        "field_schema": {
+            "description": schema.get("description", ""),
+            "properties": {},
+        },
+    }
+    for field_name, field_info in schema["properties"].items():
+        result["field_schema"]["properties"][field_name] = {
+            "description": field_info.get("description", ""),
+            "type": field_info.get("type", "string"),
+        }
+
+    return result
+
+
+@router.patch(
+    "/update/ldap_settings",
+    tags=["LDAP Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ldap_settings(
+    ldap_config: LDAPConfig,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    from litellm.proxy.proxy_server import (
+        create_config_audit_log,
+        prisma_client,
+        proxy_config,
+        store_model_in_db,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
+        )
+
+    existing_record = await ConfigRepository(prisma_client).table.find_unique(
+        where={"param_name": LDAP_SETTINGS_PARAM_NAME}
+    )
+    before_ldap_data: Optional[Dict[str, Any]] = None
+    if existing_record and existing_record.param_value:
+        before_ldap_data = proxy_config._decrypt_db_variables(_parse_db_param_value(existing_record.param_value))
+
+    ldap_data = ldap_config.model_dump()
+    if not ldap_data.get("ldap_bind_password") and before_ldap_data:
+        ldap_data["ldap_bind_password"] = before_ldap_data.get("ldap_bind_password")
+    encrypted_ldap_data = proxy_config._encrypt_env_variables(environment_variables=ldap_data)
+
+    await ConfigRepository(prisma_client).table.upsert(
+        where={"param_name": LDAP_SETTINGS_PARAM_NAME},
+        data={
+            "create": {
+                "param_name": LDAP_SETTINGS_PARAM_NAME,
+                "param_value": json.dumps(encrypted_ldap_data),
+            },
+            "update": {
+                "param_value": json.dumps(encrypted_ldap_data),
+            },
+        },
+    )
+
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name=LDAP_SETTINGS_PARAM_NAME,
+            action="updated",
+            before_value=before_ldap_data,
+            after_value=ldap_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    )
+
+    return {
+        "message": "LDAP settings updated successfully",
+        "status": "success",
+        "settings": mask_sensitive_keys(ldap_data, LDAP_SENSITIVE_FIELDS),
+    }
 
 
 @router.get(

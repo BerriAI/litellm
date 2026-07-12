@@ -108,6 +108,7 @@ describe("UserDataTable", () => {
       "Spend (USD)",
       "Budget (USD)",
       "SSO ID",
+      "LDAP DN",
       "Virtual Keys",
       "Created At",
       "Updated At",
@@ -197,5 +198,53 @@ describe("UserDataTable", () => {
     render(<>{cell}</>);
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.queryByText("Inactive")).not.toBeInTheDocument();
+  });
+
+  it("should render LDAP DN from metadata for LDAP users", () => {
+    const possibleUIRoles = { admin: { ui_label: "Admin" } };
+    const ldapUser: UserInfo = {
+      user_id: "ldap:user@example.com",
+      user_email: "ldap@example.com",
+      user_alias: null,
+      user_role: "internal_user",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      key_count: 0,
+      created_at: "",
+      updated_at: "",
+      sso_user_id: null,
+      budget_duration: null,
+      metadata: { auth_provider: "ldap", ldap_dn: "cn=user,ou=users,dc=example,dc=com" },
+    };
+
+    render(<UserDataTable {...getDefaultProps()} data={[ldapUser]} possibleUIRoles={possibleUIRoles} />);
+
+    expect(screen.getByRole("columnheader", { name: "LDAP DN" })).toBeInTheDocument();
+    expect(screen.getByText("cn=user,ou=users,dc=example,dc=com")).toBeInTheDocument();
+  });
+
+  it("should render dash for non-LDAP users in LDAP DN column", () => {
+    const possibleUIRoles = { admin: { ui_label: "Admin" } };
+    const ssoUser: UserInfo = {
+      user_id: "u-sso",
+      user_email: "sso@example.com",
+      user_alias: null,
+      user_role: "internal_user",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      key_count: 0,
+      created_at: "",
+      updated_at: "",
+      sso_user_id: "sso-123",
+      budget_duration: null,
+      metadata: { auth_provider: "sso" },
+    };
+
+    render(<UserDataTable {...getDefaultProps()} data={[ssoUser]} possibleUIRoles={possibleUIRoles} />);
+
+    expect(screen.getByRole("columnheader", { name: "LDAP DN" })).toBeInTheDocument();
+    expect(screen.getAllByText("-").length).toBeGreaterThan(0);
   });
 });

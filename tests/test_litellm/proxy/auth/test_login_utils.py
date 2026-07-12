@@ -559,3 +559,57 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert isinstance(result, LoginResult)
             assert result.user_id == "test-user-123"
             assert result.user_email == user_email
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_ldap_method_generates_ui_session(monkeypatch):
+    master_key = "sk-1234"
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    ldap_user = MagicMock()
+    ldap_user.user_id = "ldap:alice"
+    ldap_user.user_email = "alice@example.com"
+    ldap_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    mock_authenticate_ldap_user = AsyncMock(return_value=ldap_user)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_ldap_user",
+        mock_authenticate_ldap_user,
+        raising=False,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "admin-password",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {"token": "ldap-session-token"}
+
+            result = await authenticate_user(
+                username="alice",
+                password="ldap-password",
+                master_key=master_key,
+                prisma_client=mock_prisma_client,
+                auth_method="ldap",
+            )
+
+    assert result.user_id == "ldap:alice"
+    assert result.user_email == "alice@example.com"
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+    assert result.key == "ldap-session-token"
+    mock_authenticate_ldap_user.assert_awaited_once_with(
+        username="alice",
+        password="ldap-password",
+        prisma_client=mock_prisma_client,
+    )
+    mock_generate_key.assert_awaited_once()
+    assert mock_generate_key.await_args.kwargs["user_id"] == "ldap:alice"
+    assert mock_generate_key.await_args.kwargs["user_role"] == LitellmUserRoles.INTERNAL_USER

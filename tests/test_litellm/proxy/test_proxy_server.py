@@ -121,6 +121,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         password="secret",
         master_key="test-master-key",
         prisma_client=mock_prisma_client,
+        auth_method=None,
     )
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
@@ -131,6 +132,43 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         {"user_id": "test-user"},
         "test-master-key",
         algorithm="HS256",
+    )
+
+
+def test_login_v2_passes_auth_method_to_authenticate_user(monkeypatch):
+    mock_login_result = {"user_id": "ldap-user"}
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(return_value=mock_login_result)
+    mock_create_ui_token_object = MagicMock(return_value={"user_id": "ldap-user"})
+    mock_jwt_encode = MagicMock(return_value="signed-token")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        mock_create_ui_token_object,
+    )
+    monkeypatch.setattr("jwt.encode", mock_jwt_encode)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret", "auth_method": "ldap"},
+    )
+
+    assert response.status_code == 200
+    mock_authenticate_user.assert_awaited_once_with(
+        username="alice",
+        password="secret",
+        master_key="test-master-key",
+        prisma_client=mock_prisma_client,
+        auth_method="ldap",
     )
 
 
