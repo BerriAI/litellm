@@ -34,7 +34,9 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         result: Union[dict, list, tuple, set, str]
         if isinstance(obj, dict):
             result = {}
-            for k, v in obj.items():
+            # Snapshot items() so a concurrent async hook mutating the same
+            # dict can't raise "dictionary changed size during iteration".
+            for k, v in list(obj.items()):
                 if isinstance(k, (str)):
                     clean_k = k.replace("\x00", "") if "\x00" in k else k
                     result[clean_k] = _serialize(v, seen, depth + 1)
