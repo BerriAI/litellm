@@ -529,7 +529,11 @@ async def aresponses(
                 prompt_label=kwargs.get("prompt_label", None),
                 prompt_version=kwargs.get("prompt_version", None),
             )
-            input = cast(Union[str, ResponseInputParam], merged_input)
+            input = _restore_non_message_input_items(
+                original_input=input,
+                client_input=client_input,
+                merged_input=merged_input,
+            )
             if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             kwargs.pop("prompt_id", None)
@@ -601,6 +605,50 @@ async def aresponses(
         )
 
 
+def _restore_non_message_input_items(
+    original_input: Union[str, ResponseInputParam],
+    client_input: list[AllMessageValues],
+    merged_input: list[AllMessageValues],
+) -> Union[str, ResponseInputParam]:
+    """
+    Re-attach Responses API input items that were hidden from prompt management hooks.
+
+    Prompt management hooks operate on chat-completion style messages, so only dict
+    items with a "role" (``client_input``) are shown to them. Multi-turn Responses API
+    input can also carry role-less items ("reasoning", "function_call",
+    "function_call_output", "item_reference", ...) that must survive the merge:
+    providers reject message items whose paired reasoning items are missing, e.g.
+    Azure's "Item 'msg_...' of type 'message' was provided without its required
+    'reasoning' item: 'rs_...'".
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/32335
+    """
+    if isinstance(original_input, str):
+        return cast(ResponseInputParam, merged_input)
+
+    original_items = list(original_input)
+    non_message_items = [item for item in original_items if not (isinstance(item, dict) and "role" in item)]
+    if not non_message_items:
+        return cast(ResponseInputParam, merged_input)
+
+    if list(merged_input) == list(client_input):
+        return original_input
+
+    num_client_items = len(client_input)
+    hook_kept_client_as_suffix = num_client_items > 0 and list(merged_input[-num_client_items:]) == list(client_input)
+    if num_client_items == 0 or hook_kept_client_as_suffix:
+        prepended = list(merged_input[: len(merged_input) - num_client_items])
+        return cast(ResponseInputParam, prepended + original_items)
+
+    verbose_logger.warning(
+        "Prompt management hook rewrote the Responses API message list; %d non-message "
+        "input item(s) (e.g. reasoning or function_call items) could not be realigned "
+        "and were dropped from the request.",
+        len(non_message_items),
+    )
+    return cast(ResponseInputParam, merged_input)
+
+
 def _apply_prompt_management_to_responses_call(
     input: Union[str, ResponseInputParam],
     model: str,
@@ -644,7 +692,11 @@ def _apply_prompt_management_to_responses_call(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
         )
-        input = cast(Union[str, ResponseInputParam], merged_input)
+        input = _restore_non_message_input_items(
+            original_input=input,
+            client_input=client_input,
+            merged_input=merged_input,
+        )
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
