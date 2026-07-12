@@ -14,6 +14,7 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
 import asyncio
+import random
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
@@ -437,21 +438,25 @@ class ComplexityRouter(CustomLogger):
         """
         tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
 
-        # Check config tiers mapping
-        model = self.config.tiers.get(tier_key)
-        if model:
-            return model
+        if tier_key in self.config.tiers:
+            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key)
 
-        # Fallback to default model if configured
         if self.config.default_model:
             return self.config.default_model
 
-        # Last resort: return MEDIUM tier model or error
-        medium_model = self.config.tiers.get(ComplexityTier.MEDIUM.value)
-        if medium_model:
-            return medium_model
+        medium_key = ComplexityTier.MEDIUM.value
+        if medium_key in self.config.tiers:
+            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+
+    @staticmethod
+    def _pick_from_tier_value(model: Union[str, List[str]], tier_key: str) -> str:
+        if isinstance(model, str):
+            return model
+        if not model:
+            raise ValueError(f"Empty model pool for tier {tier_key}")
+        return random.choice(model)
 
     def _lexical_tier_override(self, user_message: str) -> Optional[ComplexityTier]:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.

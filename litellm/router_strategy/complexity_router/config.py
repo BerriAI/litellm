@@ -6,9 +6,9 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ComplexityTier(str, Enum):
@@ -244,10 +244,13 @@ class ClassifierLLMConfig(BaseModel):
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
-    # Tier to model mapping
-    tiers: Dict[str, str] = Field(
+    # string = pin; list = random pick from the tier pool
+    tiers: Dict[str, Union[str, List[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
-        description="Mapping of complexity tiers to model names",
+        description=(
+            "Mapping of complexity tiers to a model or model pool. "
+            "A list is randomly picked from for that tier"
+        ),
     )
 
     # Tier boundaries (normalized scores)
@@ -334,6 +337,21 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+    @field_validator("tiers", mode="before")
+    @classmethod
+    def _coerce_tier_values(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        coerced: dict[str, object] = {}
+        for key, item in value.items():
+            if isinstance(item, str):
+                coerced[key] = item
+            elif isinstance(item, (list, tuple)):
+                coerced[key] = list(item)
+            else:
+                coerced[key] = item
+        return coerced
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
