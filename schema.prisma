@@ -280,6 +280,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
+  allowed_skills        String[]       @default([]) // Namespaced Claude Code skill names ("marketplace--skill") granted to this key/team/org
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -1261,11 +1262,35 @@ model LiteLLM_ClaudeCodePluginTable {
   manifest_json String?
   files_json    String?   @default("{}")
   enabled       Boolean   @default(true)
+  marketplace_id String?
   created_at    DateTime? @default(now())
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
   @@map("LiteLLM_ClaudeCodePluginTable")
+}
+
+// A registered external Claude Code marketplace source (git repo or URL) that
+// litellm syncs skill/plugin listings from into LiteLLM_ClaudeCodePluginTable.
+model LiteLLM_SkillMarketplaceTable {
+  id             String    @id @default(uuid())
+  name           String    @unique
+  display_name   String?
+  source_type    String    // "claude_marketplace_json" | "skills_dir" | "managed"
+  source_ref     String?
+  branch         String?   @default("main")
+  owner_name     String?
+  owner_email    String?
+  enabled        Boolean   @default(true)
+  sync_status    String    @default("pending") // "pending" | "success" | "error"
+  sync_error     String?
+  skipped_count  Int       @default(0) // skills that failed to fetch after retries during the last sync
+  last_synced_at DateTime?
+  created_at     DateTime? @default(now())
+  updated_at     DateTime? @default(now()) @updatedAt
+  created_by     String?
+
+  @@map("LiteLLM_SkillMarketplaceTable")
 }
 
 // User/team-scoped memory store with a GLOBAL unique key.
