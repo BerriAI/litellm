@@ -9,11 +9,12 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
-	lint-install lint-fetch-base
+	lint-install lint-fetch-base bootstrap
 
 # Default target
 help:
 	@echo "Available commands:"
+	@echo "  make bootstrap          - Provision a fresh clone/worktree: Python env with proxy extras, Prisma client, dashboard node_modules; worktrees also copy .env from the main checkout"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
@@ -70,6 +71,18 @@ info:
 # under a dev's venv (CI installs its own env per job, so it is unaffected by this).
 install-dev:
 	$(UV) sync --inexact --frozen
+
+bootstrap:
+	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
+	$(UV_RUN) python scripts/prisma_generate_if_needed.py
+	cd ui/litellm-dashboard && npm ci --no-audit --no-fund
+	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
+	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
+		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
+	else \
+		echo "bootstrap: .env left untouched"; \
+	fi
+	@echo "bootstrap: done"
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
