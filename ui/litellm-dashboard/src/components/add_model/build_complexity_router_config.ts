@@ -43,7 +43,8 @@ export const getSemanticConfigError = ({
   embeddingModel,
   keywordTierRules,
 }: Pick<BuildComplexityRouterConfigParams, "semanticMatchingEnabled" | "embeddingModel" | "keywordTierRules">):
-  string | null => {
+  | string
+  | null => {
   if (!semanticMatchingEnabled) return null;
   if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";

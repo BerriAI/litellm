@@ -111,7 +111,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       classifier_type: classifierType,
       classifier_llm_config:
         classifierType === "llm"
-          ? (value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS })
+          ? value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }
           : undefined,
     });
   };
