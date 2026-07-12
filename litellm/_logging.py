@@ -5,7 +5,9 @@ import sys
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
+from litellm.constants import DEFAULT_EXCLUDED_UVICORN_ACCESS_PATHS
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -75,6 +77,55 @@ class SecretRedactionFilter(logging.Filter):
 
 
 _secret_filter = SecretRedactionFilter()
+
+
+class UvicornAccessPathFilter(logging.Filter):
+    # Marker so apply_log_filters can find and remove its own previously-installed
+    # filter instances without touching any other filter a user/library attached.
+    _litellm_managed = True
+
+    def __init__(self, excluded_paths: frozenset) -> None:
+        """Store the set of request paths whose access-log records should be dropped."""
+        super().__init__()
+        self.excluded_paths = excluded_paths
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Drop uvicorn.access records whose request path is in excluded_paths; pass everything else through unchanged."""
+        if record.name != "uvicorn.access" or not record.args or len(record.args) < 3:
+            return True
+        path = urlparse(str(record.args[2])).path
+        return path not in self.excluded_paths
+
+
+def apply_log_filters(
+    *,
+    excluded_uvicorn_access_paths: frozenset[str],
+    exclude_health_check_paths: bool = True,
+) -> None:
+    """
+    Configure which request paths are dropped from the uvicorn access log.
+
+    ``exclude_health_check_paths`` toggles DEFAULT_EXCLUDED_UVICORN_ACCESS_PATHS
+    (health-check probes) as a bundle. ``excluded_uvicorn_access_paths`` is an
+    independent, always-applied set of paths — it extends whatever the toggle
+    produces rather than being gated by it, so a path can still be excluded via
+    ``excluded_uvicorn_access_paths`` even when ``exclude_health_check_paths`` is
+    False. Safe to call repeatedly (e.g. on proxy config reload) — a stale
+    filter from a previous call is removed before the new one is attached.
+    """
+    access_logger = logging.getLogger("uvicorn.access")
+    # logging.getLogger returns the same logger instance on every call, so without this
+    # cleanup step, calling apply_log_filters again (config hot-reload, repeated
+    # load_config) would stack a new filter on top of the old one instead of replacing
+    # it -- and since every filter on a logger must pass for a record to be logged, the
+    # stale filter's excluded paths would keep applying even after the config changed.
+    for existing_filter in list(access_logger.filters):
+        if getattr(existing_filter, "_litellm_managed", False):
+            access_logger.removeFilter(existing_filter)
+
+    default_paths = DEFAULT_EXCLUDED_UVICORN_ACCESS_PATHS if exclude_health_check_paths else frozenset()
+    all_excluded_paths = default_paths | excluded_uvicorn_access_paths
+    access_logger.addFilter(UvicornAccessPathFilter(all_excluded_paths))
 
 
 json_logs = bool(os.getenv("JSON_LOGS", False))
