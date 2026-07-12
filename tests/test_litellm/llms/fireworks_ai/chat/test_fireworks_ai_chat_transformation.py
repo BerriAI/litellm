@@ -1098,3 +1098,102 @@ def test_streaming_surfaces_fireworks_response_fields():
     assert surfaced["fireworks_raw_outputs"] == [raw_output]
     assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
     assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]
+
+
+def test_transform_response_sets_finish_reason_tool_calls_for_content_tool_call():
+    """
+    Fireworks returns tool calls as a JSON string in message.content with
+    finish_reason="stop". After the content is converted into message.tool_calls,
+    finish_reason must become "tool_calls" (matching the shared response converter
+    and providers like Ollama/xAI) so OpenAI-style agent loops execute the tool
+    instead of treating the turn as finished.
+    """
+    config = FireworksAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    body = {
+        "id": "resp-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "llama-v3-70b-instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps({"name": "get_weather", "arguments": {"city": "SF"}}),
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    result = config.transform_response(
+        model="llama-v3-70b-instruct",
+        raw_response=_make_fireworks_raw_response(body),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        optional_params={"tools": tools},
+        litellm_params={},
+        encoding=None,
+        api_key="test-key",
+    )
+
+    choice = result.choices[0]
+    assert choice.message.tool_calls is not None
+    assert choice.message.tool_calls[0].function.name == "get_weather"
+    assert choice.finish_reason == "tool_calls"
+
+
+def test_transform_response_keeps_stop_for_plain_text():
+    """A normal text answer (no tool call in content) must keep finish_reason='stop'."""
+    config = FireworksAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+    body = {
+        "id": "resp-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "llama-v3-70b-instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "It is sunny in SF."},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    result = config.transform_response(
+        model="llama-v3-70b-instruct",
+        raw_response=_make_fireworks_raw_response(body),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        optional_params={"tools": tools},
+        litellm_params={},
+        encoding=None,
+        api_key="test-key",
+    )
+
+    choice = result.choices[0]
+    assert choice.message.content == "It is sunny in SF."
+    assert not choice.message.tool_calls
+    assert choice.finish_reason == "stop"

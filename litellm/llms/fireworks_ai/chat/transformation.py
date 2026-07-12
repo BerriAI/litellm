@@ -530,10 +530,22 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(Choices, choice).message = self._handle_message_content_with_tool_calls(
-                message=cast(Choices, choice).message,
+            typed_choice = cast(Choices, choice)
+            typed_choice.message = self._handle_message_content_with_tool_calls(
+                message=typed_choice.message,
                 tool_calls=optional_params.get("tools", None),
             )
+            # Fireworks keeps finish_reason="stop" even when the content held a
+            # tool call, and transform_response builds the ModelResponse directly
+            # (bypassing convert_to_model_response_object). Align with the
+            # OpenAI-style contract and the shared converter so agent loops that
+            # branch on finish_reason == "tool_calls" execute the tool.
+            if (
+                typed_choice.finish_reason == "stop"
+                and typed_choice.message.tool_calls
+                and len(typed_choice.message.tool_calls) > 0
+            ):
+                typed_choice.finish_reason = "tool_calls"
 
         response._hidden_params = {
             "additional_headers": additional_headers,
