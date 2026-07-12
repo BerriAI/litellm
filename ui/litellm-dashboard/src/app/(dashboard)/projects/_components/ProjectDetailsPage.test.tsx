@@ -43,6 +43,14 @@ const mockProject: ProjectResponse = {
   litellm_budget_table: null,
 };
 
+const rectangleFills = (container: HTMLElement) =>
+  new Set(Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) => rect.getAttribute("fill")));
+
+const yAxisTickLabels = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll(".recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value")).map(
+    (tick) => tick.textContent,
+  );
+
 describe("ProjectDetail", () => {
   const onBack = vi.fn();
 
@@ -157,6 +165,65 @@ describe("ProjectDetail", () => {
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("No team assigned")).toBeInTheDocument();
+    });
+
+    describe("Spend by Model chart", () => {
+      const multiModelProject: ProjectResponse = {
+        ...mockProject,
+        model_spend: {
+          "claude-sonnet-5": 0.5,
+          "gpt-5.2": 10,
+          "claude-opus-4-8": 2.75,
+          "gpt-5.2-codex": 5.5,
+        },
+      };
+
+      it("should render one cyan bar per model without a legend", () => {
+        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+        expect(container.querySelectorAll(".recharts-bar")).toHaveLength(1);
+        expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(4);
+        expect(rectangleFills(container)).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+        expect(container.querySelector(".recharts-legend-wrapper")).toBeNull();
+      });
+
+      it("should list models on the category axis sorted by spend descending", () => {
+        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+        expect(yAxisTickLabels(container)).toEqual(["gpt-5.2", "gpt-5.2-codex", "claude-opus-4-8", "claude-sonnet-5"]);
+      });
+
+      it("should format value axis ticks as dollars with four decimals", () => {
+        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+        expect(container.querySelector(".recharts-xAxis-tick-labels")?.textContent).toMatch(/\$\d+\.\d{4}/);
+      });
+
+      it("should scale the chart height at 40px per model with a 120px floor", () => {
+        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+        expect(container.querySelector<HTMLElement>('[data-slot="chart"]')?.style.height).toBe("160px");
+
+        mockUseProjectDetails.mockReturnValue({ data: mockProject, isLoading: false });
+        const { container: singleModelContainer } = renderWithProviders(
+          <ProjectDetail projectId="proj-1" onBack={onBack} />,
+        );
+        expect(singleModelContainer.querySelector<HTMLElement>('[data-slot="chart"]')?.style.height).toBe("120px");
+      });
+
+      it("should show the empty state when no model spend is recorded", () => {
+        mockUseProjectDetails.mockReturnValue({
+          data: { ...mockProject, model_spend: {} },
+          isLoading: false,
+        });
+        const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+        expect(screen.getByText("No model spend recorded yet")).toBeInTheDocument();
+        expect(container.querySelector('[data-slot="chart"]')).toBeNull();
+      });
     });
 
     it("should show team information when team data is available", () => {
