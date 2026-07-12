@@ -267,6 +267,13 @@ _BINARY_CONTENT_BLOCK_TYPES = frozenset(("input_audio", "input_video", "input_fi
 # inflation this PR fixes and zero-cost image batching that bypasses TPM limits.
 _IMAGE_BLOCK_CHAR_FLOOR = 1000
 
+# Text-bearing fields across known Responses API block types:
+#   input_text / output_text → "text"
+#   function_call_output     → "output"
+#   refusal                  → "refusal"
+# Summing all three is safe — each typed block only populates one of them.
+_TEXT_BEARING_FIELDS: tuple[str, ...] = ("text", "output", "refusal")
+
 
 def _chars_from_content_block(block: dict) -> int:
     """Return estimated text char count for one Responses API content block.
@@ -274,16 +281,16 @@ def _chars_from_content_block(block: dict) -> int:
     - ``input_image``: returns a conservative per-image floor so image-heavy
       requests are not zero-cost for TPM reservation purposes.
     - ``input_audio``/``input_video``/``input_file``: returns 0 (no text).
-    - All other types: counts the ``text`` field so tool results, refusals,
-      and future text-bearing blocks still contribute to the estimate.
+    - All other types: sums ``text``, ``output``, and ``refusal`` fields so
+      that ``input_text``, ``output_text``, ``function_call_output``,
+      ``refusal``, and future text-bearing block types are all counted.
     """
     block_type = block.get("type", "")
     if block_type == "input_image":
         return _IMAGE_BLOCK_CHAR_FLOOR
     if block_type in _BINARY_CONTENT_BLOCK_TYPES:
         return 0
-    text = block.get("text", "")
-    return len(text) if isinstance(text, str) else 0
+    return sum(len(v) for field in _TEXT_BEARING_FIELDS if isinstance(v := block.get(field, ""), str))
 
 
 def _chars_from_input_list(items: list) -> int:
