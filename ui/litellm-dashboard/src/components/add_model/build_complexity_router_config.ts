@@ -30,6 +30,14 @@ export interface ComplexityRouterConfigPayload {
   match_threshold?: number;
 }
 
+const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
+  const missing = TIER_KEYS.filter((tier) => !tiers[tier]);
+  if (missing.length === 0) return null;
+  return `Select a model for the following tier(s): ${missing.join(", ")}`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
