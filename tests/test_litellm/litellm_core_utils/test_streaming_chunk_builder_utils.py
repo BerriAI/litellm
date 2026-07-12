@@ -238,6 +238,46 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
     assert result[2]["signature"] == "sig_block2"
 
 
+def test_get_combined_thinking_content_preserves_unsigned_block():
+    """
+    Regression: a thinking block whose signature never arrives (stream truncated
+    mid-thinking by max_tokens/cancellation, or a provider that emits thinking
+    text without per-block signatures) must keep its reasoning text. Previously
+    the terminal flush required a signature and silently dropped the accumulated
+    text, so thinking_blocks came back as None.
+    """
+    base_chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "claude-sonnet-4-20250514",
+    }
+
+    def make_chunk(**delta_kwargs):
+        return ModelResponseStream(
+            **base_chunk,
+            choices=[StreamingChoices(index=0, delta=Delta(**delta_kwargs), finish_reason=None)],
+        )
+
+    chunks = [
+        make_chunk(role="assistant", content=None),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": "Let me reason "}]),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": "about this."}]),
+    ]
+    thinking_chunks = [
+        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+    result = processor.get_combined_thinking_content(thinking_chunks)
+
+    assert result is not None, "unsigned thinking text must not be dropped"
+    assert len(result) == 1
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "Let me reason about this."
+    # signature is optional and simply absent (or None) when none arrived
+    assert not result[0].get("signature")
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",
