@@ -1,11 +1,10 @@
 import { useMemo } from "react";
 import { LineChart, type ChartColor } from "@/components/shared/charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
+import { DailyData } from "@/components/UsagePage/types";
 
 interface EndpointUsageLineChartProps {
   dailyData?: { results: DailyData[] };
-  endpointData?: Record<string, MetricWithMetadata>;
 }
 
 // Transform daily data into chart format
