@@ -194,10 +194,12 @@ def _strip_bearer(value: str) -> str:
 
 
 def is_bridge_envelope_shaped(authorization_value: str) -> bool:
-    """Cheap, keyless test that an ``Authorization`` value carries an envelope (optional
-    ``Bearer`` scheme stripped). The admission edge engages the bridge arm only for an
-    envelope, so a plain upstream bearer falls through to normal oauth2 admission."""
-    return is_envelope(_strip_bearer(authorization_value))
+    """Cheap, keyless test that an ``Authorization`` value carries an envelope of either kind (optional
+    ``Bearer`` scheme stripped). The admission edge engages the bridge arm for an access envelope (to
+    admit) and for a refresh envelope (to reject it explicitly, since a refresh credential is never
+    usable at the tool-call edge); a plain upstream bearer falls through to normal oauth2 admission."""
+    candidate = _strip_bearer(authorization_value)
+    return is_envelope(candidate) or is_refresh_envelope(candidate)
 
 
 def resolve_bridge_envelope(
@@ -214,6 +216,10 @@ def resolve_bridge_envelope(
     envelope, and ``BridgeEnvelopeInvalid`` for an envelope-shaped bearer that will not
     open. Never raises: it is total over hostile input via :func:`open_envelope`.
 
+    A refresh envelope is ``BridgeEnvelopeInvalid`` here: it is a valid gateway credential but only ever
+    presented back to the token endpoint, never usable to authenticate a tool call, so admission must
+    fail it closed rather than let it fall through to another arm.
+
     ``expected_server_id`` is the ``server_id`` of the MCP server the request targets; an
     opened envelope whose sealed ``server_id`` does not match is rejected as
     ``BridgeEnvelopeInvalid``. Binding here (rather than leaving it to the caller) prevents
@@ -223,6 +229,8 @@ def resolve_bridge_envelope(
     unlike ``hmac.compare_digest`` on ``str``, does not raise on a non-ASCII server_id.
     """
     candidate = _strip_bearer(authorization_value)
+    if is_refresh_envelope(candidate):
+        return BridgeEnvelopeInvalid()
     if not is_envelope(candidate):
         return NotBridgeEnvelope()
     opened = open_envelope(candidate, keys, now)

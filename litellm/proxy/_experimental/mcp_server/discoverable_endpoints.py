@@ -1160,7 +1160,7 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
 
 
 async def _prepare_bridge_refresh(
-    request: Request, mcp_server: MCPServer, refresh_value: Optional[str]
+    request: Request, mcp_server: MCPServer, refresh_value: str | None
 ) -> "_BridgeRefreshReady | _BridgeMintError":
     """Phase 1 for the refresh_token grant, BEFORE the upstream exchange: open the client's refresh
     envelope, re-validate the sealed litellm identity so a revoked key cannot keep refreshing, and
