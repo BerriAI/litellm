@@ -759,6 +759,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "byesu",  # Byesu - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",
