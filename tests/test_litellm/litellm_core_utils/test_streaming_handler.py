@@ -1,9 +1,11 @@
 import json
 import os
 import sys
+import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import anyio
 import pytest
 
 sys.path.insert(
@@ -3059,3 +3061,204 @@ async def test_stream_chunk_builder_raise_and_usage_recovery_failure_does_not_cr
             chunks = [c async for c in response]
 
     assert len(chunks) > 0
+
+
+def _make_offload_test_wrapper() -> tuple[CustomStreamWrapper, Logging]:
+    final_chunk = ModelResponseStream(
+        id="chatcmpl-offload-test",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=Usage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+    logging_obj = Logging(
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="offload-test",
+        function_id="1245",
+    )
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=bedrock_chunks + [final_chunk]
+        ),
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    ), logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_stream_completion_offloads_chunk_builder():
+    response, logging_obj = _make_offload_test_wrapper()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    cache_handler = MagicMock()
+    cache_handler._add_streaming_response_to_cache = AsyncMock()
+    logging_obj._llm_caching_handler = cache_handler
+    original_builder = litellm.stream_chunk_builder
+
+    with (
+        patch.object(
+            litellm, "stream_chunk_builder", wraps=original_builder
+        ) as builder,
+        patch.object(
+            asyncio, "to_thread", new=AsyncMock(wraps=asyncio.to_thread)
+        ) as to_thread,
+    ):
+        chunks = [chunk async for chunk in response]
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    builder.assert_called_once()
+    cache_handler._add_streaming_response_to_cache.assert_awaited_once()
+    logging_obj.dispatch_success_handlers.assert_awaited_once()
+    assert any(
+        call.args and call.args[0] is builder
+        for call in to_thread.await_args_list
+    )
+    assert any(
+        getattr(chunk, "usage", None) is not None and chunk.usage.total_tokens == 2
+        for chunk in chunks
+    )
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.asyncio
+async def test_async_stream_completion_accounts_before_repeated_cancellation(
+    deferred: bool,
+):
+    response, logging_obj = _make_offload_test_wrapper()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    cache_handler = MagicMock()
+    cache_handler._add_streaming_response_to_cache = AsyncMock()
+    logging_obj._llm_caching_handler = cache_handler
+    deferred_callback = AsyncMock()
+    if deferred:
+        logging_obj._on_deferred_stream_complete = deferred_callback
+
+    while not response.sent_last_chunk:
+        await response.__anext__()
+
+    original_builder = litellm.stream_chunk_builder
+    builder_started = threading.Event()
+    builder_release = threading.Event()
+    builder_finished = threading.Event()
+
+    def blocking_builder(*args, **kwargs):
+        builder_started.set()
+        try:
+            assert builder_release.wait(5)
+            return original_builder(*args, **kwargs)
+        finally:
+            builder_finished.set()
+
+    with patch.object(
+        litellm, "stream_chunk_builder", side_effect=blocking_builder
+    ):
+        consumer = asyncio.create_task(response.__anext__())
+        await asyncio.wait_for(asyncio.to_thread(builder_started.wait), 5)
+        consumer.cancel("first")
+        await asyncio.sleep(0)
+        consumer.cancel("second")
+        await asyncio.sleep(0)
+        assert consumer.done() is False
+        builder_release.set()
+        await asyncio.wait_for(asyncio.to_thread(builder_finished.wait), 5)
+        with pytest.raises(asyncio.CancelledError, match="first"):
+            await consumer
+
+    assert response.sent_stream_usage is False
+    with pytest.raises(StopAsyncIteration):
+        await response.__anext__()
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    cache_handler._add_streaming_response_to_cache.assert_awaited_once()
+    cached_response = cache_handler._add_streaming_response_to_cache.await_args.args[0]
+    assert cached_response.usage.total_tokens == 2
+
+    if deferred:
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+        deferred_args = logging_obj._deferred_stream_complete_args
+        assert deferred_args[0].usage.total_tokens == 2
+        assert deferred_args[1] is False
+        await logging_obj._on_deferred_stream_complete(*deferred_args)
+        deferred_callback.assert_awaited_once()
+    else:
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        logged_response = logging_obj.dispatch_success_handlers.await_args.args[0]
+        assert logged_response.usage.total_tokens == 2
+
+
+@pytest.mark.asyncio
+async def test_async_stream_completion_propagates_builder_cancellation():
+    response, logging_obj = _make_offload_test_wrapper()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    while not response.sent_last_chunk:
+        await response.__anext__()
+
+    with patch.object(
+        litellm,
+        "stream_chunk_builder",
+        side_effect=asyncio.CancelledError("builder cancelled"),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await response.__anext__()
+
+    assert response.sent_stream_usage is False
+    assert response._async_finalization_complete is False
+    logging_obj.dispatch_success_handlers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_stream_completion_accounts_before_anyio_cancellation():
+    response, logging_obj = _make_offload_test_wrapper()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    cache_handler = MagicMock()
+    cache_handler._add_streaming_response_to_cache = AsyncMock()
+    logging_obj._llm_caching_handler = cache_handler
+    while not response.sent_last_chunk:
+        await response.__anext__()
+
+    original_builder = litellm.stream_chunk_builder
+    builder_started = threading.Event()
+    builder_release = threading.Event()
+
+    def blocking_builder(*args, **kwargs):
+        builder_started.set()
+        assert builder_release.wait(5)
+        return original_builder(*args, **kwargs)
+
+    async def cancel_from_outside_scope():
+        await asyncio.wait_for(asyncio.to_thread(builder_started.wait), 5)
+        scope.cancel()
+        await asyncio.sleep(0)
+        builder_release.set()
+
+    controller = asyncio.create_task(cancel_from_outside_scope())
+    with patch.object(
+        litellm, "stream_chunk_builder", side_effect=blocking_builder
+    ):
+        with anyio.CancelScope() as scope:
+            await response.__anext__()
+    await controller
+
+    assert scope.cancel_called is True
+    assert response.sent_stream_usage is False
+    assert response._async_finalization_complete is True
+    with pytest.raises(StopAsyncIteration):
+        await response.__anext__()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    cache_handler._add_streaming_response_to_cache.assert_awaited_once()
+    logging_obj.dispatch_success_handlers.assert_awaited_once()
