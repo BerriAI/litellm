@@ -2390,6 +2390,16 @@ class TestStreamingIDConsistency:
                 ],
             },
             {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "It should be quick.",
+                    }
+                ],
+            },
+            {
                 "type": "function_call_output",
                 "call_id": "call_01",
                 "output": "/workspace",
@@ -2406,7 +2416,8 @@ class TestStreamingIDConsistency:
             "tool",
         ]
         assert messages[1].get("content") == [
-            {"type": "text", "text": "I'll inspect the working directory."}
+            {"type": "text", "text": "I'll inspect the working directory."},
+            {"type": "text", "text": "It should be quick."},
         ]
         assert messages[1].get("tool_calls")[0].get("id") == "call_01"
         assert messages[2].get("tool_call_id") == "call_01"

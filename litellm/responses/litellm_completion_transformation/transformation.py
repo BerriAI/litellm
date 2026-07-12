@@ -415,10 +415,21 @@ class LiteLLMCompletionResponsesConfig:
                         and isinstance(new_msg, dict)
                         and last_msg.get("role") == "assistant"
                         and last_msg.get("tool_calls")
-                        and last_msg.get("content") is None
                         and new_msg.get("role") == "assistant"
                     ):
-                        last_msg["content"] = new_msg.get("content")
+                        last_content = last_msg.get("content")
+                        new_content = new_msg.get("content")
+                        if last_content is None:
+                            merged_content = new_content
+                        elif isinstance(last_content, list):
+                            merged_content = last_content + (
+                                new_content if isinstance(new_content, list) else [new_content]
+                            )
+                        elif isinstance(new_content, list):
+                            merged_content = [last_content, *new_content]
+                        else:
+                            merged_content = f"{last_content}{new_content}"
+                        last_msg["content"] = merged_content
                         continue
 
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item=_input):
