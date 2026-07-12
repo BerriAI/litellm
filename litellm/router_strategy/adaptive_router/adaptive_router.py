@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -60,6 +61,7 @@ from litellm.router_strategy.adaptive_router.update_queue import (
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
 # Same pattern for the owner cache.
 _OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
+_FEEDBACK_CONTEXT_MAX_ENTRIES: int = 1024
 from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
@@ -105,7 +107,7 @@ class AdaptiveRouter:
         self._cells: Dict[Tuple[RequestType, str], BanditCell] = {}
         self._owner_cache: Dict[str, Tuple[str, float]] = {}
         self._session_states: Dict[Tuple[str, str], SessionState] = {}
-        self._feedback_contexts: Dict[str, _FeedbackContext] = {}
+        self._feedback_contexts: OrderedDict[str, _FeedbackContext] = OrderedDict()
         # Parallel expiry map for _session_states, same TTL as _owner_cache.
         # Evicted opportunistically in `get_or_create_session_state`.
         self._session_states_expiry: Dict[Tuple[str, str], float] = {}
@@ -393,14 +395,12 @@ class AdaptiveRouter:
         """Attribute feedback to the previous response and response signals to the current model."""
         async with self._lock:
             now = time.time()
-            if len(self._feedback_contexts) >= _SESSION_STATE_SWEEP_THRESHOLD:
-                self._feedback_contexts = {
-                    key: context for key, context in self._feedback_contexts.items() if context.expires_at > now
-                }
-            previous = self._feedback_contexts.get(session_id)
-            if previous is not None and previous.expires_at <= now:
-                self._feedback_contexts.pop(session_id, None)
-                previous = None
+            while self._feedback_contexts:
+                oldest_context = next(iter(self._feedback_contexts.values()))
+                if oldest_context.expires_at > now:
+                    break
+                self._feedback_contexts.popitem(last=False)
+            previous = self._feedback_contexts.pop(session_id, None)
 
             effective_request_type = (
                 previous.request_type if previous is not None and request_type == RequestType.GENERAL else request_type
@@ -465,6 +465,8 @@ class AdaptiveRouter:
 
             next_turn_count = (previous.turn_count if previous else 0) + 1
             clean_credit_awarded = bool((previous and previous.clean_credit_awarded) or feedback_delta.satisfaction)
+            if len(self._feedback_contexts) >= _FEEDBACK_CONTEXT_MAX_ENTRIES:
+                self._feedback_contexts.popitem(last=False)
             self._feedback_contexts[session_id] = _FeedbackContext(
                 model_name=model_name,
                 request_type=effective_request_type,

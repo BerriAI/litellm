@@ -308,6 +308,38 @@ async def test_record_turn_attributes_satisfaction_to_previous_response_model():
 
 
 @pytest.mark.asyncio
+async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_session():
+    r = _make_router()
+    context_limit = ar_module._FEEDBACK_CONTEXT_MAX_ENTRIES
+
+    for index in range(context_limit):
+        await r.record_turn(
+            session_id=f"session-{index}",
+            model_name="fast",
+            request_type=RequestType.GENERAL,
+            turn=Turn(user_content="question", assistant_content="answer"),
+        )
+
+    await r.record_turn(
+        session_id="session-0",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="follow up", assistant_content="updated answer"),
+    )
+    await r.record_turn(
+        session_id="overflow",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="question", assistant_content="answer"),
+    )
+
+    assert len(r._feedback_contexts) == context_limit
+    assert "session-0" in r._feedback_contexts
+    assert "session-1" not in r._feedback_contexts
+    assert "overflow" in r._feedback_contexts
+
+
+@pytest.mark.asyncio
 async def test_load_state_from_db_overrides_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
