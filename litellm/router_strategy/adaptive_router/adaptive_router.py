@@ -22,7 +22,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Union, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -37,9 +37,9 @@ from litellm.router_strategy.adaptive_router.bandit import (
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
-    MIN_TURNS_FOR_CLEAN_CREDIT,
     MIN_QUALITY_TIER_HEADER,
     MIN_QUALITY_TIER_METADATA_KEY,
+    MIN_TURNS_FOR_CLEAN_CREDIT,
     OWNER_CACHE_TTL_SECONDS,
 )
 from litellm.router_strategy.adaptive_router.signals import (
@@ -81,8 +81,8 @@ def _default_prefs() -> AdaptiveRouterPreferences:
 class _FeedbackContext:
     model_name: str
     request_type: RequestType
-    user_content: Optional[str]
-    assistant_content: Optional[str]
+    user_content: str | None
+    assistant_content: str | None
     turn_count: int
     clean_credit_awarded: bool
     expires_at: float
@@ -95,8 +95,8 @@ class AdaptiveRouter:
         self,
         router_name: str,
         config: AdaptiveRouterConfig,
-        model_to_prefs: Dict[str, AdaptiveRouterPreferences],
-        model_to_cost: Dict[str, float],
+        model_to_prefs: dict[str, AdaptiveRouterPreferences],
+        model_to_cost: dict[str, float],
     ) -> None:
         self.router_name = router_name
         self.config = config
@@ -104,13 +104,13 @@ class AdaptiveRouter:
         self.model_to_cost = model_to_cost
         self.queue = AdaptiveRouterUpdateQueue()
 
-        self._cells: Dict[Tuple[RequestType, str], BanditCell] = {}
-        self._owner_cache: Dict[str, Tuple[str, float]] = {}
-        self._session_states: Dict[Tuple[str, str], SessionState] = {}
+        self._cells: dict[tuple[RequestType, str], BanditCell] = {}
+        self._owner_cache: dict[str, tuple[str, float]] = {}
+        self._session_states: dict[tuple[str, str], SessionState] = {}
         self._feedback_contexts: OrderedDict[str, _FeedbackContext] = OrderedDict()
         # Parallel expiry map for _session_states, same TTL as _owner_cache.
         # Evicted opportunistically in `get_or_create_session_state`.
-        self._session_states_expiry: Dict[Tuple[str, str], float] = {}
+        self._session_states_expiry: dict[tuple[str, str], float] = {}
         self._skipped_updates_total: int = 0
         self._feedback_attributed_total: int = 0
         self._feedback_without_context_total: int = 0
@@ -168,11 +168,11 @@ class AdaptiveRouter:
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: Dict[str, Any],
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
-    ) -> Optional[PreRoutingHookResponse]:
+        request_kwargs: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+        input: Union[str, list] | None = None,
+        specific_deployment: bool | None = False,
+    ) -> PreRoutingHookResponse | None:
         """
         Plugin entry point invoked by `Router.async_pre_routing_hook` when the
         inbound `model` matches this adaptive router's `router_name`.
@@ -186,7 +186,7 @@ class AdaptiveRouter:
         attribution is enforced post-call via the owner cache (see
         `claim_or_check_owner`).
         """
-        user_text = get_last_user_message(cast(List[AllMessageValues], messages or [])) or ""
+        user_text = get_last_user_message(cast(list[AllMessageValues], messages or [])) or ""
 
         request_type = classify_prompt(user_text)
         min_quality_tier = self._extract_min_quality_tier(request_kwargs)
@@ -213,7 +213,7 @@ class AdaptiveRouter:
     async def pick_model(
         self,
         request_type: RequestType,
-        min_quality_tier: Optional[int] = None,
+        min_quality_tier: int | None = None,
     ) -> str:
         """Thompson-sample across eligible models. Stateless per-turn."""
         eligible = self._eligible_models(min_quality_tier)
@@ -266,7 +266,7 @@ class AdaptiveRouter:
         for k in expired:
             self._owner_cache.pop(k, None)
 
-    async def get_state_snapshot(self) -> Dict[str, Any]:
+    async def get_state_snapshot(self) -> dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
         cells = []
         for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
@@ -310,8 +310,8 @@ class AdaptiveRouter:
 
     @staticmethod
     def _extract_min_quality_tier(
-        request_kwargs: Dict[str, Any],
-    ) -> Optional[int]:
+        request_kwargs: dict[str, Any],
+    ) -> int | None:
         """Pull `min_quality_tier` from request headers or metadata.
 
         Precedence: headers (`x-litellm-min-quality-tier`) over metadata
@@ -339,7 +339,7 @@ class AdaptiveRouter:
                     return None
         return None
 
-    def _eligible_models(self, min_quality_tier: Optional[int]) -> List[str]:
+    def _eligible_models(self, min_quality_tier: int | None) -> list[str]:
         if min_quality_tier is None:
             return list(self.config.available_models)
         return [
@@ -426,10 +426,11 @@ class AdaptiveRouter:
                 turn.assistant_content,
                 current_state.tool_call_history,
                 turn.tool_calls,
+                turn.tool_results,
                 turn.response_status,
             )
-            states_to_persist: Dict[str, SessionState] = {model_name: current_state}
-            bandit_deltas: Dict[Tuple[RequestType, str], SignalDelta] = {}
+            states_to_persist: dict[str, SessionState] = {model_name: current_state}
+            bandit_deltas: dict[tuple[RequestType, str], SignalDelta] = {}
 
             if previous is not None:
                 feedback_state = self.get_or_create_session_state(
@@ -515,7 +516,7 @@ class AdaptiveRouter:
             return combined_delta
 
     @staticmethod
-    def _persistable_session_snapshot(state: SessionState) -> Dict[str, Any]:
+    def _persistable_session_snapshot(state: SessionState) -> dict[str, Any]:
         snapshot = asdict(state)
         for sensitive in (
             "last_user_content",
@@ -527,7 +528,7 @@ class AdaptiveRouter:
         return snapshot
 
     @staticmethod
-    def _compute_bandit_delta(delta: SignalDelta) -> Tuple[float, float]:
+    def _compute_bandit_delta(delta: SignalDelta) -> tuple[float, float]:
         """
         Translate per-turn signal deltas into bandit-cell deltas.
 

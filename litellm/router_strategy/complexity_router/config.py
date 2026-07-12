@@ -6,7 +6,7 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -35,7 +35,7 @@ DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 class KeywordTierRule(BaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
 
-    keywords: List[str] = Field(
+    keywords: list[str] = Field(
         min_length=1,
         description="Keywords/phrases that trigger this rule (lexical or semantic match)",
     )
@@ -60,7 +60,7 @@ class KeywordTierRule(BaseModel):
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
 
-DEFAULT_CODE_KEYWORDS: List[str] = [
+DEFAULT_CODE_KEYWORDS: list[str] = [
     "function",
     "class",
     "def",
@@ -108,7 +108,7 @@ DEFAULT_CODE_KEYWORDS: List[str] = [
     "pull request",
 ]
 
-DEFAULT_REASONING_KEYWORDS: List[str] = [
+DEFAULT_REASONING_KEYWORDS: list[str] = [
     "step by step",
     "think through",
     "let's think",
@@ -130,7 +130,7 @@ DEFAULT_REASONING_KEYWORDS: List[str] = [
     "conclude",
 ]
 
-DEFAULT_TECHNICAL_KEYWORDS: List[str] = [
+DEFAULT_TECHNICAL_KEYWORDS: list[str] = [
     "architecture",
     "distributed",
     "scalable",
@@ -162,7 +162,7 @@ DEFAULT_TECHNICAL_KEYWORDS: List[str] = [
     # Note: "async", "kubernetes", "docker" are in DEFAULT_CODE_KEYWORDS
 ]
 
-DEFAULT_SIMPLE_KEYWORDS: List[str] = [
+DEFAULT_SIMPLE_KEYWORDS: list[str] = [
     "what is",
     "what's",
     "define",
@@ -195,7 +195,7 @@ DEFAULT_SIMPLE_KEYWORDS: List[str] = [
 
 # ─── Default Dimension Weights ───
 
-DEFAULT_DIMENSION_WEIGHTS: Dict[str, float] = {
+DEFAULT_DIMENSION_WEIGHTS: dict[str, float] = {
     "tokenCount": 0.10,  # Reduced - length is less important than content
     "codePresence": 0.30,  # High - code requests need capable models
     "reasoningMarkers": 0.25,  # High - explicit reasoning requests
@@ -208,7 +208,7 @@ DEFAULT_DIMENSION_WEIGHTS: Dict[str, float] = {
 
 # ─── Default Tier Boundaries ───
 
-DEFAULT_TIER_BOUNDARIES: Dict[str, float] = {
+DEFAULT_TIER_BOUNDARIES: dict[str, float] = {
     "simple_medium": 0.15,  # Lower threshold to catch more MEDIUM cases
     "medium_complex": 0.35,  # Lower threshold to catch technical COMPLEX cases
     "complex_reasoning": 0.60,  # Reasoning tier reserved for explicit reasoning markers
@@ -217,7 +217,7 @@ DEFAULT_TIER_BOUNDARIES: Dict[str, float] = {
 
 # ─── Default Token Thresholds ───
 
-DEFAULT_TOKEN_THRESHOLDS: Dict[str, int] = {
+DEFAULT_TOKEN_THRESHOLDS: dict[str, int] = {
     "simple": 15,  # Only very short prompts (<15 tokens) are penalized
     "complex": 400,  # Long prompts (>400 tokens) get complexity boost
 }
@@ -225,7 +225,7 @@ DEFAULT_TOKEN_THRESHOLDS: Dict[str, int] = {
 
 # ─── Default Tier to Model Mapping ───
 
-DEFAULT_TIER_MODELS: Dict[str, str] = {
+DEFAULT_TIER_MODELS: dict[str, str] = {
     "SIMPLE": "gpt-4o-mini",
     "MEDIUM": "gpt-4o",
     "COMPLEX": "claude-sonnet-4-20250514",
@@ -249,7 +249,7 @@ class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
     # string = pin; list = random pick when adaptive=False, soft-floor home pool when adaptive=True
-    tiers: Dict[str, Union[str, List[str]]] = Field(
+    tiers: dict[str, Union[str, list[str]]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description=(
             "Mapping of complexity tiers to a model or model pool. "
@@ -258,37 +258,37 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Tier boundaries (normalized scores)
-    tier_boundaries: Dict[str, float] = Field(
+    tier_boundaries: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_TIER_BOUNDARIES.copy(),
         description="Score boundaries between tiers",
     )
 
     # Token count thresholds
-    token_thresholds: Dict[str, int] = Field(
+    token_thresholds: dict[str, int] = Field(
         default_factory=lambda: DEFAULT_TOKEN_THRESHOLDS.copy(),
         description="Token count thresholds for simple/complex classification",
     )
 
     # Dimension weights
-    dimension_weights: Dict[str, float] = Field(
+    dimension_weights: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_DIMENSION_WEIGHTS.copy(),
         description="Weights for each scoring dimension",
     )
 
     # Keyword lists (overridable)
-    code_keywords: Optional[List[str]] = Field(
+    code_keywords: list[str] | None = Field(
         default=None,
         description="Keywords indicating code-related content",
     )
-    reasoning_keywords: Optional[List[str]] = Field(
+    reasoning_keywords: list[str] | None = Field(
         default=None,
         description="Keywords indicating reasoning-required content",
     )
-    technical_keywords: Optional[List[str]] = Field(
+    technical_keywords: list[str] | None = Field(
         default=None,
         description="Keywords indicating technical content",
     )
-    custom_technical_keywords: Optional[list[str]] = Field(
+    custom_technical_keywords: list[str] | None = Field(
         default=None,
         description=(
             "Domain-specific technical keywords appended to the effective base list "
@@ -297,13 +297,13 @@ class ComplexityRouterConfig(BaseModel):
             "the base list and within this list."
         ),
     )
-    simple_keywords: Optional[List[str]] = Field(
+    simple_keywords: list[str] | None = Field(
         default=None,
         description="Keywords indicating simple/basic queries",
     )
 
     # Default model if scoring fails
-    default_model: Optional[str] = Field(
+    default_model: str | None = Field(
         default=None,
         description="Default model to use if tier cannot be determined",
     )
@@ -313,7 +313,7 @@ class ComplexityRouterConfig(BaseModel):
         default="heuristic",
         description="Classification strategy: local regex/keyword scoring, or an LLM call",
     )
-    classifier_llm_config: Optional[ClassifierLLMConfig] = Field(
+    classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
     )
@@ -340,7 +340,7 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Deterministic keyword -> tier overrides, evaluated before weighted scoring
-    keyword_tier_rules: Optional[List[KeywordTierRule]] = Field(
+    keyword_tier_rules: list[KeywordTierRule] | None = Field(
         default=None,
         description="Rules that force a specific tier when their keywords match the prompt",
     )
@@ -350,7 +350,7 @@ class ComplexityRouterConfig(BaseModel):
         default=False,
         description="Match keyword_tier_rules by embedding similarity instead of literal text",
     )
-    embedding_model: Optional[str] = Field(
+    embedding_model: str | None = Field(
         default=None,
         description="Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled",
     )

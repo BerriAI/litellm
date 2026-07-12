@@ -22,9 +22,7 @@ def _make_router() -> AdaptiveRouter:
     cfg = AdaptiveRouterConfig(available_models=["fast", "smart"])
     prefs = {
         "fast": AdaptiveRouterPreferences(quality_tier=1, strengths=[]),
-        "smart": AdaptiveRouterPreferences(
-            quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-        ),
+        "smart": AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION]),
     }
     costs = {"fast": 0.0001, "smart": 0.001}
     return AdaptiveRouter(
@@ -109,9 +107,7 @@ def test_claim_or_check_owner_expired_owner_reclaims_for_new_model(monkeypatch):
     monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
     r.claim_or_check_owner("sess-A", "fast")
 
-    monkeypatch.setattr(
-        ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1
-    )
+    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1)
     assert r.claim_or_check_owner("sess-A", "smart") is True
     assert r._owner_cache["sess-A"][0] == "smart"
     # Reclaim isn't a skip.
@@ -128,9 +124,7 @@ def test_owner_cache_evicts_expired_entries_when_threshold_crossed(monkeypatch):
     assert len(r._owner_cache) == 5
 
     # Jump past TTL so all "old-*" entries are now expired.
-    monkeypatch.setattr(
-        ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1
-    )
+    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1)
     r.claim_or_check_owner("new-1", "fast")
     # Sweep ran -> only the new entry remains.
     assert "new-1" in r._owner_cache
@@ -185,9 +179,7 @@ async def test_record_turn_satisfaction_increments_alpha():
     # Prime with 2 prior turns to clear the MIN_TURNS_FOR_CLEAN_CREDIT gate.
     # Use distinct content to avoid incidentally firing stagnation/misalignment.
     priming_turns = [
-        Turn(
-            user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"
-        ),
+        Turn(user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"),
         Turn(
             user_content="golf hotel india juliet",
             assistant_content="kilo lima mike november",
@@ -230,6 +222,21 @@ async def test_record_turn_failure_increments_beta():
     cell_after = r._cells[(RequestType.GENERAL, "smart")]
     assert cell_after.beta == pytest.approx(cell_before.beta + 1.0)
     assert cell_after.alpha == pytest.approx(cell_before.alpha)
+
+
+@pytest.mark.asyncio
+async def test_record_turn_detects_exhaustion_in_tool_results():
+    r = _make_router()
+
+    delta = await r.record_turn(
+        session_id="exhausted",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(tool_results=[{"content": "rate limit exceeded"}]),
+    )
+
+    assert delta.exhaustion == 1
+    assert r._session_states[("exhausted", "smart")].exhaustion_count == 1
 
 
 @pytest.mark.asyncio
@@ -377,9 +384,7 @@ async def test_load_state_from_db_handles_unknown_request_type():
     good_row.beta = 3.0
 
     prisma = MagicMock()
-    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(
-        return_value=[bad_row, good_row]
-    )
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[bad_row, good_row])
     await r.load_state_from_db(prisma)
 
     # Unknown skipped; good applied.

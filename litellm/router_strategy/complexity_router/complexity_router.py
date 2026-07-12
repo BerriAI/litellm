@@ -13,10 +13,10 @@ evaluated before either classification strategy and force a tier outright when m
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
 
-import random
 import asyncio
+import random
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from pydantic import BaseModel
 
@@ -63,7 +63,7 @@ Tiers:
 {prompt}"""
 
 
-def _append_custom_keywords(base_keywords: list[str], custom_keywords: Optional[list[str]]) -> list[str]:
+def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str] | None) -> list[str]:
     if not custom_keywords:
         return base_keywords
     base_lowered = frozenset(keyword.lower() for keyword in base_keywords)
@@ -95,7 +95,7 @@ def _sanitize_user_api_key_auth(auth: Any) -> Any:
     return auth
 
 
-def _classifier_call_metadata(metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     if not metadata:
         return metadata
     return {
@@ -110,7 +110,7 @@ class DimensionScore:
 
     __slots__ = ("name", "score", "signal")
 
-    def __init__(self, name: str, score: float, signal: Optional[str] = None):
+    def __init__(self, name: str, score: float, signal: str | None = None):
         self.name = name
         self.score = score
         self.signal = signal
@@ -135,8 +135,8 @@ class ComplexityRouter(CustomLogger):
         self,
         model_name: str,
         litellm_router_instance: "Router",
-        complexity_router_config: Optional[Dict[str, Any]] = None,
-        default_model: Optional[str] = None,
+        complexity_router_config: dict[str, Any] | None = None,
+        default_model: str | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -173,7 +173,7 @@ class ComplexityRouter(CustomLogger):
         # embeddings are static, only the prompt is embedded per request). The lock
         # serializes the one-time build so concurrent cold-start requests don't each
         # construct the index and fire duplicate embedding calls.
-        self._semantic_routelayer: Optional[SemanticRouter] = None
+        self._semantic_routelayer: SemanticRouter | None = None
         self._semantic_routelayer_lock = asyncio.Lock()
 
         # Pre-compile regex patterns for efficiency
@@ -185,8 +185,8 @@ class ComplexityRouter(CustomLogger):
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
         ]
 
-        self.adaptive_router: Optional[Any] = None
-        self._model_tiers: Dict[str, tuple[ComplexityTier, ...]] = {}
+        self.adaptive_router: Any | None = None
+        self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
@@ -232,12 +232,12 @@ class ComplexityRouter(CustomLogger):
     def _score_keyword_match(
         self,
         text: str,
-        keywords: List[str],
+        keywords: list[str],
         name: str,
         signal_label: str,
-        thresholds: Tuple[int, int],  # (low, high)
-        scores: Tuple[float, float, float],  # (none, low, high)
-    ) -> Tuple[DimensionScore, int]:
+        thresholds: tuple[int, int],  # (low, high)
+        scores: tuple[float, float, float],  # (none, low, high)
+    ) -> tuple[DimensionScore, int]:
         """Score based on keyword matches using word boundary matching.
 
         Returns:
@@ -275,7 +275,7 @@ class ComplexityRouter(CustomLogger):
             return DimensionScore("questionComplexity", 0.5, f"{count} questions")
         return DimensionScore("questionComplexity", 0, None)
 
-    def classify(self, prompt: str, system_prompt: Optional[str] = None) -> Tuple[ComplexityTier, float, List[str]]:
+    def classify(self, prompt: str, system_prompt: str | None = None) -> tuple[ComplexityTier, float, list[str]]:
         """
         Classify a prompt by complexity.
 
@@ -334,7 +334,7 @@ class ComplexityRouter(CustomLogger):
             (0, -1.0, -1.0),
         )
 
-        dimensions: List[DimensionScore] = [
+        dimensions: list[DimensionScore] = [
             self._score_token_count(estimated_tokens),
             code_score,
             reasoning_score,
@@ -376,8 +376,8 @@ class ComplexityRouter(CustomLogger):
     async def aclassify(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        request_kwargs: Optional[dict[str, Any]] = None,
+        system_prompt: str | None = None,
+        request_kwargs: dict[str, Any] | None = None,
     ) -> tuple[ComplexityTier, float, list[str]]:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -400,8 +400,8 @@ class ComplexityRouter(CustomLogger):
     async def _classify_with_llm(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        request_kwargs: Optional[dict[str, Any]] = None,
+        system_prompt: str | None = None,
+        request_kwargs: dict[str, Any] | None = None,
     ) -> ComplexityTier:
         """Call the configured classifier model and parse its structured tier response."""
         llm_config = self.config.classifier_llm_config
@@ -456,17 +456,17 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(model: Union[str, List[str]], tier_key: str) -> str:
+    def _pick_from_tier_value(model: Union[str, list[str]], tier_key: str) -> str:
         if isinstance(model, str):
             return model
         if not model:
             raise ValueError(f"Empty model pool for tier {tier_key}")
         return random.choice(model)
 
-    def _tier_pools(self) -> Dict[str, List[str]]:
+    def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
-    def _ensure_adaptive_router(self) -> Optional[Any]:
+    def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
             return None
         if self.adaptive_router is not None:
@@ -493,8 +493,8 @@ class ComplexityRouter(CustomLogger):
             for model in available_models
         }
 
-        model_to_prefs: Dict[str, AdaptiveRouterPreferences] = {}
-        model_to_cost: Dict[str, float] = {}
+        model_to_prefs: dict[str, AdaptiveRouterPreferences] = {}
+        model_to_cost: dict[str, float] = {}
         model_list = getattr(self.litellm_router_instance, "model_list", None) or []
         name_to_indices = getattr(self.litellm_router_instance, "model_name_to_deployment_indices", {}) or {}
         for name in available_models:
@@ -505,7 +505,7 @@ class ComplexityRouter(CustomLogger):
                 continue
             deployment = model_list[indices[0]]
             mi = deployment.get("model_info") if isinstance(deployment, dict) else deployment.model_info
-            mi_dict: Dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
@@ -513,7 +513,7 @@ class ComplexityRouter(CustomLogger):
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
             lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
-            lp_dict: Dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
+            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
             cost = lp_dict.get("input_cost_per_token")
             model_to_cost[name] = float(cost) if cost is not None else 0.0
 
@@ -533,7 +533,7 @@ class ComplexityRouter(CustomLogger):
         self,
         classified_tier: ComplexityTier,
         user_message: str,
-        request_kwargs: Optional[Dict[str, Any]] = None,
+        request_kwargs: dict[str, Any] | None = None,
     ) -> str:
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
@@ -587,9 +587,9 @@ class ComplexityRouter(CustomLogger):
         cost_weight = self.config.adaptive_weights.cost
         penalty_weight = self.config.tier_distance_penalty
 
-        best_model: Optional[str] = None
+        best_model: str | None = None
         best_score = float("-inf")
-        candidate_scores: List[Dict[str, Any]] = []
+        candidate_scores: list[dict[str, Any]] = []
         for model in candidates:
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
@@ -632,7 +632,7 @@ class ComplexityRouter(CustomLogger):
                 }
         return best_model
 
-    def _lexical_tier_override(self, user_message: str) -> Optional[ComplexityTier]:
+    def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
 
         Escalating to the highest tier (rather than the first rule in the list) keeps
@@ -705,7 +705,7 @@ class ComplexityRouter(CustomLogger):
                 routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
             return routelayer
 
-    async def _semantic_tier_override(self, user_message: str, request_kwargs: Dict) -> Optional[ComplexityTier]:
+    async def _semantic_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | None:
         """Match the prompt against keyword_tier_rules by embedding similarity.
 
         Embeds the query ourselves (instead of letting SemanticRouter.acall embed it
@@ -745,7 +745,7 @@ class ComplexityRouter(CustomLogger):
         except ValueError:
             return None
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: Dict) -> Optional[ComplexityTier]:
+    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -766,9 +766,9 @@ class ComplexityRouter(CustomLogger):
 
     def _resolve_messages(
         self,
-        messages: Optional[List[Dict[str, Any]]],
-        request_kwargs: Dict,
-    ) -> Optional[List[Dict[str, Any]]]:
+        messages: list[dict[str, Any]] | None,
+        request_kwargs: dict,
+    ) -> list[dict[str, Any]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
 
@@ -785,7 +785,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.utils import CallTypes
 
         mappings = load_guardrail_translation_mappings()
-        call_type: Optional[CallTypes] = None
+        call_type: CallTypes | None = None
 
         # 1. Try route-based inference from proxy metadata
         route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
@@ -798,7 +798,7 @@ class ComplexityRouter(CustomLogger):
                         break
 
         # 2. Fallback: try each mapped handler until one produces messages
-        handlers_to_try: List[Any] = []
+        handlers_to_try: list[Any] = []
         if call_type is not None and call_type in mappings:
             handlers_to_try.append(mappings[call_type]())
         else:
@@ -815,11 +815,11 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _extract_user_message_and_system_prompt(
-        messages: List[Dict[str, Any]],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, str | None]:
         """Extract the last user message text and last system prompt from messages."""
-        user_message: Optional[str] = None
-        system_prompt: Optional[str] = None
+        user_message: str | None = None
+        system_prompt: str | None = None
 
         for msg in reversed(messages):
             role = msg.get("role", "")
@@ -842,10 +842,10 @@ class ComplexityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: Dict,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: Union[str, list] | None = None,
+        specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:
         """
         Pre-routing hook called before the routing decision.
