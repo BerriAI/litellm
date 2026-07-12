@@ -565,10 +565,6 @@ def test_build_inspection_messages_custom_tool_call_output():
     assert any("custom-tool-leak" in m["content"] for m in msgs)
 
 
-# -------------------------------------------------------------------
-# LIT-4303: reasoning.summary_text walking
-# -------------------------------------------------------------------
-
 def test_iter_message_text_walks_reasoning_summary_text():
     """Reasoning items with summary_text parts should yield their text."""
     data = {
