@@ -4710,3 +4710,30 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_models_do_not_support_reasoning(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert model in litellm.model_cost, (
+        f"{model} is missing from the local model cost map. "
+        "Add its entry to litellm/model_prices_and_context_window_backup.json."
+    )
+    assert litellm.supports_reasoning(model) is False, (
+        f"{model} incorrectly classified as reasoning-capable. "
+        "Add 'supports_reasoning: false' to its model_cost entry."
+    )
