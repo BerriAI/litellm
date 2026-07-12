@@ -570,7 +570,86 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return result
 
-    def get_json_schema_from_pydantic_object(self, response_format: Union[Any, Dict, None]) -> Optional[dict]:
+    @staticmethod
+    def _schema_has_unsupported_output_constraints(
+        schema: Union[Dict[str, Any], List[Any], Any]
+    ) -> bool:
+        if not isinstance(schema, (dict, list)):
+            return False
+
+        unsupported_fields = {
+            "maxItems",
+            "minItems",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "minLength",
+            "maxLength",
+        }
+
+        if isinstance(schema, dict):
+            if any(field in schema for field in unsupported_fields):
+                return True
+            for key, value in schema.items():
+                if key in {"properties", "$defs"} and isinstance(value, dict):
+                    if any(
+                        AnthropicConfig._schema_has_unsupported_output_constraints(
+                            item
+                        )
+                        for item in value.values()
+                    ):
+                        return True
+                elif key == "items" and isinstance(value, dict):
+                    if AnthropicConfig._schema_has_unsupported_output_constraints(
+                        value
+                    ):
+                        return True
+                elif key in {"anyOf", "allOf", "oneOf"} and isinstance(value, list):
+                    if any(
+                        AnthropicConfig._schema_has_unsupported_output_constraints(
+                            item
+                        )
+                        for item in value
+                    ):
+                        return True
+                elif isinstance(value, (dict, list)):
+                    if AnthropicConfig._schema_has_unsupported_output_constraints(
+                        value
+                    ):
+                        return True
+        else:
+            for item in schema:
+                if AnthropicConfig._schema_has_unsupported_output_constraints(item):
+                    return True
+
+        return False
+
+    def _resolve_json_schema_defs(self, json_schema: dict) -> dict:
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        resolved_schema = copy.deepcopy(json_schema)
+        defs = resolved_schema.pop("$defs", resolved_schema.pop("definitions", {}))
+        if defs:
+            unpack_defs(resolved_schema, defs)
+        return resolved_schema
+
+    def _response_format_requires_tool_json(
+        self, value: Optional[dict]
+    ) -> bool:
+        json_schema = self._extract_json_schema_from_response_format(value)
+        if json_schema is None:
+            return False
+        resolved_schema = self._resolve_json_schema_defs(json_schema)
+        return self._schema_has_unsupported_output_constraints(resolved_schema)
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Union[Any, Dict, None]
+    ) -> Optional[dict]:
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
@@ -1259,16 +1338,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Resolve $ref/$defs before filtering — Anthropic doesn't support
         # external schema references (e.g., /$defs/CalendarEvent).
-        import copy
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            unpack_defs,
-        )
-
-        json_schema = copy.deepcopy(json_schema)
-        defs = json_schema.pop("$defs", json_schema.pop("definitions", {}))
-        if defs:
-            unpack_defs(json_schema, defs)
+        json_schema = self._resolve_json_schema_defs(json_schema)
 
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)
@@ -1441,7 +1511,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if any(
+                use_native_output_format = any(
                     substring in model
                     for substring in {
                         "sonnet-4.5",
@@ -1459,8 +1529,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet_4.6",
                         "sonnet_4_6",
                     }
+                )
+                if use_native_output_format and self._response_format_requires_tool_json(
+                    value
                 ):
-                    _output_format = self.map_response_format_to_anthropic_output_format(value)
+                    use_native_output_format = False
+                if use_native_output_format:
+                    _output_format = (
+                        self.map_response_format_to_anthropic_output_format(value)
+                    )
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
                 else:

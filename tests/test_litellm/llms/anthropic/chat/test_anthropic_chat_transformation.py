@@ -1040,6 +1040,41 @@ def test_non_structured_output_model_uses_tool_workaround():
     assert "tool_choice" in optional_params
 
 
+def test_structured_output_with_constraints_uses_tool_workaround():
+    """
+    Test that models with native structured outputs fall back to the tool-based
+    workaround when the schema includes unsupported constraints.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "age": {"type": "integer", "minimum": 0},
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="claude-opus-4-6-20250918",
+        drop_params=False,
+    )
+
+    assert "output_format" not in optional_params
+    assert "tools" in optional_params
+    assert "tool_choice" in optional_params
+
+
 # ============ Tool Search Tests ============
 
 
