@@ -369,6 +369,24 @@ def test_apply_log_filters_explicit_path_wins_over_disabled_defaults():
     assert access_logger.filter(_uvicorn_access_record("/health/liveliness"))
 
 
+def test_apply_log_filters_noop_installs_no_filter():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset(), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    managed_filters = [f for f in access_logger.filters if getattr(f, "_litellm_managed", False)]
+    assert managed_filters == []
+
+
+def test_apply_log_filters_noop_removes_stale_filter():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/a"}))
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset(), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    managed_filters = [f for f in access_logger.filters if getattr(f, "_litellm_managed", False)]
+    assert managed_filters == []
+    assert access_logger.filter(_uvicorn_access_record("/a"))
+
+
 @pytest.mark.asyncio
 async def test_cache_hit_includes_custom_llm_provider():
     """

@@ -319,6 +319,51 @@ async def test_json_logs_calls_turn_on_json():
 
 
 @pytest.mark.asyncio
+async def test_log_filters_absent_still_applies_defaults():
+    """
+    Test that load_config calls apply_log_filters exactly once with the
+    default (empty) args when litellm_settings.log_filters isn't set at all,
+    so health-check paths are still suppressed out of the box.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with mock.patch(
+            "litellm.proxy.proxy_server.apply_log_filters"
+        ) as mock_apply_log_filters:
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+
+            mock_apply_log_filters.assert_called_once_with(
+                excluded_uvicorn_access_paths=frozenset(),
+                exclude_health_check_paths=True,
+            )
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
 async def test_log_filters_calls_apply_log_filters():
     """
     Test that litellm_settings.log_filters.excluded_uvicorn_access_paths in the
@@ -357,12 +402,7 @@ async def test_log_filters_calls_apply_log_filters():
                 config_file_path=temp_file_path,
             )
 
-            # load_config always applies the defaults once unconditionally (so a proxy
-            # with no log_filters config still gets health-check suppression out of the
-            # box), then re-applies with the parsed config -- so the config-derived call
-            # is the *last* call, not the only one.
-            assert mock_apply_log_filters.call_count == 2
-            mock_apply_log_filters.assert_called_with(
+            mock_apply_log_filters.assert_called_once_with(
                 excluded_uvicorn_access_paths=frozenset({"/custom/noisy"}),
                 exclude_health_check_paths=True,
             )
@@ -409,8 +449,7 @@ async def test_log_filters_exclude_health_check_paths_false_reaches_apply_log_fi
                 config_file_path=temp_file_path,
             )
 
-            assert mock_apply_log_filters.call_count == 2
-            mock_apply_log_filters.assert_called_with(
+            mock_apply_log_filters.assert_called_once_with(
                 excluded_uvicorn_access_paths=frozenset(),
                 exclude_health_check_paths=False,
             )

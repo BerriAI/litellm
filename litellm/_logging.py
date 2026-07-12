@@ -125,7 +125,8 @@ def apply_log_filters(
 
     default_paths = DEFAULT_EXCLUDED_UVICORN_ACCESS_PATHS if exclude_health_check_paths else frozenset()
     all_excluded_paths = default_paths | excluded_uvicorn_access_paths
-    access_logger.addFilter(UvicornAccessPathFilter(all_excluded_paths))
+    if all_excluded_paths:
+        access_logger.addFilter(UvicornAccessPathFilter(all_excluded_paths))
 
 
 json_logs = bool(os.getenv("JSON_LOGS", False))
