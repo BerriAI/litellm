@@ -907,8 +907,13 @@ class TestRouterComplexityDeploymentMethods:
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
     def test_register_pre_routing_alias_overrides(self):
-        """_register_pre_routing_alias_overrides stores non-routing-config
-        litellm_params and excludes reserved routing-config keys."""
+        """_register_pre_routing_alias_overrides excludes only `model` - every
+        other litellm_param set on the alias, including router-init-only
+        fields like complexity_router_config, is stored so it can be forwarded
+        to whichever deployment a pre-routing hook selects. Those router-init
+        fields never reach a real provider because litellm.completion() itself
+        strips anything in litellm.types.utils.all_litellm_params - see
+        test_router_init_only_params_are_never_sent_to_a_provider."""
         router = Router(
             model_list=[
                 {
@@ -933,16 +938,17 @@ class TestRouterComplexityDeploymentMethods:
         overrides = router.pre_routing_alias_overrides["smart-router"]
         assert overrides["drop_params"] is True
         assert "model" not in overrides
-        assert "complexity_router_config" not in overrides
-        assert "complexity_router_default_model" not in overrides
+        assert overrides["complexity_router_config"] == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+        assert overrides["complexity_router_default_model"] == "gpt-4o-mini"
 
-    def test_register_pre_routing_alias_overrides_excludes_deployment_management_fields(
+    def test_register_pre_routing_alias_overrides_forwards_deployment_management_fields(
         self,
     ):
         """Deployment-management fields (tpm/rpm/weight/tags/max_budget/...) live on
-        the same LiteLLM_Params object as drop_params/cache_control_injection_points
-        but must never be forwarded as request kwargs to the LLM call - only the
-        known request-shaping params are."""
+        the same LiteLLM_Params object as drop_params/cache_control_injection_points.
+        _register_pre_routing_alias_overrides forwards them too - only `model` is
+        excluded here. They're kept out of the real provider request by
+        litellm.completion()'s own all_litellm_params filtering, not by the router."""
         router = Router(
             model_list=[
                 {
@@ -972,10 +978,15 @@ class TestRouterComplexityDeploymentMethods:
         router._register_pre_routing_alias_overrides(deployment=deployment)
 
         overrides = router.pre_routing_alias_overrides["smart-router"]
-        assert overrides == {"drop_params": True}
+        assert overrides["tpm"] == 1000
+        assert overrides["rpm"] == 10
+        assert overrides["weight"] == 2
+        assert overrides["max_budget"] == 100.0
+        assert "model" not in overrides
 
     def test_register_pre_routing_alias_overrides_skips_empty(self):
-        """A deployment with no non-routing-config litellm_params registers nothing."""
+        """A deployment with only `model` set (no other non-default litellm_params)
+        registers nothing - there's nothing left to forward once model is excluded."""
         router = Router(
             model_list=[
                 {
@@ -990,7 +1001,6 @@ class TestRouterComplexityDeploymentMethods:
             model_name="bare-router",
             litellm_params=LiteLLM_Params(
                 model="auto_router/complexity_router",
-                complexity_router_default_model="gpt-4o-mini",
             ),
         )
         router._register_pre_routing_alias_overrides(deployment=deployment)
@@ -1485,9 +1495,14 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
 
     @pytest.mark.asyncio
-    async def test_alias_overrides_do_not_leak_routing_config_keys(self):
-        """Router-strategy config fields consumed at init time (e.g.
-        complexity_router_config) must never be forwarded to the LLM call."""
+    async def test_alias_overrides_exclude_only_model(self):
+        """`model` (the alias marker, e.g. auto_router/complexity_router) is
+        excluded since it's never a real provider model. Router-only fields
+        like complexity_router_config DO flow through into request_kwargs at
+        this layer - they're filtered from the actual outbound LLM call
+        downstream by litellm.types.utils.all_litellm_params instead, not by
+        the router's pre-routing hook. See test_router_init_only_params_are_
+        never_sent_to_a_provider for the guard on that downstream filter."""
         router = self._make_router()
         request_kwargs: Dict = {}
 
@@ -1497,9 +1512,45 @@ class TestRouterPreRoutingAliasOverrides:
             messages=[{"role": "user", "content": "hi"}],
         )
 
-        assert "complexity_router_config" not in request_kwargs
-        assert "complexity_router_default_model" not in request_kwargs
         assert "model" not in request_kwargs
+        assert request_kwargs["complexity_router_config"] == {
+            "tiers": {
+                "SIMPLE": "gpt-4o-mini",
+                "MEDIUM": "gpt-4o",
+            }
+        }
+        assert request_kwargs["complexity_router_default_model"] == "gpt-4o"
+
+    def test_router_init_only_params_are_never_sent_to_a_provider(self):
+        """The router's pre-routing hook only excludes `model` (see
+        test_alias_overrides_exclude_only_model above) - every other alias
+        litellm_param, including router-init-only fields like
+        complexity_router_config, flows into request_kwargs unfiltered. That's
+        only safe because litellm.completion()/acompletion() itself strips
+        anything listed in all_litellm_params before building the provider
+        request. If one of these keys is ever removed from that list, it
+        ships raw to the real provider as extra_body - verified live via
+        litellm.completion(..., complexity_router_config={...}) landing in
+        extra_body before this list included it."""
+        from litellm.types.utils import all_litellm_params
+
+        router_init_only_params = (
+            "auto_router_config_path",
+            "auto_router_config",
+            "auto_router_default_model",
+            "auto_router_embedding_model",
+            "complexity_router_config",
+            "complexity_router_default_model",
+            "adaptive_router_config",
+            "adaptive_router_default_model",
+            "quality_router_config",
+            "quality_router_default_model",
+        )
+        for param in router_init_only_params:
+            assert param in all_litellm_params, (
+                f"{param} must stay in litellm.types.utils.all_litellm_params - "
+                "removing it means it ships raw to the real provider as extra_body"
+            )
 
     @pytest.mark.asyncio
     async def test_caller_supplied_kwargs_are_not_overwritten(self):
@@ -1552,12 +1603,12 @@ class TestRouterPreRoutingAliasOverrides:
             },
         ]
         router = Router(model_list=model_list)
-        assert router.pre_routing_alias_overrides["smart-router"] == {"drop_params": True}
+        assert router.pre_routing_alias_overrides["smart-router"]["drop_params"] is True
 
         router.set_model_list(model_list)
 
         assert "smart-router" in router.adaptive_routers
-        assert router.pre_routing_alias_overrides["smart-router"] == {"drop_params": True}
+        assert router.pre_routing_alias_overrides["smart-router"]["drop_params"] is True
 
 
 class TestAdaptiveSoftFloors:
