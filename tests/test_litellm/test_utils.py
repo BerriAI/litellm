@@ -3932,6 +3932,108 @@ class TestGetOptionalParamsDeepSeek:
         assert result.get("thinking") == {"type": "enabled"}
 
 
+class TestPassthroughUnknownOpenaiParams:
+    """Tests for litellm.passthrough_unknown_openai_params.
+
+    Replicate intentionally doesn't advertise `logprobs` in its supported
+    params, making it a reliable regression target: the param is listed in
+    DEFAULT_CHAT_COMPLETION_PARAM_VALUES so it reaches `_check_valid_arg`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_globals(self):
+        passthrough_old = litellm.passthrough_unknown_openai_params
+        drop_old = litellm.drop_params
+        yield
+        litellm.passthrough_unknown_openai_params = passthrough_old
+        litellm.drop_params = drop_old
+
+    def test_default_rejects_provider_unsupported_param(self):
+        from litellm.exceptions import UnsupportedParamsError
+        from litellm.utils import get_optional_params
+
+        litellm.passthrough_unknown_openai_params = False
+
+        with pytest.raises(UnsupportedParamsError):
+            get_optional_params(
+                model="meta/llama",
+                custom_llm_provider="replicate",
+                logprobs=True,
+            )
+
+    def test_passthrough_does_not_raise(self):
+        from litellm.utils import get_optional_params
+
+        litellm.passthrough_unknown_openai_params = True
+
+        result = get_optional_params(
+            model="meta/llama",
+            custom_llm_provider="replicate",
+            logprobs=True,
+        )
+        assert isinstance(result, dict)
+
+    def _capture_non_default_params(self, monkeypatch):
+        """Monkeypatch ReplicateConfig.map_openai_params to capture non_default_params.
+
+        Returns a dict that will be populated with the non_default_params
+        the Provider receives. The stub does not call the real implementation
+        so this remains a unit test of the Proxy → Provider handoff, not
+        an integration test of Replicate's request transformation.
+        """
+        import litellm.llms.replicate.chat.transformation as replicate_mod
+
+        captured = {}
+
+        def _capturing_map(self, non_default_params, optional_params, **kw):
+            captured.update(non_default_params)
+            return optional_params
+
+        monkeypatch.setattr(
+            replicate_mod.ReplicateConfig,
+            "map_openai_params",
+            _capturing_map,
+            raising=True,
+        )
+
+        return captured
+
+    def test_provider_receives_unsupported_param_in_non_default_params(self, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        litellm.passthrough_unknown_openai_params = True
+
+        captured = self._capture_non_default_params(monkeypatch)
+
+        get_optional_params(
+            model="meta/llama",
+            custom_llm_provider="replicate",
+            logprobs=True,
+        )
+
+        assert "logprobs" in captured
+        assert captured["logprobs"] is True
+
+    def test_passthrough_takes_priority_over_drop_params(self, monkeypatch):
+        """passthrough must take priority over drop_params to preserve
+        unknown params for the provider rather than silently dropping them."""
+        from litellm.utils import get_optional_params
+
+        litellm.drop_params = True
+        litellm.passthrough_unknown_openai_params = True
+
+        captured = self._capture_non_default_params(monkeypatch)
+
+        get_optional_params(
+            model="meta/llama",
+            custom_llm_provider="replicate",
+            logprobs=True,
+        )
+
+        assert "logprobs" in captured
+        assert captured["logprobs"] is True
+
+
 class TestIsStreamingRequest:
     def test_stream_true_in_kwargs(self):
         assert (

@@ -225,6 +225,7 @@ token: Optional[str] = (
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
+passthrough_unknown_openai_params = os.getenv("LITELLM_PASSTHROUGH_UNKNOWN_OPENAI_PARAMS", "").lower() in ("1", "true", "yes")
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
