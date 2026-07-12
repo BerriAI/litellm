@@ -163,6 +163,17 @@ def get_llm_provider(
                 api_key = litellm_params.api_key
 
         dynamic_api_key = None
+
+        # openai/chat_completions/<name> is an opt-in alias for the OpenAI chat completions
+        # API (mirrors the responses-path handling of the same prefix). Normalize it to
+        # openai/<name> so the bare model id reaches the provider; without this the literal
+        # "chat_completions/<name>" is forwarded and OpenAI rejects it. See #32489.
+        _openai_cc_prefix = "openai/chat_completions/"
+        if model.startswith(_openai_cc_prefix):
+            remainder = model[len(_openai_cc_prefix) :]
+            if remainder:
+                model = f"openai/{remainder}"
+
         # check if llm provider provided
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
