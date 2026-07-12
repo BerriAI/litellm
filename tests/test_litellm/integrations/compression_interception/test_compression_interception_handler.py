@@ -32,6 +32,40 @@ def test_initialize_from_proxy_config():
     assert logger.compression_target == 789
 
 
+def test_initialize_from_proxy_config_ignores_non_dict_callback_specific_params():
+    """Regression (#29590): a non-dict value under
+    callback_settings.compression_interception must not crash initialization.
+
+    Forwarding callback_settings as callback_specific_params activates this
+    branch; without the isinstance(dict) guard a non-dict value reached
+    from_config_yaml(...).get(...) and raised AttributeError at proxy startup.
+    The value is ignored and the logger falls back to defaults.
+    """
+    logger = CompressionInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={"compression_interception": True},
+    )
+
+    assert logger.enabled is True
+    assert logger.compression_trigger == 200_000
+
+
+def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
+    """A valid dict under callback_settings.compression_interception is applied."""
+    logger = CompressionInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={
+            "compression_interception": {
+                "enabled": False,
+                "compression_trigger": 12345,
+            }
+        },
+    )
+
+    assert logger.enabled is False
+    assert logger.compression_trigger == 12345
+
+
 @pytest.mark.asyncio
 async def test_pre_call_hook_compresses_messages_and_injects_tool(monkeypatch):
     """Test pre-call hook compresses and stores per-call cache."""

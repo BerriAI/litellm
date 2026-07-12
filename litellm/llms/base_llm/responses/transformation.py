@@ -62,6 +62,26 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """Sign the request after the body is finalized.
+
+        Default is a no-op (returns headers unchanged, no signed body). Providers
+        whose endpoint requires request signing (e.g. Bedrock Mantle SigV4)
+        override this and return the signed body bytes so the handler sends those
+        exact bytes.
+        """
+        return headers, None
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
@@ -76,9 +96,7 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         return {}
 
     @abstractmethod
@@ -238,6 +256,29 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def get_websocket_url(
+        self,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> str:
+        """
+        Return the wss:// URL for the provider's native Responses WebSocket endpoint.
+
+        Defaults to converting the HTTP URL from get_complete_url. Providers whose
+        WebSocket path differs from their HTTP path (e.g. Azure uses
+        /openai/v1/responses without api-version) should override this.
+        """
+        http_url = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        return http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+    def model_in_websocket_url(self) -> bool:
+        """
+        Return True if the model should be appended as a ?model= query param to
+        the WebSocket URL. Providers that identify the model via the request body
+        (e.g. Azure Responses API) should override this to return False.
+        """
+        return True
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
@@ -314,7 +355,5 @@ class BaseResponsesAPIConfig(ABC):
             return data
         return {
             **data,
-            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
-                data["input"]
-            ),
+            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(data["input"]),
         }

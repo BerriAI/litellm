@@ -100,7 +100,18 @@ database:
       usernameKey: username
       passwordKey: password
 
-# Optional Redis (caching, rate limiting). Leave host empty to disable.
+# Optional Redis. Leave host empty to disable.
+#
+# This is the proxy's coordination store: cross-pod tpm/rpm rate limits, spend
+# tracking, and the pod lock manager. The chart emits REDIS_HOST / REDIS_PORT /
+# REDIS_PASSWORD, which the proxy picks up through its coordination Redis env
+# fallback. Response caching is separate and off unless you enable it in
+# `proxy_config.litellm_settings.cache`.
+#
+# For full control, define `general_settings.coordination_redis` in
+# `proxy_config` (host/port/password/username/url/ssl/startup_nodes/
+# sentinel_nodes/sentinel_password/service_name, each accepting os.environ/VAR
+# refs). An explicit block overrides these env vars.
 #
 # Set `cluster: true` for Redis Cluster mode (e.g. AWS ElastiCache Cluster,
 # self-hosted Redis Cluster). The chart emits REDIS_CLUSTER_NODES from
@@ -124,6 +135,11 @@ gateway:
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
   envSecrets: [] # Add extra environment variables to the gateway from secrets
+  # Additional volumes on the gateway Deployment (e.g. a ConfigMap holding
+  # custom callback / SSO handler code, mounted next to the proxy config).
+  volumes: []
+  # Additional volumeMounts on the gateway container.
+  volumeMounts: []
   config:
     create: true
     proxy_config: {}
@@ -167,6 +183,10 @@ backend:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  # Additional volumes on the backend Deployment.
+  volumes: []
+  # Additional volumeMounts on the backend container.
+  volumeMounts: []
   image:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
@@ -206,6 +226,10 @@ ui:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  # Additional volumes on the ui Deployment.
+  volumes: []
+  # Additional volumeMounts on the ui container.
+  volumeMounts: []
   image:
     repository: ghcr.io/berriai/litellm-ui
     tag: ""

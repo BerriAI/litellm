@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 
 export interface MCPServerData {
   server_id: string;
@@ -79,30 +80,6 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "URL",
-      accessorKey: "url",
-      enableSorting: true,
-      sortingFn: "alphanumeric",
-      cell: ({ row }) => {
-        const server = row.original;
-
-        return (
-          <div className="flex items-center space-x-2">
-            <Text className="text-xs truncate max-w-xs">{server.url}</Text>
-            <Tooltip title="Copy URL">
-              <CopyOutlined
-                onClick={() => copyToClipboard(server.url)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs flex-shrink-0"
-              />
-            </Tooltip>
-          </div>
-        );
-      },
-      meta: {
-        className: "hidden lg:table-cell",
-      },
-    },
-    {
       header: "Transport",
       accessorKey: "transport",
       enableSorting: true,
@@ -148,21 +125,17 @@ export const mcpHubColumns = (
       cell: ({ row }) => {
         const server = row.original;
 
-        const statusColors: Record<string, string> = {
-          active: "green",
-          inactive: "red",
-          unknown: "gray",
-          healthy: "green",
-          unhealthy: "red",
+        const statusTones: Record<string, StatusTone> = {
+          active: "success",
+          inactive: "error",
+          unknown: "neutral",
+          healthy: "success",
+          unhealthy: "error",
         };
 
-        const color = statusColors[server.status] || "gray";
+        const tone = statusTones[server.status] || "neutral";
 
-        return (
-          <Badge color={color} size="sm">
-            {server.status || "unknown"}
-          </Badge>
-        );
+        return <StatusBadge tone={tone} label={server.status || "unknown"} />;
       },
     },
     {

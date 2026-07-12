@@ -34,9 +34,15 @@ class _FakeLoggingObj:
         self.last_success_kwargs = None
         self.last_async_success_kwargs = None
         self.start_time = datetime.now()
+        self.completion_start_time = None
         self.model_call_details = {"litellm_params": {}}
 
     # Signature alignment with Logging handlers
+    async def dispatch_success_handlers(self, *args, **kwargs):
+        kwargs.pop("prefer_async_handlers", None)
+        await self.async_success_handler(*args, **kwargs)
+        self.success_handler(*args, **kwargs)
+
     def success_handler(self, *args, **kwargs):
         self.success_calls += 1
         self.last_success_kwargs = kwargs
@@ -50,6 +56,10 @@ class _FakeLoggingObj:
 
     async def async_failure_handler(self, *args, **kwargs):
         self.async_failure_calls += 1
+
+    def _update_completion_start_time(self, completion_start_time):
+        self.completion_start_time = completion_start_time
+        self.model_call_details["completion_start_time"] = completion_start_time
 
 
 def _make_completed_response(response_id: str = "resp_test") -> ResponseCompletedEvent:

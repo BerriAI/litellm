@@ -483,7 +483,7 @@ async def new_project(
     response_model=LiteLLM_ProjectTable,
 )
 @management_endpoint_wrapper
-async def update_project(  # noqa: PLR0915
+async def update_project(
     data: UpdateProjectRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

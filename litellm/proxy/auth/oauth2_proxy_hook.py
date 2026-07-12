@@ -64,17 +64,13 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
         feature_name="OAuth2 proxy auth",
     )
 
-    oauth2_config_mappings: Dict[str, str] = (
-        general_settings.get("oauth2_config_mappings") or {}
-    )
+    oauth2_config_mappings: Dict[str, str] = general_settings.get("oauth2_config_mappings") or {}
     verbose_proxy_logger.debug(f"Oauth2 config mappings: {oauth2_config_mappings}")
 
     if not oauth2_config_mappings:
         raise ValueError("Oauth2 config mappings not found in general_settings")
 
-    disallowed = sorted(
-        set(oauth2_config_mappings.keys()) - ALLOWED_OAUTH2_PROXY_FIELDS
-    )
+    disallowed = sorted(set(oauth2_config_mappings.keys()) - ALLOWED_OAUTH2_PROXY_FIELDS)
     if disallowed:
         raise ValueError(
             "Oauth2 proxy auth refuses to map non-identity UserAPIKeyAuth "

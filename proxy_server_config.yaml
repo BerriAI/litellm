@@ -24,6 +24,7 @@ model_list:
     litellm_params:
       model: openai/gpt-4.1
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to OpenAI
       rpm: 480
       timeout: 300
       stream_timeout: 60
@@ -35,6 +36,7 @@ model_list:
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to OpenAI
     model_info:
       mode: embedding
       base_model: text-embedding-3-small
@@ -44,43 +46,57 @@ model_list:
   - model_name: openai-dall-e-3 # dall-e-3 deprecated 2026-05-12; underlying now gpt-image-1
     litellm_params:
       model: gpt-image-1
+  # In CI, RECORDER_OPENAI_BASE_URL points OpenAI models at the record/replay
+  # proxy (tests/_openai_record_replay_proxy.py) so the spend/cost E2Es don't
+  # depend on OpenAI's uptime every commit. Unset elsewhere, so it resolves to
+  # None and falls back to api.openai.com.
+  - model_name: gpt-image-1
+    litellm_params:
+      model: openai/gpt-image-1
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL
+  - model_name: text-moderation-stable
+    litellm_params:
+      model: openai/omni-moderation-latest
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL
   - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/gpt-5-mini
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
   - model_name: fake-openai-endpoint-2
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1000
   - model_name: fake-openai-endpoint-4
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       num_retries: 50
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1000
   - model_name: bad-model
     litellm_params:
       model: openai/bad-model
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       mock_timeout: True
       timeout: 60
       rpm: 1000
@@ -90,7 +106,7 @@ model_list:
     litellm_params:
       model: openai/bad-model
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       rpm: 1000
     model_info:
       health_check_timeout: 1
@@ -132,7 +148,7 @@ model_list:
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       timeout: 1
   - model_name: badly-configured-openai-endpoint
     litellm_params:
@@ -173,7 +189,7 @@ litellm_settings:
       langfuse_host: https://us.cloud.langfuse.com
   # cache: true   # [OPTIONAL] use for caching responses 
   # enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
-  # cache_params:  # And for shared health check
+  # cache_params:
   #   type: redis
   #   host: localhost
   #   port: 6379
@@ -212,8 +228,12 @@ general_settings:
   proxy_batch_write_at: 1
   database_connection_pool_limit: 10
   # background_health_checks: true
-  # use_shared_health_check: true
+  # use_shared_health_check: true  # needs a coordination Redis (below)
   # health_check_interval: 30
+  # coordination_redis:  # standalone Redis for cross-pod coordination: rate limits, spend tracking, pod locks, shared health checks
+  #   host: localhost
+  #   port: 6379
+  # cancel_on_disconnect: true # cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot)
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
   pass_through_endpoints:

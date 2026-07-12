@@ -611,6 +611,65 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
+def test_parallel_tool_calls_config_kept_for_sonnet_5():
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert data["additionalModelRequestFields"]["tool_choice"] == {
+            "disable_parallel_tool_use": True
+        }
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = "anthropic.claude-fable-5"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"cache_creation_input_token_cost_above_1hr": 2e-05},
+    )
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model=model,
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+
+    data = config._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+
+
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
     import httpx
@@ -1467,11 +1526,10 @@ def test_transform_request_with_function_tool():
     )
 
     # Verify the structure
-    assert "additionalModelRequestFields" in request_data
-    additional_fields = request_data["additionalModelRequestFields"]
+    # Function tools are not computer use tools, so they don't get anthropic_beta —
+    # additionalModelRequestFields should be absent (not serialized as empty {})
+    assert "additionalModelRequestFields" not in request_data
 
-    # Function tools are not computer use tools, so they don't get anthropic_beta
-    # They are processed through the regular tool config
     assert "toolConfig" in request_data
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
@@ -4131,6 +4189,42 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
+def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
+    """
+    The disable_parallel_tool_use gate must read supports_parallel_tool_use_config,
+    not the 1h-TTL pricing field: a model carrying only the former still gets the flag.
+    """
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-parallel-tool-use-only"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
+    assert is_claude_4_5_on_bedrock(model) is False
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert (
+        request_data["additionalModelRequestFields"]["tool_choice"][
+            "disable_parallel_tool_use"
+        ]
+        is True
+    )
+
+
 def test_parallel_tool_calls_older_model_drops_disable_flag():
     """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
     config = AmazonConverseConfig()
@@ -4553,6 +4647,154 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     tools = result["toolConfig"]["tools"]
     # No cachePoint should be appended
     assert all("cachePoint" not in tool for tool in tools)
+
+
+def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
+    """
+    Regression test: cache_control_injection_points with location=tool_config
+    must honor the requested `control.ttl`, mirroring the message/system
+    cache_control behavior, instead of always emitting a bare
+    {"type": "default"} cachePoint with no ttl.
+
+    Forces the bundled local cost map so `is_claude_4_5_on_bedrock` (which
+    reads `cache_creation_input_token_cost_above_1hr` from litellm.model_cost)
+    sees this branch's pricing data rather than the network-fetched `main`
+    copy, which lacks it until merge.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing():
+    """
+    Regression test: a regional pricing entry that omits
+    `cache_creation_input_token_cost_above_1hr` (e.g. `jp.anthropic.claude-opus-4-7`)
+    must not shadow the base model entry that carries it; the requested ttl
+    survives through the base-model fallback.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
+        assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="jp.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
+    """
+    Models that don't support extended TTL caching (only Claude 4.5+ on
+    Bedrock does) must fall back to the default cachePoint with no ttl,
+    even if the caller requested one, matching message/system behavior.
+    """
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    assert tools[-1] == {"cachePoint": {"type": "default"}}
 
 
 def test_translate_response_format_json_schema_still_injects_tool():
@@ -5268,3 +5510,330 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_converse_drops_sampling_params_for_models_that_removed_them():
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p; with
+    drop_params set, converse must drop them instead of forwarding (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-fable-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "topP" not in result
+
+
+def test_converse_sampling_params_raise_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="global.anthropic.claude-opus-4-8-v1:0",
+            drop_params=False,
+        )
+
+
+def test_converse_sampling_params_forwarded_on_models_that_accept_them():
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-6",
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["topP"] == 0.9
+
+
+def test_converse_top_k_dropped_for_models_that_removed_it():
+    """``top_k`` reaches converse as a provider-specific kwarg destined for
+    ``additionalModelRequestFields``, bypassing ``map_openai_params``; the
+    transform must strip it for models that removed sampling params (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result.get("additionalModelRequestFields", {})
+
+
+def test_converse_top_k_raises_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 40
+
+
+def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
+    """``top_k=0`` must hit the same gating as any other value; previously the
+    truthiness check let it silently disappear on models that removed sampling
+    params, diverging from the Anthropic boundary that treats ``0`` as present."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 0},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 0},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grounding_source_and_query_rendered_as_text():
+    """grounding_source / query content blocks must render as plain text on the
+    generate path (the model needs to see the RAG context + question). The bedrock
+    converse dispatch silently drops unrecognised content types, so these would
+    otherwise vanish from the prompt."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "grounding_source", "text": "Tokyo is the capital of Japan."},
+                {"type": "query", "text": "What is the capital of Japan?"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+
+    assert result == async_result
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    user_content = result[0]["content"]
+    assert {"text": "Tokyo is the capital of Japan."} in user_content
+    assert {"text": "What is the capital of Japan?"} in user_content
+
+
+def _agentic_messages_with_ttl(ttl_target: str):
+    """A tool-loop conversation with `ttl: 1h` cache_control at `ttl_target`:
+    'user', 'tool_call' (per-tool-call, on the assistant's tool call), or
+    'tool' (message-level, on the tool result - where
+    `cache_control_injection_points` with `index: -1` lands mid-loop).
+
+    Message-level cache_control on a content-less assistant message emits no
+    cachePoint at all today (a separate gap, orthogonal to ttl); per-tool-call
+    placement covers that message, so it's excluded from the params below."""
+    user: dict = {"role": "user", "content": "optimize this kernel " * 60}
+    assistant: dict = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "evaluate", "arguments": "{}"},
+            }
+        ],
+    }
+    tool: dict = {"role": "tool", "tool_call_id": "call_1", "content": "score: 42"}
+    ttl_cc = {"type": "ephemeral", "ttl": "1h"}
+    if ttl_target == "user":
+        user["cache_control"] = ttl_cc
+    elif ttl_target == "tool_call":
+        assistant["tool_calls"][0]["cache_control"] = ttl_cc
+    elif ttl_target == "tool":
+        tool["cache_control"] = ttl_cc
+    return [user, assistant, tool]
+
+
+def _collect_cache_points(result):
+    return [
+        block["cachePoint"]
+        for message in result
+        for block in message.get("content") or []
+        if "cachePoint" in block
+    ]
+
+
+@pytest.mark.parametrize("ttl_target", ["user", "tool_call", "tool"])
+@pytest.mark.asyncio
+async def test_message_level_cache_control_honors_ttl_for_supported_model(
+    ttl_target,
+):
+    """Message- and tool-call-level cache_control must carry `ttl` onto the
+    emitted cachePoint for models that support extended caching, mirroring the
+    system-message path. Regression test for the gap left by the system-only
+    fix: the message paths called `_get_cache_point_block` without `model` (or
+    hardcoded `{"type": "default"}`), silently downgrading 1h to 5m."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = _agentic_messages_with_ttl(ttl_target)
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="global.anthropic.claude-opus-4-7",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="global.anthropic.claude-opus-4-7",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    cache_points = _collect_cache_points(result)
+    assert len(cache_points) == 1
+    assert cache_points[0].get("ttl") == "1h"
+
+
+@pytest.mark.parametrize("ttl_target", ["user", "tool_call", "tool"])
+def test_message_level_cache_control_drops_ttl_for_unsupported_model(ttl_target):
+    """Models outside the extended-caching allow-list must keep emitting the
+    plain `{"type": "default"}` cachePoint (Bedrock rejects `ttl` for them)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    result = _bedrock_converse_messages_pt(
+        messages=_agentic_messages_with_ttl(ttl_target),
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    cache_points = _collect_cache_points(result)
+    assert len(cache_points) == 1
+    assert "ttl" not in cache_points[0]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-haiku-4-5",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-5",
+    ],
+)
+def test_adaptive_thinking_translated_to_legacy_on_pre_46_converse(model):
+    """Raw thinking={type: adaptive} from callers like Claude Code must be
+    translated to legacy thinking={type: enabled, budget_tokens} for pre-4.6
+    models on Bedrock Converse rather than forwarded as-is and rejected."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    thinking = optional_params.get("thinking")
+    assert thinking is not None
+    assert thinking["type"] == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert thinking["budget_tokens"] < 8192
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
+    """thinking={type: adaptive} must be forwarded unchanged for 4.6+ models
+    that natively support adaptive thinking."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "adaptive"}
+
+
+def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
+    """When max_tokens can't fit even the minimum thinking budget, the raw
+    adaptive block must be dropped entirely rather than translated, so the
+    Bedrock Converse request still succeeds."""
+    from litellm.constants import ANTHROPIC_MIN_THINKING_BUDGET_TOKENS
+
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5",
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params

@@ -30,12 +30,8 @@ class FirecrawlSearchRequest(_FirecrawlSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return (default 5, max 100)
-    sources: List[
-        str
-    ]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
-    categories: List[
-        Dict[str, str]
-    ]  # Optional - categories to filter by (github, research, pdf)
+    sources: List[str]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
+    categories: List[Dict[str, str]]  # Optional - categories to filter by (github, research, pdf)
     tbs: str  # Optional - time-based search parameter
     location: str  # Optional - location parameter for geo-targeting
     country: str  # Optional - ISO country code (default 'US')
@@ -61,11 +57,15 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("FIRECRAWL_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("FIRECRAWL_API_KEY",),
+            base_env_var="FIRECRAWL_API_BASE",
+            default_api_base=self.FIRECRAWL_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "FIRECRAWL_API_KEY is not set. Set `FIRECRAWL_API_KEY` environment variable."
-            )
+            raise ValueError("FIRECRAWL_API_KEY is not set. Set `FIRECRAWL_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -80,9 +80,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base or get_secret_str("FIRECRAWL_API_BASE") or self.FIRECRAWL_API_BASE
-        )
+        api_base = api_base or get_secret_str("FIRECRAWL_API_BASE") or self.FIRECRAWL_API_BASE
 
         # Append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):
@@ -135,10 +133,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # By default, request markdown content if not explicitly specified

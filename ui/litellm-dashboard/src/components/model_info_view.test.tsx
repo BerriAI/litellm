@@ -633,6 +633,51 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("output_cost_per_token");
   });
 
+  it("never re-sends a masked secret on save (regression: masked auth value must not overwrite the real secret)", async () => {
+    // /model/info redacts secrets by masking (e.g. "azur****BBCC"), not removing them.
+    // A plain save re-PATCHes the whole litellm_params blob; if the masked value were
+    // sent, the backend would encrypt the asterisks over the real azure_ad_token and
+    // silently destroy the credential. The edit form must strip masked values entirely.
+    const maskedSecret = "azur********************************************BBCC";
+    const maskedModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "azure/gpt-4o",
+        api_base: "https://example-az.openai.azure.com",
+        custom_llm_provider: "azure",
+        azure_ad_token: maskedSecret,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [maskedModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [maskedModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.azure_ad_token).not.toBe(maskedSecret);
+    // No masked value may appear anywhere in the outbound params.
+    expect(JSON.stringify(updatePayload.litellm_params)).not.toContain("**");
+  });
+
   it("should display health check model field for wildcard models", async () => {
     const wildcardModelData = {
       ...defaultModelData,

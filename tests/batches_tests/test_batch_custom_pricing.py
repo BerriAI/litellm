@@ -159,12 +159,12 @@ def test_batch_cost_calculator_applies_data_residency_uplift(
 
         base_prompt, base_completion = batch_cost_calculator(
             usage=usage,
-            model="gpt-5",
+            model="gpt-5.4",
             custom_llm_provider="openai",
         )
         regional_prompt, regional_completion = batch_cost_calculator(
             usage=usage,
-            model="gpt-5",
+            model="gpt-5.4",
             custom_llm_provider="openai",
             data_residency=data_residency,
         )

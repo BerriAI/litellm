@@ -56,69 +56,56 @@ async def test_global_redaction_on():
     )
 
 
-@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+@pytest.mark.parametrize(
+    "dynamic_turn_off, expect_redacted",
+    [(True, True), (False, False)],
+)
 @pytest.mark.asyncio
-async def test_global_redaction_ignores_dynamic_param(turn_off_message_logging):
-    """
-    Request-body `turn_off_message_logging` is no longer honored as a dynamic
-    callback param — global setting (or admin-configured key/team config) wins.
-    With global redaction ON, the caller cannot disable redaction via the
-    request body.
-    """
+async def test_dynamic_turn_off_message_logging_overrides_global_on(dynamic_turn_off, expect_redacted):
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    await litellm.acompletion(
         model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
-        turn_off_message_logging=turn_off_message_logging,
+        turn_off_message_logging=dynamic_turn_off,
         mock_response="hello",
     )
 
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    print(
-        "logged standard logging payload",
-        json.dumps(standard_logging_payload, indent=2),
-    )
 
-    response = standard_logging_payload["response"]
-    assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    expected_response_content = "redacted-by-litellm" if expect_redacted else "hello"
+    expected_message_content = "redacted-by-litellm" if expect_redacted else "hi"
+    assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
+    assert standard_logging_payload["messages"][0]["content"] == expected_message_content
 
 
-@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+@pytest.mark.parametrize(
+    "dynamic_turn_off, expect_redacted",
+    [(True, True), (False, False)],
+)
 @pytest.mark.asyncio
-async def test_global_redaction_off_ignores_dynamic_param(turn_off_message_logging):
-    """
-    Request-body `turn_off_message_logging` is no longer honored as a dynamic
-    callback param — global setting (or admin-configured key/team config) wins.
-    With global redaction OFF, the caller cannot enable redaction via the
-    request body.
-    """
+async def test_dynamic_turn_off_message_logging_overrides_global_off(dynamic_turn_off, expect_redacted):
     litellm.turn_off_message_logging = False
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    await litellm.acompletion(
         model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
-        turn_off_message_logging=turn_off_message_logging,
+        turn_off_message_logging=dynamic_turn_off,
         mock_response="hello",
     )
 
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    print(
-        "logged standard logging payload",
-        json.dumps(standard_logging_payload, indent=2),
-    )
-    assert (
-        standard_logging_payload["response"]["choices"][0]["message"]["content"]
-        == "hello"
-    )
-    assert standard_logging_payload["messages"][0]["content"] == "hi"
+
+    expected_response_content = "redacted-by-litellm" if expect_redacted else "hello"
+    expected_message_content = "redacted-by-litellm" if expect_redacted else "hi"
+    assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
+    assert standard_logging_payload["messages"][0]["content"] == expected_message_content
 
 
 @pytest.mark.asyncio

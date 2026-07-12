@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import traceback
+import uuid
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
@@ -16,6 +17,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,7 +27,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -44,6 +46,44 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
     exception = task.exception()
     if exception is not None:
         verbose_logger.error("%s failed: %s", task_name, exception)
+
+
+_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
+    (
+        "invalid_request_error",
+        "context_length_exceeded",
+        "content_policy_violation",
+        "model_not_found",
+    )
+)
+
+
+def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional[str]]:
+    if isinstance(error_obj, dict):
+        raw_message = error_obj.get("message")
+        raw_type = error_obj.get("type")
+        raw_code = error_obj.get("code")
+    elif error_obj is not None:
+        raw_message = getattr(error_obj, "message", None)
+        raw_type = getattr(error_obj, "type", None)
+        raw_code = getattr(error_obj, "code", None)
+    else:
+        raw_message = None
+        raw_type = None
+        raw_code = None
+    message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    error_type = raw_type if isinstance(raw_type, str) else None
+    code = raw_code if isinstance(raw_code, str) else None
+    return message, error_type, code
+
+
+def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
+    fields = tuple(field for field in (error_type, error_code) if field is not None)
+    if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
+        return 429
+    if any(field in _CLIENT_ERROR_CODES for field in fields):
+        return 400
+    return 500
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -72,6 +112,8 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[Any] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
+        self._yielded_first_chunk = False
+        self._generated_content = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: Optional[bool] = None
@@ -88,13 +130,9 @@ class BaseResponsesAPIStreamingIterator:
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
         _api_base = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get(
-                "litellm_params", {}
-            ),
+            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: Dict = (
-            litellm_metadata.get("model_info", {}) if litellm_metadata else {}
-        )
+        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -131,6 +169,9 @@ class BaseResponsesAPIStreamingIterator:
             self.finished = True
             return None
 
+        if self.logging_obj.completion_start_time is None:
+            self.logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
         try:
             # Parse the JSON chunk
             parsed_chunk = json.loads(chunk)
@@ -138,24 +179,18 @@ class BaseResponsesAPIStreamingIterator:
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
                 if self.responses_api_provider_config is None:
-                    raise ValueError(
-                        "responses_api_provider_config is required to process live streaming chunks"
-                    )
-                openai_responses_api_chunk = (
-                    self.responses_api_provider_config.transform_streaming_response(
-                        model=self.model,
-                        parsed_chunk=parsed_chunk,
-                        logging_obj=self.logging_obj,
-                    )
+                    raise ValueError("responses_api_provider_config is required to process live streaming chunks")
+                openai_responses_api_chunk = self.responses_api_provider_config.transform_streaming_response(
+                    model=self.model,
+                    parsed_chunk=parsed_chunk,
+                    logging_obj=self.logging_obj,
                 )
 
                 # Only when the SSE JSON carries a response body (delta events do not).
                 # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
                 # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
                 if "response" in parsed_chunk:
-                    response_object = getattr(
-                        openai_responses_api_chunk, "response", None
-                    )
+                    response_object = getattr(openai_responses_api_chunk, "response", None)
                     if response_object is not None:
                         response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                             responses_api_response=response_object,
@@ -166,10 +201,12 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Encode container_id on streaming events so proxy/UI follow-ups route correctly
                 _event_type = getattr(openai_responses_api_chunk, "type", None)
+                if _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                    _delta = getattr(openai_responses_api_chunk, "delta", None)
+                    if isinstance(_delta, str):
+                        self._generated_content += _delta
                 _stream_model_id = (
-                    self.litellm_metadata.get("model_info", {}).get("id")
-                    if self.litellm_metadata
-                    else None
+                    self.litellm_metadata.get("model_info", {}).get("id") if self.litellm_metadata else None
                 )
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -182,12 +219,8 @@ class BaseResponsesAPIStreamingIterator:
                             custom_llm_provider=self.custom_llm_provider,
                             model_id=_stream_model_id,
                         )
-                elif (
-                    _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED
-                ):
-                    _annotation = getattr(
-                        openai_responses_api_chunk, "annotation", None
-                    )
+                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+                    _annotation = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_annotation,
@@ -211,9 +244,7 @@ class BaseResponsesAPIStreamingIterator:
                             )
 
                 # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
-                if self.litellm_metadata and self.litellm_metadata.get(
-                    "encrypted_content_affinity_enabled"
-                ):
+                if self.litellm_metadata and self.litellm_metadata.get("encrypted_content_affinity_enabled"):
                     openai_types = _get_openai_response_types()
                     event_type = getattr(openai_responses_api_chunk, "type", None)
                     if event_type in (
@@ -225,9 +256,7 @@ class BaseResponsesAPIStreamingIterator:
                             encrypted_content = getattr(item, "encrypted_content", None)
                             if encrypted_content and isinstance(encrypted_content, str):
                                 model_id = (
-                                    self.litellm_metadata.get("model_info", {}).get(
-                                        "id"
-                                    )
+                                    self.litellm_metadata.get("model_info", {}).get("id")
                                     if self.litellm_metadata
                                     else None
                                 )
@@ -247,23 +276,14 @@ class BaseResponsesAPIStreamingIterator:
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
-                    if (
-                        litellm.include_cost_in_streaming_usage
-                        and self.logging_obj is not None
-                    ):
-                        response_obj: Optional[Any] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
+                    if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
+                        response_obj: Optional[Any] = getattr(openai_responses_api_chunk, "response", None)
                         if response_obj:
-                            usage_obj: Optional[Any] = getattr(
-                                response_obj, "usage", None
-                            )
+                            usage_obj: Optional[Any] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[float] = (
-                                        self.logging_obj._response_cost_calculator(
-                                            result=response_obj
-                                        )
+                                    cost: Optional[float] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
@@ -271,10 +291,7 @@ class BaseResponsesAPIStreamingIterator:
                                     # Best-effort usage cost annotation should not break stream replay.
                                     pass
 
-                    if (
-                        _chunk_type
-                        == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED
-                    ):
+                    if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
                     else:
                         self._handle_logging_completed_response()
@@ -305,13 +322,9 @@ class BaseResponsesAPIStreamingIterator:
         # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
         # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
         logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(
-            self.completed_response, "model_dump"
-        ):
+        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
             try:
-                logging_response = type(self.completed_response).model_validate(
-                    self.completed_response.model_dump()
-                )
+                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
             except Exception:
                 # Fallback to original if serialization fails
                 pass
@@ -319,11 +332,12 @@ class BaseResponsesAPIStreamingIterator:
         end_time = datetime.now()
         if is_async:
             asyncio.create_task(
-                self.logging_obj.async_success_handler(
-                    result=logging_response,
+                self.logging_obj.dispatch_success_handlers(
+                    logging_response,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=self._completed_response_cache_hit,
+                    prefer_async_handlers=True,
                 )
             )
         else:
@@ -334,14 +348,13 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
                 cache_hit=self._completed_response_cache_hit,
             )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=self._completed_response_cache_hit,
-            start_time=self.start_time,
-            end_time=end_time,
-        )
+            executor.submit(
+                self.logging_obj.success_handler,
+                result=logging_response,
+                cache_hit=self._completed_response_cache_hit,
+                start_time=self.start_time,
+                end_time=end_time,
+            )
         self._run_post_success_hooks(end_time=end_time)
 
     def _handle_logging_completed_response(self):
@@ -357,22 +370,67 @@ class BaseResponsesAPIStreamingIterator:
         async_failure_handler / failure_handler so logging integrations correctly
         record the call as failed.
         """
-        response_obj = (
-            getattr(self.completed_response, "response", None)
-            if self.completed_response
-            else None
-        )
+        response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
         error_info = getattr(response_obj, "error", None) if response_obj else None
-        error_message = "Response failed"
-        if isinstance(error_info, dict):
-            error_message = error_info.get("message", str(error_info))
+        error_message, error_type, error_code = _error_event_fields(error_info)
+        self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
-            status_code=500,
+            status_code=_status_code_for_error_fields(error_type, error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
         )
         self._handle_failure(exception)
+
+    def _record_failed_response_usage(self, response_obj: Optional[Any]) -> None:
+        if response_obj is None or self.logging_obj is None:
+            return
+        usage_obj = getattr(response_obj, "usage", None)
+        if usage_obj is None:
+            return
+        try:
+            self.logging_obj.model_call_details["combined_usage_object"] = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+            )
+        except (TypeError, ValueError) as usage_error:
+            verbose_logger.debug(
+                "could not record usage for failed responses stream: %s",
+                usage_error,
+            )
+            return
+        self.logging_obj.model_call_details["response_cost"] = (
+            self.logging_obj._response_cost_calculator(result=response_obj) or 0.0
+        )
+
+    def _maybe_raise_for_error_event(self, result: object) -> None:
+        chunk_type = getattr(result, "type", None)
+        if chunk_type not in ("error", "response.failed"):
+            return
+
+        error_obj: object = (
+            getattr(getattr(result, "response", None), "error", None)
+            if chunk_type == "response.failed"
+            else getattr(result, "error", None)
+        )
+
+        error_message, error_type, error_code = _error_event_fields(error_obj)
+        status_code = _status_code_for_error_fields(error_type, error_code)
+        mapped_exception = litellm.APIError(
+            status_code=status_code,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+        if 400 <= status_code < 500 and status_code != 429:
+            raise mapped_exception
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model or "",
+            llm_provider=self.custom_llm_provider or "",
+            original_exception=mapped_exception,
+            generated_content=self._generated_content,
+            is_pre_first_chunk=not self._yielded_first_chunk,
+        )
 
     def _get_completed_response_object(self) -> Optional[Any]:
         openai_types = _get_openai_response_types()
@@ -392,10 +450,7 @@ class BaseResponsesAPIStreamingIterator:
 
         completed_response = self.completed_response
         openai_types = _get_openai_response_types()
-        if (
-            getattr(completed_response, "type", None)
-            != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        ):
+        if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             return
 
         response_obj = self._get_completed_response_object()
@@ -407,10 +462,7 @@ class BaseResponsesAPIStreamingIterator:
             return
 
         request_kwargs = getattr(caching_handler, "request_kwargs", None)
-        if (
-            not isinstance(request_kwargs, dict)
-            or request_kwargs.get("stream") is not True
-        ):
+        if not isinstance(request_kwargs, dict) or request_kwargs.get("stream") is not True:
             return
         request_kwargs = request_kwargs.copy()
         preset_cache_key = getattr(caching_handler, "preset_cache_key", None)
@@ -470,15 +522,11 @@ class BaseResponsesAPIStreamingIterator:
                     typed_call_type = None
             if typed_call_type is None:
                 try:
-                    typed_call_type = CallTypes(
-                        getattr(self.logging_obj, "call_type", None)
-                    )
+                    typed_call_type = CallTypes(getattr(self.logging_obj, "call_type", None))
                 except Exception:
                     typed_call_type = None
 
-            request_data = self.request_data or getattr(
-                self.logging_obj, "model_call_details", {}
-            )
+            request_data = self.request_data or getattr(self.logging_obj, "model_call_details", {})
             callbacks = getattr(litellm, "callbacks", None) or []
             hooks_ran = False
             for callback in callbacks:
@@ -520,9 +568,9 @@ class BaseResponsesAPIStreamingIterator:
             pass
         if "litellm_params" not in request_payload:
             try:
-                request_payload["litellm_params"] = getattr(
-                    self.logging_obj, "model_call_details", {}
-                ).get("litellm_params", {})
+                request_payload["litellm_params"] = getattr(self.logging_obj, "model_call_details", {}).get(
+                    "litellm_params", {}
+                )
             except Exception:
                 request_payload["litellm_params"] = {}
 
@@ -657,11 +705,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Await hook directly instead of run_async_function
                     # (which spawns a thread + event loop per call)
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -731,11 +781,13 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Sync path: use run_async_function for the hook
                     result = run_async_function(
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -817,10 +869,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if (
-            getattr(evt, "type", None)
-            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        ):
+        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -834,10 +883,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if (
-            getattr(evt, "type", None)
-            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        ):
+        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -890,10 +936,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if (
-            getattr(evt, "type", None)
-            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        ):
+        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -907,10 +950,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if (
-            getattr(evt, "type", None)
-            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        ):
+        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -937,12 +977,8 @@ def _build_response_status_event(
         update={"status": "in_progress", "output": []},
     )
     if event_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED:
-        return openai_types.ResponseCreatedEvent(
-            type=event_type, response=in_progress_response
-        )
-    return openai_types.ResponseInProgressEvent(
-        type=event_type, response=in_progress_response
-    )
+        return openai_types.ResponseCreatedEvent(type=event_type, response=in_progress_response)
+    return openai_types.ResponseInProgressEvent(type=event_type, response=in_progress_response)
 
 
 def _build_content_part_done_event(
@@ -1011,9 +1047,7 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        for annotation_index, annotation in enumerate(
-            part_payload.get("annotations", []) or []
-        ):
+        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
             events.append(
                 openai_types.OutputTextAnnotationAddedEvent(
                     type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
@@ -1067,27 +1101,19 @@ def _build_synthetic_response_events(
         usage_obj: Optional[Any] = getattr(transformed, "usage", None)
         if usage_obj is not None:
             try:
-                cost: Optional[float] = logging_obj._response_cost_calculator(
-                    result=transformed
-                )
+                cost: Optional[float] = logging_obj._response_cost_calculator(result=transformed)
                 if cost is not None:
                     setattr(usage_obj, "cost", cost)
             except Exception:
                 pass
 
     events: List[Any] = [
-        _build_response_status_event(
-            openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed
-        ),
-        _build_response_status_event(
-            openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed
-        ),
+        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
+        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(
-        getattr(transformed, "output", []) or []
-    ):
+    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1096,16 +1122,12 @@ def _build_synthetic_response_events(
             openai_types.OutputItemAddedEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(
-                    **output_item_payload
-                ),
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
             )
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(
-                output_item_payload.get("content", []) or []
-            ):
+            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1113,9 +1135,7 @@ def _build_synthetic_response_events(
                         item_id=item_id,
                         output_index=output_index,
                         content_index=content_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(
-                            **part_payload
-                        ),
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**part_payload),
                     )
                 )
                 _add_text_like_part_events(
@@ -1154,9 +1174,7 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(
-                output_item_payload.get("summary", []) or []
-            ):
+            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1188,9 +1206,7 @@ def _build_synthetic_response_events(
                         output_index=output_index,
                         sequence_number=sequence_number,
                         summary_index=summary_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(
-                            **summary_payload
-                        ),
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
                     )
                 )
 
@@ -1200,9 +1216,7 @@ def _build_synthetic_response_events(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 sequence_number=sequence_number,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(
-                    **output_item_payload
-                ),
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
             )
         )
 
@@ -1220,7 +1234,6 @@ def _build_synthetic_response_events(
 # ---------------------------------------------------------------------------
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",
@@ -1229,6 +1242,8 @@ RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.incomplete",
     "error",
 ]
+
+RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES = frozenset({"input_text", "output_text", "text"})
 
 
 class ResponsesWebSocketStreaming:
@@ -1252,6 +1267,9 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         first_message: Optional[str] = None,
+        guardrail_callbacks: Optional[List[Any]] = None,
+        output_guardrail_callbacks: Optional[List[Any]] = None,
+        authorized_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1261,6 +1279,11 @@ class ResponsesWebSocketStreaming:
         self.messages: list[Dict] = []
         self.input_messages: list[Dict[str, str]] = []
         self.first_message = first_message
+        self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
+        # Model name authorized at connection time; enforced on every
+        # response.create frame to prevent deployment-substitution attacks.
+        self.authorized_model: Optional[str] = authorized_model
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1304,20 +1327,13 @@ class ResponsesWebSocketStreaming:
                     if item.get("type") == "message" and item.get("role") == "user":
                         content = item.get("content", [])
                         if isinstance(content, str):
-                            self.input_messages.append(
-                                {"role": "user", "content": content}
-                            )
+                            self.input_messages.append({"role": "user", "content": content})
                         elif isinstance(content, list):
                             for c in content:
-                                if (
-                                    isinstance(c, dict)
-                                    and c.get("type") == "input_text"
-                                ):
+                                if isinstance(c, dict) and c.get("type") == "input_text":
                                     text = c.get("text", "")
                                     if text:
-                                        self.input_messages.append(
-                                            {"role": "user", "content": text}
-                                        )
+                                        self.input_messages.append({"role": "user", "content": text})
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -1332,8 +1348,7 @@ class ResponsesWebSocketStreaming:
         if self.input_messages:
             self.logging_obj.model_call_details["messages"] = self.input_messages
         if self.messages:
-            asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
-            _ws_executor.submit(self.logging_obj.success_handler, self.messages)
+            asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
@@ -1351,8 +1366,30 @@ class ResponsesWebSocketStreaming:
                 else:
                     response_str = raw_response
 
-                self._store_event(response_str)
-                await self.websocket.send_text(response_str)
+                # When apply_to_output masking is active, suppress delta events
+                # and the text-bearing "done" events. Per-fragment Presidio
+                # cannot reliably catch PII spanning multiple delta chunks (e.g.
+                # "alice@" + "example.com"), and the done events carry the full
+                # output text that response.completed already delivers in
+                # fully-masked form; forwarding them would leak unmasked PII
+                # before response.completed arrives. The client receives only the
+                # masked response.completed.
+                if self.output_guardrail_callbacks:
+                    try:
+                        _evt_type = json.loads(response_str).get("type")
+                    except (json.JSONDecodeError, TypeError):
+                        _evt_type = None
+                    if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
+                        continue
+
+                unmasked_str = self._unmask_response_event(response_str)
+                output_masked_str = await self._mask_response_completed(unmasked_str)
+
+                # Log the output-masked form so PII redacted by apply_to_output
+                # guardrails does not appear in success logs.
+                self._store_event(output_masked_str)
+
+                await self.websocket.send_text(output_masked_str)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -1361,20 +1398,305 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
+    def _enforce_authorized_model(self, msg_obj: dict) -> bool:
+        """
+        Overwrite any ``model`` field in a ``response.create`` frame with the
+        connection-authorized model to prevent deployment-substitution attacks.
+
+        Handles both shapes:
+          flat:   ``{"type": "response.create", "model": "...", ...}``
+          nested: ``{"type": "response.create", "response": {"model": "...", ...}}``
+
+        Returns True if the object was modified.
+        """
+        if not self.authorized_model:
+            return False
+        modified = False
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict):
+            if nested.get("model") != self.authorized_model:
+                nested["model"] = self.authorized_model
+                modified = True
+            if "model" in msg_obj and msg_obj["model"] != self.authorized_model:
+                msg_obj["model"] = self.authorized_model
+                modified = True
+        elif msg_obj.get("model") != self.authorized_model:
+            msg_obj["model"] = self.authorized_model
+            modified = True
+        return modified
+
+    async def _mask_response_create(self, message: str) -> str:
+        """
+        Enforce the authorized model and apply Presidio PII masking to a
+        ``response.create`` message before it is forwarded to the upstream
+        provider.
+
+        - Overwrites any ``model`` field with the connection-authorized model
+          to prevent deployment-substitution attacks (always applied).
+        - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
+          on every text block, and stores the resulting ``pii_tokens`` map in
+          ``self.request_data["metadata"]`` for later unmasking.
+
+        Non-``response.create`` messages are returned unchanged.
+        """
+        try:
+            msg_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if msg_obj.get("type") != "response.create":
+            return message
+
+        # Always enforce the authorized model, even when PII masking is off.
+        model_modified = self._enforce_authorized_model(msg_obj)
+
+        if not self.guardrail_callbacks:
+            return json.dumps(msg_obj) if model_modified else message
+
+        if "metadata" not in self.request_data:
+            self.request_data["metadata"] = {}
+
+        modified = model_modified
+        for cb in self.guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
+            # response.create carries client text in two shapes:
+            #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
+            #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
+            # Mask "input" and "instructions" in both shapes so PII is never
+            # forwarded unmasked regardless of where the client places it.
+            nested_response = msg_obj.get("response") if isinstance(msg_obj.get("response"), dict) else None
+            text_containers: list[tuple[dict, str]] = []
+            for container in (msg_obj, nested_response):
+                if container is None:
+                    continue
+                if "input" in container:
+                    text_containers.append((container, "input"))
+                if isinstance(container.get("instructions"), str):
+                    text_containers.append((container, "instructions"))
+
+            for container, key in text_containers:
+                field_value = container[key]
+
+                if isinstance(field_value, str):
+                    container[key] = await cb.check_pii(
+                        text=field_value,
+                        output_parse_pii=True,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    modified = True
+
+                elif isinstance(field_value, list):
+                    for item in field_value:
+                        if not isinstance(item, dict):
+                            continue
+                        for item_field in ("content", "output"):
+                            value = item.get(item_field)
+                            if isinstance(value, str):
+                                item[item_field] = await cb.check_pii(
+                                    text=value,
+                                    output_parse_pii=True,
+                                    presidio_config=presidio_config,
+                                    request_data=self.request_data,
+                                )
+                                modified = True
+                            elif isinstance(value, list):
+                                for block in value:
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type") in RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES
+                                        and isinstance(block.get("text"), str)
+                                    ):
+                                        block["text"] = await cb.check_pii(
+                                            text=block["text"],
+                                            output_parse_pii=True,
+                                            presidio_config=presidio_config,
+                                            request_data=self.request_data,
+                                        )
+                                        modified = True
+
+        return json.dumps(msg_obj) if modified else message
+
+    # Delta event types whose ``delta`` field may contain PII tokens.
+    _DELTA_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.refusal.delta",
+            "response.function_call_arguments.delta",
+        }
+    )
+
+    # Terminal events that carry the full output text or tool-call arguments
+    # already delivered by ``response.completed``. Suppressed when output masking
+    # is active so the unmasked copy never reaches the client before the masked
+    # completed event.
+    _OUTPUT_DONE_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.function_call_arguments.done",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+        }
+    )
+
+    def _unmask_response_event(self, response_str: str) -> str:
+        """
+        Apply Presidio PII unmasking to backend events before forwarding to
+        the client.
+
+        Handles two shapes:
+        - ``response.completed``: walks ``response.output[*].content[*].text``
+        - streaming delta events (``response.output_text.delta``, etc.):
+          replaces tokens in the ``delta`` field
+
+        Uses the ``pii_tokens`` map stored during ``_mask_response_create`` to
+        replace every token (e.g. ``<EMAIL_ADDRESS_1>``) with the original
+        value.  Events with no stored tokens are returned unchanged.
+        """
+        if not self.guardrail_callbacks:
+            return response_str
+
+        pii_tokens: Dict[str, str] = (self.request_data.get("metadata") or {}).get("pii_tokens", {})
+        if not pii_tokens:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        cb = self.guardrail_callbacks[0]
+        event_type = evt_obj.get("type")
+
+        if event_type == "response.completed":
+            modified = False
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
+                return response_str
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
+                    continue
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        if unmasked != text:
+                            content_block["text"] = unmasked
+                            modified = True
+            return json.dumps(evt_obj) if modified else response_str
+
+        if event_type in self._DELTA_EVENT_TYPES:
+            delta = evt_obj.get("delta")
+            if isinstance(delta, str):
+                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                if unmasked != delta:
+                    evt_obj["delta"] = unmasked
+                    return json.dumps(evt_obj)
+
+        return response_str
+
+    async def _mask_response_completed(self, response_str: str) -> str:
+        """
+        Apply Presidio output masking (apply_to_output=True) to the
+        ``response.completed`` event before it is forwarded to the client.
+
+        Walks ``response.output[*].content[*].text`` and masks every text block,
+        as well as ``response.output[*].arguments`` on function-call items and
+        ``response.output[*].summary[*].text`` on reasoning items. Delta and
+        ``*.done`` events are suppressed upstream in ``backend_to_client`` when
+        output masking is active, so only the authoritative full-output view
+        reaches this method; events of other types are returned unchanged.
+        """
+        if not self.output_guardrail_callbacks:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        if evt_obj.get("type") != "response.completed":
+            return response_str
+
+        modified = False
+        for cb in self.output_guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
+                continue
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
+                    continue
+                arguments = output_item.get("arguments")
+                if isinstance(arguments, str):
+                    masked_args = await cb.check_pii(
+                        text=arguments,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    if masked_args != arguments:
+                        output_item["arguments"] = masked_args
+                        modified = True
+                summary = output_item.get("summary") or []
+                if isinstance(summary, list):
+                    for summary_block in summary:
+                        if not isinstance(summary_block, dict):
+                            continue
+                        summary_text = summary_block.get("text")
+                        if isinstance(summary_text, str):
+                            masked_summary = await cb.check_pii(
+                                text=summary_text,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=self.request_data,
+                            )
+                            if masked_summary != summary_text:
+                                summary_block["text"] = masked_summary
+                                modified = True
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        masked = await cb.check_pii(
+                            text=text,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=self.request_data,
+                        )
+                        if masked != text:
+                            content_block["text"] = masked
+                            modified = True
+
+        return json.dumps(evt_obj) if modified else response_str
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None:
-                self._store_input(self.first_message)
-                self._store_event(self.first_message)
-                await self.backend_ws.send(self.first_message)  # type: ignore[union-attr]
+                masked_first = await self._mask_response_create(self.first_message)
+                self._store_input(masked_first)
+                self._store_event(masked_first)
+                await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
 
             while True:
                 message = await self.websocket.receive_text()
-
-                self._store_input(message)
-                self._store_event(message)
-                await self.backend_ws.send(message)  # type: ignore[union-attr]
+                masked = await self._mask_response_create(message)
+                self._store_input(masked)
+                self._store_event(masked)
+                await self.backend_ws.send(masked)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -1418,6 +1740,8 @@ _MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
     }
 )
 
+_WARMUP_RESPONSE_ID_PREFIX = "resp_warmup_"
+
 
 class ManagedResponsesWebSocketHandler:
     """
@@ -1455,6 +1779,9 @@ class ManagedResponsesWebSocketHandler:
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Dict[str, Any] = litellm_metadata or {}
+        self.model_group: Optional[str] = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+            "deployment_model_name"
+        )
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
@@ -1462,9 +1789,7 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
-        self.extra_kwargs: Dict[str, Any] = {
-            k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
-        }
+        self.extra_kwargs: Dict[str, Any] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
         # Keyed by the DECODED (pre-encoding) response ID from response.completed.
         # This avoids the async DB-write race condition where spend logs haven't
@@ -1487,17 +1812,13 @@ class ManagedResponsesWebSocketHandler:
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:
-            verbose_logger.debug(
-                "ManagedResponsesWS: failed to serialize chunk: %s", exc
-            )
+            verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
     async def _send_error(self, message: str, error_type: str = "server_error") -> None:
         try:
             await self.websocket.send_text(
-                json.dumps(
-                    {"type": "error", "error": {"type": error_type, "message": message}}
-                )
+                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
             )
         except Exception:
             pass
@@ -1509,9 +1830,7 @@ class ManagedResponsesWebSocketHandler:
         The key is the *decoded* response ID (the raw provider response ID before
         LiteLLM base64-encodes it into the ``resp_...`` format).
         """
-        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
-            previous_response_id
-        )
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
         raw_id = decoded.get("response_id", previous_response_id)
         return list(self._session_history.get(raw_id, []))
 
@@ -1531,9 +1850,7 @@ class ManagedResponsesWebSocketHandler:
         Returns *None* if the event doesn't contain a usable ID.
         """
         resp_obj = completed_event.get("response", {})
-        encoded_id: Optional[str] = (
-            resp_obj.get("id") if isinstance(resp_obj, dict) else None
-        )
+        encoded_id: Optional[str] = resp_obj.get("id") if isinstance(resp_obj, dict) else None
         if not encoded_id:
             return None
         decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(encoded_id)
@@ -1603,14 +1920,75 @@ class ManagedResponsesWebSocketHandler:
         try:
             msg_obj = json.loads(raw_message)
         except json.JSONDecodeError:
-            await self._send_error(
-                "Invalid JSON in response.create event", "invalid_request_error"
-            )
+            await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
         if msg_obj.get("type") != "response.create":
             # Silently ignore non-response.create messages (e.g. warmup pings)
             return None
         return msg_obj
+
+    @staticmethod
+    def _is_warmup_frame(msg_obj: Dict[str, Any]) -> bool:
+        """Return True for a response.create whose generate flag is false."""
+        nested = msg_obj.get("response")
+        source = nested if isinstance(nested, dict) and nested else msg_obj
+        return source.get("generate") is False
+
+    @staticmethod
+    def _is_warmup_response_id(response_id: Optional[str]) -> bool:
+        """Return True for synthetic warmup IDs that only exist on this connection."""
+        if not response_id:
+            return False
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        raw_id = decoded.get("response_id", response_id)
+        return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
+
+    @staticmethod
+    def _warmup_source_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
+            return nested
+        return {k: v for k, v in msg_obj.items() if k != "type"}
+
+    def _build_warmup_response(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Build a minimal completed Responses API object for a warmup ack."""
+        source = self._warmup_source_params(msg_obj)
+        wire_model = source.get("model") or self.model_group or self.model
+        return {
+            "id": f"{_WARMUP_RESPONSE_ID_PREFIX}{uuid.uuid4().hex}",
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "completed",
+            "model": wire_model,
+            "output": [],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    async def _send_warmup_ack(self, msg_obj: Dict[str, Any]) -> None:
+        """
+        Acknowledge a generate=false prewarm without calling the provider.
+
+        Codex blocks on the warmup turn until it receives response.created and
+        response.completed over the WebSocket. Managed HTTP providers cannot
+        honor an empty-input warmup, so we synthesize the completion locally.
+        """
+        response = self._build_warmup_response(msg_obj)
+        for event_type, status in (
+            ("response.created", "in_progress"),
+            ("response.completed", "completed"),
+        ):
+            event = {
+                "type": event_type,
+                "response": {**response, "status": status},
+            }
+            serialized = self._serialize_chunk(event)
+            if serialized is None:
+                continue
+            await self.websocket.send_text(serialized)
 
     @staticmethod
     def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1621,9 +1999,7 @@ class ManagedResponsesWebSocketHandler:
         """
         nested = msg_obj.get("response")
         response_params: Dict[str, Any] = (
-            nested
-            if isinstance(nested, dict) and nested
-            else {k: v for k, v in msg_obj.items() if k != "type"}
+            nested if isinstance(nested, dict) and nested else {k: v for k, v in msg_obj.items() if k != "type"}
         )
         return {
             param: response_params[param]
@@ -1640,6 +2016,12 @@ class ManagedResponsesWebSocketHandler:
     ) -> None:
         """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
         if not previous_response_id:
+            return
+        if self._is_warmup_response_id(previous_response_id):
+            verbose_logger.debug(
+                "ManagedResponsesWS: ignoring synthetic warmup previous_response_id=%s",
+                previous_response_id,
+            )
             return
         if prior_history:
             call_kwargs["input"] = prior_history + current_messages
@@ -1680,9 +2062,7 @@ class ManagedResponsesWebSocketHandler:
             return False
         return event_provider == self._connection_provider
 
-    def _inject_credentials(
-        self, call_kwargs: Dict[str, Any], model: Optional[str] = None
-    ) -> None:
+    def _inject_credentials(self, call_kwargs: Dict[str, Any], model: Optional[str] = None) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
             call_kwargs["api_key"] = self.api_key
@@ -1703,9 +2083,7 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _update_proxy_request(call_kwargs: Dict[str, Any], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
-        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get(
-            "proxy_server_request"
-        ) or {}
+        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
         body = dict(proxy_server_request.get("body") or {})
@@ -1722,9 +2100,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.setdefault("litellm_params", {})
         call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(
-        self, model: str, call_kwargs: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def _stream_and_forward(self, model: str, call_kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -1738,9 +2114,7 @@ class ManagedResponsesWebSocketHandler:
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (
-                chunk.get("type") if isinstance(chunk, dict) else None
-            )
+            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
             serialized = self._serialize_chunk(chunk)
             if serialized is None:
                 continue
@@ -1752,9 +2126,7 @@ class ManagedResponsesWebSocketHandler:
             try:
                 await self.websocket.send_text(serialized)
             except Exception as send_exc:
-                verbose_logger.debug(
-                    "ManagedResponsesWS: error sending chunk to client: %s", send_exc
-                )
+                verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
                 return completed_event  # Client disconnected
         return completed_event
 
@@ -1807,36 +2179,45 @@ class ManagedResponsesWebSocketHandler:
         if msg_obj is None:
             return
 
+        # generate=false is a prompt-cache warmup hint (sent by codex prewarm).
+        # Native provider sockets handle it server-side, but there is no HTTP
+        # equivalent and the frame carries empty input. Managed providers must
+        # synthesize a completion so clients like Codex can proceed.
+        if self._is_warmup_frame(msg_obj):
+            try:
+                await self._send_warmup_ack(msg_obj)
+            except Exception as exc:
+                verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
+            return
+
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        model = call_kwargs.pop("model", None) or self.model
+        # A frame that repeats the connection's public alias (model_group) must
+        # reuse the router-resolved self.model; passing the alias raw to
+        # litellm.aresponses fails in get_llm_provider. A genuinely different
+        # provider-prefixed per-frame model is still honored.
+        requested_model = call_kwargs.pop("model", None)
+        if requested_model is None or requested_model == self.model_group:
+            model = self.model
+        else:
+            model = requested_model
 
-        previous_response_id: Optional[str] = call_kwargs.pop(
-            "previous_response_id", None
-        )
+        previous_response_id: Optional[str] = call_kwargs.pop("previous_response_id", None)
         current_messages = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
-        prior_history = (
-            self._get_history_messages(previous_response_id)
-            if previous_response_id
-            else []
-        )
+        prior_history = self._get_history_messages(previous_response_id) if previous_response_id else []
 
-        self._apply_history(
-            call_kwargs, previous_response_id, current_messages, prior_history
-        )
+        self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
-        self._update_proxy_request(call_kwargs, model)
+        self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
 
         try:
             completed_event = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
-            verbose_logger.exception(
-                "ManagedResponsesWS: error processing response.create: %s", exc
-            )
+            verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))
             return
 
@@ -1859,9 +2240,7 @@ class ManagedResponsesWebSocketHandler:
                 try:
                     message = await self.websocket.receive_text()
                 except Exception as exc:
-                    verbose_logger.debug(
-                        "ManagedResponsesWS: client disconnected: %s", exc
-                    )
+                    verbose_logger.debug("ManagedResponsesWS: client disconnected: %s", exc)
                     break
 
                 await self._process_response_create(message)

@@ -270,7 +270,7 @@ const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) =>
               <tr key={idx} className="border-b border-gray-100">
                 <td className="py-2 pr-4">{match.type}</td>
                 <td className="py-2 pr-4">
-                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-xs">
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-sm text-xs">
                     {match.detection_method ?? "-"}
                   </span>
                 </td>
@@ -312,7 +312,7 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
         </div>
         {showRaw && (
           <div className="p-3 border-t bg-white">
-            <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
+            <pre className="bg-gray-50 rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
           </div>
         )}
       </div>
@@ -413,7 +413,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
           <div key={idx} className="flex items-start gap-3 relative">
             {/* Vertical line */}
             <div className="flex flex-col items-center">
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 {item.type === "request" || item.type === "response" ? (
                   <GrayDotIcon />
                 ) : item.type === "llm" ? (
@@ -424,9 +424,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                   <FailCircleIcon />
                 )}
               </div>
-              {idx < timeline.length - 1 && (
-                <div className="w-0.5 bg-gray-200 flex-grow" style={{ minHeight: "24px" }} />
-              )}
+              {idx < timeline.length - 1 && <div className="w-0.5 bg-gray-200 grow" style={{ minHeight: "24px" }} />}
             </div>
 
             {/* Content */}
@@ -444,7 +442,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                     {item.status}
                   </span>
                 )}
-                <span className="text-xs text-gray-400 font-mono ml-auto flex-shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-gray-400 font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
               </div>
             </div>
           </div>
@@ -492,18 +490,18 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
-        <div className="flex-shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
+        <div className="shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
           <span className="font-semibold text-gray-900 text-sm truncate">{displayName}</span>
 
-          <span className="px-2 py-0.5 border border-blue-200 bg-blue-50 text-blue-700 rounded text-[11px] font-semibold uppercase flex-shrink-0">
+          <span className="px-2 py-0.5 border border-blue-200 bg-blue-50 text-blue-700 rounded-sm text-[11px] font-semibold uppercase shrink-0">
             {modeStr}
           </span>
 
           <span
-            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase flex-shrink-0 ${
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${
               success
                 ? "bg-green-100 text-green-700 border border-green-200"
                 : "bg-red-100 text-red-700 border border-red-200"
@@ -514,7 +512,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
           {matchCountStr && (
             <span
-              className={`px-2 py-0.5 rounded text-[11px] font-medium flex-shrink-0 ${
+              className={`px-2 py-0.5 rounded text-[11px] font-medium shrink-0 ${
                 totalMasked === 0
                   ? "bg-green-50 text-green-700 border border-green-200"
                   : "bg-amber-50 text-amber-700 border border-amber-200"
@@ -525,7 +523,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           )}
 
           {entry.confidence_score != null && (
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded text-[11px] font-medium flex-shrink-0">
+            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-sm text-[11px] font-medium shrink-0">
               {(entry.confidence_score * 100).toFixed(0)}% conf
             </span>
           )}
@@ -533,7 +531,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           {riskScore != null && success && (
             <Tooltip title={`Risk score: ${riskScore}/10`}>
               <span
-                className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(riskScore)}`}
+                className={`px-2 py-0.5 border rounded-sm text-[11px] font-semibold shrink-0 ${getRiskColor(riskScore)}`}
               >
                 Risk {riskScore}/10
               </span>
@@ -542,10 +540,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         </div>
 
         {/* Right side: duration + method + chevron */}
-        <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-3 shrink-0">
           <span className="text-sm text-gray-500 font-mono">{durationStr}</span>
           {entry.detection_method && (
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded text-[11px] font-medium">
+            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-sm text-[11px] font-medium">
               {entry.detection_method.split(",")[0].trim()}
             </span>
           )}
@@ -598,7 +596,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
               <h5 className="text-sm font-medium text-gray-700 mb-2">Masked Entities</h5>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(entry.masked_entity_count || {}).map(([entityType, count]) => (
-                  <span key={entityType} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-medium">
+                  <span key={entityType} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-sm text-xs font-medium">
                     {entityType}: {count}
                   </span>
                 ))}
@@ -670,7 +668,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-xl border border-gray-200 shadow-xs w-full max-w-full overflow-hidden mb-6">
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
         <div className="flex items-center gap-4">

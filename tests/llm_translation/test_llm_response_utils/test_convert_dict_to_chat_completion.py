@@ -1627,7 +1627,12 @@ class TestMissingChoicesGuard:
         assert "no 'choices'" in exc_info.value.message
 
     def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
-        """Empty choices list raises APIError."""
+        """Empty choices list raises APIError, same as missing/null choices.
+
+        Provider-specific repair (e.g. github_copilot synthesizing choices for
+        Anthropic-native responses) happens before this guard, in the provider
+        config; the core utility keeps treating empty choices as an error.
+        """
         from litellm.exceptions import APIError
 
         response_object = {
@@ -1683,7 +1688,9 @@ class TestMissingChoicesGuard:
 
         assert "no 'choices'" in exc_info.value.message
 
-    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(self):
+    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(
+        self,
+    ):
         """Missing choices via stream=True path raises APIError when generator is consumed."""
         from litellm.exceptions import APIError
 
@@ -1988,11 +1995,15 @@ class TestConvertToStreamingResponseAsync:
             return chunks
 
         chunks = asyncio.run(run())
-        assert len(chunks) == 1
-        assert chunks[0].id == "msg_async_1"
-        assert chunks[0].model == "claude-3"
-        assert chunks[0].choices[0].delta.content == "Hi there"
-        assert chunks[0].usage.prompt_tokens == 3
+        # Cached replay is sliced into word-shaped chunks to preserve
+        # streaming cadence; joining the slices reconstructs the content.
+        assert len(chunks) == 2
+        assert all(c.id == "msg_async_1" for c in chunks)
+        assert all(c.model == "claude-3" for c in chunks)
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
+        assert chunks[0].choices[0].finish_reason is None
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].usage.prompt_tokens == 3
 
 
 class TestHandleInvalidParallelToolCalls:
@@ -2425,6 +2436,42 @@ class TestConvertToModelResponseObjectCompletion:
         assert result.choices[0].message.content == "The answer is 4."
         assert result.choices[0].message.reasoning_content == "2+2=4"
 
+    def test_reasoning_content_not_mirrored_into_provider_specific_fields(self):
+        """Mirroring reasoning_content into provider_specific_fields made
+        cache-replayed messages diverge from live Anthropic messages, which
+        only set it top-level, breaking cache key stability (issue #27337)."""
+        response_object = {
+            "id": "chatcmpl-5",
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "The answer is 4.",
+                        "role": "assistant",
+                        "reasoning_content": "2+2=4",
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "2+2=4",
+                                "signature": "sig",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        message = result.choices[0].message
+        assert message.reasoning_content == "2+2=4"
+        assert "reasoning_content" not in (message.provider_specific_fields or {})
+
     def test_response_none_raises(self):
         with pytest.raises(Exception):
             convert_to_model_response_object(
@@ -2435,6 +2482,13 @@ class TestConvertToModelResponseObjectCompletion:
     def test_model_response_none_raises(self):
         with pytest.raises(Exception):
             convert_to_model_response_object(
-                response_object={"choices": [{"message": {"content": "hi", "role": "assistant"}, "finish_reason": "stop"}]},
+                response_object={
+                    "choices": [
+                        {
+                            "message": {"content": "hi", "role": "assistant"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
                 model_response_object=None,
             )

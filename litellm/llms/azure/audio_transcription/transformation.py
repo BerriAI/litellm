@@ -41,9 +41,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     STT_ENDPOINT_PATH = "/speech/recognition/conversation/cognitiveservices/v1"
     DEFAULT_LANGUAGE = "en-US"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return ["language", "response_format"]
 
     def map_openai_params(
@@ -78,9 +76,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         validated_headers = headers.copy()
         validated_headers["Ocp-Apim-Subscription-Key"] = api_key
-        validated_headers["Content-Type"] = validated_headers.get(
-            "Content-Type", "audio/wav"
-        )
+        validated_headers["Content-Type"] = validated_headers.get("Content-Type", "audio/wav")
         validated_headers["Accept"] = "application/json"
         return validated_headers
 
@@ -108,9 +104,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         base_url = self._resolve_stt_base_url(api_base=api_base)
         query_params = {
             "language": optional_params.get("language", self.DEFAULT_LANGUAGE),
-            "format": self._get_azure_response_format(
-                optional_params.get("response_format")
-            ),
+            "format": self._get_azure_response_format(optional_params.get("response_format")),
         }
         return f"{base_url}{self.STT_ENDPOINT_PATH}?{urlencode(query_params)}"
 
@@ -136,10 +130,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         recognition_status = response_json.get("RecognitionStatus")
         if recognition_status is not None and recognition_status != "Success":
             raise AzureSpeechAudioTranscriptionException(
-                message=(
-                    "Azure AI Speech transcription failed with "
-                    f"RecognitionStatus={recognition_status}."
-                ),
+                message=(f"Azure AI Speech transcription failed with RecognitionStatus={recognition_status}."),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -164,9 +155,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         hostname = parsed_url.hostname or ""
 
         if self._is_cognitive_services_endpoint(hostname=hostname):
-            region = self._extract_region_from_hostname(
-                hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN
-            )
+            region = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_stt_base_url(region=region)
 
         if self._is_stt_endpoint(hostname=hostname):
@@ -184,14 +173,10 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return api_base
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
-        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(
-            f".{self.COGNITIVE_SERVICES_DOMAIN}"
-        )
+        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(f".{self.COGNITIVE_SERVICES_DOMAIN}")
 
     def _is_stt_endpoint(self, hostname: str) -> bool:
-        return hostname == self.STT_SPEECH_DOMAIN or hostname.endswith(
-            f".{self.STT_SPEECH_DOMAIN}"
-        )
+        return hostname == self.STT_SPEECH_DOMAIN or hostname.endswith(f".{self.STT_SPEECH_DOMAIN}")
 
     def _is_azure_openai_endpoint(self, hostname: str) -> bool:
         return hostname.endswith(".openai.azure.com")

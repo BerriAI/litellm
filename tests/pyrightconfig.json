@@ -1,0 +1,11 @@
+{
+    "include": ["e2e"],
+    "exclude": ["**/node_modules", "**/__pycache__"],
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "strict",
+    "enableTypeIgnoreComments": false,
+    "reportMissingImports": false,
+    "reportPrivateImportUsage": false,
+    "reportExplicitAny": "error",
+    "reportAny": "error"
+}

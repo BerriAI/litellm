@@ -12,6 +12,7 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
     GCPIAMCredentialProvider,
     _token_cache,
@@ -169,6 +170,46 @@ def test_socket_timeouts_in_cluster_kwargs():
     kwargs = _get_redis_cluster_kwargs()
     assert "socket_timeout" in kwargs
     assert "socket_connect_timeout" in kwargs
+
+
+def test_reconnect_kwargs_in_cluster_kwargs():
+    """Health check and keepalive must survive the cluster kwarg allow-list so
+    operators can tune Redis cluster reconnection behavior via config."""
+    kwargs = _get_redis_cluster_kwargs()
+    assert "health_check_interval" in kwargs
+    assert "socket_keepalive" in kwargs
+
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_cluster_sets_reconnect_defaults(mock_cluster_cls):
+    """
+    The async RedisCluster client must be built with a periodic health check and
+    TCP keepalive so a connection silently dropped by a cluster restart (e.g.
+    ElastiCache Serverless maintenance) is revalidated and reconnected before
+    reuse instead of stalling in re-initialization. Regression for LIT-4083.
+    """
+    get_redis_async_client(startup_nodes=[{"host": "cluster-node", "port": 6379}])
+
+    mock_cluster_cls.assert_called_once()
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["health_check_interval"] == REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+    assert call_kwargs["health_check_interval"] > 0
+    assert call_kwargs["socket_keepalive"] is True
+
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_cluster_reconnect_defaults_are_overridable(mock_cluster_cls):
+    """An explicit health_check_interval / socket_keepalive from config must win
+    over the built-in reconnect defaults."""
+    get_redis_async_client(
+        startup_nodes=[{"host": "cluster-node", "port": 6379}],
+        health_check_interval=7,
+        socket_keepalive=False,
+    )
+
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["health_check_interval"] == 7
+    assert call_kwargs["socket_keepalive"] is False
 
 
 def test_get_redis_async_client_with_connection_pool():
@@ -588,3 +629,98 @@ def test_sync_client_url_used_when_no_cluster(mock_from_url, monkeypatch):
     get_redis_client()
 
     mock_from_url.assert_called_once()
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_explicit_host_outranks_environment_redis_url(mock_from_url, monkeypatch):
+    """
+    An explicitly configured host must win over REDIS_URL in the environment.
+
+    Otherwise the url branch strips the caller's host/port and the client
+    silently connects to whatever REDIS_URL names, so an explicit config block
+    (or a connection test typed into the admin UI) targets the wrong server.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://env-host:6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    client = get_redis_client(host="explicit-host", port=6380)
+
+    mock_from_url.assert_not_called()
+    assert client.connection_pool.connection_kwargs["host"] == "explicit-host"
+    assert client.connection_pool.connection_kwargs["port"] == 6380
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_explicit_url_still_wins_over_environment_host(mock_from_url, monkeypatch):
+    """An explicit url argument keeps taking the from_url path."""
+    monkeypatch.setenv("REDIS_HOST", "env-host")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    get_redis_client(url="redis://explicit-host:6380")
+
+    mock_from_url.assert_called_once()
+    assert mock_from_url.call_args.kwargs["url"] == "redis://explicit-host:6380"
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_environment_redis_url_used_when_caller_names_no_target(mock_from_url, monkeypatch):
+    """With no caller-supplied connection target, REDIS_URL still drives the client."""
+    monkeypatch.setenv("REDIS_URL", "redis://env-host:6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    get_redis_client()
+
+    mock_from_url.assert_called_once()
+
+
+@pytest.mark.parametrize("falsy_ssl", [False, None, 0, ""])
+def test_connection_pool_falsy_ssl_uses_plain_connection(falsy_ssl, monkeypatch):
+    """
+    ssl=False must produce a plain (non-TLS) connection pool.
+
+    The admin UI's coordination Redis form always sends ssl explicitly, so a
+    presence check here turns ssl=False into an SSLConnection; the TLS
+    handshake against a plaintext Redis then hangs until the ping timeout and
+    every connection test from the UI fails.
+    """
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    with patch("litellm._redis.async_redis.BlockingConnectionPool") as mock_pool:
+        get_redis_connection_pool(host="plain-redis.example.com", port=6379, ssl=falsy_ssl)
+
+    call_kwargs = mock_pool.call_args.kwargs
+    assert call_kwargs.get("connection_class") is not async_redis.SSLConnection, (
+        f"ssl={falsy_ssl!r} must not select SSLConnection"
+    )
+    assert "ssl" not in call_kwargs, "ssl must never leak into BlockingConnectionPool kwargs"
+
+
+def test_connection_pool_ssl_true_uses_ssl_connection(monkeypatch):
+    """ssl=True must still opt in to a TLS connection pool."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    with patch("litellm._redis.async_redis.BlockingConnectionPool") as mock_pool:
+        get_redis_connection_pool(host="tls-redis.example.com", port=6380, ssl=True)
+
+    call_kwargs = mock_pool.call_args.kwargs
+    assert call_kwargs.get("connection_class") is async_redis.SSLConnection
+    assert "ssl" not in call_kwargs, "ssl must be consumed, not forwarded to the pool"
+
+
+def test_connection_pool_without_ssl_kwarg_uses_plain_connection(monkeypatch):
+    """Omitting ssl entirely must keep the historical plain-connection default."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    with patch("litellm._redis.async_redis.BlockingConnectionPool") as mock_pool:
+        get_redis_connection_pool(host="plain-redis.example.com", port=6379)
+
+    call_kwargs = mock_pool.call_args.kwargs
+    assert call_kwargs.get("connection_class") is not async_redis.SSLConnection
+    assert "ssl" not in call_kwargs

@@ -24,6 +24,8 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 # litellm.num_retries=3
 
 litellm.cache = None
@@ -1343,7 +1345,7 @@ def test_lm_studio_completion(monkeypatch):
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            api_base=FAKE_OPENAI_API_BASE,
         )
     except litellm.AuthenticationError as e:
         pytest.fail(f"Error occurred: {e}")

@@ -291,25 +291,6 @@ class CohereToolResult(BaseModel):
     outputs: List[Dict[str, Any]]
 
 
-class CohereResponseFormat(BaseModel):
-    """Response format for Cohere."""
-
-    type: str
-
-
-class CohereResponseTextFormat(CohereResponseFormat):
-    """Text response format for Cohere."""
-
-    type: Literal["text"] = "text"
-
-
-class CohereResponseJSONSchemaFormat(CohereResponseFormat):
-    """JSON schema response format for Cohere."""
-
-    type: Literal["json_schema"] = "json_schema"
-    jsonSchema: Dict[str, Any]
-
-
 class CohereChatRequest(BaseModel):
     """Cohere chat request model."""
 
@@ -336,13 +317,10 @@ class CohereChatRequest(BaseModel):
     # ``OCIChatConfig.openai_to_oci_cohere_param_map`` which marks
     # ``tool_choice`` as unsupported. The field is intentionally absent here
     # so it isn't silently dropped or surfaced as a supported feature.
-    responseFormat: Optional[
-        Union[
-            CohereResponseTextFormat,
-            CohereResponseJSONSchemaFormat,
-            CohereResponseFormat,
-        ]
-    ] = None
+    # OCI Cohere responseFormat is {"type": "TEXT" | "JSON_OBJECT", "schema"?: ...};
+    # there is no JSON_SCHEMA type. The shape is built in
+    # OCIChatConfig._normalize_response_format.
+    responseFormat: Optional[Dict[str, Any]] = None
     preambleOverride: Optional[str] = None
     documents: Optional[List[Dict[str, Any]]] = None
     searchQueriesOnly: Optional[bool] = None
@@ -438,13 +416,9 @@ class OCIEmbedRequest(BaseModel):
     compartmentId: str
     servingMode: OCIServingMode
     inputs: List[str]
-    inputType: Optional[str] = (
-        None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
-    )
+    inputType: Optional[str] = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
     truncate: Optional[str] = "END"  # NONE | START | END
-    outputDimensions: Optional[int] = (
-        None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
-    )
+    outputDimensions: Optional[int] = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
 
 
 class OCIEmbedUsage(BaseModel):

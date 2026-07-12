@@ -4,7 +4,7 @@ from collections import OrderedDict
 from typing import Callable, Sequence
 
 from opentelemetry.context import Context
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
@@ -13,16 +13,20 @@ from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
+    SpanError,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
-from litellm.integrations.otel.model.semconv import Error
+from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     SpanRole,
     guardrail_span_name,
     llm_call_span_name,
+    mcp_list_tools_span_name,
     mcp_tool_call_span_name,
     service_span_name,
 )
@@ -33,6 +37,7 @@ from litellm.integrations.otel.model.spans import (
 _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
     SpanRole.LLM_CALL: llm_call_span_name,
     SpanRole.MCP_TOOL_CALL: mcp_tool_call_span_name,
+    SpanRole.MCP_LIST_TOOLS: mcp_list_tools_span_name,
     SpanRole.GUARDRAIL: guardrail_span_name,
     # DB_CALL and SERVICE are both built from ServiceSpanData; they differ only in
     # span kind (CLIENT vs INTERNAL) and attribute vocabulary, not in naming.
@@ -46,21 +51,42 @@ _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
 _DEDUP_CACHE_MAX = 10_000
 
 
+def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
+    """Stamp the OTel-semconv error attributes (``error.type`` + ``error.message``).
+    ``error_type`` and ``resolved_message`` are ``finish_span``'s already-computed
+    fallback chains, so the pair on the status, event, and attributes stays in
+    lockstep."""
+    span.set_attribute(Error.TYPE, error_type)
+    span.set_attribute(Error.MESSAGE, resolved_message)
+
+
+def _stamp_litellm_error_attributes(span: Span, error: SpanError) -> None:
+    """Stamp litellm-specific error detail attributes. Emitted only when the
+    corresponding field is populated so guardrail-shape errors carrying only a
+    message aren't polluted with empty detail keys."""
+    if error.code:
+        span.set_attribute(LiteLLMError.CODE, error.code)
+    if error.stack_trace:
+        span.set_attribute(LiteLLMError.STACK_TRACE, error.stack_trace)
+    if error.llm_provider:
+        span.set_attribute(LiteLLMError.LLM_PROVIDER, error.llm_provider)
+
+
 class SpanEmitter:
     def __init__(
         self,
         tracer: Tracer,
         config: OpenTelemetryV2Config,
         mappers: Sequence[AttributeMapper] | None = None,
+        event_recorder: GenAIEventRecorder | None = None,
     ) -> None:
         self._tracer = tracer
         self._config = config
+        self._event_recorder = event_recorder
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
-            list(mappers)
-            if mappers is not None
-            else resolve_mappers(config.mapper_names)
+            list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
@@ -76,18 +102,21 @@ class SpanEmitter:
         start_time_ns: int | None = None,
         *,
         tracer: Tracer | None = None,
+        links: Sequence[Link] | None = None,
     ) -> Span:
         """Start a span for ``role`` without dedup or attribute mapping.
 
         For callers that own and manage their own span lifecycle. ``tracer``
         overrides the bound tracer for this span only, used for per-request
-        multi-tenant credential routing.
+        multi-tenant credential routing. ``links`` records related-but-not-parent
+        spans (e.g. the transport span of an MCP message, per MCP semconv).
         """
         return (tracer or self._tracer).start_span(
             name,
             context=parent_context,
             kind=to_otel_span_kind(SPAN_REGISTRY[role].kind),
             start_time=start_time_ns,
+            links=list(links) if links else None,
         )
 
     def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
@@ -118,18 +147,21 @@ class SpanEmitter:
         start_time_ns: int | None = None,
         end_time_ns: int | None = None,
         tracer: Tracer | None = None,
+        links: Sequence[Link] | None = None,
     ) -> Span | None:
         """Emit one complete span: dedup, start, map attributes, status, end.
 
         Return the span, or ``None`` if it was deduplicated away. ``tracer``
         overrides the bound tracer for this span, used for per-request routing.
+        ``links`` records related-but-not-parent spans (the transport span of an
+        MCP message).
         """
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
         # the type for mypy and keeps the engine free of duck-typed attribute reads.
         dedup_key = (
             data.identity.call_id
-            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData))
+            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData, MCPListToolsSpanData))
             else None
         )
         if self._seen(dedup_key, role):
@@ -140,6 +172,7 @@ class SpanEmitter:
             parent_context=parent_context,
             start_time_ns=start_time_ns,
             tracer=tracer,
+            links=links,
         )
         self.finish_span(role, span, data, end_time_ns=end_time_ns)
         return span
@@ -172,6 +205,7 @@ class SpanEmitter:
                 (
                     LLMCallSpanData,
                     MCPToolCallSpanData,
+                    MCPListToolsSpanData,
                     ServiceSpanData,
                     GuardrailSpanData,
                 ),
@@ -179,10 +213,27 @@ class SpanEmitter:
             else None
         )
         if error and (error.error_type or error.message):
-            span.set_attribute(Error.TYPE, error.error_type or "error")
-            span.set_status(
-                Status(StatusCode.ERROR, error.message or error.error_type or "error")
+            error_type = error.error_type or "error"
+            message = error.message or error.error_type or "error"
+            _stamp_otel_error_attributes(span, error_type, message)
+            _stamp_litellm_error_attributes(span, error)
+            span.set_status(Status(StatusCode.ERROR, message))
+            # Also emit the semconv ``exception`` event so backends that
+            # dynamic-map unknown string span attrs to ``keyword`` (e.g.
+            # Elasticsearch with a 1024-char ``ignore_above``) still see the
+            # full untruncated message on the recognized event field.
+            span.add_event(
+                ExceptionEvent.NAME,
+                {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
             )
+            if self._event_recorder is not None and role is SpanRole.LLM_CALL:
+                self._event_recorder.record_operation_exception(
+                    span_context=span.get_span_context(),
+                    error_type=error_type,
+                    message=message,
+                    stack_trace=error.stack_trace,
+                    timestamp_ns=end_time_ns,
+                )
         # On success leave the status UNSET (the semconv default) rather than
         # forcing OK — that matches the FastAPI server span and avoids implying a
         # span-level health signal litellm doesn't actually evaluate. Only a

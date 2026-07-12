@@ -43,18 +43,11 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return (
-            api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("AZURE_AI_API_KEY")
-        )
+        return api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_AI_API_KEY")
 
     @property
     def api_version(self, api_version: Optional[str] = None) -> Optional[str]:
-        api_version = (
-            api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-        )
+        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
         return api_version
 
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
@@ -73,9 +66,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
             return AzureAIAnthropicTokenCounter()
         return None
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by Azure AI.
 
@@ -171,6 +162,4 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         api_base: Optional[str] = None,
     ) -> dict:
         """Azure Foundry sends api key in query params"""
-        raise NotImplementedError(
-            "Azure Foundry does not support environment validation"
-        )
+        raise NotImplementedError("Azure Foundry does not support environment validation")

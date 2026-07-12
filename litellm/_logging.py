@@ -17,9 +17,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = (
-    os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
-)
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def _redact_string(value: str) -> str:
@@ -64,9 +62,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(
-                    self._formatter.formatException(record.exc_info)
-                )
+                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -189,9 +185,7 @@ class JsonFormatter(Formatter):
             json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(
-                record.exc_info
-            )
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
@@ -419,7 +413,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 

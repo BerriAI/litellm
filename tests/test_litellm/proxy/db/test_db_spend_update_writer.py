@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -237,6 +238,54 @@ async def test_update_daily_spend_sorting():
 
     # Verify that table.upsert was called
     mock_table.upsert.assert_has_calls(upsert_calls)
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_drains_all_batches_over_batch_size():
+    """
+    Regression for #30281: >BATCH_SIZE (100) unique entities in one flush must all
+    be written and the in-memory dict fully drained within a single call. Pre-fix,
+    only the first 100 sorted items were upserted then the method returned, silently
+    dropping the remaining entities.
+    """
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    num_entities = 250
+    daily_spend_transactions = {
+        f"test_key_{i}": {
+            "user_id": f"user{i:04d}",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+        for i in range(num_entities)
+    }
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_table.upsert.call_count == num_entities
+    assert mock_prisma_client.db.batch_.call_count == 3
+    assert daily_spend_transactions == {}
 
 
 @pytest.mark.asyncio
@@ -1371,8 +1420,7 @@ async def test_batch_database_updates_isolation_on_failure():
         prisma_client=MagicMock(),
         user_api_key_cache=MagicMock(),
         litellm_proxy_budget_name="budget",
-        payload_copy={"key": "value"},
-        request_tags=None,
+        payload={"key": "value"},
     )
 
     # _update_key_db raised, but all others should still have been called
@@ -1656,3 +1704,117 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
     )
 
     assert captured_where_values == expected_order
+
+
+@pytest.mark.asyncio
+async def test_update_database_does_not_deepcopy_on_request_path():
+    """
+    Regression for LIT-4088: copy.deepcopy must not run while the caller awaits
+    update_database(). The deepcopy used to isolate the daily-spend helpers is
+    relocated into the _batch_database_updates background task, and the spend-log
+    insert receives the payload directly (all consumers are read-only).
+
+    Asserts:
+    - zero copy.deepcopy calls happen on the awaited request path
+    - the batch background task still hands the daily helpers an isolated copy
+      (mutating the original after the task ran does not bleed into it)
+    - the spend-log insert receives the payload on the request path with the
+      correct content
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    captured_batch_payloads = []
+    captured_spend_log = {}
+
+    async def capture_batch_payload(**kwargs):
+        captured_batch_payloads.append(kwargs.get("payload"))
+
+    async def capture_spend_log(**kwargs):
+        payload = kwargs.get("payload")
+        captured_spend_log["ref"] = payload
+        captured_spend_log["model_at_call"] = payload["model"]
+
+    db_writer._insert_spend_log_to_db = AsyncMock(side_effect=capture_spend_log)
+    db_writer._update_user_db = AsyncMock()
+    db_writer._update_key_db = AsyncMock()
+    db_writer._update_team_db = AsyncMock()
+    db_writer._update_org_db = AsyncMock()
+    db_writer._update_tag_db = AsyncMock()
+    db_writer._update_agent_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock(
+        side_effect=capture_batch_payload
+    )
+    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+
+    fake_payload = {
+        "startTime": "2024-01-01T00:00:00",
+        "endTime": "2024-01-01T00:01:00",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "request_tags": '["prod-tag"]',
+        "spend": 0.0,
+        "nested": {"a": 1},
+    }
+
+    deepcopy_calls = []
+    real_deepcopy = copy.deepcopy
+
+    def counting_deepcopy(obj, *args, **kwargs):
+        deepcopy_calls.append(obj)
+        return real_deepcopy(obj, *args, **kwargs)
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=fake_payload,
+        ),
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.copy.deepcopy",
+            counting_deepcopy,
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            team_id="test-team",
+            org_id="test-org",
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+
+        # Request path is clean: nothing was deepcopied while the caller awaited.
+        assert len(deepcopy_calls) == 0
+
+        # The spend-log insert ran inline on the request path with the real payload.
+        assert captured_spend_log["ref"] is fake_payload
+        assert captured_spend_log["model_at_call"] == "gpt-4"
+        assert fake_payload["spend"] == 0.1
+
+        # Now let the batch background task run; the deepcopy happens here.
+        await asyncio.sleep(0)
+
+    assert len(deepcopy_calls) >= 1
+    assert len(captured_batch_payloads) == 1
+    batch_payload = captured_batch_payloads[0]
+    assert batch_payload is not fake_payload
+    assert batch_payload["model"] == "gpt-4"
+    assert batch_payload["spend"] == 0.1
+
+    # Mutating the original after the batch task captured its snapshot must not
+    # leak into the daily helper's isolated copy.
+    fake_payload["model"] = "MUTATED"
+    fake_payload["nested"]["a"] = 999
+    assert batch_payload["model"] == "gpt-4"
+    assert batch_payload["nested"]["a"] == 1

@@ -18,6 +18,18 @@ env_keys = set()
 
 # Terminal/environment detection variables that should not be documented
 # These are internal variables used for terminal detection, not user-configurable settings
+# Guard-only env vars: read solely to raise on invalid values; the only valid
+# value is the default, so there is nothing meaningful to document.
+EXCLUDED_GUARD_ONLY_VARS = {
+    "MAVVRIK_FOCUS_FREQUENCY",
+}
+
+# Temporary/internal rollout flags are intentionally not added to the public
+# environment settings docs until the feature is ready for broad use.
+EXCLUDED_ROLLOUT_FLAGS = {
+    "LITELLM_USE_RUST_OCR",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -64,6 +76,8 @@ for root, dirs, files in os.walk(repo_base):
                     match
                     for match in getenv_matches
                     if match not in EXCLUDED_TERMINAL_VARS
+                    and match not in EXCLUDED_GUARD_ONLY_VARS
+                    and match not in EXCLUDED_ROLLOUT_FLAGS
                 )  # Extract only the key part, excluding terminal vars
 
                 # Find all keys using litellm.get_secret()

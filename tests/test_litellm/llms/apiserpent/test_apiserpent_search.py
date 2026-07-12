@@ -66,9 +66,8 @@ class TestAPISerpentConfig:
         assert headers["X-API-Key"] == "test-api-key"
         assert headers["Content-Type"] == "application/json"
 
-    @patch("litellm.llms.apiserpent.search.transformation.get_secret_str")
-    def test_validate_environment_without_api_key(self, mock_get_secret):
-        mock_get_secret.return_value = None
+    def test_validate_environment_without_api_key(self, monkeypatch):
+        monkeypatch.delenv("APISERPENT_API_KEY", raising=False)
         with pytest.raises(ValueError, match="APISERPENT_API_KEY is not set"):
             APISerpentSearchConfig().validate_environment({})
 

@@ -65,7 +65,6 @@ interface FallbacksProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
@@ -115,7 +114,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   }
 }
 
-const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, modelData }) => {
+const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
@@ -134,7 +133,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
       let router_settings = data.router_settings;
       if ("model_group_retry_policy" in router_settings) {
         delete router_settings["model_group_retry_policy"];
@@ -243,7 +241,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
     <>
       {canModify && (
         <AddFallbacks
-          models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
           accessToken={accessToken || ""}
           value={routerSettings.fallbacks || []}
           onChange={handleFallbacksChange}

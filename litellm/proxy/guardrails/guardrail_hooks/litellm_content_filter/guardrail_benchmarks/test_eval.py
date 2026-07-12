@@ -186,21 +186,15 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
             tn += 1
         elif expected == "BLOCK" and actual == "ALLOW":
             fn += 1
-            wrong.append(
-                f"  FN (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}"
-            )
+            wrong.append(f"  FN (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}")
         elif expected == "ALLOW" and actual == "BLOCK":
             fp += 1
-            wrong.append(
-                f"  FP (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}"
-            )
+            wrong.append(f"  FP (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}")
 
     total = tp + tn + fp + fn
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = (
-        2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    )
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
     accuracy = (tp + tn) / total if total > 0 else 0
 
     # Latency stats
@@ -593,6 +587,4 @@ class TestInvestmentLlmJudgeClaude:
         return _load_jsonl("block_investment.jsonl")
 
     def test_confusion_matrix(self, blocker, cases):
-        _confusion_matrix(
-            blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)"
-        )
+        _confusion_matrix(blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)")

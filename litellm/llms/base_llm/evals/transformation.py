@@ -46,9 +46,7 @@ class BaseEvalsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate and update headers with provider-specific requirements
 

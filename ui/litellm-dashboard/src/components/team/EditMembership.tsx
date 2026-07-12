@@ -2,6 +2,7 @@ import { Text, TextInput } from "@tremor/react";
 import { Button as AntButton, Form, Modal, Select } from "antd";
 import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 
 interface BaseMember {
   user_email?: string;
@@ -21,7 +22,7 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -50,8 +51,6 @@ const MemberModal = <T extends BaseMember>({
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  console.log("Initial Data:", initialData);
-
   // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
     if (visible) {
@@ -65,10 +64,10 @@ const MemberModal = <T extends BaseMember>({
           max_budget_in_team: (initialData as any).max_budget_in_team || null,
           tpm_limit: (initialData as any).tpm_limit || null,
           rpm_limit: (initialData as any).rpm_limit || null,
+          budget_duration: (initialData as any).budget_duration || null,
           // Keep array values for multi-select fields
           allowed_models: (initialData as any).allowed_models || [],
         };
-        console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
       } else {
         // For add mode, reset to defaults
@@ -97,7 +96,6 @@ const MemberModal = <T extends BaseMember>({
         return { ...acc, [key]: value };
       }, {}) as T;
 
-      console.log("Submitting form data:", formData);
       await Promise.resolve(onSubmit(formData));
       form.resetFields();
       // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
@@ -117,7 +115,7 @@ const MemberModal = <T extends BaseMember>({
   const renderField = (field: {
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -155,6 +153,8 @@ const MemberModal = <T extends BaseMember>({
             allowClear
           />
         );
+      case "budget-duration":
+        return <BudgetDurationDropdown />;
       default:
         return null;
     }

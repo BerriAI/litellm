@@ -22,11 +22,11 @@ The CLI can be configured using environment variables or command-line options:
 Example:
 
 ```bash
-litellm-proxy version
+lite version
 # or
-litellm-proxy --version
+lite --version
 # or
-litellm-proxy -v
+lite -v
 ```
 
 ## Commands
@@ -40,7 +40,7 @@ The CLI provides several commands for managing models on your LiteLLM proxy serv
 View all available models:
 
 ```bash
-litellm-proxy models list [--format table|json]
+lite models list [--format table|json]
 ```
 
 Options:
@@ -52,7 +52,7 @@ Options:
 Get detailed information about all models:
 
 ```bash
-litellm-proxy models info [options]
+lite models info [options]
 ```
 
 Options:
@@ -75,7 +75,7 @@ Default columns: `public_model`, `upstream_model`, `updated_at`
 Add a new model to the proxy:
 
 ```bash
-litellm-proxy models add <model-name> [options]
+lite models add <model-name> [options]
 ```
 
 Options:
@@ -86,7 +86,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.com -i description="GPT-4 model"
+lite models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.com -i description="GPT-4 model"
 ```
 
 #### Get Model Info
@@ -94,7 +94,7 @@ litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.
 Get information about a specific model:
 
 ```bash
-litellm-proxy models get [--id MODEL_ID] [--name MODEL_NAME]
+lite models get [--id MODEL_ID] [--name MODEL_NAME]
 ```
 
 Options:
@@ -107,7 +107,7 @@ Options:
 Delete a model from the proxy:
 
 ```bash
-litellm-proxy models delete <model-id>
+lite models delete <model-id>
 ```
 
 #### Update Model
@@ -115,7 +115,7 @@ litellm-proxy models delete <model-id>
 Update an existing model's configuration:
 
 ```bash
-litellm-proxy models update <model-id> [options]
+lite models update <model-id> [options]
 ```
 
 Options:
@@ -128,7 +128,7 @@ Options:
 Import models from a YAML file:
 
 ```bash
-litellm-proxy models import models.yaml
+lite models import models.yaml
 ```
 
 Options:
@@ -142,31 +142,31 @@ Examples:
 1. Import all models from a YAML file:
 
 ```bash
-litellm-proxy models import models.yaml
+lite models import models.yaml
 ```
 
 2. Dry run (show what would be imported):
 
 ```bash
-litellm-proxy models import models.yaml --dry-run
+lite models import models.yaml --dry-run
 ```
 
 3. Only import models where the model name contains 'gpt':
 
 ```bash
-litellm-proxy models import models.yaml --only-models-matching-regex gpt
+lite models import models.yaml --only-models-matching-regex gpt
 ```
 
 4. Only import models with access group containing 'beta':
 
 ```bash
-litellm-proxy models import models.yaml --only-access-groups-matching-regex beta
+lite models import models.yaml --only-access-groups-matching-regex beta
 ```
 
 5. Combine both filters:
 
 ```bash
-litellm-proxy models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
+lite models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
 ```
 
 ### Credentials Management
@@ -178,7 +178,7 @@ The CLI provides commands for managing credentials on your LiteLLM proxy server:
 View all available credentials:
 
 ```bash
-litellm-proxy credentials list [--format table|json]
+lite credentials list [--format table|json]
 ```
 
 Options:
@@ -194,7 +194,7 @@ The table format displays:
 Create a new credential:
 
 ```bash
-litellm-proxy credentials create <credential-name> --info <json-string> --values <json-string>
+lite credentials create <credential-name> --info <json-string> --values <json-string>
 ```
 
 Options:
@@ -205,7 +205,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy credentials create azure-cred \
+lite credentials create azure-cred \
   --info '{"custom_llm_provider": "azure"}' \
   --values '{"api_key": "sk-123", "api_base": "https://example.azure.openai.com"}'
 ```
@@ -215,7 +215,7 @@ litellm-proxy credentials create azure-cred \
 Get information about a specific credential:
 
 ```bash
-litellm-proxy credentials get <credential-name>
+lite credentials get <credential-name>
 ```
 
 #### Delete Credential
@@ -223,7 +223,7 @@ litellm-proxy credentials get <credential-name>
 Delete a credential:
 
 ```bash
-litellm-proxy credentials delete <credential-name>
+lite credentials delete <credential-name>
 ```
 
 ### Keys Management
@@ -235,7 +235,7 @@ The CLI provides commands for managing API keys on your LiteLLM proxy server:
 View all API keys:
 
 ```bash
-litellm-proxy keys list [--format table|json] [options]
+lite keys list [--format table|json] [options]
 ```
 
 Options:
@@ -256,7 +256,7 @@ Options:
 Generate a new API key:
 
 ```bash
-litellm-proxy keys generate [options]
+lite keys generate [options]
 ```
 
 Options:
@@ -274,7 +274,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
+lite keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
 ```
 
 #### Delete Keys
@@ -282,7 +282,7 @@ litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 
 Delete API keys by key or alias:
 
 ```bash
-litellm-proxy keys delete [--keys <comma-separated-keys>] [--key-aliases <comma-separated-aliases>]
+lite keys delete [--keys <comma-separated-keys>] [--key-aliases <comma-separated-aliases>]
 ```
 
 Options:
@@ -293,7 +293,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
+lite keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
 ```
 
 #### Get Key Info
@@ -301,7 +301,7 @@ litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
 Get information about a specific API key:
 
 ```bash
-litellm-proxy keys info --key <key-hash>
+lite keys info --key <key-hash>
 ```
 
 Options:
@@ -311,7 +311,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy keys info --key sk-key1
+lite keys info --key sk-key1
 ```
 
 ### User Management
@@ -323,7 +323,7 @@ The CLI provides commands for managing users on your LiteLLM proxy server:
 View all users:
 
 ```bash
-litellm-proxy users list
+lite users list
 ```
 
 #### Get User Info
@@ -331,7 +331,7 @@ litellm-proxy users list
 Get information about a specific user:
 
 ```bash
-litellm-proxy users get --id <user-id>
+lite users get --id <user-id>
 ```
 
 #### Create User
@@ -339,7 +339,7 @@ litellm-proxy users get --id <user-id>
 Create a new user:
 
 ```bash
-litellm-proxy users create --email user@example.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
+lite users create --email user@example.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
 ```
 
 #### Delete User
@@ -347,7 +347,7 @@ litellm-proxy users create --email user@example.com --role internal_user --alias
 Delete one or more users by user_id:
 
 ```bash
-litellm-proxy users delete <user-id-1> <user-id-2>
+lite users delete <user-id-1> <user-id-2>
 ```
 
 ### Chat Commands
@@ -359,7 +359,7 @@ The CLI provides commands for interacting with chat models through your LiteLLM 
 Create a chat completion:
 
 ```bash
-litellm-proxy chat completions <model> [options]
+lite chat completions <model> [options]
 ```
 
 Arguments:
@@ -379,12 +379,12 @@ Examples:
 
 1. Simple completion:
 ```bash
-litellm-proxy chat completions gpt-4 -m "user:Hello, how are you?"
+lite chat completions gpt-4 -m "user:Hello, how are you?"
 ```
 
 2. Multi-message conversation:
 ```bash
-litellm-proxy chat completions gpt-4 \
+lite chat completions gpt-4 \
   -m "system:You are a helpful assistant" \
   -m "user:What's the capital of France?" \
   -m "assistant:The capital of France is Paris." \
@@ -393,7 +393,7 @@ litellm-proxy chat completions gpt-4 \
 
 3. With generation parameters:
 ```bash
-litellm-proxy chat completions gpt-4 \
+lite chat completions gpt-4 \
   -m "user:Write a story" \
   --temperature 0.7 \
   --max-tokens 500 \
@@ -409,7 +409,7 @@ The CLI provides commands for making direct HTTP requests to your LiteLLM proxy 
 Make an HTTP request to any endpoint:
 
 ```bash
-litellm-proxy http request <method> <uri> [options]
+lite http request <method> <uri> [options]
 ```
 
 Arguments:
@@ -425,18 +425,51 @@ Examples:
 
 1. List models:
 ```bash
-litellm-proxy http request GET /models
+lite http request GET /models
 ```
 
 2. Create a chat completion:
 ```bash
-litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+lite http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 3. Test connection with custom headers:
 ```bash
-litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value"
+lite http request GET /health/test_connection -H "X-Custom-Header:value"
 ```
+
+### Run a Coding Agent
+
+Launch a coding agent with all of its LLM traffic routed through your LiteLLM proxy. Each supported agent is its own command, so there is nothing to remember beyond the agent's name:
+
+```bash
+lite claude
+lite codex
+lite opencode
+```
+
+Anything you type after the agent name is forwarded to it untouched, so the usual flags keep working:
+
+```bash
+lite claude --resume
+lite codex exec "summarize the repo"
+```
+
+Each command resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
+
+The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol).
+
+Options (these belong to the wrapper, so put them before the agent's own flags):
+
+- `--skip-verify`: Skip the pre-launch key check (useful offline or with non-standard auth).
+
+To pin the model, pass the agent's own model flag (for example `lite claude --model my-proxy-model` or `lite codex -m my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
+
+#### About the `lite login` credential
+
+The token minted by `lite login` is a short-lived, per-session agent credential, not a managed virtual key. It is scoped to the user and team you authenticated as, inherits that user's and team's models and budgets, and is enforced on the proxy exactly like a virtual key on the same team (guardrails, routing, logging, spend). Spend is tracked against the shared team and user budgets, so running several agents (or logging in more than once) does not hand each session its own separate budget; they all draw down the same team/user allowance. There is no separate per-session cap, so sustained agent use is not capped at a small chat-session limit.
+
+The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
 ## Environment Variables
 
@@ -450,37 +483,37 @@ The CLI respects the following environment variables:
 1. List all models in table format:
 
 ```bash
-litellm-proxy models list
+lite models list
 ```
 
 2. Add a new model with parameters:
 
 ```bash
-litellm-proxy models add gpt-4 -p api_key=sk-123 -p max_tokens=2048
+lite models add gpt-4 -p api_key=sk-123 -p max_tokens=2048
 ```
 
 3. Get model information in JSON format:
 
 ```bash
-litellm-proxy models info --format json
+lite models info --format json
 ```
 
 4. Update model parameters:
 
 ```bash
-litellm-proxy models update model-123 -p temperature=0.7 -i description="Updated model"
+lite models update model-123 -p temperature=0.7 -i description="Updated model"
 ```
 
 5. List all credentials in table format:
 
 ```bash
-litellm-proxy credentials list
+lite credentials list
 ```
 
 6. Create a new credential for Azure:
 
 ```bash
-litellm-proxy credentials create azure-prod \
+lite credentials create azure-prod \
   --info '{"custom_llm_provider": "azure"}' \
   --values '{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
 ```
@@ -488,7 +521,7 @@ litellm-proxy credentials create azure-prod \
 7. Make a custom HTTP request:
 
 ```bash
-litellm-proxy http request POST /chat/completions \
+lite http request POST /chat/completions \
   -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}' \
   -H "X-Custom-Header:value"
 ```
@@ -497,29 +530,29 @@ litellm-proxy http request POST /chat/completions \
 
 ```bash
 # List users
-litellm-proxy users list
+lite users list
 
 # Get user info
-litellm-proxy users get --id u1
+lite users get --id u1
 
 # Create a user
-litellm-proxy users create --email a@b.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
+lite users create --email a@b.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
 
 # Delete users
-litellm-proxy users delete u1 u2
+lite users delete u1 u2
 ```
 
 9. Import models from a YAML file (with filters):
 
 ```bash
 # Only import models where the model name contains 'gpt'
-litellm-proxy models import models.yaml --only-models-matching-regex gpt
+lite models import models.yaml --only-models-matching-regex gpt
 
 # Only import models with access group containing 'beta'
-litellm-proxy models import models.yaml --only-access-groups-matching-regex beta
+lite models import models.yaml --only-access-groups-matching-regex beta
 
 # Combine both filters
-litellm-proxy models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
+lite models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
 ```
 
 ## Error Handling

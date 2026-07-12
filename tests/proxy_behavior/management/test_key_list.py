@@ -81,8 +81,11 @@ async def _list_hashes(proxy_client, caller_cleartext: str, query: str) -> set:
 
 
 async def test_key_list_admin_key_alias_substring_match(proxy_client, scratch, world):
-    """A PROXY_ADMIN's key_alias filter is a case-insensitive substring match;
-    a narrower fragment selects the subset whose alias contains it."""
+    """A PROXY_ADMIN's key_alias filter is a case-insensitive substring match
+    when substring_matching=true is requested (the dashboard search box); a
+    narrower fragment selects the subset whose alias contains it. Substring
+    matching is opt-in: without the flag the filter is exact (see
+    test_key_list_admin_key_alias_exact_without_substring_flag)."""
     admin = world.keys[Actor.PROXY_ADMIN]
     a = await create_scratch_key(
         proxy_client,
@@ -101,14 +104,44 @@ async def test_key_list_admin_key_alias_substring_match(proxy_client, scratch, w
     seeded = {hash_token(a), hash_token(b)}
 
     broad = await _list_hashes(
-        proxy_client, admin.cleartext, f"key_alias={scratch.prefix}-sub"
+        proxy_client,
+        admin.cleartext,
+        f"key_alias={scratch.prefix}-sub&substring_matching=true",
     )
     assert broad & seeded == seeded
 
     narrow = await _list_hashes(
-        proxy_client, admin.cleartext, f"key_alias={scratch.prefix}-sub-a"
+        proxy_client,
+        admin.cleartext,
+        f"key_alias={scratch.prefix}-sub-a&substring_matching=true",
     )
     assert narrow & seeded == {hash_token(a)}
+
+
+async def test_key_list_admin_key_alias_exact_without_substring_flag(
+    proxy_client, scratch, world
+):
+    """Regression guard for the prior exact-match contract: without
+    substring_matching, even a PROXY_ADMIN's key_alias filter is exact, so a
+    fragment of a seeded alias does not select it."""
+    admin = world.keys[Actor.PROXY_ADMIN]
+    full_alias = f"{scratch.prefix}-exactflag"
+    key = await create_scratch_key(
+        proxy_client,
+        admin.cleartext,
+        scratch.prefix,
+        user_id=admin.user_id,
+        key_alias=full_alias,
+    )
+    key_hash = hash_token(key)
+
+    exact = await _list_hashes(proxy_client, admin.cleartext, f"key_alias={full_alias}")
+    assert key_hash in exact
+
+    fragment = await _list_hashes(
+        proxy_client, admin.cleartext, f"key_alias={scratch.prefix}-exactfla"
+    )
+    assert key_hash not in fragment
 
 
 async def test_key_list_non_admin_key_alias_is_exact_match(

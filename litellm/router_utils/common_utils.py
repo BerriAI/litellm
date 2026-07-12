@@ -14,9 +14,7 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     Hash of the credential params, used for mapping the file id to the right model
     """
     sensitive_params = CredentialLiteLLMParams(**litellm_params)
-    return hashlib.sha256(
-        json.dumps(sensitive_params.model_dump()).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
 def add_model_file_id_mappings(
@@ -37,9 +35,7 @@ def add_model_file_id_mappings(
     """
     model_file_id_mapping: Dict[str, str] = {}
     deployments_list: List[Dict] = (
-        healthy_deployments
-        if isinstance(healthy_deployments, list)
-        else [healthy_deployments]
+        healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
     )
     for deployment, response in zip(deployments_list, responses):
         model_id = deployment.get("model_info", {}).get("id")
@@ -62,9 +58,7 @@ def filter_team_based_models(
 
     metadata = request_kwargs.get("metadata") or {}
     litellm_metadata = request_kwargs.get("litellm_metadata") or {}
-    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
-        "user_api_key_team_id"
-    )
+    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
     ids_to_remove = set()
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
@@ -129,9 +123,7 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [
-        d for d in healthy_deployments if _deployment_supports_web_search(d)
-    ]
+    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments

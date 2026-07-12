@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,11 +10,16 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _adjust_dates_for_timezone,
+    _build_aggregated_sql_query,
     _is_user_agent_tag,
+    _record_to_spend_metrics,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    update_metrics,
 )
+from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
 
 
 @pytest.mark.asyncio
@@ -55,6 +61,51 @@ async def test_get_daily_activity_empty_entity_id_list():
     # Check that team_id is set to empty list
     assert "team_id" in where_conditions
     assert where_conditions["team_id"] == {"in": []}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_order_has_id_tiebreaker():
+    """Regression for #30164.
+
+    ``date`` alone is not a unique sort key for either
+    ``LiteLLM_DailyUserSpend`` or ``LiteLLM_DailyTeamSpend`` -- a busy
+    tenant has many rows per date (one per api_key, model, model_group,
+    provider, endpoint, ...).  Offset pagination over a non-unique sort
+    landed on arbitrary page boundaries between queries, so summing
+    per-page totals across pages produced non-deterministic results
+    (sometimes inflated, sometimes deflated).  The tiebreaker on the
+    UUID primary key pins the row order so a client paging through all
+    results gets the correct total.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyspend = mock_table
+
+    await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+    )
+
+    mock_table.find_many.assert_called_once()
+    order = mock_table.find_many.call_args[1]["order"]
+    assert order == [{"date": "desc"}, {"id": "asc"}], (
+        f"order must include the id tiebreaker after date for stable offset "
+        f"pagination (see #30164); got {order!r}"
+    )
 
 
 def test_is_user_agent_tag():
@@ -585,3 +636,303 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+def _daily_user_spend_record(*, user_id, api_key, spend):
+    """A LiteLLM_DailyUserSpend row as the per-user breakdown reads it."""
+    return SimpleNamespace(
+        date="2024-01-01",
+        user_id=user_id,
+        api_key=api_key,
+        model="gpt-4",
+        model_group="gpt-4",
+        custom_llm_provider="openai",
+        mcp_namespaced_tool_name=None,
+        endpoint="/chat/completions",
+        spend=spend,
+        prompt_tokens=10,
+        completion_tokens=5,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_applies_resolve_entity_metadata_to_breakdown():
+    """Regression for LIT-3889: the Spend Per User chart showed raw UUIDs.
+
+    /user/daily/activity used to pass entity_metadata_field=None, so every
+    user entity in the breakdown carried empty metadata and the dashboard had
+    nothing to render but the user_id UUID. The page-scoped resolver must put
+    the resolved email/alias onto the entity metadata so the UI can label it,
+    while a spender with no email on file still falls back to the raw UUID.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    records = [
+        _daily_user_spend_record(user_id="user-with-email", api_key="key-1", spend=7.0),
+        _daily_user_spend_record(user_id="user-no-email", api_key="key-2", spend=3.0),
+    ]
+
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    seen_user_ids = {}
+
+    async def resolver(page_records):
+        seen_user_ids["ids"] = {r.user_id for r in page_records}
+        return {"user-with-email": {"user_email": "spender@example.com"}}
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+        resolve_entity_metadata=resolver,
+    )
+
+    # Resolver is driven by the user_ids actually on the page
+    assert seen_user_ids["ids"] == {"user-with-email", "user-no-email"}
+
+    entities = result.results[0].breakdown.entities
+    # Email is on the entity metadata so the UI labels the chart with it
+    assert entities["user-with-email"].metadata["user_email"] == "spender@example.com"
+    # No email on file -> empty metadata -> UI falls back to the UUID
+    assert entities["user-no-email"].metadata == {}
+
+
+class TestAdjustDatesForTimezone:
+    """
+    Regression tests for the timezone double-counting bug.
+
+    Background: the previous implementation expanded the SQL date range by a full
+    UTC day on whichever side a non-UTC timezone offset pointed. Because spend is
+    bucketed in whole UTC days in the aggregation table, that expansion caused
+    single-day queries from non-UTC timezones to include a second full UTC day's
+    worth of data, producing approximately 2x over-counting. The sum of single-day
+    spends across a window then exceeded the equivalent multi-day aggregate, which
+    is mathematically impossible.
+
+    These tests pin the function to a pass-through and assert the additivity
+    invariant that any future implementation must preserve.
+    """
+
+    @pytest.mark.parametrize(
+        "offset_minutes",
+        [
+            None,
+            0,
+            -330,  # IST UTC+5:30
+            -540,  # JST UTC+9
+            -60,  # CET UTC+1
+            240,  # AST UTC-4
+            300,  # EST UTC-5
+            480,  # PST UTC-8
+        ],
+    )
+    def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
+        start, end = _adjust_dates_for_timezone(
+            "2026-05-29", "2026-05-29", offset_minutes
+        )
+        assert start == "2026-05-29"
+        assert end == "2026-05-29"
+
+    def test_single_day_query_does_not_widen_to_two_utc_days(self):
+        """
+        Pins the boundary that caused the original 2x bug: a single IST day must
+        not be translated into a SQL filter covering two UTC days.
+        """
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
+        assert start == end == "2026-05-29", (
+            "Single-day IST query expanded to a multi-day UTC range; this is "
+            "the regression that produced approximately 2x over-counting."
+        )
+
+    def test_multi_day_range_endpoints_are_preserved(self):
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
+        assert (start, end) == ("2026-05-29", "2026-06-02")
+
+    @pytest.mark.parametrize("offset_minutes", [-330, 480])
+    def test_single_day_sums_match_multi_day_window(self, offset_minutes):
+        """
+        Additivity invariant: querying each day in a window separately and summing
+        the resulting SQL ranges must cover exactly the same range as querying the
+        whole window at once. The bug broke this; without it, single-day sums
+        exceeded the multi-day total by ~50% over a 5-day IST window.
+        """
+        days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
+        single_day_ranges = [
+            _adjust_dates_for_timezone(d, d, offset_minutes) for d in days
+        ]
+        multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
+
+        per_day_starts = [r[0] for r in single_day_ranges]
+        per_day_ends = [r[1] for r in single_day_ranges]
+        assert min(per_day_starts) == multi_day_range[0]
+        assert max(per_day_ends) == multi_day_range[1]
+        assert per_day_starts == days
+        assert per_day_ends == days
+
+
+class TestBuildAggregatedSqlQuery:
+    """
+    Asserts the SQL emitted by the aggregated query path stays anchored to the
+    user-supplied date range. The original bug shipped a function that returned
+    expanded dates from _adjust_dates_for_timezone, so the regression surface is
+    not just the helper but the SQL it feeds into.
+    """
+
+    @pytest.mark.parametrize("offset_minutes", [None, 0, -330, 480])
+    def test_sql_date_bounds_are_user_supplied_dates(self, offset_minutes):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-05-29",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=offset_minutes,
+        )
+
+        assert params[0] == "2026-05-29"
+        assert params[1] == "2026-05-29"
+        assert "date >= $1" in sql
+        assert "date <= $2" in sql
+
+    def test_optional_filters_appear_in_params_in_order(self):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model="bedrock/global.anthropic.claude-opus-4-8",
+            api_key="sk-test",
+            timezone_offset_minutes=-330,
+        )
+
+        assert params == [
+            "2026-05-29",
+            "2026-06-02",
+            "user-1",
+            "bedrock/global.anthropic.claude-opus-4-8",
+            "sk-test",
+        ]
+        assert "model = $4" in sql
+        assert "api_key = $5" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_empty_result_set():
+    """Regression test for the empty-range 500.
+
+    When the date filter matches zero rows, Postgres still emits the
+    grand-total () grouping-set row with every SUM column NULL. The
+    endpoint must return an empty result set with zeroed totals, not
+    crash on None + None.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    mock_rows = [
+        {
+            "date": None,
+            "api_key": None,
+            "model": None,
+            "model_group": None,
+            "custom_llm_provider": None,
+            "mcp_namespaced_tool_name": None,
+            "endpoint": None,
+            "group_level": 127,
+            "spend": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "cache_read_input_tokens": None,
+            "cache_creation_input_tokens": None,
+            "api_requests": None,
+            "successful_requests": None,
+            "failed_requests": None,
+        }
+    ]
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-16",
+        end_date="2026-06-16",
+        model=None,
+        api_key=None,
+    )
+
+    assert result.results == []
+    assert result.metadata.total_spend == 0.0
+    assert result.metadata.total_prompt_tokens == 0
+    assert result.metadata.total_completion_tokens == 0
+    assert result.metadata.total_tokens == 0
+    assert result.metadata.total_api_requests == 0
+    assert result.metadata.total_successful_requests == 0
+    assert result.metadata.total_failed_requests == 0
+    assert result.metadata.total_cache_read_input_tokens == 0
+    assert result.metadata.total_cache_creation_input_tokens == 0
+
+
+def _no_spend_record():
+    """A rollup row for a key with no spend, where SUM() returns NULL (None)."""
+    return SimpleNamespace(
+        spend=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        cache_read_input_tokens=None,
+        cache_creation_input_tokens=None,
+        api_requests=None,
+        successful_requests=None,
+        failed_requests=None,
+    )
+
+
+def test_record_to_spend_metrics_handles_none_values():
+    """Keys with no spend produce NULL aggregates; treat them as zero, not a crash."""
+    metrics = _record_to_spend_metrics(_no_spend_record())
+    assert metrics.spend == 0
+    assert metrics.prompt_tokens == 0
+    assert metrics.completion_tokens == 0
+    assert metrics.total_tokens == 0
+    assert metrics.api_requests == 0
+    assert metrics.successful_requests == 0
+    assert metrics.failed_requests == 0
+    assert metrics.cache_read_input_tokens == 0
+    assert metrics.cache_creation_input_tokens == 0
+
+
+def test_update_metrics_handles_none_values():
+    """update_metrics should coalesce NULL aggregates instead of raising TypeError."""
+    metrics = update_metrics(SpendMetrics(), _no_spend_record())
+    assert metrics.spend == 0
+    assert metrics.prompt_tokens == 0
+    assert metrics.completion_tokens == 0
+    assert metrics.total_tokens == 0
+    assert metrics.api_requests == 0
+    assert metrics.successful_requests == 0
+    assert metrics.failed_requests == 0
+    assert metrics.cache_read_input_tokens == 0
+    assert metrics.cache_creation_input_tokens == 0

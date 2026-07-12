@@ -147,9 +147,7 @@ async def list_search_tools(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(
-            prisma_client=prisma_client
-        )
+        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
 
         db_tool_names = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
@@ -163,9 +161,7 @@ async def list_search_tools(
             if parsed_tools:
                 config_search_tools = parsed_tools
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Could not get config-defined search tools: {e}"
-            )
+            verbose_proxy_logger.debug(f"Could not get config-defined search tools: {e}")
 
         for config_search_tool in config_search_tools:
             tool_name = config_search_tool.get("search_tool_name")
@@ -183,9 +179,7 @@ async def list_search_tools(
                         search_tool_id=None,
                         search_tool_name=tool_name,
                         litellm_params=masked_litellm_params_dict,
-                        search_tool_info=(
-                            dict(config_tool_info) if config_tool_info else None
-                        ),
+                        search_tool_info=(dict(config_tool_info) if config_tool_info else None),
                         created_at=None,
                         updated_at=None,
                         is_from_config=True,
@@ -193,9 +187,7 @@ async def list_search_tools(
                 )
 
         search_tool_configs = [
-            tool
-            for tool in search_tool_configs
-            if tool.get("search_tool_name") not in db_tool_names
+            tool for tool in search_tool_configs if tool.get("search_tool_name") not in db_tool_names
         ]
 
         for db_search_tool in search_tools_from_db:
@@ -212,19 +204,13 @@ async def list_search_tools(
                     search_tool_name=db_search_tool.get("search_tool_name", ""),
                     litellm_params=masked_litellm_params_dict,
                     search_tool_info=db_search_tool.get("search_tool_info"),
-                    created_at=_convert_datetime_to_str(
-                        db_search_tool.get("created_at")
-                    ),
-                    updated_at=_convert_datetime_to_str(
-                        db_search_tool.get("updated_at")
-                    ),
+                    created_at=_convert_datetime_to_str(db_search_tool.get("created_at")),
+                    updated_at=_convert_datetime_to_str(db_search_tool.get("updated_at")),
                     is_from_config=False,
                 )
             )
 
-        visible_search_tools = await _filter_visible_search_tools(
-            search_tool_configs, user_api_key_dict
-        )
+        visible_search_tools = await _filter_visible_search_tools(search_tool_configs, user_api_key_dict)
 
         return ListSearchToolsResponse(search_tools=visible_search_tools)
     except Exception as e:
@@ -432,8 +418,7 @@ async def delete_search_tool(search_tool_id: str):
         )
 
         verbose_proxy_logger.debug(
-            "Successfully deleted search tool from database. "
-            "Router will be updated by the cron job."
+            "Successfully deleted search tool from database. Router will be updated by the cron job."
         )
 
         return result
@@ -574,13 +559,9 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         api_base = litellm_params.get("api_base")
 
         if not search_provider:
-            raise HTTPException(
-                status_code=400, detail="search_provider is required in litellm_params"
-            )
+            raise HTTPException(status_code=400, detail="search_provider is required in litellm_params")
 
-        verbose_proxy_logger.debug(
-            f"Testing connection to search provider: {search_provider}"
-        )
+        verbose_proxy_logger.debug(f"Testing connection to search provider: {search_provider}")
 
         # Make a simple test search query with max_results=1 to minimize cost
         test_query = "test"
@@ -593,26 +574,20 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             timeout=10.0,  # 10 second timeout for test
         )
 
-        verbose_proxy_logger.debug(
-            f"Successfully tested connection to {search_provider} search provider"
-        )
+        verbose_proxy_logger.debug(f"Successfully tested connection to {search_provider} search provider")
 
         return {
             "status": "success",
             "message": f"Successfully connected to {search_provider} search provider",
             "test_query": test_query,
-            "results_count": (
-                len(response.results) if response and response.results else 0
-            ),
+            "results_count": (len(response.results) if response and response.results else 0),
         }
 
     except Exception as e:
         error_message = str(e)
         error_type = type(e).__name__
 
-        verbose_proxy_logger.exception(
-            f"Failed to connect to search provider: {error_message}"
-        )
+        verbose_proxy_logger.exception(f"Failed to connect to search provider: {error_message}")
 
         # Return error details in a structured format
         return {
@@ -664,9 +639,7 @@ async def get_available_search_providers():
         for provider in SearchProviders:
             try:
                 # Get the config class for this provider
-                config = ProviderConfigManager.get_provider_search_config(
-                    provider=provider
-                )
+                config = ProviderConfigManager.get_provider_search_config(provider=provider)
 
                 if config is not None:
                     # Get the UI-friendly name from the config class
@@ -679,9 +652,7 @@ async def get_available_search_providers():
                         }
                     )
             except Exception as e:
-                verbose_proxy_logger.debug(
-                    f"Could not get config for search provider {provider.value}: {e}"
-                )
+                verbose_proxy_logger.debug(f"Could not get config for search provider {provider.value}: {e}")
                 continue
 
         return {"providers": available_providers}

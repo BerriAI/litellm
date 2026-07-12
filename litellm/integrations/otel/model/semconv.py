@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
@@ -143,7 +144,52 @@ class Client:
 
 
 class Error:
+    """OTel-defined error attribute keys, from the semconv ``error.*`` registry.
+    ``MESSAGE`` is marked *Deprecated* upstream in favor of domain-specific
+    error message keys plus ``exception.message`` on the exception event, but
+    litellm still stamps it."""
+
     TYPE: Final = "error.type"
+    MESSAGE: Final = "error.message"
+
+
+class LiteLLMError:
+    """Detail keys for the mapped provider exception of a failed LLM call.
+    OTel semconv does not define these, so they live under the ``litellm.*``
+    vendor namespace rather than squatting on the semconv-owned ``error.*``
+    namespace."""
+
+    CODE: Final = "litellm.provider.error.code"
+    STACK_TRACE: Final = "litellm.provider.error.stack_trace"
+    LLM_PROVIDER: Final = "litellm.provider.error.llm_provider"
+
+
+class ExceptionEvent:
+    """OTel exception-event name and attribute keys (semconv ``exception.*``).
+
+    The full error message rides ``exception.message`` on a span event rather than
+    a custom string attribute. Backends recognise these semantic-convention names
+    and map them as full text; an unrecognised key (e.g. ``error_message``) falls
+    into the default dynamic template, which truncates strings to a 1024-char
+    ``keyword``.
+    """
+
+    NAME: Final = "exception"
+    TYPE: Final = "exception.type"
+    MESSAGE: Final = "exception.message"
+    STACKTRACE: Final = "exception.stacktrace"
+
+
+class GenAIEvent:
+    """GenAI semconv event names, from the GenAI registry's *events* section.
+
+    ``gen_ai.client.operation.exception`` is defined as a log-based event
+    (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
+    span via the trace/span ids — the semconv-compliant home for GenAI failure
+    details, unlike the deprecated ``error.message`` span attribute.
+    """
+
+    OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
 class Server:
@@ -215,6 +261,10 @@ class Metric:
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
+    TOKEN_COST: Final = "gen_ai.client.token.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.

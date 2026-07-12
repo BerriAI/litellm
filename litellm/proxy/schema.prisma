@@ -279,6 +279,7 @@ model LiteLLM_ObjectPermissionTable {
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
+  mcp_tool_search_enabled Boolean?
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -311,6 +312,11 @@ model LiteLLM_MCPServerTable {
   tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
+  // Admin-configured environment variables interpolated into static_headers
+  // via ${NAME} syntax. Stored as an array of
+  // {name, value, scope, description}. scope is "global" (value used as-is)
+  // or "user" (value supplied per-user via LiteLLM_MCPUserEnvVars).
+  env_vars     Json?          @default("[]")
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -323,14 +329,23 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   oauth2_flow        String?
+  token_exchange_endpoint String?
+  // Named for the RFC 8693 "audience" token-exchange request parameter (that flow only).
+  // RFC 8707 resource indicators are a separate concept, named "resource" in the v2 egress types.
+  audience           String?
+  subject_token_type String?
+  token_exchange_profile String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
+  dcr_bridge Boolean?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
+  timeout               Float?
+  max_concurrent_requests Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -365,6 +380,21 @@ model LiteLLM_MCPUserCredentials {
   @@unique([user_id, server_id])
 }
 
+// Per-user environment variable values for MCP servers.
+// values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
+model LiteLLM_MCPUserEnvVars {
+  id         String   @id @default(uuid())
+  user_id    String
+  server_id  String
+  values_b64 String
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  @@unique([user_id, server_id])
+  @@index([user_id])
+  @@index([server_id])
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id
@@ -396,6 +426,7 @@ model LiteLLM_VerificationToken {
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_fallbacks Json @default("{}")
     budget_id String?
     organization_id String?
     object_permission_id String?
@@ -489,6 +520,7 @@ model LiteLLM_DeletedVerificationToken {
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    budget_fallbacks        Json     @default("{}")
     router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?

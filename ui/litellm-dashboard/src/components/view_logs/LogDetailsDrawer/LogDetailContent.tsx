@@ -112,7 +112,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
         <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
           <Descriptions column={2} size="small">
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
@@ -163,7 +163,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+        <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <Spin size="default" />
           <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
         </div>
@@ -234,7 +234,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
@@ -299,7 +299,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
           {showAnthropicMessagesInputOutput ? (
@@ -420,7 +420,7 @@ function RequestResponseSection({
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"
@@ -548,7 +548,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
 
 function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"

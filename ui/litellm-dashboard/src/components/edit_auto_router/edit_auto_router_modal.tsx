@@ -2,9 +2,14 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
+import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
+
+const isComplexityRouterModel = (modelData: any): boolean =>
+  modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
+  modelData?.litellm_params?.complexity_router_config != null;
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -30,6 +35,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
+  const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
+    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    classifier_type: "heuristic",
+  });
+  const isComplexityRouter = isComplexityRouterModel(modelData);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -66,6 +76,31 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const initializeForm = () => {
     try {
+      if (isComplexityRouterModel(modelData)) {
+        // Parse the complexity_router_config if it exists and is a string
+        let parsedConfig = modelData.litellm_params?.complexity_router_config || {};
+        if (typeof parsedConfig === "string") {
+          parsedConfig = JSON.parse(parsedConfig);
+        }
+
+        setComplexityRouterConfig({
+          tiers: {
+            SIMPLE: parsedConfig.tiers?.SIMPLE || "",
+            MEDIUM: parsedConfig.tiers?.MEDIUM || "",
+            COMPLEX: parsedConfig.tiers?.COMPLEX || "",
+            REASONING: parsedConfig.tiers?.REASONING || "",
+          },
+          classifier_type: parsedConfig.classifier_type || "heuristic",
+          classifier_llm_config: parsedConfig.classifier_llm_config,
+        });
+
+        form.setFieldsValue({
+          auto_router_name: modelData.model_name,
+          model_access_group: modelData.model_info?.access_groups || [],
+        });
+        return;
+      }
+
       // Parse the auto_router_config if it exists and is a string
       let parsedConfig = null;
       if (modelData.litellm_params?.auto_router_config) {
@@ -100,6 +135,49 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     try {
       setLoading(true);
       const values = await form.validateFields();
+
+      if (isComplexityRouter) {
+        const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
+        if (Object.values(tiers).filter(Boolean).length === 0) {
+          NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
+          return;
+        }
+        if (classifier_type === "llm" && !classifier_llm_config?.model) {
+          NotificationsManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+          return;
+        }
+
+        const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+        const updatedLitellmParams = {
+          ...modelData.litellm_params,
+          complexity_router_config: {
+            tiers,
+            classifier_type,
+            ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
+          },
+          complexity_router_default_model: defaultModel,
+        };
+        const updatedModelInfo = {
+          ...modelData.model_info,
+          access_groups: values.model_access_group || [],
+        };
+
+        await modelPatchUpdateCall(
+          accessToken,
+          { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
+          modelData.model_info.id,
+        );
+
+        NotificationsManager.success("Auto router configuration updated successfully");
+        onSuccess({
+          ...modelData,
+          model_name: values.auto_router_name,
+          litellm_params: updatedLitellmParams,
+          model_info: updatedModelInfo,
+        });
+        onCancel();
+        return;
+      }
 
       // Prepare the updated litellm_params
       const updatedLitellmParams = {
@@ -177,45 +255,60 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             <TextInput placeholder="e.g., auto_router_1, smart_routing" />
           </Form.Item>
 
-          {/* Router Configuration Builder */}
-          <div className="w-full">
-            <RouterConfigBuilder
-              modelInfo={modelInfo}
-              value={routerConfig}
-              onChange={(config) => {
-                setRouterConfig(config);
-              }}
-            />
-          </div>
+          {isComplexityRouter ? (
+            /* Complexity Router Configuration */
+            <div className="w-full">
+              <ComplexityRouterConfig
+                modelInfo={modelInfo}
+                value={complexityRouterConfig}
+                onChange={(config) => {
+                  setComplexityRouterConfig(config);
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              {/* Router Configuration Builder */}
+              <div className="w-full">
+                <RouterConfigBuilder
+                  modelInfo={modelInfo}
+                  value={routerConfig}
+                  onChange={(config) => {
+                    setRouterConfig(config);
+                  }}
+                />
+              </div>
 
-          {/* Default Model */}
-          <Form.Item
-            label="Default Model"
-            name="auto_router_default_model"
-            rules={[{ required: true, message: "Default model is required" }]}
-          >
-            <AntdSelect
-              placeholder="Select a default model"
-              onChange={(value) => {
-                setShowCustomDefaultModel(value === "custom");
-              }}
-              options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
-              showSearch={true}
-            />
-          </Form.Item>
+              {/* Default Model */}
+              <Form.Item
+                label="Default Model"
+                name="auto_router_default_model"
+                rules={[{ required: true, message: "Default model is required" }]}
+              >
+                <AntdSelect
+                  placeholder="Select a default model"
+                  onChange={(value) => {
+                    setShowCustomDefaultModel(value === "custom");
+                  }}
+                  options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
+                  showSearch={true}
+                />
+              </Form.Item>
 
-          {/* Embedding Model */}
-          <Form.Item label="Embedding Model" name="auto_router_embedding_model">
-            <AntdSelect
-              placeholder="Select an embedding model (optional)"
-              onChange={(value) => {
-                setShowCustomEmbeddingModel(value === "custom");
-              }}
-              options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
-              showSearch={true}
-              allowClear
-            />
-          </Form.Item>
+              {/* Embedding Model */}
+              <Form.Item label="Embedding Model" name="auto_router_embedding_model">
+                <AntdSelect
+                  placeholder="Select an embedding model (optional)"
+                  onChange={(value) => {
+                    setShowCustomEmbeddingModel(value === "custom");
+                  }}
+                  options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
+                  showSearch={true}
+                  allowClear
+                />
+              </Form.Item>
+            </>
+          )}
 
           {/* Model Access Groups - Admin only */}
           {userRole === "Admin" && (

@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     Optional,
     UserAPIKeyAuth,
 )
+from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
@@ -56,15 +57,10 @@ def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
         return _audit_log_callback_cache[name]
 
     instance: Optional[CustomLogger]
-    if (
-        name == "s3_v2"
-        and getattr(litellm, "s3_audit_callback_params", None) is not None
-    ):
+    if name == "s3_v2" and getattr(litellm, "s3_audit_callback_params", None) is not None:
         from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
-        instance = S3V2Logger(
-            s3_callback_params_override=litellm.s3_audit_callback_params
-        )
+        instance = S3V2Logger(s3_callback_params_override=litellm.s3_audit_callback_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -120,9 +116,7 @@ def _audit_log_task_done_callback(task: asyncio.Task) -> None:
     except asyncio.CancelledError:
         return
     if exc is not None:
-        verbose_proxy_logger.error(
-            "Audit log callback task failed: %s", exc, exc_info=exc
-        )
+        verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
 
 
 async def _dispatch_audit_log_to_callbacks(
@@ -136,24 +130,18 @@ async def _dispatch_audit_log_to_callbacks(
 
     for callback in litellm.audit_log_callbacks:
         try:
-            resolved: Optional[CustomLogger] = (
-                callback if isinstance(callback, CustomLogger) else None
-            )
+            resolved: Optional[CustomLogger] = callback if isinstance(callback, CustomLogger) else None
             if isinstance(callback, str):
                 resolved = _resolve_audit_log_callback(callback)
                 if resolved is None:
-                    verbose_proxy_logger.warning(
-                        "Could not resolve audit log callback: %s", callback
-                    )
+                    verbose_proxy_logger.warning("Could not resolve audit log callback: %s", callback)
                     continue
 
             if isinstance(resolved, CustomLogger):
                 task = asyncio.create_task(resolved.async_log_audit_log_event(payload))
                 task.add_done_callback(_audit_log_task_done_callback)
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Failed dispatching audit log to callback: %s", e
-            )
+            verbose_proxy_logger.error("Failed dispatching audit log to callback: %s", e)
 
 
 async def create_object_audit_log(
@@ -179,9 +167,7 @@ async def create_object_audit_log(
     """
     from litellm.secret_managers.main import get_secret_bool
 
-    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool(
-        "LITELLM_STORE_AUDIT_LOGS"
-    )
+    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
 
     if _store_audit_logs is not True:
         return
@@ -213,9 +199,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     """
     from litellm.secret_managers.main import get_secret_bool
 
-    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool(
-        "LITELLM_STORE_AUDIT_LOGS"
-    )
+    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
     if _store_audit_logs is not True:
         return
 
@@ -236,15 +220,13 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     await _dispatch_audit_log_to_callbacks(request_data)
 
     if prisma_client is None:
-        verbose_proxy_logger.error(
-            "prisma_client is None, cannot write audit log to DB"
-        )
+        verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
         return
 
     _request_data = request_data.model_dump(exclude_none=True)
 
     try:
-        await prisma_client.db.litellm_auditlog.create(
+        await AuditLogRepository(prisma_client).table.create(
             data={
                 **_request_data,  # type: ignore
             }

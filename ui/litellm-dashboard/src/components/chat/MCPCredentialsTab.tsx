@@ -1,18 +1,27 @@
 "use client";
 
-/**
- * MCPCredentialsTab
- *
- * Shows all OAuth2 MCP connections the calling user has stored.
- * Lives in the Chat sidebar's "Credentials" tab.
- */
-
-import React, { useCallback, useEffect, useState } from "react";
-import { Spin } from "antd";
+import React, { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Trash2, Link } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import MessageManager from "@/components/molecules/message_manager";
-import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
-import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
+
+const MCP_CREDENTIALS_QUERY_KEY = "mcp-user-credentials";
 
 interface Props {
   accessToken: string;
@@ -35,46 +44,44 @@ function relativeTime(isoString: string | null | undefined): string {
   }
 }
 
-function expiryLabel(isoString: string | null | undefined): string {
-  if (!isoString) return "Does not expire";
+function expiryLabel(isoString: string | null | undefined): {
+  text: string;
+  variant: "secondary" | "destructive" | "outline";
+} {
+  if (!isoString) return { text: "Does not expire", variant: "secondary" };
   try {
     const exp = new Date(isoString);
     const diffMs = exp.getTime() - Date.now();
-    if (diffMs <= 0) return "Expired";
+    if (diffMs <= 0) return { text: "Expired", variant: "destructive" };
     const diffSec = Math.floor(diffMs / 1000);
     const diffMin = Math.floor(diffSec / 60);
     const diffHr = Math.floor(diffMin / 60);
     const diffDay = Math.floor(diffHr / 24);
-    if (diffDay > 0) return `Expires in ${diffDay}d`;
-    if (diffHr > 0) return `Expires in ${diffHr}h`;
-    return `Expires in ${diffMin}m`;
+    if (diffDay > 0) return { text: `Expires in ${diffDay}d`, variant: "outline" };
+    if (diffHr > 0) return { text: `Expires in ${diffHr}h`, variant: "outline" };
+    return { text: `Expires in ${diffMin}m`, variant: "outline" };
   } catch {
-    return "";
+    return { text: "", variant: "outline" };
   }
 }
 
 const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
-  const [credentials, setCredentials] = useState<MCPUserCredentialListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
 
-  const load = useCallback(() => {
-    setLoading(true);
-    listMCPUserCredentials(accessToken)
-      .then(setCredentials)
-      .catch(() => setCredentials([]))
-      .finally(() => setLoading(false));
-  }, [accessToken]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data: credentials = [], isLoading: loading } = useQuery({
+    queryKey: [MCP_CREDENTIALS_QUERY_KEY, accessToken],
+    queryFn: () => listMCPUserCredentials(accessToken),
+    enabled: !!accessToken,
+  });
 
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));
     try {
       await deleteMCPOAuthUserCredential(accessToken, serverId);
-      setCredentials((prev) => prev.filter((c) => c.server_id !== serverId));
+      queryClient.setQueryData<MCPUserCredentialListItem[]>([MCP_CREDENTIALS_QUERY_KEY, accessToken], (prev) =>
+        (prev ?? []).filter((c) => c.server_id !== serverId),
+      );
     } catch {
       MessageManager.error("Failed to revoke connection. Please try again.");
     } finally {
@@ -90,67 +97,126 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
 
   return (
     <div className="w-full">
-      {/* Header */}
       <div className="mb-4">
-        <h2 className="text-base font-semibold text-gray-900 mb-0.5">App Credentials</h2>
-        <p className="text-sm text-gray-500 m-0">Your stored OAuth connections — used automatically in chat.</p>
+        <h2 className="text-base font-semibold text-foreground mb-0.5">App Credentials</h2>
+        <p className="text-sm text-muted-foreground m-0">Your stored OAuth connections; used automatically in chat</p>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12">
-          <Spin />
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  App
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Connected
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Status
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">
+                  Actions
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: 3 }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell>
+                    <Skeleton className="h-4 w-24" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-16" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-20" />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Skeleton className="h-4 w-8 ml-auto" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       ) : credentials.length === 0 ? (
-        <div className="text-center text-gray-400 text-sm py-12 border border-dashed border-gray-200 rounded-lg">
-          <LinkOutlined className="text-2xl mb-3 block text-gray-300" />
-          No connections yet.
-          <br />
-          Go to <strong>Apps</strong> and click <strong>Connect</strong> to authorize an MCP server.
+        <div className="text-center text-muted-foreground text-sm py-12 border border-dashed rounded-lg">
+          <Link className="h-6 w-6 mb-3 mx-auto text-muted-foreground/50" />
+          <p className="m-0">No connections yet</p>
+          <p className="m-0 mt-1 text-xs">
+            Go to <span className="font-medium">Integrations</span> and click{" "}
+            <span className="font-medium">Connect</span> to authorize an MCP server
+          </p>
         </div>
       ) : (
-        <div className="rounded-lg border border-gray-200 overflow-hidden">
+        <div className="rounded-lg border overflow-hidden">
           <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">App</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Connected</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Status</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4 text-right">
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  App
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Connected
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Status
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">
                   Actions
-                </TableHeaderCell>
+                </TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {credentials.map((cred) => {
-                const name = displayName(cred);
                 const isRevoking = revoking.has(cred.server_id);
                 const exp = expiryLabel(cred.expires_at);
-                const connected = relativeTime(cred.connected_at);
-                const isExpired = exp === "Expired";
-
                 return (
-                  <TableRow key={cred.server_id} className="h-10 hover:bg-gray-50">
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm font-medium text-gray-900">{name}</span>
+                  <TableRow key={cred.server_id}>
+                    <TableCell className="text-sm font-medium">{displayName(cred)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {relativeTime(cred.connected_at) || "\u2014"}
                     </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm text-gray-500">{connected || "—"}</span>
+                    <TableCell>
+                      <Badge variant={exp.variant}>{exp.text}</Badge>
                     </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <Badge color={isExpired ? "red" : "green"} size="xs">
-                        {exp}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="py-2 px-4 text-right">
-                      <button
-                        onClick={() => handleRevoke(cred.server_id)}
-                        disabled={isRevoking}
-                        title="Revoke connection"
-                        className={`inline-flex items-center justify-center rounded-md border border-gray-200 px-2 py-1 text-gray-400 hover:text-red-500 hover:border-red-200 transition-colors ${isRevoking ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                        style={{ background: "none" }}
-                      >
-                        {isRevoking ? <Spin size="small" /> : <DeleteOutlined className="text-sm" />}
-                      </button>
+                    <TableCell className="text-right">
+                      <AlertDialog>
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              disabled={isRevoking}
+                              title="Revoke connection"
+                              className="text-muted-foreground hover:text-destructive hover:border-destructive/50"
+                            >
+                              {isRevoking ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          }
+                        />
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Revoke connection?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This removes the stored OAuth credential for {displayName(cred)}. You&apos;ll need to
+                              reconnect to use it in chat again.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction variant="destructive" onClick={() => handleRevoke(cred.server_id)}>
+                              Revoke
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </TableCell>
                   </TableRow>
                 );

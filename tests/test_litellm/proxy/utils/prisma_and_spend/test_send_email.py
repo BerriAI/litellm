@@ -16,11 +16,12 @@ from litellm.proxy.utils import send_email
 @pytest.fixture(autouse=True)
 def _smtp_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMTP_HOST", "smtp.invalid")
-    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_USERNAME", "u")
     monkeypatch.setenv("SMTP_PASSWORD", "p")
     monkeypatch.setenv("SMTP_SENDER_EMAIL", "from@invalid")
     monkeypatch.setenv("SMTP_TLS", "True")
+    monkeypatch.setenv("SMTP_USE_SSL", "False")
 
 
 @pytest.mark.asyncio
@@ -50,7 +51,20 @@ async def test_send_email_dispatches_via_smtp(in_memory_smtp: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_email_skips_starttls_when_disabled(
+async def test_send_email_starttls_uses_ssl(
+    in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SMTP_USE_SSL", "True")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent[0].starttls_called is False
+
+
+@pytest.mark.asyncio
+async def test_send_email_skips_starttls_when_tls_disabled(
     in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SMTP_TLS", "False")

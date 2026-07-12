@@ -12,6 +12,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
@@ -47,29 +48,19 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         **kwargs,
     ):
         """Initialize Azure Prompt Shield guardrail handler."""
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-        ]
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
             api_key=api_key,
             api_base=api_base,
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
 
-        verbose_proxy_logger.debug(
-            f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}"
-        )
+        verbose_proxy_logger.debug(f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}")
 
-    async def async_make_request(
-        self, user_prompt: str
-    ) -> "AzurePromptShieldGuardrailResponse":
+    async def async_make_request(self, user_prompt: str) -> "AzurePromptShieldGuardrailResponse":
         """
         Make a request to the Azure Prompt Shield API.
 
@@ -84,19 +75,13 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             AzurePromptShieldGuardrailResponse,
         )
 
-        chunks = self.split_text_by_words(
-            user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
-        )
+        chunks = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: Optional[AzurePromptShieldGuardrailResponse] = None
 
         for chunk in chunks:
-            request_body = AzurePromptShieldGuardrailRequestBody(
-                documents=[], userPrompt=chunk
-            )
-            response_json = await self._post_to_content_safety(
-                "text:shieldPrompt", cast(dict, request_body)
-            )
+            request_body = AzurePromptShieldGuardrailRequestBody(documents=[], userPrompt=chunk)
+            response_json = await self._post_to_content_safety("text:shieldPrompt", cast(dict, request_body))
 
             last_response = cast(AzurePromptShieldGuardrailResponse, response_json)
 
@@ -136,16 +121,12 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         )
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
-            verbose_proxy_logger.warning(
-                "Azure Prompt Shield: not running guardrail. No messages in data"
-            )
+            verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
             return data
         user_prompt = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.debug(
-                f"Azure Prompt Shield: User prompt: {user_prompt}"
-            )
+            verbose_proxy_logger.debug(f"Azure Prompt Shield: User prompt: {user_prompt}")
             await self.async_make_request(
                 user_prompt=user_prompt,
             )
@@ -163,3 +144,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         )
 
         return AzurePromptShieldGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+        ]

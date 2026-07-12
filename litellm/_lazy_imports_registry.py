@@ -223,6 +223,7 @@ LLM_CONFIG_NAMES = (
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
+    "VoyageMultimodalEmbeddingConfig",
     "InfinityEmbeddingConfig",
     "PerplexityEmbeddingConfig",
     "AzureAIStudioConfig",
@@ -259,7 +260,6 @@ LLM_CONFIG_NAMES = (
     "SambaNovaEmbeddingConfig",
     "FireworksAIConfig",
     "FireworksAITextCompletionConfig",
-    "FireworksAIAudioTranscriptionConfig",
     "FireworksAIEmbeddingConfig",
     "FriendliaiChatConfig",
     "JinaAIEmbeddingConfig",
@@ -284,6 +284,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "TencentChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -305,6 +306,7 @@ LLM_CONFIG_NAMES = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
     "V0ChatConfig",
@@ -321,6 +323,8 @@ LLM_CONFIG_NAMES = (
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
+    "SonioxAudioTranscriptionConfig",
+    "GDCGeminiConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -902,6 +906,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.voyage.embedding.transformation_contextual",
         "VoyageContextualEmbeddingConfig",
     ),
+    "VoyageMultimodalEmbeddingConfig": (
+        ".llms.voyage.embedding.transformation_multimodal",
+        "VoyageMultimodalEmbeddingConfig",
+    ),
     "InfinityEmbeddingConfig": (
         ".llms.infinity.embedding.transformation",
         "InfinityEmbeddingConfig",
@@ -1020,10 +1028,6 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.fireworks_ai.completion.transformation",
         "FireworksAITextCompletionConfig",
     ),
-    "FireworksAIAudioTranscriptionConfig": (
-        ".llms.fireworks_ai.audio_transcription.transformation",
-        "FireworksAIAudioTranscriptionConfig",
-    ),
     "FireworksAIEmbeddingConfig": (
         ".llms.fireworks_ai.embed.fireworks_ai_transformation",
         "FireworksAIEmbeddingConfig",
@@ -1093,6 +1097,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
@@ -1155,6 +1160,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
     ),
+    "GDCGeminiConfig": (
+        ".llms.gdc.chat.transformation",
+        "GDCGeminiConfig",
+    ),
+    "ModelScopeChatConfig": (
+        ".llms.modelscope.chat.transformation",
+        "ModelScopeChatConfig",
+    ),
     "MoonshotChatConfig": (".llms.moonshot.chat.transformation", "MoonshotChatConfig"),
     "DockerModelRunnerChatConfig": (
         ".llms.docker_model_runner.chat.transformation",
@@ -1194,6 +1207,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AmazonNovaChatConfig": (
         ".llms.amazon_nova.chat.transformation",
         "AmazonNovaChatConfig",
+    ),
+    "SonioxAudioTranscriptionConfig": (
+        ".llms.soniox.audio_transcription.transformation",
+        "SonioxAudioTranscriptionConfig",
     ),
 }
 

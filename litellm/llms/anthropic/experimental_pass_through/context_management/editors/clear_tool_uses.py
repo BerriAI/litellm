@@ -68,9 +68,7 @@ def _trigger_met(
         messages=messages,
         tools=cast(Any, tools),
     )
-    verbose_logger.debug(
-        f"context_management polyfill: current_tokens: {current_tokens}"
-    )
+    verbose_logger.debug(f"context_management polyfill: current_tokens: {current_tokens}")
     verbose_logger.debug(f"context_management polyfill: threshold: {threshold}")
     return current_tokens > threshold, current_tokens
 
@@ -101,9 +99,7 @@ def _last_completed_tool_use_id(
     return last_id
 
 
-def _clear_tool_results(
-    messages: List[Dict[str, Any]], ids_to_clear: set
-) -> Tuple[List[Dict[str, Any]], int]:
+def _clear_tool_results(messages: List[Dict[str, Any]], ids_to_clear: set) -> Tuple[List[Dict[str, Any]], int]:
     """Clear matching tool_result content; return (messages, cleared_count)."""
     cleared = 0
     new_messages: List[Dict[str, Any]] = []
@@ -148,11 +144,7 @@ def apply_clear_tool_uses_20250919(
     edit_spec: Dict[str, Any],
 ) -> Tuple[List[Dict[str, Any]], Optional[AppliedEdit]]:
     """Apply clear_tool_uses; return (messages, AppliedEdit or None)."""
-    ignored_knobs = [
-        knob
-        for knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs")
-        if knob in edit_spec
-    ]
+    ignored_knobs = [knob for knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs") if knob in edit_spec]
     for ignored_knob in ignored_knobs:
         verbose_logger.warning(
             "context_management polyfill: ignoring '%s' on %s "
@@ -192,12 +184,8 @@ def apply_clear_tool_uses_20250919(
         return messages, None
 
     if tokens_before is None:
-        tokens_before = litellm.token_counter(
-            model=model, messages=messages, tools=cast(Any, tools)
-        )
-    tokens_after = litellm.token_counter(
-        model=model, messages=edited, tools=cast(Any, tools)
-    )
+        tokens_before = litellm.token_counter(model=model, messages=messages, tools=cast(Any, tools))
+    tokens_after = litellm.token_counter(model=model, messages=edited, tools=cast(Any, tools))
     cleared_input_tokens = max(tokens_before - tokens_after, 0)
 
     applied: AppliedEdit = {
