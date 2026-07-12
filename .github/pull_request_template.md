@@ -44,4 +44,18 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## QA runbook
 
-<!-- For PRs that change behavior (features, fixes, tests): list the manual steps a reviewer can follow to QA each change by hand against a live proxy, mapping 1:1 to what the automated proof asserts. One "- [ ]" checklist per test or behavior, each item a concrete action (route, request body, expected response). Note environment prerequisites (provider credentials, config flags) and any nuances a manual run will hit. See PRs #32914 and #32963 for examples. Delete this section if there is nothing to QA by hand -->
+<!-- Only needed when your PR edits tests/e2e; delete this section otherwise
+
+For each e2e test you added or changed, list the manual steps a reviewer can follow to reproduce it by hand against a live proxy, mapping 1:1 to what the test asserts: one "- [ ]" checklist per test, each item a concrete action (route, request body, expected response). Note environment prerequisites (provider credentials, config flags) and any nuances a manual run will hit. See PRs #32914 and #32963 for full examples
+
+Example checklists:
+
+### test_key_rpm_limit_blocks_third_request
+- [ ] Generate a limited key: curl -X POST http://localhost:4000/key/generate -H "Authorization: Bearer sk-1234" -d '{"rpm_limit": 2}'
+- [ ] Send three /v1/chat/completions requests with that key inside one minute
+- [ ] Expect the first two to return 200 and the third to return 429 naming the rpm limit
+
+### test_model_create_appears_in_ui
+- [ ] POST /model/new with the master key, a bedrock model, and aws_region_name (needs STORE_MODEL_IN_DB=True and AWS credentials)
+- [ ] Open http://localhost:4000/ui/?page=models and expect a deployment row showing the returned model id
+-->
