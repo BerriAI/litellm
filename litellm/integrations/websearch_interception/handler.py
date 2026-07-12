@@ -841,7 +841,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         return max_tokens
 
     @staticmethod
-    def _prepare_followup_kwargs(kwargs: Dict) -> Dict:
+    def _prepare_followup_kwargs(
+        kwargs: Dict,
+        internal_keys: Optional[set[str]] = None,
+    ) -> Dict:
         """Build kwargs for the follow-up call, excluding internal keys.
 
         ``litellm_logging_obj`` MUST be excluded so the follow-up call creates
@@ -852,9 +855,24 @@ class WebSearchInterceptionLogger(CustomLogger):
         SpendLog / AWS billing mismatch.
         """
         _internal_keys = {"litellm_logging_obj"}
-        return {
+        if internal_keys:
+            _internal_keys.update(internal_keys)
+
+        kwargs_for_followup = {
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in _internal_keys
         }
+
+        # Deployment ``extra_headers`` is stored inside ``litellm_params`` on
+        # the initial request, but follow-up APIs consume it as a top-level
+        # kwarg. Keep a request-level value when both are present, matching the
+        # Router's request-over-deployment precedence.
+        litellm_params = kwargs.get("litellm_params")
+        if "extra_headers" not in kwargs_for_followup and isinstance(litellm_params, dict):
+            extra_headers = litellm_params.get("extra_headers")
+            if extra_headers is not None:
+                kwargs_for_followup["extra_headers"] = extra_headers
+
+        return kwargs_for_followup
 
     async def _execute_agentic_loop(
         self,
@@ -1203,9 +1221,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             "stream_response",
             "custom_prompt_dict",
         }
-        kwargs_for_followup = {
-            k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
-        }
+        kwargs_for_followup = self._prepare_followup_kwargs(
+            kwargs,
+            internal_keys=internal_params,
+        )
 
         full_model_name = model
         if "custom_llm_provider" in kwargs:

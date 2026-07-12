@@ -366,6 +366,94 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     assert result["api_key"] == "fake-key"
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "expected_headers"),
+    [
+        (
+            {"litellm_params": {"extra_headers": {"source": "deployment"}}},
+            {"source": "deployment"},
+        ),
+        (
+            {
+                "extra_headers": {"source": "request"},
+                "litellm_params": {"extra_headers": {"source": "deployment"}},
+            },
+            {"source": "request"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_anthropic_followup_preserves_extra_headers_precedence(
+    kwargs, expected_headers
+):
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(return_value=("result", None))
+
+    patch, _ = await logger._build_anthropic_request_patch(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[],
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+                "input": {"query": "hello"},
+            }
+        ],
+        thinking_blocks=[],
+        anthropic_messages_optional_request_params={},
+        logging_obj=Mock(model_call_details={}),
+        kwargs=kwargs,
+    )
+
+    assert patch.kwargs["extra_headers"] == expected_headers
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_headers"),
+    [
+        (
+            {"litellm_params": {"extra_headers": {"source": "deployment"}}},
+            {"source": "deployment"},
+        ),
+        (
+            {
+                "extra_headers": {"source": "request"},
+                "litellm_params": {"extra_headers": {"source": "deployment"}},
+            },
+            {"source": "request"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_completion_followup_preserves_extra_headers_precedence(
+    kwargs, expected_headers
+):
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+    logger._execute_search = AsyncMock(return_value=("result", None))
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="gpt-4o",
+        messages=[],
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+                "input": {"query": "hello"},
+            }
+        ],
+        optional_params={},
+        kwargs=kwargs,
+    )
+
+    assert patch.kwargs["extra_headers"] == expected_headers
+
+
+def test_prepare_followup_kwargs_handles_none_litellm_params():
+    assert WebSearchInterceptionLogger._prepare_followup_kwargs(
+        {"litellm_params": None}
+    ) == {"litellm_params": None}
+
+
 @pytest.mark.asyncio
 async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
     """
