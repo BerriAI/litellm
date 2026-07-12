@@ -315,6 +315,36 @@ class TestModelSelection:
         model = router.get_model_for_tier(ComplexityTier.SIMPLE)
         assert model == "fallback-model"
 
+    def test_get_model_for_tier_list_random_choice(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["cheap", "premium"], "MEDIUM": "mid"},
+                "default_model": "mid",
+            },
+        )
+        pool = ["cheap", "premium"]
+        with patch(
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            return_value="premium",
+        ) as choice:
+            assert router.get_model_for_tier(ComplexityTier.SIMPLE) == "premium"
+            choice.assert_called_once_with(pool)
+        assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
+
+    def test_get_model_for_tier_empty_pool_raises(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": []},
+                "default_model": "mid",
+            },
+        )
+        with pytest.raises(ValueError, match="Empty model pool for tier SIMPLE"):
+            router.get_model_for_tier(ComplexityTier.SIMPLE)
+
 
 class TestPreRoutingHook:
     """Test the async_pre_routing_hook method."""
