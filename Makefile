@@ -14,7 +14,7 @@
 # Default target
 help:
 	@echo "Available commands:"
-	@echo "  make bootstrap          - Provision a fresh clone/worktree: Python env with proxy extras, Prisma client, dashboard node_modules; worktrees also copy .env from the main checkout"
+	@echo "  make bootstrap          - Provision a fresh clone/worktree"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
