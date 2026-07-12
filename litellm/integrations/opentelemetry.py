@@ -1618,6 +1618,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
         return LogRecord, SeverityNumber
 
+    @staticmethod
+    def _drop_none_values(value):
+        """Recursively remove ``None`` from a log record's attributes/body.
+
+        OTLP ``AnyValue`` has no representation for ``None``. A single ``None``
+        anywhere in an emitted log record makes the OTLP exporter raise
+        ``Invalid type <class 'NoneType'>`` while encoding and drop the whole
+        batch, so the content events are silently lost. Sources of ``None``
+        here include ``choice.finish_reason``, ``gen_ai.system`` (unresolved
+        provider) and raw message fields carried by ``msg.copy()`` such as
+        ``content`` or ``tool_calls``.
+        """
+        if isinstance(value, dict):
+            return {
+                key: OpenTelemetry._drop_none_values(val)
+                for key, val in value.items()
+                if val is not None
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                OpenTelemetry._drop_none_values(item)
+                for item in value
+                if item is not None
+            ]
+        return value
+
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
             return
@@ -1675,8 +1701,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=body,
-                attributes=attrs,
+                body=self._drop_none_values(body),
+                attributes=self._drop_none_values(attrs),
             )
             otel_logger.emit(log_record)
 
@@ -1707,8 +1733,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=body,
-                attributes=attrs,
+                body=self._drop_none_values(body),
+                attributes=self._drop_none_values(attrs),
             )
             otel_logger.emit(log_record)
 
