@@ -4383,14 +4383,23 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     or
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
+
+    A model that already carries a namespace get_llm_provider did not consume
+    (e.g. `bedrockz/anthropic.claude-...`) is never granted here: its provider was
+    inferred from a fragment of the full string, so rebuilding
+    `{provider}/{model}` would produce `bedrock/bedrockz/...` and slip an
+    unrecognized namespace through a `bedrock/*` key.
     """
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         return False
 
+    if stripped_model == model and "/" in model:
+        return False
+
     return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{model}",
+        model=f"{custom_llm_provider}/{stripped_model}",
         allowed_model_pattern=allowed_model_pattern,
     )
 
