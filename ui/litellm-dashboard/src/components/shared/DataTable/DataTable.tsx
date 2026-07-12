@@ -339,6 +339,9 @@ function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown>
   const meta = column?.columnDef.meta;
   const width = SKELETON_WIDTHS[index % SKELETON_WIDTHS.length];
   const shape = meta?.skeleton;
+  if (meta?.renderSkeleton !== undefined) {
+    return <>{meta.renderSkeleton()}</>;
+  }
   if (shape === "twoLine") {
     return (
       <div className="flex flex-col gap-2">

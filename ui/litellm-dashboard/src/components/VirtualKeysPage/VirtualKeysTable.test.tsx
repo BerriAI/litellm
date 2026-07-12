@@ -209,6 +209,29 @@ it("shows the user alias over the email in the visible cell when both exist", as
   expect(within(row).queryByText("user@example.com")).not.toBeInTheDocument();
 });
 
+it("shows created_by_user alias over email in the Created By column when it is enabled", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid",
+        created_by_user: { user_id: "some-uuid", user_email: "creator@example.com", user_alias: "The Creator" },
+      },
+    ]),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+
+  // Created By is hidden by default; turn it on via the Columns menu.
+  await user.click(screen.getByRole("button", { name: "Columns" }));
+  await user.click(await screen.findByText("Created By"));
+  await user.keyboard("{Escape}");
+
+  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+  expect(within(row).getByText("The Creator")).toBeInTheDocument();
+  expect(within(row).queryByText("creator@example.com")).not.toBeInTheDocument();
+});
+
 it("should show a loading state on the initial load and hide the data", () => {
   mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isPending: true, isFetching: true }));
 

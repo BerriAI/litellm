@@ -9,7 +9,7 @@ import {
   DataTableFilterField,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
-import { Combobox } from "@/components/shared/Combobox";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -17,7 +17,6 @@ import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@
 import { KeyRound } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { KeyAliasCombobox } from "../KeyAliasSelect/KeyAliasCombobox";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
@@ -35,9 +34,8 @@ const toSortOrder = (sorting: SortingState): "asc" | "desc" | undefined => {
 };
 
 const FILTER_LABELS: Record<string, string> = {
-  team_id: "Team ID",
-  org_id: "Organization ID",
-  key_alias: "Key Alias",
+  team_id: "Team",
+  org_id: "Organization",
   user_id: "User ID",
   key_hash: "Key ID",
 };
@@ -70,7 +68,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyListOptions = {
     teamID: getFilterValue("team_id"),
     organizationID: getFilterValue("org_id"),
-    selectedKeyAlias: searchQuery.trim() || getFilterValue("key_alias"),
+    selectedKeyAlias: searchQuery.trim() || undefined,
     userID: getFilterValue("user_id"),
     keyHash: getFilterValue("key_hash"),
     sortBy,
@@ -111,8 +109,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const teamOptions = useMemo(
     () =>
       allTeams.map((team) => ({
-        label: `${team.team_alias || team.team_id} (${team.team_id})`,
+        label: team.team_alias || team.team_id,
         value: team.team_id,
+        sublabel: team.team_alias ? team.team_id : undefined,
       })),
     [allTeams],
   );
@@ -121,11 +120,25 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     () =>
       organizations
         .filter((org) => org.organization_id)
-        .map((org) => ({
-          label: `${org.organization_alias || org.organization_id} (${org.organization_id})`,
-          value: org.organization_id as string,
-        })),
+        .map((org) => {
+          const id = org.organization_id as string;
+          return { label: org.organization_alias || id, value: id, sublabel: org.organization_alias ? id : undefined };
+        }),
     [organizations],
+  );
+
+  const formatFilterValue = useCallback(
+    (columnId: string, value: unknown): string => {
+      const raw = String(value);
+      if (columnId === "team_id") {
+        return allTeams.find((team) => team.team_id === raw)?.team_alias || raw;
+      }
+      if (columnId === "org_id") {
+        return organizations.find((org) => org.organization_id === raw)?.organization_alias || raw;
+      }
+      return raw;
+    },
+    [allTeams, organizations],
   );
 
   if (selectedKey) {
@@ -178,11 +191,12 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={handleSearchChange}
-              searchPlaceholder="Search keys, aliases, users…"
+              searchPlaceholder="Search by key alias…"
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
               filterLabels={FILTER_LABELS}
+              formatFilterValue={formatFilterValue}
             />
             <DataTableFilterDrawer
               table={table}
@@ -193,31 +207,22 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
             >
               {({ get, set }) => (
                 <>
-                  <DataTableFilterField label="Team ID">
-                    <Combobox
+                  <DataTableFilterField label="Team">
+                    <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
                       onValueChange={(value) => set("team_id", value)}
-                      placeholder="Select Team ID…"
-                      searchPlaceholder="Search teams…"
+                      placeholder="Select a team…"
                       emptyText="No teams found"
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Organization ID">
-                    <Combobox
+                  <DataTableFilterField label="Organization">
+                    <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
                       onValueChange={(value) => set("org_id", value)}
-                      placeholder="Select Organization ID…"
-                      searchPlaceholder="Search organizations…"
+                      placeholder="Select an organization…"
                       emptyText="No organizations found"
-                    />
-                  </DataTableFilterField>
-                  <DataTableFilterField label="Key Alias">
-                    <KeyAliasCombobox
-                      value={(get("key_alias") as string) || undefined}
-                      onValueChange={(value) => set("key_alias", value)}
-                      teamId={(get("team_id") as string) || undefined}
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="User ID">

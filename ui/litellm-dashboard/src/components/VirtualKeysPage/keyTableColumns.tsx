@@ -5,6 +5,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Popover, Typography } from "antd";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
   IdCell,
@@ -120,7 +121,18 @@ export const getKeyTableColumns = ({
   {
     id: "key_alias",
     accessorKey: "key_alias",
-    meta: { title: "Key", skeleton: "twoLine" },
+    meta: {
+      title: "Key",
+      renderSkeleton: () => (
+        <div className="flex flex-col gap-1 py-1">
+          <Skeleton className="h-4 w-32" />
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-5 w-16 rounded-full" />
+          </div>
+        </div>
+      ),
+    },
     header: ({ column }) => <DataTableSortHeader column={column} title="Key" variant="header-cycle" />,
     size: 260,
     enableSorting: true,

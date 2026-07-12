@@ -322,6 +322,19 @@ describe("DataTable loading", () => {
     expect(barsIn(cells[1])).toBe(3);
     expect(barsIn(cells[2])).toBe(2);
   });
+
+  it("uses a column's renderSkeleton override when provided", () => {
+    const columns: ColumnDef<Person, unknown>[] = [
+      {
+        id: "custom",
+        header: "Custom",
+        meta: { renderSkeleton: () => <div data-testid="custom-skeleton">loading</div> },
+        cell: () => null,
+      },
+    ];
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={columns} isLoading />);
+    expect(screen.getAllByTestId("custom-skeleton").length).toBeGreaterThan(0);
+  });
 });
 
 describe("DataTable column visibility", () => {
