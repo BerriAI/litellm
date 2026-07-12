@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space, Modal } from "antd";
 import type { FormInstance } from "antd";
 import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
@@ -12,6 +12,8 @@ import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./Complexit
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import { buildComplexityRouterConfig, getSemanticConfigError } from "./build_complexity_router_config";
+import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAutoRouterTabProps {
@@ -44,6 +46,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
   // Semantic router config (existing)
   const [routerConfig, setRouterConfig] = useState<any>(null);
+
+  const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
+  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [connectionTestId, setConnectionTestId] = useState<number>(0);
+  const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
@@ -192,6 +199,24 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     } else {
       submitSemanticRouter(name);
     }
+  };
+
+  const handleTestConnection = () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: complexityRouterConfig.tiers,
+      semanticMatchingEnabled,
+      embeddingModel,
+    });
+
+    if (targets.length === 0) {
+      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+      return;
+    }
+
+    setTestTargets(targets);
+    setConnectionTestId((id) => id + 1);
+    setIsTestingConnection(true);
+    setIsTestModalVisible(true);
   };
 
   return (
@@ -355,10 +380,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
-              {/* TODO: add back a Test Connection or JSON preview action here. Test Connection was removed
-                  because prepareModelAddRequest can't build a valid pre-save payload for an auto router
-                  (tiers are model-group references, not litellm_params); a JSON preview of the
-                  complexity_router_config would be a good alternative. */}
+              {routerType === "recommended" && (
+                <Button
+                  data-testid="auto-router-test-connect-btn"
+                  onClick={handleTestConnection}
+                  loading={isTestingConnection}
+                >
+                  Test Connection
+                </Button>
+              )}
               <Button
                 type="primary"
                 onClick={() => {
@@ -371,6 +401,36 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           </div>
         </Form>
       </Card>
+
+      <Modal
+        title="Connection Test Results"
+        open={isTestModalVisible}
+        onCancel={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
+        }}
+        footer={[
+          <Button
+            key="close"
+            onClick={() => {
+              setIsTestModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {isTestModalVisible && (
+          <AutoRouterConnectionTest
+            key={connectionTestId}
+            accessToken={accessToken}
+            targets={testTargets}
+            onTestComplete={() => setIsTestingConnection(false)}
+          />
+        )}
+      </Modal>
     </>
   );
 };
