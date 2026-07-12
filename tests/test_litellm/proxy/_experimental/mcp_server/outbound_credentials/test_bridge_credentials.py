@@ -100,12 +100,16 @@ def test_open_bridge_refresh_envelope_rejects_under_wrong_master_key():
 
 
 def test_refresh_envelope_is_never_admitted_at_the_tool_call_edge():
-    """A refresh envelope must never authenticate a tool call. It is not an access envelope, so the
-    admission consumer returns NotBridgeEnvelope, which admission fails closed (401): a refresh
-    credential can only ever be presented back to the token endpoint."""
+    """A refresh envelope must never authenticate a tool call. The admission edge engages the bridge arm
+    for it (is_bridge_envelope_shaped is true for either envelope kind), and the consumer rejects it as
+    BridgeEnvelopeInvalid, which admission fails closed (401): a refresh credential is only ever
+    presented back to the token endpoint."""
     keys = envelope_keys_from_master_key(_MASTER_KEY)
-    result = resolve_bridge_envelope(_sealed_refresh(keys), keys, _NOW, _SERVER_ID)
-    assert isinstance(result, NotBridgeEnvelope)
+    refresh = _sealed_refresh(keys)
+    assert is_bridge_envelope_shaped(refresh) is True
+    assert is_bridge_envelope_shaped(f"Bearer {refresh}") is True
+    result = resolve_bridge_envelope(refresh, keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeInvalid)
 
 
 def test_refresh_jwt_wearing_the_access_prefix_is_rejected_at_the_edge():
