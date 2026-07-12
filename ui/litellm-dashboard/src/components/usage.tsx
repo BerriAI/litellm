@@ -51,6 +51,7 @@ import {
 } from "./networking";
 import TopKeyView from "./UsagePage/components/EntityUsage/TopKeyView";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatLocalDate } from "@/utils/dateUtils";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 
 interface UsagePageProps {
@@ -158,8 +159,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const lastDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
 
-  let startTime = formatDate(firstDay);
-  let endTime = formatDate(lastDay);
+  let startTime = formatLocalDate(firstDay);
+  let endTime = formatLocalDate(lastDay);
 
   console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
@@ -233,18 +234,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
     console.log("Tag spend data updated successfully");
   };
 
-  function formatDate(date: Date) {
-    const year = date.getFullYear();
-    let month = date.getMonth() + 1; // JS month index starts from 0
-    let day = date.getDate();
-
-    // Pad with 0 if month or day is less than 10
-    const monthStr = month < 10 ? "0" + month : month;
-    const dayStr = day < 10 ? "0" + day : day;
-
-    return `${year}-${monthStr}-${dayStr}`;
-  }
-
   console.log(`Start date is ${startTime}`);
   console.log(`End date is ${endTime}`);
 
@@ -280,7 +269,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         const year = new Date().getFullYear();
         const monthIndex = new Date(`${month} 01 2024`).getMonth();
         const fullDate = new Date(year, monthIndex, parseInt(day));
-        return formatDate(fullDate);
+        return formatLocalDate(fullDate);
       }
     };
 
@@ -300,7 +289,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
     // Iterate through each date in the range
     while (currentDate <= endDate) {
-      const dateStr = formatDate(currentDate);
+      const dateStr = formatLocalDate(currentDate);
 
       if (existingDates.has(dateStr)) {
         // Use existing data if we have it
