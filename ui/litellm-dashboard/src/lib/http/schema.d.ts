@@ -13434,23 +13434,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/team/member/bulk_update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Bulk Update Team Members */
-        post: operations["bulk_update_team_members_team_member_bulk_update_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/team/member_add": {
         parameters: {
             query?: never;
@@ -18959,6 +18942,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/team/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Bulk Update Team Members */
+        patch: operations["bulk_update_team_members_v2_team__team_id__members_patch"];
+        trace?: never;
+    };
     "/v2/user/info": {
         parameters: {
             query?: never;
@@ -21500,8 +21500,6 @@ export interface components {
              * @default false
              */
             all_members_in_team: boolean;
-            /** Team Id */
-            team_id: string;
             update_fields: components["schemas"]["TeamMemberBulkUpdateFields"];
             /** User Ids */
             user_ids?: string[] | null;
@@ -50209,39 +50207,6 @@ export interface operations {
             };
         };
     };
-    bulk_update_team_members_team_member_bulk_update_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkTeamMemberUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkTeamMemberUpdateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     team_member_add_team_member_add_post: {
         parameters: {
             query?: never;
@@ -57609,6 +57574,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_update_team_members_v2_team__team_id__members_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberUpdateResponse"];
                 };
             };
             /** @description Validation Error */

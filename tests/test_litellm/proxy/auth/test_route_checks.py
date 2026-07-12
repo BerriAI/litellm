@@ -131,7 +131,6 @@ def test_proxy_admin_viewer_config_update_route_rejected():
         "/team/unblock",
         "/team/permissions_update",
         "/team/permissions_bulk_update",
-        "/team/member/bulk_update",
         # JWT key mapping write routes
         "/jwt/key/mapping/new",
         "/jwt/key/mapping/update",
@@ -2881,6 +2880,46 @@ def test_patch_team_gate_rejects_view_only_admin():
             valid_token=valid_token,
             request_data={"organization_id": "org-1"},
         )
+
+
+def test_bulk_member_update_route_has_same_reach_as_member_update():
+    """PATCH /v2/team/{team_id}/members must be reachable by the same coarse gate
+    as /team/member_update (self_managed_routes; the endpoint enforces proxy /
+    team / org admin itself), without the resolved path colliding with static
+    siblings like /v2/team/list."""
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert RouteChecks.check_route_access(
+        route="/v2/team/team-1/members", allowed_routes=LiteLLMRoutes.self_managed_routes.value
+    )
+    assert RouteChecks.check_route_access(
+        route="/v2/team/team-1/members", allowed_routes=LiteLLMRoutes.management_routes.value
+    )
+    assert not RouteChecks.check_route_access(
+        route="/v2/team/list", allowed_routes=LiteLLMRoutes.self_managed_routes.value
+    )
+
+
+def test_bulk_member_update_gate_rejects_view_only_admin():
+    """A view-only proxy admin cannot PATCH /v2/team/{team_id}/members: the
+    templated path never exact-matches the write blocklists, so the unsafe-method
+    default-deny is what has to catch it."""
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value)
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route="/v2/team/team-1/members",
+            request=_patch_team_request(),
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

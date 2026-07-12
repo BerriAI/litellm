@@ -21,10 +21,9 @@ export const teamMemberBulkUpdateCall = async (
   userIds: string[],
   updateFields: TeamMemberBulkUpdateFields,
 ) =>
-  apiClient.post(`/team/member/bulk_update`, {
+  apiClient.patch(`/v2/team/${encodeURIComponent(teamId)}/members`, {
     accessToken,
     body: {
-      team_id: teamId,
       user_ids: userIds,
       update_fields: updateFields,
     },

@@ -600,7 +600,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_list",
             "/team/permissions_update",
             "/team/permissions_bulk_update",
-            "/team/member/bulk_update",
+            "/v2/team/{team_id}/members",
             "/team/daily/activity",
             # model
             "/model/new",
@@ -742,6 +742,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",
+        "/v2/team/{team_id}/members",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -3721,7 +3722,6 @@ class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
 
 
 class BulkTeamMemberUpdateRequest(LiteLLMPydanticObjectBase):
-    team_id: str
     user_ids: list[str] | None = None
     all_members_in_team: bool = False
     update_fields: TeamMemberBulkUpdateFields

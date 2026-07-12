@@ -33,7 +33,6 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
         "/team/unblock",
         "/team/permissions_update",
         "/team/permissions_bulk_update",
-        "/team/member/bulk_update",
         # model
         "/model/new",
         "/model/update",
@@ -735,7 +734,6 @@ class RouteChecks:
             "/team/new",
             "/team/update",
             "/team/delete",
-            "/team/member/bulk_update",
             "/model/new",
             "/model/update",
             "/model/delete",
