@@ -45284,8 +45284,8 @@
         "rules": [
             {
                 "name": "bedrock-claude-ids",
-                "pattern": "anthropic\\.claude-",
-                "description": "Any Bedrock-syntax Claude id: the dotted anthropic.claude- segment appears in bare (anthropic.claude-...), region-prefixed (us./eu./au./jp./apac.) and global.-prefixed ids, for every version. Routes these to bedrock before the bare-id Anthropic rule is consulted.",
+                "pattern": "^(?:[a-z-]+\\.)?anthropic\\.claude-",
+                "description": "Any Bedrock-syntax Claude id: anthropic.claude- at the start of the name, optionally behind a single dotted prefix segment covering region-prefixed (us./eu./au./jp./apac./us-gov.) and global.-prefixed ids, for every version. Anchored to the start so ids under a foreign namespace like someprovider/anthropic.claude-... never match; an unanchored substring match let keys scoped to bedrock/* pass the model access check for such ids. Routes these to bedrock before the bare-id Anthropic rule is consulted.",
                 "model_info": {
                     "litellm_provider": "bedrock"
                 }

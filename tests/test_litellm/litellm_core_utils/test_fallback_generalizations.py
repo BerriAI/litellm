@@ -261,6 +261,14 @@ def test_unknown_model_routes_via_routing_rule(restore_generalizations):
     assert provider == "openai"
 
 
+def test_slash_prefixed_unknown_provider_raises_despite_matching_rule(restore_generalizations):
+    """Routing rules are for bare-id inference only; an id under an unknown
+    provider namespace must keep raising even when a rule matches inside it."""
+    restore_generalizations([{"name": "myco", "pattern": r"myco-", "model_info": {"litellm_provider": "openai"}}])
+    with pytest.raises(litellm.BadRequestError):
+        litellm.get_llm_provider(model="mycoz/myco-fast-1")
+
+
 def test_capability_info_backfills_requested_provider(restore_generalizations):
     restore_generalizations(
         [
@@ -341,6 +349,16 @@ def test_shipped_bedrock_syntax_claude_id_routes_to_bedrock(shipped_cost_map):
         assert model not in litellm.model_cost
         _, provider, _, _ = litellm.get_llm_provider(model=model)
         assert provider == "bedrock", model
+
+
+def test_shipped_bedrock_rule_ignores_foreign_provider_prefixes(shipped_cost_map):
+    """Regression: the unanchored bedrock-claude-ids pattern substring-matched
+    bedrockz/anthropic.claude-..., so get_llm_provider inferred bedrock and keys
+    scoped to bedrock/* passed the model access check for that id."""
+    model = "bedrockz/anthropic.claude-3-5-sonnet-20240620"
+    assert match_routing_generalization(model) is None
+    with pytest.raises(litellm.BadRequestError):
+        litellm.get_llm_provider(model=model)
 
 
 def test_shipped_rules_resolve_unmapped_bedrock_claude_with_bedrock_provider(shipped_cost_map):

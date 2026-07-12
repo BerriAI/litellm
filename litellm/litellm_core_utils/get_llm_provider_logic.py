@@ -475,8 +475,10 @@ def get_llm_provider(
 
         # Last resort for an otherwise-unknown model: a declarative
         # fallback-generalization routing rule (e.g. routes future claude-* to anthropic).
-        # Exact provider matches above always win; this only runs on a miss.
-        if not custom_llm_provider:
+        # Exact provider matches above always win; this only runs on a miss, and only
+        # for bare ids: a slash means an explicit provider prefix that failed every
+        # lookup above, which must keep raising rather than being guessed from a rule.
+        if not custom_llm_provider and "/" not in model:
             custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
