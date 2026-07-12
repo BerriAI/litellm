@@ -7098,6 +7098,38 @@ class TestOBOEndpointDiscovery:
         assert result is None or result.token_url is None
 
     @pytest.mark.asyncio
+    async def test_descovery_metadata_closes_stream_on_401_oauth_challenge(self):
+        manager = MCPServerManager()
+        server_url = "https://example.com/mcp"
+        request = httpx.Request("GET", server_url)
+        error_response = MagicMock()
+        error_response.headers = {}
+
+        streaming_response = MagicMock()
+        streaming_response.status_code = 401
+        streaming_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("unauthorized", request=request, response=error_response)
+        )
+        streaming_response.aclose = AsyncMock()
+
+        mock_handler = MagicMock()
+        mock_handler.get = AsyncMock(return_value=streaming_response)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_handler,
+            ),
+            patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_oauth_metadata_from_resource", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_authorization_server_metadata", AsyncMock(return_value=None)),
+        ):
+            result = await manager._descovery_metadata(server_url)
+
+        streaming_response.aclose.assert_awaited_once()
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_descovery_metadata_returns_none_for_no_auth_sse_server(self):
         manager = MCPServerManager()
         server_url = "https://example.com/mcp"

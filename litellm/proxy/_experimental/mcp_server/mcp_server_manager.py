@@ -2925,8 +2925,10 @@ class MCPServerManager:
             handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
             response = await handler.get(server_url, stream=True)
             status_code = response.status_code
-            response.raise_for_status()
-            await response.aclose()
+            try:
+                response.raise_for_status()
+            finally:
+                await response.aclose()
             (
                 authorization_servers,
                 resource_scopes,
