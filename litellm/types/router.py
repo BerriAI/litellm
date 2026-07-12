@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hi
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Required, TypedDict
+from typing_extensions import Protocol, Required, TypedDict
 
 from litellm._uuid import uuid
 
@@ -827,6 +827,27 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, Any]]]
+
+
+class RoutingContext(BaseModel):
+    """
+    Passed through a Router's `plugins` pipeline before the routing decision is made.
+
+    Each plugin reads and mutates this object; the next plugin sees the previous
+    plugin's changes. `candidate_models` narrows as the pipeline runs -- Router
+    only selects a deployment whose `litellm_params.model` survives the pipeline.
+    """
+
+    messages: List[Dict[str, Any]]
+    candidate_models: List[str]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    signals: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RoutingPlugin(Protocol):
+    """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
+
+    async def run(self, context: RoutingContext) -> RoutingContext: ...
 
 
 class RequestType(str, enum.Enum):
