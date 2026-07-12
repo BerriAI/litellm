@@ -509,3 +509,62 @@ def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
     assert (
         shared_extra_headers == {}
     ), "extra_headers must not be mutated by completion()"
+
+
+_SID = "e96634a3-fa28-4083-b354-55542e2dca01"
+
+
+def _validate_session_env(headers, litellm_params):
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+        "vertex_credentials": "{}",
+    }
+    params.update(litellm_params)
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers=headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={},
+            litellm_params=params,
+            api_base=None,
+        )
+    return updated_headers
+
+
+def test_session_affinity_header_derived_from_litellm_session_id():
+    headers = _validate_session_env({}, {"litellm_session_id": _SID})
+    assert headers["X-Vertex-Ai-Session-Id"] == _SID
+
+
+def test_session_affinity_header_derived_from_litellm_metadata():
+    headers = _validate_session_env({}, {"litellm_metadata": {"session_id": _SID}})
+    assert headers["X-Vertex-Ai-Session-Id"] == _SID
+
+
+def test_session_affinity_header_derived_from_metadata():
+    headers = _validate_session_env({}, {"metadata": {"session_id": _SID}})
+    assert headers["X-Vertex-Ai-Session-Id"] == _SID
+
+
+def test_session_affinity_header_not_clobbered_when_client_supplied():
+    headers = _validate_session_env(
+        {"x-vertex-ai-session-id": "client-set-value"},
+        {"litellm_session_id": _SID},
+    )
+    assert headers["x-vertex-ai-session-id"] == "client-set-value"
+    assert "X-Vertex-Ai-Session-Id" not in headers
+
+
+def test_session_affinity_header_absent_without_session_id():
+    headers = _validate_session_env({}, {})
+    assert "X-Vertex-Ai-Session-Id" not in headers
