@@ -821,7 +821,7 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
     )
 
 
-async def _prepare_bridge_mint(request: Request, mcp_server: MCPServer) -> "_BridgeMintReady | _BridgeMintError":
+async def _prepare_bridge_mint(request: Request) -> "_BridgeMintReady | _BridgeMintError":
     """Phase 1, BEFORE the upstream exchange: validate that the gateway can mint (master_key set) and
     that the request carries a resolvable litellm identity, and derive the envelope keys. Returns a
     ready context or a failure value. Running before the exchange is what makes a missing master_key or
@@ -866,7 +866,7 @@ def _finish_bridge_mint(
         return "too_large"
     # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the
     # client is never told the bearer lives past the point admission (which uses that exp) rejects it.
-    expires_in = max(1, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
+    expires_in = max(0, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
     body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
 
@@ -949,7 +949,7 @@ async def exchange_token_with_server(
     # phase 3. A failure here returns without ever touching the upstream credential.
     bridge_mint_ready: _BridgeMintReady | None = None
     if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
-        prepared = await _prepare_bridge_mint(request, mcp_server)
+        prepared = await _prepare_bridge_mint(request)
         if not isinstance(prepared, _BridgeMintReady):
             return _bridge_mint_error_response(prepared)
         bridge_mint_ready = prepared
