@@ -239,6 +239,15 @@ export const getSourceDisplayText = (source: PluginSource): string => {
   return "Unknown source";
 };
 
+const getGitHubSubdirLink = (repoUrl: string, path: string): string | null => {
+  const url = parseRepoUrl(repoUrl);
+  if (!url || url.hostname.replace(/^www\./, "") !== GITHUB_HOST) {
+    return null;
+  }
+  const repoPath = url.pathname.replace(/\.git\/?$/, "").replace(/\/+$/, "");
+  return `${url.origin}${repoPath}/tree/HEAD/${path}`;
+};
+
 /**
  * Get clickable link for plugin source
  */
@@ -246,7 +255,10 @@ export const getSourceLink = (source: PluginSource): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
+  if (source.source === "git-subdir" && source.url) {
+    return source.path ? getGitHubSubdirLink(source.url, source.path) ?? source.url : source.url;
+  }
+  if (source.source === "url" && source.url) {
     return source.url;
   }
   return null;

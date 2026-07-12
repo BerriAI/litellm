@@ -128,9 +128,15 @@ describe("getSourceLink", () => {
     expect(getSourceLink({ source: "url", url: "https://example.com" })).toBe("https://example.com");
   });
 
-  it("returns the repo url for a github git-subdir source", () => {
+  it("uses the default branch for a github git-subdir source", () => {
     expect(getSourceLink({ source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" })).toBe(
-      "https://github.com/org/repo",
+      "https://github.com/org/repo/tree/HEAD/plugins/x",
+    );
+  });
+
+  it("strips the clone suffix from a github git-subdir link", () => {
+    expect(getSourceLink({ source: "git-subdir", url: "https://github.com/org/repo.git", path: "plugins/x" })).toBe(
+      "https://github.com/org/repo/tree/HEAD/plugins/x",
     );
   });
 
