@@ -3537,3 +3537,180 @@ async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
     )
 
     assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_marker_set_when_descriptors_empty():
+    """When no rate-limit descriptors are built for a request, async_pre_call_hook
+    sets _no_rate_limits=True in data['metadata'] so downstream callbacks can
+    skip Redis writes entirely."""
+    _api_key = hash_token("sk-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+
+    should_rate_limit_called = False
+
+    async def mock_should_rate_limit(*args, **kwargs):
+        nonlocal should_rate_limit_called
+        should_rate_limit_called = True
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert not should_rate_limit_called, "should_rate_limit must not run when descriptors is empty"
+    assert data["metadata"]["_no_rate_limits"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_tpm_scope_targets():
+    """_collect_tpm_scope_targets returns [] when _no_rate_limits is set in
+    litellm_params metadata, preventing any TPM counter writes."""
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    standard_metadata = {
+        "user_api_key_hash": hash_token("sk-test"),
+        "user_api_key_team_id": "team-1",
+    }
+
+    # Without _no_rate_limits: should return non-empty targets
+    kwargs_without = {"litellm_params": {"metadata": {}}}
+    targets = handler._collect_tpm_scope_targets(
+        standard_logging_metadata=standard_metadata,
+        kwargs=kwargs_without,
+        model_group="gpt-4",
+    )
+    assert len(targets) > 0, "should return targets when marker is absent"
+
+    # With _no_rate_limits: must return empty list
+    kwargs_with = {"litellm_params": {"metadata": {"_no_rate_limits": True}}}
+    targets = handler._collect_tpm_scope_targets(
+        standard_logging_metadata=standard_metadata,
+        kwargs=kwargs_with,
+        model_group="gpt-4",
+    )
+    assert targets == [], "must return [] when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_failure_event_writes():
+    """async_log_failure_event returns early without touching Redis when
+    _no_rate_limits is set in litellm_params metadata."""
+    _api_key = hash_token("sk-fail-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        "litellm_params": {"metadata": {"_no_rate_limits": True}},
+    }
+
+    await handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None,
+    )
+
+    assert captured_ops == [], "no Redis writes should happen when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_success_event_writes():
+    """async_log_success_event returns early without touching Redis when
+    _no_rate_limits is set in litellm_params metadata."""
+    from unittest.mock import MagicMock
+
+    _api_key = hash_token("sk-success-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": _api_key}
+        },
+        "litellm_params": {"metadata": {"_no_rate_limits": True}},
+    }
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs, response_obj=mock_response, start_time=None, end_time=None,
+    )
+
+    assert captured_ops == [], "no Redis writes should happen when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_with_rate_limits_still_writes_redis():
+    """Regression guard: when descriptors ARE present (rate limits configured),
+    async_log_success_event and async_log_failure_event still write Redis as before."""
+    from unittest.mock import MagicMock
+
+    _api_key = hash_token("sk-with-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": _api_key}
+        },
+        "litellm_params": {"metadata": {}},
+    }
+
+    # --- success event ---
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs, response_obj=mock_response, start_time=None, end_time=None,
+    )
+
+    assert len(captured_ops) > 0, "success event must write Redis ops when _no_rate_limits is absent"
+    captured_ops.clear()
+
+    # --- failure event ---
+    await handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None,
+    )
+
+    assert len(captured_ops) > 0, "failure event must write Redis ops when _no_rate_limits is absent"

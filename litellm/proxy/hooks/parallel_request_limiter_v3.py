@@ -2085,6 +2085,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                     verbose_proxy_logger.debug(f"TPM tokens reserved: {estimated_tokens} for model {requested_model}")
 
+        else:
+            data.setdefault("metadata", {})["_no_rate_limits"] = True
+
         # Defense-in-depth: scrub any stash key that escaped onto data
         # top-level (stale cache hit, router pass, test fixture) before the
         # body is forwarded to the provider.
@@ -2433,6 +2436,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         the emitter; this helper just lists the candidate scopes so callers
         can split reserved-vs-unreserved.
         """
+        _lp_meta = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
+        if _lp_meta.get("_no_rate_limits"):
+            return []
         user_api_key = standard_logging_metadata.get("user_api_key_hash")
         user_api_key_user_id = standard_logging_metadata.get("user_api_key_user_id")
         user_api_key_team_id = standard_logging_metadata.get("user_api_key_team_id")
@@ -2632,6 +2638,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
+            _lp_meta = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
+            if _lp_meta.get("_no_rate_limits"):
+                return
+
             pipeline_operations = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
                 response_obj=response_obj,
@@ -2662,6 +2672,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(kwargs)
             standard_logging_object = kwargs.get("standard_logging_object") or {}
             standard_logging_metadata = standard_logging_object.get("metadata") or {}
+            _lp_meta = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
+            if _lp_meta.get("_no_rate_limits"):
+                return
             user_api_key = standard_logging_metadata.get("user_api_key_hash")
 
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
