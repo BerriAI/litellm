@@ -4,7 +4,9 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev lint-checks format \
+	test-llm-translation test-llm-translation-single test-llm-translation-flush-vcr-cache \
+	lint lint-dev lint-checks format format-check \
+	lint-ruff lint-format-check-changed lint-format-changed lint-ruff-dev lint-ruff-FULL-dev \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
@@ -16,8 +18,6 @@ help:
 	@echo "Available commands:"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
-	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
-	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
@@ -29,7 +29,6 @@ help:
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
 	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e (zero errors allowed)"
 	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
-	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
@@ -60,10 +59,6 @@ LINT_DEP_BASE ?= lint-fetch-base
 LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
-# Show info
-info:
-	@echo "UV: $(UV)"
-
 # Installation targets
 # --inexact: sync the locked deps without pruning anything already installed, so running
 # a lint/format target doesn't tear the proxy extras (prisma, websockets, ...) out from
@@ -74,16 +69,9 @@ install-dev:
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
 
-# CI-compatible installations (matches GitHub workflows exactly)
-install-dev-ci:
-	$(UV) sync --frozen
-
-install-proxy-dev-ci:
-	$(UV) sync --frozen --group proxy-dev --extra proxy
-
-install-test-deps: install-proxy-dev
+install-test-deps:
 	$(UV) sync --frozen --all-groups --all-extras
-	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
+	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
@@ -178,8 +166,6 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # it needs the base ref fetched to resolve the merge-base.
 lint-basedpyright-budget-update: install-dev lint-fetch-base
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
-
-lint-format: format-check
 
 lint-ruff-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py

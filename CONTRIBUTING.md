@@ -187,11 +187,6 @@ make lint
 make test-unit
 ```
 
-For exact CI compatibility (pins OpenAI version like CI):
-```bash
-make install-dev-ci     # Installs exact CI dependencies
-```
-
 ## Available Make Commands
 
 Run `make help` to see all available commands:
