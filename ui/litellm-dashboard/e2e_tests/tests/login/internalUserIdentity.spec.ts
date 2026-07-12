@@ -27,13 +27,13 @@ test.describe("Navbar identity scoping", () => {
       { timeout: 5_000 },
     );
 
-    // Open the dropdown (UserDropdown configures trigger=["click"]).
+    // Open the account menu (click to open the Base UI popover).
     await accountButton.click();
 
-    // Locate the panel by its test id (data-testid on the popupRender div in
-    // UserDropdown.tsx) rather than Ant/Tailwind class names, so styling
-    // refactors don't silently break the identity-scoping assertions below.
-    const popup = page.getByTestId("user-dropdown-panel");
+    // Locate the panel by its test id (data-testid on SidebarAccountMenu's
+    // popover content) rather than class names, so styling refactors don't
+    // silently break the identity-scoping assertions below.
+    const popup = page.getByTestId("sidebar-account-menu-panel");
     await expect(popup).toBeVisible({ timeout: 5_000 });
 
     // The popup must show the internal user's identity — not the seeded

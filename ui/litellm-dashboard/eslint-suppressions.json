@@ -254,9 +254,6 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/add_guardrail_form.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     },
@@ -861,9 +858,6 @@
   "src/app/(dashboard)/projects/_components/ProjectDetailsPage.tsx": {
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
@@ -1076,6 +1070,61 @@
       "count": 3
     },
     "react-hooks/immutability": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageBarChart.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageLineChart.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageTable.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/SpendByProvider.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/purity": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity.ts": {
+    "react-hooks/refs": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -1499,76 +1548,6 @@
       "count": 1
     },
     "react-hooks/static-components": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageBarChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageLineChart.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EndpointUsage/components/EndpointUsageTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EntityUsage/EntityUsage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EntityUsage/SpendByProvider.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/EntityUsage/TopModelView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/KeyModelUsageView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/UsageAIChatPanel.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "src/components/UsagePage/components/UsagePageView.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/purity": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/components/UsagePage/hooks/usePaginatedDailyActivity.ts": {
-    "react-hooks/refs": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
