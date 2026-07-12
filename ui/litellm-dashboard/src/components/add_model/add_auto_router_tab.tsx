@@ -198,6 +198,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const handleAutoRouterSubmit = () => {
     const name = form.getFieldValue("auto_router_name");
     if (!name) {
+      setShowValidationErrors(true);
+      form.validateFields(["auto_router_name"]).catch(() => undefined);
       NotificationManager.fromBackend("Please enter an Auto Router Name");
       return;
     }
