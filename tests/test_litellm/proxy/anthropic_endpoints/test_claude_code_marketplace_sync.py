@@ -683,11 +683,14 @@ async def test_resolve_and_sync_refuses_to_overwrite_row_owned_by_another_market
 
 @pytest.mark.asyncio
 async def test_resolve_and_sync_unpublishes_skill_whose_source_changed(monkeypatch):
-    """Regression test: an already-public (enabled=True) skill must not have
-    its git source silently swapped by a re-sync of the marketplace that owns
-    it - that would let a compromised/malicious upstream repoint an
-    already-trusted skill with no admin re-review. The sync should demote it
-    back to enabled=False instead of overwriting the source in place."""
+    """Regression test: a skill's git source must not be silently swapped by
+    a re-sync of the marketplace that owns it - that would let a
+    compromised/malicious upstream repoint a skill with no admin re-review.
+    Unlike a plain "unpublish", get_marketplace() still serves a disabled row
+    to anyone with a standing allowed_skills grant, so the sync must keep the
+    previously-approved manifest (source) in place rather than overwrite it -
+    demoting to enabled=False alone would still hand granted callers the new,
+    unreviewed source."""
     client = _make_fake_prisma_client()
     marketplace = await _create_marketplace(client, name="anthropic-agent-skills", source_ref="anthropics/skills")
 
@@ -700,7 +703,8 @@ async def test_resolve_and_sync_unpublishes_skill_whose_source_changed(monkeypat
     published_name = "anthropic-agent-skills--claude-api"
     published = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
     published.enabled = True  # simulate an admin having reviewed and published it
-    original_source = json.loads(published.manifest_json)["source"]
+    original_manifest_json = published.manifest_json
+    original_source = json.loads(original_manifest_json)["source"]
 
     # A repointed `source` (repo root -> a subdirectory) is exactly what an
     # upstream marketplace repo owner controls and could change unilaterally.
@@ -722,9 +726,11 @@ async def test_resolve_and_sync_unpublishes_skill_whose_source_changed(monkeypat
 
     refreshed = await client.db.litellm_claudecodeplugintable.find_unique(where={"name": published_name})
     assert refreshed.enabled is False
-    new_source = json.loads(refreshed.manifest_json)["source"]
-    assert new_source != original_source
-    assert new_source["path"] == "skills/claude-api"
+    # The served manifest (and therefore source) is untouched - not just the
+    # enabled flag - so a caller with a standing allowed_skills grant for
+    # this row still only ever sees the previously-approved source.
+    assert refreshed.manifest_json == original_manifest_json
+    assert json.loads(refreshed.manifest_json)["source"] == original_source
 
 
 @pytest.mark.asyncio

@@ -688,24 +688,37 @@ async def _upsert_single_plugin(
         )
         return False
 
-    # A skill an admin has already reviewed and published (enabled=True) must
-    # not have its git source silently swapped by whoever controls the
-    # upstream marketplace repo on the next sync - that would let a
-    # compromised/malicious upstream repoint an already-trusted, publicly
-    # served skill without any re-review. Demote it back to unpublished so an
-    # admin has to look at it again before it's public with the new source.
-    update_data: dict[str, Any] = {
-        "description": entry.description,
-        "manifest_json": manifest_json,
-        "marketplace_id": marketplace_id,
-        "updated_at": now,
-    }
-    if existing is not None and existing.enabled and _existing_source_changed(existing.manifest_json, entry):
+    # A previously-synced row's approved manifest (source + description) must
+    # not be silently swapped by whoever controls the upstream marketplace
+    # repo on the next sync - that would let a compromised/malicious upstream
+    # repoint a skill without any re-review. This applies regardless of the
+    # row's current `enabled` state: get_marketplace() serves a disabled row
+    # to anyone with a standing allowed_skills grant, not just to public
+    # (enabled=True) callers, so "already published" isn't the only audience
+    # that could receive the swapped source. Freeze the manifest entirely and
+    # demote to unpublished so an admin has to look at it again; the new
+    # source is only recorded in this log line, never served, until the next
+    # sync after that review (e.g. a delete + re-register of the marketplace).
+    source_changed = existing is not None and _existing_source_changed(existing.manifest_json, entry)
+    if source_changed:
         verbose_proxy_logger.warning(
-            "skill-marketplace-sync: %r changed source on re-sync, unpublishing pending admin re-review",
+            "skill-marketplace-sync: %r changed source on re-sync (new source=%r), "
+            "keeping the previously-approved manifest and unpublishing pending admin re-review",
             entry.stored_name,
+            entry.source.model_dump(),
         )
-        update_data["enabled"] = False
+        update_data: dict[str, Any] = {
+            "marketplace_id": marketplace_id,
+            "updated_at": now,
+            "enabled": False,
+        }
+    else:
+        update_data = {
+            "description": entry.description,
+            "manifest_json": manifest_json,
+            "marketplace_id": marketplace_id,
+            "updated_at": now,
+        }
 
     await repository.table.upsert(
         where={"name": entry.stored_name},
