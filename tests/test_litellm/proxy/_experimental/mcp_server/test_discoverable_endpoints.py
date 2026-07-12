@@ -4367,6 +4367,7 @@ _BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
 
 async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_client_out=None):
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _ResolvedKey,
         exchange_token_with_server,
     )
 
@@ -4375,7 +4376,10 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_clie
     fake_http_response.raise_for_status = MagicMock()
     fake_http_client = MagicMock()
     fake_http_client.post = AsyncMock(return_value=fake_http_response)
-    key_resolver = AsyncMock(return_value=key_hash)
+    # The mint consumes _resolve_active_litellm_key's tagged result: an active key resolves to a
+    # _ResolvedKey carrying its hash; a request with no usable credential resolves to "no_active_key".
+    resolution = _ResolvedKey(key_hash=key_hash, key=MagicMock()) if key_hash is not None else "no_active_key"
+    key_resolver = AsyncMock(return_value=resolution)
     if fake_client_out is not None:
         fake_client_out["client"] = fake_http_client
 
@@ -4385,7 +4389,7 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, fake_clie
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
             new=key_resolver,
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -4511,10 +4515,12 @@ async def test_bridge_envelope_does_not_seal_upstream_refresh_token():
 
 
 @pytest.mark.asyncio
-async def test_bridge_refresh_grant_fails_closed_before_upstream_when_no_identity():
-    """The pre-exchange identity gate covers the refresh_token grant, not just authorization_code: an
-    unresolvable litellm identity fails closed with invalid_request BEFORE the upstream refresh is
-    exchanged, so the client's refresh token is not rotated/consumed on a rejected request."""
+async def test_bridge_refresh_grant_is_rejected_before_upstream():
+    """A bridge oauth_delegate server issues only envelopes and seals no upstream refresh_token, so the
+    client never holds one to present. _prepare_bridge_mint rejects the refresh_token grant up front
+    with unsupported_grant_type, BEFORE any upstream exchange, so a stray refresh request can never
+    rotate or consume the client's upstream refresh credential; renewal is re-running
+    authorization_code. This is checked before identity resolution, so it holds even with a valid key."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
     from litellm.types.mcp import MCPAuth
 
@@ -4525,10 +4531,6 @@ async def test_bridge_refresh_grant_fails_closed_before_upstream_when_no_identit
         patch(
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
             return_value=fake_http_client,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
-            new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
     ):
@@ -4545,7 +4547,7 @@ async def test_bridge_refresh_grant_fails_closed_before_upstream_when_no_identit
         )
 
     assert response.status_code == 400
-    assert json.loads(response.body)["error"] == "invalid_request"
+    assert json.loads(response.body)["error"] == "unsupported_grant_type"
     fake_http_client.post.assert_not_called()
 
 
@@ -4567,8 +4569,8 @@ async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_active_key_hash_from_request",
-            new=AsyncMock(return_value="hashed-litellm-key-77"),
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            new=AsyncMock(return_value="no_active_key"),
         ),
         patch("litellm.proxy.proxy_server.master_key", None),
     ):
@@ -4586,6 +4588,93 @@ async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
     assert response.status_code == 500
     assert json.loads(response.body)["error"] == "server_error"
     fake_http_client.post.assert_not_called()
+
+
+async def _prepare_only_bridge_exchange(resolver_result):
+    """Drive exchange_token_with_server for a bridge oauth_delegate authorization_code request with the
+    identity resolver stubbed to a given tagged result, returning (response, post_mock) so a test can
+    assert the mapped status and that the single-use code was never exchanged."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            new=AsyncMock(return_value=resolver_result),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    return response, fake_http_client.post
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_db_outage_is_503_before_upstream():
+    """A DB outage while resolving identity is a retryable gateway failure, so the mint returns 503
+    temporarily_unavailable WITHOUT consuming the single-use code, matching how admission statuses the
+    same outage on the egress side. Collapsing every resolution failure to None used to blame the
+    client with 400 invalid_request for an infrastructure problem."""
+    response, post = await _prepare_only_bridge_exchange("unavailable")
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"] == "temporarily_unavailable"
+    post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_unresolvable_identity_is_500_before_upstream():
+    """An unresolvable identity (no DB connection, or an unexpected resolution error) is a gateway
+    fault, so the mint returns 500 server_error before the exchange, a status distinct from both the
+    caller's 400 and the transient 503, matching admission's 500-vs-503 split for the same conditions."""
+    response, post = await _prepare_only_bridge_exchange("unresolvable")
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"] == "server_error"
+    post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_upstream_expired_lifetime_is_502():
+    """An upstream token response reporting an already-elapsed lifetime (a parseable non-positive
+    expires_in) is rejected with 502 rather than sealed into an hour-long envelope around a dead
+    bearer. Regression for expires_in<=0 silently falling through to the 1h cap."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 0}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"] == "server_error"
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_unknown_lifetime_is_capped_not_rejected():
+    """An absent or unparseable expires_in leaves the lifetime unknown, which the envelope caps (never
+    inventing a longer life than the upstream stated); it is NOT rejected. Only an explicitly-dead
+    lifetime fails, so a metadata glitch on an otherwise-valid token still mints a bounded envelope."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": "not-a-number"}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["access_token"].startswith("llm_env_")
+    assert 0 < body["expires_in"] <= 3600
 
 
 @pytest.mark.asyncio
@@ -4638,34 +4727,51 @@ def test_bridge_reported_expires_in_can_be_zero_at_jwt_exp_boundary():
     assert json.loads(response.body)["expires_in"] == 0
 
 
-def test_bridge_grant_coerces_numeric_expires_in():
-    """expires_in from an IdP may be an int, a float (3600.0), or a numeric string ("3600"); coerce
-    it to a positive int so the envelope TTL honors the real lifetime instead of dropping a non-int
-    value and defaulting to the 1h cap (which can outlive a shorter-lived upstream token). bool and
-    non-numeric values become None."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _bridge_grant_from_token_response,
-    )
+def test_classify_upstream_lifetime():
+    """expires_in from an IdP may be an int, a float (3600.0), or a numeric string ("3600"); each
+    coerces to a positive number of seconds. Absent or unparseable input (bool, non-numeric, NaN/inf,
+    oversized) is "unspecified" so the envelope caps it, while a parseable non-positive value is
+    "expired": the upstream reporting an already-dead token, which the mint must reject rather than
+    silently give the 1h cap."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _classify_upstream_lifetime
 
-    def ei(v):
-        return _bridge_grant_from_token_response({"access_token": "x", "expires_in": v}).expires_in
+    assert _classify_upstream_lifetime(300) == 300
+    assert _classify_upstream_lifetime(300.0) == 300
+    assert _classify_upstream_lifetime("300") == 300
+    assert _classify_upstream_lifetime("  300  ") == 300
+    # explicit, parseable, non-positive -> the upstream says the token is already dead
+    assert _classify_upstream_lifetime(0) == "expired"
+    assert _classify_upstream_lifetime(-5) == "expired"
+    # unknown lifetime -> cap (never invent a longer life than the upstream stated)
+    assert _classify_upstream_lifetime(None) == "unspecified"
+    assert _classify_upstream_lifetime(True) == "unspecified"
+    assert _classify_upstream_lifetime("nope") == "unspecified"
+    # hostile numerics must not raise (int(float(...)) can OverflowError) -> unspecified
+    assert _classify_upstream_lifetime("inf") == "unspecified"
+    assert _classify_upstream_lifetime("1e999") == "unspecified"
+    assert _classify_upstream_lifetime("-inf") == "unspecified"
+    assert _classify_upstream_lifetime("nan") == "unspecified"
+    assert _classify_upstream_lifetime(float("inf")) == "unspecified"
+    assert _classify_upstream_lifetime(10**400) == "unspecified"
 
-    assert ei(300) == 300
-    assert ei(300.0) == 300
-    assert ei("300") == 300
-    assert ei("  300  ") == 300
-    assert ei(True) is None
-    assert ei("nope") is None
-    assert ei(0) is None
-    assert ei(-5) is None
-    assert ei(None) is None
-    # hostile numerics must not raise (int(float(...)) can OverflowError) -> None
-    assert ei("inf") is None
-    assert ei("1e999") is None
-    assert ei("-inf") is None
-    assert ei("nan") is None
-    assert ei(float("inf")) is None
-    assert ei(10**400) is None
+
+def test_bridge_grant_honors_and_rejects_upstream_lifetime():
+    """The grant validator honors a positive lifetime, leaves an unknown one None for the envelope to
+    cap, and rejects an explicitly-expired one with "expired_lifetime" so a dead upstream token is
+    never sealed into an hour-long envelope."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _bridge_grant_from_token_response
+
+    def grant(v):
+        return _bridge_grant_from_token_response({"access_token": "x", "expires_in": v})
+
+    assert grant(300).expires_in == 300
+    assert grant(120.0).expires_in == 120
+    # unknown lifetime backs a grant whose expires_in the envelope caps; it is not a rejection
+    assert grant("nope").expires_in is None
+    assert _bridge_grant_from_token_response({"access_token": "x"}).expires_in is None
+    # an explicitly already-dead lifetime is rejected, not silently capped at 1h
+    assert grant(0) == "expired_lifetime"
+    assert grant(-5) == "expired_lifetime"
 
 
 @pytest.mark.asyncio
@@ -5073,13 +5179,14 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
 
 
 @pytest.mark.asyncio
-async def test_extract_active_key_hash_returns_hash_for_active_key(proxy_globals):
+async def test_resolve_active_litellm_key_returns_resolved_key_for_active_key(proxy_globals):
     """The dcr_bridge mint seals the hash of the authorizing key so admission can reload the live
     record. For an active key the resolver returns exactly hash_token(key), the same value
     get_key_object and the whole cache/DB layer key the record by, so the sealed reference resolves
     back to this key at admission."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _extract_active_key_hash_from_request,
+        _resolve_active_litellm_key,
+        _ResolvedKey,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5095,19 +5202,22 @@ async def test_extract_active_key_hash_returns_hash_for_active_key(proxy_globals
     proxy_globals.prisma_client = object()
 
     request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
-    assert await _extract_active_key_hash_from_request(request) == hash_token(key)
+    resolved = await _resolve_active_litellm_key(request)
+    assert isinstance(resolved, _ResolvedKey)
+    assert resolved.key_hash == hash_token(key)
 
 
 @pytest.mark.asyncio
-async def test_extract_active_key_hash_returns_hash_for_active_key_without_user_id(proxy_globals):
+async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_globals):
     """A valid team-scoped or service-account key has no user_id but is a legitimate credential, so it
     must still resolve to a hash and be able to mint a bridge envelope. Gating the resolver on user_id
     presence wrongly rejected these keys with invalid_request; the active-state gate now checks only
     blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
     store still gets no user for such a key, since there is none to key a stored credential by."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _extract_active_key_hash_from_request,
         _extract_user_id_from_request,
+        _resolve_active_litellm_key,
+        _ResolvedKey,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5123,16 +5233,18 @@ async def test_extract_active_key_hash_returns_hash_for_active_key_without_user_
     proxy_globals.prisma_client = object()
 
     request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
-    assert await _extract_active_key_hash_from_request(request) == hash_token(key)
+    resolved = await _resolve_active_litellm_key(request)
+    assert isinstance(resolved, _ResolvedKey)
+    assert resolved.key_hash == hash_token(key)
     assert await _extract_user_id_from_request(request) is None
 
 
 @pytest.mark.asyncio
-async def test_extract_active_key_hash_rejects_blocked_key(proxy_globals):
+async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals):
     """A blocked key must not yield a hash, so no gateway-bound envelope is minted for a revoked key;
     the mint fails closed with invalid_request instead."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _extract_active_key_hash_from_request,
+        _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5145,17 +5257,17 @@ async def test_extract_active_key_hash_rejects_blocked_key(proxy_globals):
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
-    assert await _extract_active_key_hash_from_request(request) is None
+    assert await _resolve_active_litellm_key(request) == "no_active_key"
 
 
 @pytest.mark.asyncio
-async def test_extract_active_key_hash_fails_closed_on_malformed_expiry(proxy_globals):
+async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy_globals):
     """A key whose stored expires string does not parse must fail closed to no-hash (the mint then
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
     raise. Before the fix this raised a ValueError instead of returning None."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _extract_active_key_hash_from_request,
+        _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5168,14 +5280,14 @@ async def test_extract_active_key_hash_fails_closed_on_malformed_expiry(proxy_gl
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": "sk-bad-expiry-key"})
-    assert await _extract_active_key_hash_from_request(request) is None
+    assert await _resolve_active_litellm_key(request) == "no_active_key"
 
 
 @pytest.mark.asyncio
-async def test_extract_active_key_hash_none_without_litellm_key(proxy_globals):
+async def test_resolve_active_litellm_key_no_active_key_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request yields no hash without consulting the resolver."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _extract_active_key_hash_from_request,
+        _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5183,7 +5295,46 @@ async def test_extract_active_key_hash_none_without_litellm_key(proxy_globals):
     proxy_globals.prisma_client = object()
 
     request = _token_request({"content-type": "application/json"})
-    assert await _extract_active_key_hash_from_request(request) is None
+    assert await _resolve_active_litellm_key(request) == "no_active_key"
+
+
+@pytest.mark.asyncio
+async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals):
+    """A database outage while resolving the presented key is a retryable infrastructure failure, not
+    the caller's fault, so the resolver reports "unavailable" (the mint statuses it 503) rather than
+    collapsing it to the same value as a missing credential. is_database_service_unavailable_error
+    classifies a connection error (an OSError) as an outage, matching admission's egress-side handling."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _resolve_active_litellm_key,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _OutagePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            raise ConnectionError("connection refused")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _OutagePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-during-outage"})
+    assert await _resolve_active_litellm_key(request) == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_globals):
+    """With no database connection configured the gateway cannot verify the presented key at all, so
+    the resolver reports "unresolvable" (the mint statuses it 500) instead of blaming the caller.
+    Mirrors admission, which 500s a missing prisma_client on the egress side."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _resolve_active_litellm_key,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = None
+
+    request = _token_request({"x-litellm-api-key": "sk-no-db"})
+    assert await _resolve_active_litellm_key(request) == "unresolvable"
 
 
 @pytest.mark.asyncio
