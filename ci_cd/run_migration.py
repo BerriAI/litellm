@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -235,8 +236,11 @@ def create_migration(
         with testing.postgresql.Postgresql() as postgresql:
             db_url = postgresql.url()
 
-            # Create temporary migrations directory next to schema.prisma
-            temp_migrations_dir = schema_path.parent / "migrations"
+            # A temp dir outside the repo, never a fixed path under root_dir -
+            # `root_dir / "migrations"` collides with the real, tracked
+            # top-level migrations/ directory (Dockerfile, run.py), and the
+            # rmtree in the `finally` block below would permanently delete it.
+            temp_migrations_dir = Path(tempfile.mkdtemp(prefix="litellm_migrations_")) / "migrations"
 
             try:
                 # Copy existing migrations to temp directory
