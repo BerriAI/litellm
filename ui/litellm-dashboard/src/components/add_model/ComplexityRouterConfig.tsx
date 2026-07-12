@@ -95,6 +95,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       label: model.model_group,
     }));
 
+  const classifierModelMissing =
+    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+
   const handleTierChange = (tier: keyof ComplexityTiers, model: string) => {
     onChange({
       ...value,
@@ -233,7 +236,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                         showSearch
                         style={{ width: "100%" }}
                         options={modelOptions}
+                        status={classifierModelMissing ? "error" : undefined}
                       />
+                      {classifierModelMissing && (
+                        <Text type="danger" style={{ fontSize: 12 }}>
+                          A classifier model is required
+                        </Text>
+                      )}
                     </div>
                     <div>
                       <Text strong style={{ display: "block", marginBottom: 4 }}>

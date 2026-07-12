@@ -226,6 +226,28 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("This tier is required")).not.toBeInTheDocument();
   });
 
+  it("shows an inline error on the classifier model select when llm is selected without a model", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("A classifier model is required")).toBeInTheDocument();
+  });
+
+  it("does not show the classifier model error once a classifier model is set", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("A classifier model is required")).not.toBeInTheDocument();
+  });
+
   it("shows a validation error only under unfilled tiers when showValidationErrors is true", () => {
     renderWithProviders(
       <ComplexityRouterConfig
