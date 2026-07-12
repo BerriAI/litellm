@@ -301,7 +301,7 @@ class Router:
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
-        plugins: Optional[List[RoutingPlugin]] = None,
+        plugins: list[RoutingPlugin] | None = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[Union[RetryPolicy, dict]] = None,  # set custom retries for different exceptions
         model_group_retry_policy: Dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
@@ -480,7 +480,7 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
-        self.routing_plugins: List[RoutingPlugin] = list(plugins) if plugins else []
+        self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -10609,8 +10609,8 @@ class Router:
     async def _run_routing_plugins(
         self,
         model: str,
-        request_kwargs: Dict,
-        messages: Optional[List[Dict[str, Any]]],
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None,
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`
@@ -10618,6 +10618,10 @@ class Router:
         onto `request_kwargs["metadata"]` so `_filter_by_routing_plugin_candidates`
         (called later, during healthy-deployment filtering) can consume them.
         """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            resolve_structured_messages,
+        )
+
         deployments = self.get_model_list(model_name=model) or []
         candidate_models = [
             d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
@@ -10627,7 +10631,8 @@ class Router:
         metadata = request_kwargs.setdefault(metadata_key, {})
 
         context = RoutingContext(
-            messages=messages or [],
+            raw_messages=messages or [],
+            structured_messages=resolve_structured_messages(messages=messages, request_kwargs=request_kwargs) or [],
             candidate_models=candidate_models,
             metadata=metadata,
         )
@@ -10643,9 +10648,9 @@ class Router:
 
     def _filter_by_routing_plugin_candidates(
         self,
-        healthy_deployments: Union[List[Dict], Dict],
-        request_kwargs: Dict,
-    ) -> Union[List[Dict], Dict]:
+        healthy_deployments: Union[list[dict], dict],
+        request_kwargs: dict,
+    ) -> Union[list[dict], dict]:
         """
         Narrow `healthy_deployments` to whatever `self.routing_plugins` left in
         `context.candidate_models`. Raises rather than silently falling back to

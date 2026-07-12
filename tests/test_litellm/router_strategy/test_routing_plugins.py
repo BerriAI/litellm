@@ -141,3 +141,41 @@ async def test_router_without_plugins_is_unaffected():
         messages=[{"role": "user", "content": "hi"}],
     )
     assert response.choices[0].message.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_run_routing_plugins_narrows_candidates_and_records_signals():
+    """Unit-level check of _run_routing_plugins in isolation, independent of acompletion."""
+    router = Router(
+        model_list=_smart_router_model_list(),
+        plugins=[LanguageDetector(), DomainClassifier(), TenantPolicy(), BudgetPolicy()],
+    )
+    request_kwargs = {"metadata": {"tenant": "acme-corp"}}
+
+    context = await router._run_routing_plugins(
+        model="smart-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert context.candidate_models == ["openai/gpt-4o-mini", "anthropic/claude-haiku-4-5"]
+    assert context.signals["domain-classifier"]["domain"] == "coding"
+    assert request_kwargs["metadata"]["_routing_plugin_candidate_models"] == context.candidate_models
+
+
+def test_filter_by_routing_plugin_candidates_narrows_and_raises_when_empty():
+    """Unit-level check of _filter_by_routing_plugin_candidates in isolation."""
+    router = Router(model_list=_smart_router_model_list(), plugins=[TenantPolicy()])
+    healthy_deployments = router.model_list
+
+    narrowed = router._filter_by_routing_plugin_candidates(
+        healthy_deployments=healthy_deployments,
+        request_kwargs={"metadata": {"_routing_plugin_candidate_models": ["openai/gpt-4o-mini"]}},
+    )
+    assert [d["litellm_params"]["model"] for d in narrowed] == ["openai/gpt-4o-mini"]
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        router._filter_by_routing_plugin_candidates(
+            healthy_deployments=healthy_deployments,
+            request_kwargs={"metadata": {"_routing_plugin_candidate_models": ["nonexistent/model"]}},
+        )
