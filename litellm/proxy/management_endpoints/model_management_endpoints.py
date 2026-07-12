@@ -1040,6 +1040,22 @@ class ModelManagementAuthChecks:
         return True
 
 
+def _deployment_name_and_model(deployment: Optional[Union[Deployment, Dict[str, object]]]) -> Tuple[Optional[str], str]:
+    """Return (model_name, litellm_params.model) for a deployment.
+
+    delete_deployment is annotated to return a Deployment but hands back the raw
+    model_list dict at runtime, so both shapes are handled; the model defaults to "".
+    """
+    if deployment is None:
+        return None, ""
+    if isinstance(deployment, dict):
+        name = deployment.get("model_name")
+        params = deployment.get("litellm_params")
+        model = params.get("model") if isinstance(params, dict) else None
+        return (name if isinstance(name, str) else None), (model if isinstance(model, str) else "")
+    return deployment.model_name, str(getattr(deployment.litellm_params, "model", "") or "")
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -1111,7 +1127,19 @@ async def delete_model(
 
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
-                llm_router.delete_deployment(id=model_info.id)
+                deleted_deployment = llm_router.delete_deployment(id=model_info.id)
+                # delete_deployment only drops the deployment from model_list; the auto/
+                # complexity router registries are keyed by model_name and would otherwise
+                # retain a stale (now unbacked) entry, so evict it here too. Guard on the
+                # auto_router/ prefix (as clear_cache does): a regular DB model that merely
+                # shares a model_name with a config-defined router must not evict that router,
+                # since add_deployment never restores config-defined routers.
+                deleted_name, deleted_model = _deployment_name_and_model(deleted_deployment)
+                if deleted_name is not None and deleted_model.startswith("auto_router/"):
+                    llm_router.auto_routers.pop(deleted_name, None)
+                    llm_router.complexity_routers.pop(deleted_name, None)
+                    llm_router.adaptive_routers.pop(deleted_name, None)
+                    llm_router.quality_routers.pop(deleted_name, None)
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -1715,8 +1743,27 @@ async def clear_cache():
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
 
-        # Clear auto routers
-        llm_router.auto_routers.clear()
+        # Clear only DB-backed auto-router-family entries, keyed by model_name, so the
+        # reload below rebuilds them fresh. A blanket .clear() would also drop config-defined
+        # routers, which are never re-added below (add_deployment only reloads DB models),
+        # leaving them permanently unroutable until a full proxy restart for every tenant.
+        # Restrict to deployments whose model is actually an auto_router/* so a config
+        # router that merely shares a model_name with a regular DB model isn't evicted. The
+        # auto_router/ prefix also covers quality_router/ and adaptive_router/, so pop the
+        # name from every router registry (no-op where absent); missing quality/adaptive
+        # entries would otherwise make init raise "already exists" on reload and abort it.
+        db_router_names = {
+            model.get("model_name")
+            for model in current_models
+            if model.get("model_name") is not None
+            and model.get("model_info", {}).get("db_model", False)
+            and str(model.get("litellm_params", {}).get("model", "")).startswith("auto_router/")
+        }
+        for model_name in db_router_names:
+            llm_router.auto_routers.pop(model_name, None)
+            llm_router.complexity_routers.pop(model_name, None)
+            llm_router.adaptive_routers.pop(model_name, None)
+            llm_router.quality_routers.pop(model_name, None)
 
         # Reload only DB models
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)

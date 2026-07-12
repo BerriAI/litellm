@@ -29,9 +29,11 @@ from fastapi import HTTPException
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
+    CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
@@ -179,12 +181,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=[
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-                GuardrailEventHooks.realtime_input_transcription,
-            ],
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
             **kwargs,
@@ -1707,6 +1704,66 @@ class ContentFilterGuardrail(CustomGuardrail):
             tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
         )
 
+    @staticmethod
+    def _get_mcp_tool_name(request_data: dict) -> str | None:
+        raw_name: object = request_data.get("mcp_tool_name")
+        if isinstance(raw_name, str) and raw_name:
+            return raw_name
+        return None
+
+    def _assert_mcp_argument_label_clean(self, text: str, detections: list[ContentFilterDetection]) -> None:
+        if self._filter_single_text(text, detections=detections) != text:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Content blocked: MCP tool call argument matched a masking rule on a non-rewritable field"
+                },
+            )
+
+    def _filter_mcp_argument_value(
+        self, value: object, detections: list[ContentFilterDetection], depth: int = 0
+    ) -> object:
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Content blocked: MCP tool call arguments exceed the maximum nesting depth"},
+            )
+        if isinstance(value, str):
+            return self._filter_single_text(value, detections=detections)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            self._assert_mcp_argument_label_clean(str(value), detections)
+            return value
+        if isinstance(value, dict):
+            for key in value:
+                if isinstance(key, str):
+                    self._assert_mcp_argument_label_clean(key, detections)
+            return {key: self._filter_mcp_argument_value(item, detections, depth + 1) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._filter_mcp_argument_value(item, detections, depth + 1) for item in value]
+        return value
+
+    def _scan_mcp_tool_call_arguments(
+        self,
+        request_data: dict,
+        detections: list[ContentFilterDetection],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> None:
+        if not self._event_hook_is_event_type(GuardrailEventHooks.pre_mcp_call):
+            return
+        call_type: object = getattr(logging_obj, "call_type", None)
+        if logging_obj is not None and call_type != CallTypes.call_mcp_tool.value:
+            return
+        if self._get_mcp_tool_name(request_data) is None:
+            return
+        raw_arguments: object = request_data.get("mcp_arguments")
+        if not isinstance(raw_arguments, dict) or not raw_arguments:
+            return
+        filtered_arguments = self._filter_mcp_argument_value(raw_arguments, detections)
+        if filtered_arguments == raw_arguments:
+            return
+        request_data["mcp_arguments"] = filtered_arguments
+        request_data["modified_arguments"] = filtered_arguments
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -1760,6 +1817,11 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
             inputs["texts"] = processed_texts
+
+            if input_type == "request":
+                self._scan_mcp_tool_call_arguments(
+                    request_data=request_data, detections=detections, logging_obj=logging_obj
+                )
 
             # Count masked entities by type
             self._count_masked_entities(detections, masked_entity_count)
@@ -1919,3 +1981,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         return LitellmContentFilterGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_mcp_call,
+        ]

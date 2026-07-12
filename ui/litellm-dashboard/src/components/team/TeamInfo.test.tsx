@@ -583,7 +583,7 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
       });
-      expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Columns" })).toBeInTheDocument();
       expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-1 of 1");
       expect(screen.getByTestId("pagination-prev")).toBeInTheDocument();
       expect(screen.getByTestId("pagination-next")).toBeInTheDocument();

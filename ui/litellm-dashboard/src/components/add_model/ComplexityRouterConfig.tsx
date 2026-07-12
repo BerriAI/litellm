@@ -2,6 +2,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, Collapse, Divider, InputNumber, Radio, Space, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
+import SemanticKeywordMatching from "./SemanticKeywordMatching";
 
 const { Text } = Typography;
 
@@ -33,6 +35,17 @@ interface ComplexityRouterConfigProps {
   onChange: (value: ComplexityRouterConfigValue) => void;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
+  // Optional: the edit-auto-router modal doesn't yet support editing keyword tier
+  // rules or semantic matching, so it renders this component without them.
+  keywordTierRules?: KeywordTierRule[];
+  onKeywordTierRulesChange?: (rules: KeywordTierRule[]) => void;
+  semanticMatchingEnabled?: boolean;
+  onSemanticMatchingEnabledChange?: (enabled: boolean) => void;
+  embeddingModel?: string;
+  onEmbeddingModelChange?: (model: string) => void;
+  matchThreshold?: number;
+  onMatchThresholdChange?: (threshold: number) => void;
+  showValidationErrors?: boolean;
 }
 
 const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
@@ -64,12 +77,26 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onChange,
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
+  keywordTierRules = [],
+  onKeywordTierRulesChange,
+  semanticMatchingEnabled = false,
+  onSemanticMatchingEnabledChange,
+  embeddingModel,
+  onEmbeddingModelChange = () => {},
+  matchThreshold = 0.5,
+  onMatchThresholdChange = () => {},
+  showValidationErrors = false,
 }) => {
-  // Prepare model options for dropdowns
-  const modelOptions = modelInfo.map((model) => ({
-    value: model.model_group,
-    label: model.model_group,
-  }));
+  // Embedding models can't serve a chat-completion role, so they're excluded here.
+  const modelOptions = modelInfo
+    .filter((model) => model.mode !== "embedding")
+    .map((model) => ({
+      value: model.model_group,
+      label: model.model_group,
+    }));
+
+  const classifierModelMissing =
+    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
 
   const handleTierChange = (tier: keyof ComplexityTiers, model: string) => {
     onChange({
@@ -128,6 +155,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <Card>
         {(Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>).map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
+          const tierMissing = showValidationErrors && !value.tiers[tier];
           return (
             <div key={tier}>
               {index > 0 && <Divider style={{ margin: "16px 0" }} />}
@@ -150,7 +178,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
+                  status={tierMissing ? "error" : undefined}
                 />
+                {tierMissing && (
+                  <Text type="danger" style={{ fontSize: 12 }}>
+                    This tier is required
+                  </Text>
+                )}
               </div>
             </div>
           );
@@ -202,7 +236,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                         showSearch
                         style={{ width: "100%" }}
                         options={modelOptions}
+                        status={classifierModelMissing ? "error" : undefined}
                       />
+                      {classifierModelMissing && (
+                        <Text type="danger" style={{ fontSize: 12 }}>
+                          A classifier model is required
+                        </Text>
+                      )}
                     </div>
                     <div>
                       <Text strong style={{ display: "block", marginBottom: 4 }}>
@@ -239,7 +279,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </Tooltip>
         </div>
         <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
-          Optional: add terms the built-in list misses (e.g., udp, kafka, terraform)
+          Optional: Add terms to the built-in list to improve classification accuracy on the technical dimension. (e.g.,
+          udp, kafka, terraform).
         </Text>
         <AntdSelect
           mode="tags"
@@ -280,6 +321,32 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </li>
         </ul>
       </Card>
+
+      {/* Keyword-tier and semantic sections only render when their change handlers are
+          wired (the add-router flow). The edit-auto-router modal doesn't pass them yet, so
+          they stay hidden there rather than rendering interactive-but-dead controls. */}
+      {onKeywordTierRulesChange && (
+        <>
+          <Divider />
+          <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
+        </>
+      )}
+
+      {onSemanticMatchingEnabledChange && (
+        <>
+          <Divider />
+          <SemanticKeywordMatching
+            enabled={semanticMatchingEnabled}
+            onEnabledChange={onSemanticMatchingEnabledChange}
+            embeddingModel={embeddingModel}
+            onEmbeddingModelChange={onEmbeddingModelChange}
+            matchThreshold={matchThreshold}
+            onMatchThresholdChange={onMatchThresholdChange}
+            modelInfo={modelInfo}
+            showValidationErrors={showValidationErrors}
+          />
+        </>
+      )}
     </div>
   );
 };

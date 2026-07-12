@@ -48,7 +48,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --frozen --group proxy-dev
+          uv sync --frozen --group proxy-dev --group e2e-dev
 
       # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
       # only after `prisma generate` writes prisma/client.py et al. Without this the
@@ -106,6 +106,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
+
+      - name: Check tests/e2e basedpyright (zero errors)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only --diff-filter=ACMRD "$BASE_SHA"...HEAD -- 'tests/e2e/**/*.py' | grep -q .; then
+            uv run --no-sync basedpyright tests/e2e
+          else
+            echo "No changed tests/e2e Python files; skipping."
+          fi
 
       - name: Check for circular imports
         run: |
