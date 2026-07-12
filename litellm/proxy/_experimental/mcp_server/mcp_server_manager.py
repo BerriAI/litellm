@@ -241,6 +241,71 @@ def _without_authorization(
     return filtered or None
 
 
+def _merge_hook_extra_headers_with_precedence(
+    extra_headers: dict[str, str] | None,
+    hook_extra_headers: dict[str, str],
+    server_auth_header: str | None,
+    mcp_auth_header: str | None,
+    mcp_server: MCPServer,
+) -> dict[str, str]:
+    """Merge ``pre_mcp_call`` guardrail headers into ``extra_headers`` while
+    preserving a per-user OAuth ``Authorization`` credential.
+
+    ``mcp_jwt_signer`` injects a signed JWT as ``Authorization`` in
+    ``hook_extra_headers``. A per-user OAuth token must take precedence over that
+    JWT, so when one is present — the server ``auth_value``
+    (``server_auth_header``), the per-user ``mcp_auth_header``, or a non-static
+    ``Authorization`` already in ``extra_headers`` on an OAuth-backed server —
+    the hook's ``Authorization`` is dropped and only its other headers are
+    applied. This mirrors the ``tools/list`` path (see ``list_tools``) and fixes
+    #31977, where the JWT clobbered the user's OAuth token on ``tools/call`` so
+    OAuth-backed servers rejected the request.
+
+    The signer JWT still overrides an admin-configured *static* ``Authorization``
+    header (``server.static_headers``), preserving the existing behavior that
+    the signer supersedes static credentials.
+    """
+    merged: dict[str, str] = dict(extra_headers) if extra_headers else {}
+    headers_to_apply: dict[str, str] = dict(hook_extra_headers)
+
+    def _has_authorization(headers: dict[str, str] | None) -> bool:
+        return any(isinstance(k, str) and k.lower() == "authorization" for k in (headers or {}))
+
+    if _has_authorization(headers_to_apply):
+        static_headers = getattr(mcp_server, "static_headers", None) or {}
+        is_oauth_server = getattr(mcp_server, "auth_type", None) == MCPAuth.oauth2
+        # On an OAuth-backed server, a non-static Authorization already in
+        # extra_headers is the user's resolved OAuth token — preserve it. For
+        # non-OAuth servers the signer JWT stays authoritative, so a
+        # caller-forwarded Authorization does not suppress it.
+        extra_oauth_authorization = (
+            is_oauth_server and _has_authorization(merged) and not _has_authorization(static_headers)
+        )
+        preserve_existing_authorization = (
+            server_auth_header is not None or bool(mcp_auth_header) or extra_oauth_authorization
+        )
+        if preserve_existing_authorization:
+            verbose_logger.debug(
+                "MCPServerManager: preserving per-user OAuth Authorization header for MCP "
+                "server '%s'; the mcp_jwt_signer JWT will not overwrite it (see #31977).",
+                mcp_server.server_name or mcp_server.name,
+            )
+            headers_to_apply = {
+                k: v for k, v in headers_to_apply.items() if not (isinstance(k, str) and k.lower() == "authorization")
+            }
+        elif _has_authorization(merged):
+            # The signer JWT is overriding an existing (static) Authorization —
+            # keep the original warning so admins know it supersedes it.
+            verbose_logger.warning(
+                "MCPServerManager: mcp_jwt_signer 'Authorization' overrides the existing "
+                "static Authorization header for MCP server '%s'; the hook JWT takes precedence.",
+                mcp_server.server_name or mcp_server.name,
+            )
+
+    merged.update(headers_to_apply)
+    return merged
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[Tuple[int, Optional[str]]]:
@@ -3325,29 +3390,16 @@ class MCPServerManager:
             extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            if "Authorization" in hook_extra_headers:
-                if "Authorization" in extra_headers:
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
-                    )
-                elif server_auth_header is not None:
-                    # server_auth_header is passed separately to _create_mcp_client as
-                    # auth_value.  Both will reach the upstream server — warn so admins
-                    # know two Authorization credentials are being sent.
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
-                        "server '%s' already has a configured authentication_token. "
-                        "Both credentials will be sent; the hook header is in extra_headers "
-                        "and the server token is in auth_value — the upstream server decides "
-                        "which one wins.  Consider unsetting authentication_token if you want "
-                        "the hook JWT to be the sole credential.",
-                        mcp_server.server_name or mcp_server.name,
-                    )
-            extra_headers.update(hook_extra_headers)
+            # Per-user OAuth / admin static auth take precedence over the signer
+            # JWT — don't let hook_extra_headers overwrite an existing
+            # Authorization credential (mirrors the tools/list path). See #31977.
+            extra_headers = _merge_hook_extra_headers_with_precedence(
+                extra_headers=extra_headers,
+                hook_extra_headers=hook_extra_headers,
+                server_auth_header=server_auth_header,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server=mcp_server,
+            )
 
         # Reset to None if no headers were actually added
         if extra_headers is not None and len(extra_headers) == 0:
