@@ -86,12 +86,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self.optional_params = kwargs
 
         # Set supported event hooks
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(guardrail_name=guardrail_name, **kwargs)
 
@@ -669,3 +664,11 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         return IBMDetectorGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+        ]

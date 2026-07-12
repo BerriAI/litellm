@@ -18865,7 +18865,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "supports_reasoning": false
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -18898,6 +18899,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -18939,6 +18941,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -18980,6 +18983,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -36951,6 +36955,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -36973,6 +36978,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_reasoning": false,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3-pro-image-preview": {
@@ -36988,6 +36994,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_reasoning": false,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3.1-flash-image": {
@@ -37001,6 +37008,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "supports_reasoning": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
@@ -37014,6 +37022,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "supports_reasoning": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
@@ -45283,31 +45292,26 @@
     "fallback_generalizations": {
         "rules": [
             {
-                "name": "bedrock-anthropic-claude-mid-conversation-system",
-                "pattern": "anthropic\\.claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "description": "Bedrock Invoke ids for Claude 4.8 or higher: anthropic.claude-<family> with minor 4.8 through 4.99, any 5.x or later major-minor, or a bare 5+ major, which also admits new families such as fable. These models accept mid-conversation role system messages in place (verified live on Opus 4.8, Sonnet 5 and Fable 5), so unmapped future Bedrock Claudes keep the cache-preserving in-place handling instead of the hoist-all default. Listed first so bare-id provider inference, which takes the first pattern hit, resolves these Bedrock ids to bedrock; model-info resolution skips provider-mismatched rules either way.",
-                "extends": "anthropic-claude",
+                "name": "bedrock-claude-ids",
+                "pattern": "^(?:[a-z-]+\\.)?anthropic\\.claude-",
+                "description": "A Bedrock-syntax Claude id, for every version: anthropic.claude- at the start of the name, optionally behind a single dotted geo segment (us./eu./au./jp./apac./global./us-gov.). Anchored to the start because routing rules see the raw request string and provider inference feeds the proxy's provider/* wildcard access checks: an id under an unrecognized namespace such as bedrockz/anthropic.claude-... must stay unroutable rather than resolve to bedrock and slip through a bedrock/* key. Routes to bedrock before the bare-id Anthropic rule is consulted.",
                 "model_info": {
-                    "litellm_provider": "bedrock",
-                    "supports_adaptive_thinking": true,
-                    "supports_mid_conversation_system": true
+                    "litellm_provider": "bedrock"
                 }
             },
             {
-                "name": "anthropic-claude-adaptive-thinking",
-                "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
-                "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
-                "extends": "anthropic-claude",
+                "name": "anthropic-claude-ids",
+                "pattern": "^claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?$",
+                "description": "A bare Claude family-major id with an optional minor and an optional 8-digit date suffix, anchored to the whole name, so claude-newfamily-5 routes like claude-newfamily-5-1 does. Routes an unmapped Claude id that carries no provider namespace to the Anthropic API.",
                 "model_info": {
-                    "supports_adaptive_thinking": true
+                    "litellm_provider": "anthropic"
                 }
             },
             {
-                "name": "anthropic-claude",
-                "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
-                "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that gives an unmapped Claude provider routing and baseline capabilities; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+                "name": "claude-family-baseline",
+                "pattern": "claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?",
+                "description": "Any Claude family-major id with an optional minor and an optional 8-digit date suffix, under any provider namespace (bare, bedrock-dotted, vertex, databricks, ...), so bare majors like claude-newfamily-5 get the same baseline as claude-newfamily-5-1. Carries the model-family facts every Claude shares; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
                 "model_info": {
-                    "litellm_provider": "anthropic",
                     "mode": "chat",
                     "max_input_tokens": 200000,
                     "max_output_tokens": 64000,
@@ -45322,6 +45326,22 @@
                     "supports_reasoning": true,
                     "supports_pdf_input": true,
                     "supports_system_messages": true
+                }
+            },
+            {
+                "name": "claude-adaptive-thinking",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
+                "model_info": {
+                    "supports_adaptive_thinking": true
+                }
+            },
+            {
+                "name": "claude-mid-conversation-system",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "description": "Claude at version 4.8 or higher, in any id shape that contains claude-<family>-: minors 4.8 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Anthropic introduced mid-conversation system messages with Opus 4.8 and every newer Claude keeps them; 4.7 and below reject the system role inside messages.",
+                "model_info": {
+                    "supports_mid_conversation_system": true
                 }
             }
         ]

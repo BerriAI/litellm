@@ -1,21 +1,25 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
-import { DataTable, DataTablePagination, DataTableSortHeader } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableFilterField,
+  DataTableSortHeader,
+  DataTableToolbar,
+} from "@/components/shared/DataTable";
+import { Input } from "@/components/ui/input";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { ColumnDef, PaginationState, SortingState } from "@tanstack/react-table";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Badge, Icon, Text } from "@tremor/react";
 import { Popover, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import { useQuery } from "@tanstack/react-query";
-import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
@@ -30,18 +34,29 @@ interface TeamVirtualKeysTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
-  const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
   });
-  const [filters, setFilters] = useState<Record<string, string>>({
-    "Organization ID": "",
-    "Key Alias": "",
-    "User ID": "",
-  });
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: 300 });
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
+
+  const getFilterValue = useCallback(
+    (columnId: string): string | undefined => {
+      const entry = columnFilters.find((filter) => filter.id === columnId);
+      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
+    },
+    [columnFilters],
+  );
 
   const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : "desc";
@@ -56,9 +71,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     refetch,
   } = useKeys(pageIndex + 1, pageSize, {
     teamID: teamId,
-    organizationID: filters["Organization ID"]?.trim() || undefined,
-    selectedKeyAlias: filters["Key Alias"]?.trim() || undefined,
-    userID: filters["User ID"]?.trim() || undefined,
+    selectedKeyAlias: searchQuery.trim() || undefined,
+    userID: getFilterValue("user_id"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
@@ -95,18 +109,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [teamId, teamAlias, organization],
   );
 
-  const teamFilterOptionsQuery = useQuery({
-    queryKey: ["teamFilterOptions", teamId, accessToken],
-    queryFn: async () => fetchTeamFilterOptions(accessToken, teamId),
-    enabled: !!accessToken && !!teamId,
-    staleTime: 30000, // 30 seconds - align with useKeys
-  });
-  const teamFilterOptions = teamFilterOptionsQuery.data || {
-    keyAliases: [],
-    organizationIds: [],
-    userIds: [],
-  };
-
   const handleStorageChange = useCallback(() => {
     refetch?.();
   }, [refetch]);
@@ -116,76 +118,17 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [handleStorageChange]);
 
-  const handleFilterChange = useCallback((newFilters: Record<string, string>) => {
-    setFilters((prev) => ({
-      ...prev,
-      "Organization ID": newFilters["Organization ID"] ?? prev["Organization ID"],
-      "Key Alias": newFilters["Key Alias"] ?? prev["Key Alias"],
-      "User ID": newFilters["User ID"] ?? prev["User ID"],
-    }));
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
+    setColumnFilters(updaterOrValue);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
-
-  const handleFilterReset = useCallback(() => {
-    setFilters({
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-    });
-    setSorting(DEFAULT_SORTING);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const filterOptions: FilterOption[] = useMemo(
-    () => [
-      {
-        name: "Organization ID",
-        label: "Organization ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { organizationIds } = teamFilterOptions;
-          if (!organizationIds.length) return [];
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
-          return filtered.map((id) => ({ label: id, value: id }));
-        },
-      },
-      {
-        name: "Key Alias",
-        label: "Key Alias",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { keyAliases } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
-          return filtered.map((alias) => ({ label: alias, value: alias }));
-        },
-      },
-      {
-        name: "User ID",
-        label: "User ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { userIds } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
-            : userIds;
-          return filtered.map((u) => ({
-            label: u.email ? `${u.id} (${u.email})` : u.id,
-            value: u.id,
-          }));
-        },
-      },
-    ],
-    [teamFilterOptions],
-  );
 
   const columns: ColumnDef<KeyResponse>[] = useMemo(
     () => [
       {
         id: "token",
         accessorKey: "token",
+        meta: { title: "Key ID" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Key ID" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -196,6 +139,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "key_alias",
         accessorKey: "key_alias",
+        meta: { title: "Key Alias" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Key Alias" variant="header-cycle" />,
         size: 150,
         enableSorting: true,
@@ -268,6 +212,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "created_at",
         accessorKey: "created_at",
+        meta: { title: "Created At" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Created At" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -335,6 +280,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "updated_at",
         accessorKey: "updated_at",
+        meta: { title: "Updated At" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -359,6 +305,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "spend",
         accessorKey: "spend",
+        meta: { title: "Spend (USD)" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
         size: 100,
         enableSorting: true,
@@ -367,6 +314,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "max_budget",
         accessorKey: "max_budget",
+        meta: { title: "Budget (USD)" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" variant="header-cycle" />,
         size: 110,
         enableSorting: true,
@@ -503,27 +451,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="w-full mb-6">
-            <FilterComponent
-              options={filterOptions}
-              onApplyFilters={handleFilterChange}
-              initialValues={filters}
-              onResetFilters={handleFilterReset}
-            />
-          </div>
-
-          <div className="w-full mb-4">
-            <DataTablePagination
-              page={pageIndex}
-              pageSize={pageSize}
-              rowCount={rowCount}
-              onPageChange={(nextPage) => setTablePagination((prev) => ({ ...prev, pageIndex: nextPage }))}
-              onPageSizeChange={(nextSize) => setTablePagination({ pageIndex: 0, pageSize: nextSize })}
-              isLoading={isLoading || isFetching}
-            />
-          </div>
-
+        <div className="py-4 flex-1 overflow-hidden">
           <DataTable
             data={displayKeys}
             columns={columns}
@@ -534,14 +462,46 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             pagination={tablePagination}
             onPaginationChange={setTablePagination}
             rowCount={rowCount}
-            paginationSlot={() => null}
+            filterMode="server"
+            columnFilters={columnFilters}
+            onColumnFiltersChange={handleColumnFiltersChange}
             enableColumnResizing
             columnResizeMode="onChange"
             isLoading={isLoading || isFetching}
             loadingMessage="Loading keys..."
-            noDataMessage="No keys found"
             maxBodyHeight="75vh"
             size="compact"
+            toolbar={(table) => (
+              <>
+                <DataTableToolbar
+                  table={table}
+                  searchValue={searchInput}
+                  onSearchChange={handleSearchChange}
+                  searchPlaceholder="Search by key alias…"
+                  onRefresh={() => refetch?.()}
+                  isRefreshing={isFetching}
+                  onOpenFilters={() => setFiltersOpen(true)}
+                  filterLabels={{ user_id: "User ID" }}
+                />
+                <DataTableFilterDrawer
+                  table={table}
+                  open={filtersOpen}
+                  onOpenChange={setFiltersOpen}
+                  title="Filters"
+                  description={`Narrow down keys for ${teamAlias ?? "this team"}`}
+                >
+                  {({ get, set }) => (
+                    <DataTableFilterField label="User ID">
+                      <Input
+                        value={(get("user_id") as string) ?? ""}
+                        onChange={(event) => set("user_id", event.target.value)}
+                        placeholder="Filter by user ID…"
+                      />
+                    </DataTableFilterField>
+                  )}
+                </DataTableFilterDrawer>
+              </>
+            )}
           />
         </div>
       )}

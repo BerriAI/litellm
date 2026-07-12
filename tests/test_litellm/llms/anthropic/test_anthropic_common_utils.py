@@ -1578,7 +1578,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     def test_resolver_reads_flag_through_bedrock_invoke_prefix(
         self, local_model_cost_map
@@ -1592,6 +1592,7 @@ class TestClaudeOpus48AdaptiveThinking:
             AnthropicModelInfo._supports_model_capability(
                 "bedrock/invoke/us.anthropic.claude-opus-4-8",
                 "supports_adaptive_thinking",
+                "anthropic",
             )
             is True
         )
@@ -1609,7 +1610,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -1644,27 +1645,28 @@ class TestClaudeOpus48AdaptiveThinking:
         version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
         [
-            "us.anthropic.claude-fable-5-preview",
-            "claude-fable-5-preview",
+            "us.anthropic.claude-fable-preview",
+            "claude-fable-preview",
         ],
     )
     def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
         self, local_model_cost_map, model
     ):
         """An alias absent from the map, not matched by any ``fallback_generalizations``
-        rule, and without a parseable opus/sonnet/haiku >= 4.6 family version stays
-        non-adaptive. ``fable`` is outside the version-rule family set, so neither the
-        cost map nor the declarative rule marks it adaptive."""
+        rule, and without any parseable family version stays non-adaptive. ``fable``
+        without a major version matches neither the core-family 4.6+ gate nor the
+        family-agnostic 5+ gate, so neither the cost map nor the declarative rule marks
+        it adaptive."""
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -1676,21 +1678,23 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-opus-5-0",
             "claude-opus-4-10",
             "claude-opus-4-8-some-future-suffix",
+            "claude-fable-5-preview",
+            "us.anthropic.claude-fable-5-preview",
         ],
     )
     def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
         self, local_model_cost_map, model
     ):
-        """Provider-prefixed or suffixed Claude names that resolve to no mapped entry and
-        are not matched by the anchored ``anthropic-claude`` pricing rule still resolve to
-        adaptive when their opus/sonnet/haiku family version is >= 4.6. The version gate is
-        the declarative ``anthropic-claude-adaptive-thinking`` rule, so 5.x, 6.x and any
-        later family are covered with no code change."""
+        """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
+        still resolve to adaptive when the id carries claude-<family>- at version 4.6
+        or higher, bare 5+ majors included. The version gate is the declarative
+        ``claude-adaptive-thinking`` rule, so 5.x, 6.x and any later family are covered
+        with no code change."""
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -1713,7 +1717,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -1722,7 +1726,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
 
 
 class TestDefaultSuffixAdaptiveThinking:
@@ -1747,7 +1751,7 @@ class TestDefaultSuffixAdaptiveThinking:
     ) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True, (
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
             f"{model} not classified as adaptive thinking. "
             "Check _model_map_lookup_candidates strips @default suffix."
         )
@@ -1767,4 +1771,52 @@ class TestDefaultSuffixAdaptiveThinking:
         candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
         assert expected_bare in candidates, (
             f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
+        )
+
+
+class TestCapabilityProbeUsesCallerProvider:
+    """``_supports_model_capability`` must probe under the caller's real provider
+    namespace instead of a pinned ``"anthropic"``. With the pin, the exact Bedrock
+    cost-map entry for ``global.anthropic.claude-opus-4-8`` was rejected by the
+    provider match and the anthropic-scoped fallback rule answered instead, so
+    flipping ``supports_adaptive_thinking`` on the exact entry changed nothing and
+    the documented "exact entry beats rule" precedence was silently violated."""
+
+    BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
+
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is True
+        )
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is False
+        )
+
+    def test_native_anthropic_probe_still_reads_anthropic_entry(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
+            is True
         )

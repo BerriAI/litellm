@@ -2130,9 +2130,9 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
     """An unmapped Bedrock Claude at 4.8 or higher resolves through the
-    ``bedrock-anthropic-claude-mid-conversation-system`` fallback rule, so a
-    future model that has not landed in the cost map yet keeps the
-    cache-preserving in-place behavior instead of falling back to hoist-all."""
+    ``claude-mid-conversation-system`` capability rule, so a future model that
+    has not landed in the cost map yet keeps the cache-preserving in-place
+    behavior instead of falling back to hoist-all."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2159,9 +2159,9 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
     """Exact cost-map hits resolve before fallback-generalization rules, so a
     mapped Bedrock Claude 4.8+ entry without ``supports_mid_conversation_system``
     silently loses the cache-preserving in-place handling that the
-    ``bedrock-anthropic-claude-mid-conversation-system`` rule grants unmapped
-    ids. Every mapped entry the rule's own pattern matches must carry the flag
-    explicitly."""
+    ``claude-mid-conversation-system`` capability rule grants unmapped ids.
+    Every mapped bedrock entry the rule's own pattern matches must carry the
+    flag explicitly."""
     import re
 
     import litellm
@@ -2171,7 +2171,7 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
     pattern = re.compile(
-        next(r["pattern"] for r in rules if r["name"] == "bedrock-anthropic-claude-mid-conversation-system"),
+        next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
         re.IGNORECASE,
     )
     missing = [
@@ -2472,3 +2472,46 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     )
     assert out_converse == []
 
+
+
+def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
+    local_model_cost_map, monkeypatch
+):
+    """The outbound thinking payload must follow the exact Bedrock cost-map entry.
+    Before threading the caller's provider through the capability probes, the probe
+    was pinned to ``"anthropic"``: the exact ``global.anthropic.claude-opus-4-8``
+    entry was rejected by the provider match and the anthropic-scoped fallback rule
+    forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
+    explicitly set to ``false`` on the entry."""
+    import litellm
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    model = "global.anthropic.claude-opus-4-8"
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    def transform():
+        return cfg.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
+    litellm.get_model_info.cache_clear()
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped
