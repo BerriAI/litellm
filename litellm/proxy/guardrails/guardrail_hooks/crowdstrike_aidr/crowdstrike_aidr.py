@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Annotated,
+    List,
     Literal,
     NamedTuple,
     Optional,
@@ -31,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionToolParam
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -236,6 +238,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     AI Guard service.
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         guardrail_name: str,
@@ -266,6 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 "CrowdStrike AIDR API base URL is required. Set CS_AIDR_BASE_URL environment variable or pass it in litellm_params."
             )
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         # Pass relevant kwargs to the parent class
         super().__init__(guardrail_name=guardrail_name, **kwargs)
         verbose_proxy_logger.debug(

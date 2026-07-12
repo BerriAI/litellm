@@ -3706,3 +3706,341 @@ async def test_per_tag_untagged_request_governed_by_key_limit_v3(monkeypatch):
         await call({"tags": ["cell-99"]})
     assert exc_info.value.status_code == 429
     assert "tag_per_key" not in str(exc_info.value.detail)
+
+
+# --------------------------------------------------------------------------
+# Streaming success logging mirrors x-ratelimit-* remaining values into
+# standard_logging_object.hidden_params.additional_headers so Prometheus /
+# logging callbacks see them for streams too (non-streaming already gets
+# them via async_post_call_success_hook, which the streaming path skips).
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_end_to_end_populates_slp_ratelimit_headers(monkeypatch):
+    """
+    End-to-end regression: on a streaming request, the same pre-call +
+    success-callback pair the proxy uses must land ``x-ratelimit-*``
+    remaining/limit values in
+    ``kwargs["standard_logging_object"]["hidden_params"]["additional_headers"]``.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-stream-e2e")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        rpm_limit=100,
+        tpm_limit=10000,
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Real pre-call: populates data and stashes the response into metadata
+    # so the success callback can find it via litellm_params.metadata.
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "metadata": {},
+        "stream": True,
+    }
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="",
+    )
+
+    # Simulate the wrapper handing the pre-call metadata dict to the
+    # completion() call: it becomes kwargs["litellm_params"]["metadata"] by
+    # the time the success callback fires.
+    mock_response = ModelResponse(
+        id="mock-stream-e2e",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    mock_kwargs: Dict[str, Any] = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "litellm_params": {"metadata": data["metadata"]},
+        "model": "gpt-4o-mini",
+    }
+
+    async def _noop_increment(increment_list, **_):
+        return True
+
+    monkeypatch.setattr(
+        handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        _noop_increment,
+    )
+
+    # async_logging_hook runs before async_log_success_event, so any
+    # downstream callback that reads the SLP sees the mirrored values.
+    await handler.async_logging_hook(
+        kwargs=mock_kwargs,
+        result=mock_response,
+        call_type="acompletion",
+    )
+
+    additional_headers = (
+        mock_kwargs["standard_logging_object"]
+        .get("hidden_params", {})
+        .get("additional_headers", {})
+    )
+
+    # api_key-scoped remaining/limit values are the baseline every request
+    # emits and must always reach the SLP.
+    remaining_keys = [
+        k for k in additional_headers if "-remaining-" in k
+    ]
+    assert (
+        remaining_keys
+    ), f"streaming success must populate remaining values, got {additional_headers!r}"
+    limit_keys = [k for k in additional_headers if "-limit-" in k]
+    assert limit_keys, "streaming success must also populate limit values"
+    assert (
+        additional_headers.get("x-ratelimit-api_key-remaining-requests") == 99
+    ), (
+        "api_key remaining requests should reflect the just-consumed slot;"
+        f" got {additional_headers!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_populates_model_per_key_ratelimit_headers(monkeypatch):
+    """
+    Streaming must land the per-(key, model) remaining/limit values in the
+    SLP under ``x-ratelimit-model_per_key-{remaining|limit}-{requests,tokens}``.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-stream-mirror")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        metadata={
+            "model_rpm_limit": {"gpt-4o-mini": 100},
+            "model_tpm_limit": {"gpt-4o-mini": 10000},
+        },
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def _noop_increment(increment_list, **_):
+        return True
+
+    monkeypatch.setattr(
+        handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        _noop_increment,
+    )
+
+    data: Dict[str, Any] = {"model": "gpt-4o-mini", "metadata": {}, "stream": True}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="",
+    )
+
+    mock_response = ModelResponse(
+        id="mock-stream",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+
+    mock_kwargs: Dict[str, Any] = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "litellm_params": {"metadata": data["metadata"]},
+        "model": "gpt-4o-mini",
+    }
+
+    await handler.async_logging_hook(
+        kwargs=mock_kwargs,
+        result=mock_response,
+        call_type="acompletion",
+    )
+
+    hidden_params = mock_kwargs["standard_logging_object"].get("hidden_params") or {}
+    additional_headers = hidden_params.get("additional_headers") or {}
+
+    assert (
+        additional_headers.get("x-ratelimit-model_per_key-remaining-requests") == 99
+    ), f"got {additional_headers!r}"
+    assert additional_headers.get("x-ratelimit-model_per_key-limit-requests") == 100
+
+    # response._hidden_params is also updated for late readers.
+    response_hidden = getattr(mock_response, "_hidden_params", None) or {}
+    response_headers = response_hidden.get("additional_headers") or {}
+    assert response_headers.get("x-ratelimit-model_per_key-remaining-requests") == 99
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_no_mirror_when_no_snapshot(monkeypatch):
+    """
+    No pre-call snapshot (no descriptors matched) -> no fabricated
+    ``x-ratelimit-*`` headers.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-stream-no-mirror")
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    async def _noop_increment(increment_list, **_):
+        return True
+
+    monkeypatch.setattr(
+        handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        _noop_increment,
+    )
+
+    mock_response = ModelResponse(
+        id="mock-stream-none",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+
+    mock_kwargs: Dict[str, Any] = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "litellm_params": {"metadata": {}},
+        "model": "gpt-4o-mini",
+    }
+
+    await handler.async_logging_hook(
+        kwargs=mock_kwargs,
+        result=mock_response,
+        call_type="acompletion",
+    )
+
+    hidden_params = mock_kwargs["standard_logging_object"].get("hidden_params") or {}
+    additional_headers = hidden_params.get("additional_headers") or {}
+    ratelimit_keys = [k for k in additional_headers if k.startswith("x-ratelimit-")]
+    assert (
+        not ratelimit_keys
+    ), f"no snapshot must produce no rate-limit headers, got {ratelimit_keys}"
+
+
+@pytest.mark.asyncio
+async def test_streaming_mirror_matches_non_streaming_header_shape(monkeypatch):
+    """
+    Given the same pre-call state, streaming and non-streaming must write
+    the identical ``x-ratelimit-*`` key/value shape to their respective
+    ``additional_headers`` slots.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-shape")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        metadata={
+            "model_rpm_limit": {"gpt-4o-mini": 50},
+            "model_tpm_limit": {"gpt-4o-mini": 5000},
+        },
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def _noop_increment(increment_list, **_):
+        return True
+
+    monkeypatch.setattr(
+        handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        _noop_increment,
+    )
+
+    # Drive pre-call once so both paths have the same authoritative snapshot.
+    data: Dict[str, Any] = {"model": "gpt-4o-mini", "metadata": {}}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="",
+    )
+
+    # Non-streaming path: async_post_call_success_hook mutates response._hidden_params.
+    non_stream_response = ModelResponse(
+        id="mock-non-stream",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+    non_stream_response._hidden_params = {}
+    await handler.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=non_stream_response,
+    )
+    non_stream_headers = non_stream_response._hidden_params.get(
+        "additional_headers", {}
+    )
+
+    # Streaming path: async_logging_hook mirrors into standard_logging_object.
+    stream_kwargs: Dict[str, Any] = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": _api_key}
+        },
+        "litellm_params": {"metadata": data["metadata"]},
+        "model": "gpt-4o-mini",
+    }
+    stream_response = ModelResponse(
+        id="mock-stream",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+    await handler.async_logging_hook(
+        kwargs=stream_kwargs,
+        result=stream_response,
+        call_type="acompletion",
+    )
+    stream_slp_headers = (
+        stream_kwargs["standard_logging_object"]
+        .get("hidden_params", {})
+        .get("additional_headers", {})
+    )
+
+    def _rl_only(headers: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: v for k, v in headers.items() if k.startswith("x-ratelimit-")}
+
+    assert _rl_only(stream_slp_headers) == _rl_only(non_stream_headers), (
+        f"streaming={_rl_only(stream_slp_headers)}"
+        f" non_streaming={_rl_only(non_stream_headers)}"
+    )
+    assert "x-ratelimit-model_per_key-remaining-requests" in stream_slp_headers

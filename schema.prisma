@@ -339,6 +339,7 @@ model LiteLLM_MCPServerTable {
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
+  dcr_bridge Boolean?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?

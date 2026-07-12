@@ -8,7 +8,7 @@ from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
-from .commands.auth import get_stored_api_key, login, logout, whoami
+from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
 from .commands.credentials import credentials
 from .commands.encryption import encryption
@@ -76,6 +76,10 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
+    # Normalize once here so every downstream command (login, agents, http, ...) can safely
+    # do f"{base_url}/some/path" without producing a double slash.
+    base_url = base_url.rstrip("/")
+
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
     if api_key is None:
@@ -83,6 +87,12 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
 
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
+    # `--base-url` defaults to localhost:4000 for local dev convenience, but
+    # apiKeyHelper is invoked bare (no flags) -- commands that must work
+    # unattended (print-token) need to tell "user didn't say" apart from
+    # "user said localhost:4000 on purpose" so they can fall back to
+    # whatever server the stored token was actually issued for.
+    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
@@ -100,6 +110,8 @@ def version(ctx: click.Context):
 cli.add_command(login)
 cli.add_command(logout)
 cli.add_command(whoami)
+# Add the auth command group (e.g. `lite auth print-token`, used as Claude Code's apiKeyHelper)
+cli.add_command(auth_group, name="auth")
 # Add the models command group
 cli.add_command(models)
 # Add the credentials command group

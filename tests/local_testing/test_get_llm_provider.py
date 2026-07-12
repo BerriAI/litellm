@@ -509,10 +509,10 @@ def shipped_generalizations():
 
 class TestClaudeModelPatternMatching:
     """
-    The ``anthropic-claude`` fallback generalization rule routes future Claude
-    models to the Anthropic provider without requiring a
+    The ``anthropic-claude-ids`` fallback generalization routing rule routes future
+    Claude models to the Anthropic provider without requiring a
     model_prices_and_context_window.json entry. These tests exercise the rule
-    end-to-end through ``get_llm_provider`` and ``match_fallback_generalization``.
+    end-to-end through ``get_llm_provider`` and ``match_routing_generalization``.
     """
 
     @pytest.mark.parametrize(
@@ -556,10 +556,10 @@ class TestClaudeModelPatternMatching:
         self, model, shipped_generalizations
     ):
         from litellm.litellm_core_utils.fallback_generalizations import (
-            match_fallback_generalization,
+            match_routing_generalization,
         )
 
-        assert match_fallback_generalization(model) is None
+        assert match_routing_generalization(model) is None
 
     def test_routing_comes_from_the_rule_not_python(self, shipped_generalizations):
         """With the rule cleared, an unknown claude must no longer route to

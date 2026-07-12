@@ -1401,6 +1401,76 @@ async def test_handle_streamable_http_mcp_true_passthrough_without_token_surface
 
 
 @pytest.mark.asyncio
+async def test_handle_streamable_http_mcp_true_passthrough_dcr_bridge_challenges_with_gateway_metadata():
+    """With dcr_bridge on, the missing-token challenge names the GATEWAY's well-known instead of
+    relaying the upstream's: the gateway is the authorization server for bridge clients, and the
+    upstream's own challenge would point them at metadata that fails the RFC 9728 resource match.
+    The upstream probe is skipped entirely; the gateway can answer authoritatively."""
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    probe_client = MagicMock()
+    probe_client.post = AsyncMock()
+
+    scope = _passthrough_mode_scope("tp_bridge_server")
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = None
+    bridge_server = _build_passthrough_mode_server("tp_bridge_server", MCPAuth.true_passthrough).model_copy(
+        update={"dcr_bridge": True}
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["tp_bridge_server"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+            return_value=probe_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=bridge_server,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert "/.well-known/oauth-protected-resource/tp_bridge_server/mcp" in challenge
+    assert "upstream.example.com" not in challenge
+    probe_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_streamable_http_mcp_true_passthrough_with_token_skips_probe_and_challenge():
     """When the true_passthrough caller already carries an Authorization the
     gateway must forward without probing or challenging. Guards the

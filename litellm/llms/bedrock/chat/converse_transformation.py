@@ -423,6 +423,7 @@ class AmazonConverseConfig(BaseConfig):
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
+                custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
             )
             if mapped_thinking is None:
@@ -430,7 +431,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model):
+                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig._raise_invalid_reasoning_effort(
@@ -465,7 +466,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 llm_provider="bedrock_converse",
             )
-        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort)
+        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort, custom_llm_provider="bedrock")
         if error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=error,
@@ -1279,7 +1280,7 @@ class AmazonConverseConfig(BaseConfig):
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
             if base_model.startswith("anthropic"):
-                if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model):
+                if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                         model,
@@ -1422,7 +1423,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 isinstance(output_config, dict)
                 and output_config.get("effort") is not None
-                and not AnthropicConfig._is_adaptive_thinking_model(model)
+                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
             ):
                 from litellm.types.llms.anthropic import (
                     ANTHROPIC_EFFORT_BETA_HEADER,

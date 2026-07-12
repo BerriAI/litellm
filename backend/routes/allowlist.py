@@ -46,6 +46,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/fallback",
     "/fallbacks",
     "/cache_settings",
+    "/coordination_redis/",
     "/cost_tracking",
     "/cost/",
     "/credentials",

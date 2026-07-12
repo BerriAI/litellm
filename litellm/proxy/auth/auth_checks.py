@@ -102,7 +102,7 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request
+from .auth_utils import get_model_from_request, get_request_route_template
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -726,6 +726,7 @@ async def common_checks(
         route=route,
         request_body=request_body,
         fetch_team_org_id=_fetch_team_org_id,
+        route_template=get_request_route_template(request),
     )
 
     _is_route_allowed = _is_api_route_allowed(

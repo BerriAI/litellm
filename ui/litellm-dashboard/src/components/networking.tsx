@@ -22,7 +22,8 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
-import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -30,9 +31,20 @@ import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  CoordinationRedisSettings,
+  CoordinationRedisSettingsResponse,
+  CoordinationRedisTestResponse,
+} from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import {
+  registerAuthHeaderNameGetter,
+  registerAuthTokenGetter,
+  registerBaseUrlGetter,
+  registerErrorHandler,
+} from "@/lib/http/runtime";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -365,6 +377,11 @@ const apiClient = createApiClient({
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
 });
+
+registerBaseUrlGetter(getProxyBaseUrl);
+registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
+registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
+registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
@@ -3192,6 +3209,47 @@ export const updateCacheSettingsCall = async (accessToken: string, cacheSettings
     return data;
   } catch (error) {
     console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
+export const getCoordinationRedisSettingsCall = async (
+  accessToken: string,
+): Promise<CoordinationRedisSettingsResponse> => {
+  try {
+    return await apiClient.get<CoordinationRedisSettingsResponse>(`/coordination_redis/settings`, { accessToken });
+  } catch (error) {
+    console.error("Failed to get coordination redis settings:", error);
+    throw error;
+  }
+};
+
+export const testCoordinationRedisConnectionCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<CoordinationRedisTestResponse> => {
+  try {
+    return await apiClient.post<CoordinationRedisTestResponse>(`/coordination_redis/settings/test`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to test coordination redis connection:", error);
+    throw error;
+  }
+};
+
+export const updateCoordinationRedisSettingsCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<void> => {
+  try {
+    await apiClient.post(`/coordination_redis/settings`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to update coordination redis settings:", error);
     throw error;
   }
 };

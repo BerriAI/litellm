@@ -31,6 +31,7 @@ const oauthHook = vi.hoisted(() => ({
     | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
     | null,
   getCredentials: null as (() => Record<string, unknown> | undefined) | null,
+  getTemporaryPayload: null as (() => Record<string, unknown> | null) | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
@@ -39,9 +40,11 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
       registeredClient?: { clientId?: string; clientSecret?: string },
     ) => void;
     getCredentials?: () => Record<string, unknown> | undefined;
+    getTemporaryPayload?: () => Record<string, unknown> | null;
   }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
     oauthHook.getCredentials = opts.getCredentials ?? null;
+    oauthHook.getTemporaryPayload = opts.getTemporaryPayload ?? null;
     return {
       startOAuthFlow: vi.fn(),
       status: "idle",
@@ -202,8 +205,8 @@ describe("CreateMCPServer", () => {
         await waitFor(() => {
           expect(screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" })).toBeInTheDocument();
         });
-        expect(screen.getByText("OAuth Client ID (optional, not saved)")).toBeInTheDocument();
-        expect(screen.getByText("OAuth Client Secret (optional, not saved)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client ID (optional)")).toBeInTheDocument();
+        expect(screen.getByText("OAuth Client Secret (optional)")).toBeInTheDocument();
       },
     );
 
@@ -434,6 +437,434 @@ describe("CreateMCPServer", () => {
         expect.objectContaining({ access_token: "upstream-tok" }),
         undefined,
       );
+    });
+
+    it.each([
+      ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
+      ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
+    ])(
+      "persists admin-entered OAuth app credentials on create for %s while the token stays browser-held",
+      async (_authType, optionLabel) => {
+        oauthHook.tokenResponse = { access_token: "upstream-tok", token_type: "Bearer" };
+        await selectHttpTransport();
+
+        const user = userEvent.setup({ delay: null });
+        await user.type(getServerNameInput(), "CF_App_Server");
+        await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+        await selectAntOption("Authentication", optionLabel);
+
+        // Admin declares the org's pre-registered upstream app; unlike the browser-authorized
+        // token, this is config and must survive onto the server row so internal users'
+        // Tools-page Authorize relays through it (required for non-DCR upstreams like Slack).
+        await user.type(
+          screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+          "org-app-client-id",
+        );
+        await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+        await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+        await act(async () => {
+          oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+        });
+
+        const createdServer = {
+          server_id: "new-cf-app-server",
+          server_name: "CF_App_Server",
+          alias: "CF_App_Server",
+          url: "https://example.com/mcp",
+          transport: "http",
+          auth_type: _authType,
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+        };
+        vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+
+        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
+
+        await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+
+        // The declared app persists; the browser-authorized token still appears nowhere in the
+        // payload and no per-user DB credential is written.
+        expect(payload.credentials).toEqual({
+          client_id: "org-app-client-id",
+          client_secret: "org-app-secret",
+        });
+        expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+        expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+        expect(setToken).toHaveBeenCalledWith(
+          "new-cf-app-server",
+          expect.objectContaining({ access_token: "upstream-tok" }),
+          undefined,
+        );
+      },
+    );
+
+    it("preserves admin-entered app credentials when the URL changes after authorize for true_passthrough", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "CF_Keep_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      await user.type(
+        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
+        "org-app-client-id",
+      );
+      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+      });
+
+      // Editing the URL after authorize invalidates the held token (identity change), but the
+      // declared app is config, not minted material: it must survive the invalidation instead of
+      // being silently reset, or the server would persist without the configured app.
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://other.example.com/mcp" },
+        });
+      });
+
+      const keptAppServer = {
+        server_id: "kept-app-server",
+        server_name: "CF_Keep_Server",
+        alias: "CF_Keep_Server",
+        url: "https://other.example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(keptAppServer);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.url).toBe("https://other.example.com/mcp");
+      expect(payload.credentials).toEqual({
+        client_id: "org-app-client-id",
+        client_secret: "org-app-secret",
+      });
+      expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+    });
+
+    it("wipes oauth2-minted credentials when the auth type switches to a client-forwarded mode", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Switch_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "OAuth");
+
+      // The oauth2 onTokenReceived branch writes the fetched token AND the DCR client into
+      // form.credentials; both are minted for the oauth2 identity.
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-minted-tok", refresh_token: "oauth2-minted-refresh", token_type: "Bearer" },
+          { clientId: "dcr-minted-client", clientSecret: "dcr-minted-secret" },
+        );
+      });
+
+      // Switching into a client-forwarded mode changes the identity with auth_type in the changed
+      // values, so the preserve carve-out must NOT apply: the minted material would otherwise ride
+      // into a mode that now persists credentials onto the server row.
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      const switchedServer = {
+        server_id: "switched-server",
+        server_name: "Switch_Server",
+        alias: "Switch_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(switchedServer);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials).toBeUndefined();
+      expect(JSON.stringify(payload)).not.toContain("dcr-minted-client");
+      expect(JSON.stringify(payload)).not.toContain("oauth2-minted-tok");
+    });
+
+    it("keeps the DCR-minted client out of form.credentials but reuses it via getCredentials", async () => {
+      await selectHttpTransport();
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "DCR_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "OAuth");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-tok", token_type: "Bearer" },
+          { clientId: "dcr-client", clientSecret: "dcr-secret" },
+        );
+      });
+
+      // The DCR client must NOT be in the form store (or it could be collected as a CF server's app),
+      // but getCredentials merges it so a re-authorize reuses the registered client instead of re-DCRing.
+      expect(oauthHook.getCredentials?.()?.client_id).toBe("dcr-client");
+      // getTemporaryPayload must mirror getCredentials for oauth2, or a re-authorize's temp session omits
+      // the registered client and useMcpOAuthFlow re-registers instead of reusing it.
+      expect(oauthHook.getTemporaryPayload?.()?.credentials).toMatchObject({ client_id: "dcr-client" });
+    });
+
+    it("clears the DCR ref and the upstream warning when the modal closes so nothing leaks to the next session", async () => {
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument());
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Leak_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "OAuth");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-tok", token_type: "Bearer" },
+          { clientId: "leak-client", clientSecret: "leak-secret" },
+        );
+      });
+      // Ref is held while the modal is open.
+      expect(oauthHook.getCredentials?.()?.client_id).toBe("leak-client");
+
+      // A parent dismiss (isModalVisible -> false) that does not route through Cancel/Create must still
+      // clear the DCR ref, or the next server's oauth2 submit would carry this server's registered client.
+      await act(async () => {
+        rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      });
+
+      expect(oauthHook.getCredentials?.()?.client_id).toBeUndefined();
+      expect(oauthHook.getTemporaryPayload?.()?.credentials ?? {}).not.toMatchObject({ client_id: "leak-client" });
+    });
+
+    it("persists the DCR client on an oauth2 submit via the ref", async () => {
+      await selectHttpTransport();
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "DCR_Submit_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "OAuth");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!(
+          { access_token: "oauth2-tok", token_type: "Bearer" },
+          { clientId: "dcr-client", clientSecret: "dcr-secret" },
+        );
+      });
+
+      const dcrSubmitServer = {
+        server_id: "dcr-submit",
+        server_name: "DCR_Submit_Server",
+        alias: "DCR_Submit_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(dcrSubmitServer);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials.client_id).toBe("dcr-client");
+      expect(payload.credentials.client_secret).toBe("dcr-secret");
+    });
+
+    // These two tests drive multiple antd auth-type switches; use single-shot fireEvent.change for the
+    // text fields (not per-keystroke userEvent.type) and a wider timeout so they do not flake under CI
+    // resource contention. The behavior under test is the credential preserve across the switches.
+    const fillText = (el: HTMLElement, value: string) => fireEvent.change(el, { target: { value } });
+
+    it("preserves the typed app across a switch between the two client-forwarded modes", async () => {
+      await selectHttpTransport();
+      fillText(getServerNameInput(), "CF_Switch_Keep");
+      fillText(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+      fillText(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      fillText(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "cf-tok", token_type: "Bearer" }, undefined);
+      });
+
+      await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+
+      const switched = {
+        server_id: "cf-switch-keep",
+        server_name: "CF_Switch_Keep",
+        alias: "CF_Switch_Keep",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth_delegate",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(switched);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials).toEqual({ client_id: "app-id", client_secret: "app-secret" });
+    }, 60_000);
+
+    it("preserves the typed app across a client-forwarded -> oauth2 -> client-forwarded round trip", async () => {
+      await selectHttpTransport();
+      fillText(getServerNameInput(), "CF_Round");
+      fillText(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+      fillText(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      fillText(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "cf-tok", token_type: "Bearer" }, undefined);
+      });
+
+      await selectAntOption("Authentication", "OAuth");
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+      const cfRoundServer = {
+        server_id: "cf-round",
+        server_name: "CF_Round",
+        alias: "CF_Round",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(cfRoundServer);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials).toEqual({ client_id: "app-id", client_secret: "app-secret" });
+    }, 60_000);
+
+    it("keeps the typed app but warns when the URL changes after a client-forwarded authorize", async () => {
+      await selectHttpTransport();
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "CF_Warn");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "cf-tok", token_type: "Bearer" }, undefined);
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://other.example.com/mcp" },
+        });
+      });
+
+      // Keep + warn: the app stays in the field, and a non-blocking warning appears.
+      expect(screen.getByText(/OAuth app entered here was registered for the previous upstream/)).toBeInTheDocument();
+    });
+
+    it("keeps client_secret when only client_id is edited after a client-forwarded authorize", async () => {
+      await selectHttpTransport();
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "CF_Keystroke");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "cf-tok", token_type: "Bearer" }, undefined);
+      });
+
+      // Editing only client_id fires an invalidation whose changedValues carries only the client_id
+      // sub-field; the preserve + deep-merge re-apply must keep client_secret from being dropped.
+      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "2");
+
+      const cfKeystrokeServer = {
+        server_id: "cf-keystroke",
+        server_name: "CF_Keystroke",
+        alias: "CF_Keystroke",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "true_passthrough",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue(cfKeystrokeServer);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials).toEqual({ client_id: "app-id2", client_secret: "app-secret" });
+    });
+
+    it("replaces the token set on re-authorize instead of leaving stale siblings", async () => {
+      await selectHttpTransport();
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Reauth_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      await selectAntOption("Authentication", "OAuth");
+
+      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+      const firstToken = { access_token: "T1", refresh_token: "R1", scope: "read", token_type: "Bearer" };
+      await act(async () => {
+        oauthHook.onTokenReceived!(firstToken, undefined);
+      });
+      await act(async () => {
+        oauthHook.onTokenReceived!({ access_token: "T2", token_type: "Bearer" }, undefined);
+      });
+
+      const creds = oauthHook.getCredentials?.() ?? {};
+      expect(creds.access_token).toBe("T2");
+      expect(creds.refresh_token).toBeUndefined();
+      expect(creds.scope).toBeUndefined();
     });
 
     it("should not show auth value field when None auth type is selected", async () => {
@@ -1507,5 +1938,183 @@ describe("CreateMCPServer oauth2_flow persistence", () => {
 
     const payload = await submitCreate();
     expect(payload.oauth2_flow).toBeUndefined();
+  });
+});
+
+describe("CreateMCPServer dcr_bridge toggle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    oauthHook.tokenResponse = null;
+    oauthHook.onTokenReceived = null;
+  });
+
+  const createdServer = {
+    server_id: "new-cf-server",
+    server_name: "CF_Server",
+    alias: "CF_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "true_passthrough",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  const getDcrToggle = () => document.getElementById("dcr_bridge");
+
+  async function setupHttpServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Server" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
+    });
+  }
+
+  async function submitCreate() {
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    await waitFor(() => {
+      expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    return payload;
+  }
+
+  it.each([["True Passthrough (no LiteLLM auth)"], ["OAuth Delegate (client-supplied upstream token)"]])(
+    "renders the toggle default-checked when %s is selected",
+    async (optionLabel) => {
+      await setupHttpServerForm();
+
+      await selectAntOption("Authentication", optionLabel);
+
+      await waitFor(() => {
+        expect(getDcrToggle()).toBeInTheDocument();
+      });
+      expect(screen.getByText("Gateway-hosted sign-in (DCR bridge)")).toBeInTheDocument();
+      expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+    },
+  );
+
+  it.each([["None"], ["API Key"], ["OAuth"]])("does not render the toggle for %s", async (optionLabel) => {
+    await setupHttpServerForm();
+
+    await selectAntOption("Authentication", optionLabel);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Gateway-hosted sign-in (DCR bridge)")).not.toBeInTheDocument();
+    });
+    expect(getDcrToggle()).not.toBeInTheDocument();
+  });
+
+  it("renders the toggle between the OAuth client fields and the Authorize button", async () => {
+    await setupHttpServerForm();
+
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    const toggle = getDcrToggle() as HTMLElement;
+    const secretInput = screen.getByPlaceholderText("Leave blank for public clients / PKCE");
+    const authorizeButton = screen.getByRole("button", { name: "Authorize & Fetch Tools (browser-only)" });
+    expect(secretInput.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(authorizeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
+    ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
+  ])("sends dcr_bridge: true by default on create for %s", async (authType, optionLabel) => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: authType });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", optionLabel);
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(true);
+  });
+
+  it("sends an explicit dcr_bridge: false when the toggle is unchecked", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "oauth_delegate" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "false");
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it.each([
+    ["none", "None"],
+    ["api_key", "API Key"],
+    ["oauth2", "OAuth"],
+  ])("forces an explicit dcr_bridge: false for %s", async (authType, optionLabel) => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: authType });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", optionLabel);
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("forces dcr_bridge: false when the auth type is switched away after toggling", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(getDcrToggle()!);
+    });
+
+    await selectAntOption("Authentication", "None");
+    await waitFor(() => {
+      expect(getDcrToggle()).not.toBeInTheDocument();
+    });
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(false);
+  });
+
+  it("preserves the toggle value when switching between the two client-forwarded modes", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "oauth_delegate" });
+    await setupHttpServerForm();
+    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    // The Form.Item is mounted in both client-forwarded modes, so switching between them keeps the
+    // live toggle value rather than forcing it back to the default or to false.
+    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await waitFor(() => {
+      expect(getDcrToggle()).toBeInTheDocument();
+    });
+    expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
+
+    const payload = await submitCreate();
+    expect(payload.dcr_bridge).toBe(true);
   });
 });
