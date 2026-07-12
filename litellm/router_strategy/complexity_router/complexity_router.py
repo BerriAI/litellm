@@ -445,21 +445,20 @@ class ComplexityRouter(CustomLogger):
         """
         tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
 
-        model = self.config.tiers.get(tier_key)
-        if model:
-            return self._pick_from_tier_value(model, tier_key)
+        if tier_key in self.config.tiers:
+            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key)
 
         if self.config.default_model:
             return self.config.default_model
 
-        medium_model = self.config.tiers.get(ComplexityTier.MEDIUM.value)
-        if medium_model:
-            return self._pick_from_tier_value(medium_model, ComplexityTier.MEDIUM.value)
+        medium_key = ComplexityTier.MEDIUM.value
+        if medium_key in self.config.tiers:
+            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(model: Union[str, list[str]], tier_key: str) -> str:
+    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
         if isinstance(model, str):
             return model
         if not model:
