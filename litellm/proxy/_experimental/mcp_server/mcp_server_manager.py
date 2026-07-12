@@ -2922,15 +2922,17 @@ class MCPServerManager:
         """
 
         try:
-            client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-            response = await client.get(server_url)
+            handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+            response = await handler.get(server_url, stream=True)
+            status_code = response.status_code
             response.raise_for_status()
+            await response.aclose()
             (
                 authorization_servers,
                 resource_scopes,
             ) = await self._attempt_well_known_discovery(server_url)
             metadata = await self._fetch_authorization_server_metadata(authorization_servers, server_url)
-            if metadata is None and not resource_scopes and authorization_servers and response.status_code == 200:
+            if metadata is None and not resource_scopes and authorization_servers and status_code == 200:
                 verbose_logger.warning(
                     "MCP OAuth discovery for %s received 200 OK without RFC 9728 challenge and no discoverable authorization metadata.",
                     server_url,

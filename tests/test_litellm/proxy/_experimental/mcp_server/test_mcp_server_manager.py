@@ -7097,6 +7097,33 @@ class TestOBOEndpointDiscovery:
         mock_fetch_auth.assert_not_awaited()
         assert result is None or result.token_url is None
 
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_returns_none_for_no_auth_sse_server(self):
+        manager = MCPServerManager()
+        server_url = "https://example.com/mcp"
+
+        streaming_response = MagicMock()
+        streaming_response.status_code = 200
+        streaming_response.raise_for_status = MagicMock()
+        streaming_response.aclose = AsyncMock()
+
+        mock_handler = MagicMock()
+        mock_handler.get = AsyncMock(return_value=streaming_response)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_handler,
+            ),
+            patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_authorization_server_metadata", AsyncMock(return_value=None)),
+        ):
+            result = await manager._descovery_metadata(server_url)
+
+        mock_handler.get.assert_awaited_once_with(server_url, stream=True)
+        streaming_response.aclose.assert_awaited_once()
+        assert result is None
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

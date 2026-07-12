@@ -581,20 +581,21 @@ class AsyncHTTPHandler:
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        stream: bool = False,
     ):
-        # Set follow_redirects to UseClientDefault if None
         _follow_redirects = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
 
-        response = await self.client.get(
+        req = self.client.build_request(
+            "GET",
             url,
             params=params,
-            headers=headers,  # type: ignore
-            follow_redirects=_follow_redirects,  # type: ignore
+            headers=headers,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
+        response = await self.client.send(req, stream=stream, follow_redirects=_follow_redirects)  # type: ignore[arg-type]  # UseClientDefault sentinel not in httpx stubs
         return response
 
     @track_llm_api_timing()
