@@ -4395,7 +4395,7 @@ class BedrockConverseMessagesProcessor:
                                 _parts.append(_cache_point_block)
                     user_content.extend(_parts)
                 elif message_block["content"] and isinstance(message_block["content"], str):
-                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                    _part = BedrockContentBlock(text=message_block["content"])
                     _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                         message_block, block_type="content_block", model=model
                     )
@@ -4770,7 +4770,7 @@ def _bedrock_converse_messages_pt(
                             _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             elif message_block["content"] and isinstance(message_block["content"], str):
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                _part = BedrockContentBlock(text=message_block["content"])
                 _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
                     message_block, block_type="content_block", model=model
                 )

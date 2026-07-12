@@ -183,6 +183,62 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
 
 
 @pytest.mark.parametrize(
+    "empty_content",
+    ["", "   "],
+    ids=["empty", "spaces"],
+)
+def test_bedrock_converse_string_user_message_uses_continue_substitution(monkeypatch, empty_content):
+    """
+    Regression for the string-content branch of `_bedrock_converse_messages_pt`.
+
+    `get_user_message_block_or_continue_message()` replaces empty/whitespace-only
+    user content with a "continue" placeholder because Bedrock Converse rejects
+    blank-text ContentBlocks (issue #7169). The list-content branch honored that
+    substitution, but the string-content branch read the *original* message
+    content (`messages[msg_i]["content"]`) instead of the substituted block, so an
+    empty/whitespace string was forwarded to Bedrock unchanged and rejected with
+    "The text field in the ContentBlock object ... is blank."
+
+    Verify string content emits the substituted "Please continue." text, matching
+    the list-content branch.
+    """
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result = _bedrock_converse_messages_pt(
+        messages=[{"role": "user", "content": empty_content}],
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+
+    user_blocks = [m for m in result if m["role"] == "user"]
+    text_blocks = [b["text"] for m in user_blocks for b in m["content"] if "text" in b]
+    assert text_blocks == ["Please continue."], f"expected continue substitution, got {result!r}"
+    for text in text_blocks:
+        assert text.strip(), "Bedrock rejects blank-text ContentBlocks"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_content",
+    ["", "   "],
+    ids=["empty", "spaces"],
+)
+async def test_bedrock_converse_string_user_message_uses_continue_substitution_async(monkeypatch, empty_content):
+    """Async counterpart of the string-content substitution regression (issue #7169)."""
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=[{"role": "user", "content": empty_content}],
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+
+    user_blocks = [m for m in result if m["role"] == "user"]
+    text_blocks = [b["text"] for m in user_blocks for b in m["content"] if "text" in b]
+    assert text_blocks == ["Please continue."], f"expected continue substitution, got {result!r}"
+
+
+@pytest.mark.parametrize(
     "thinking_block",
     [
         {"type": "thinking", "thinking": "oss reasoning", "signature": None},
