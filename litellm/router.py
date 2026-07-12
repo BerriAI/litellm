@@ -10760,6 +10760,18 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
+        if self.routing_plugins:
+            raise ValueError(
+                "Router(plugins=[...]) is configured, but this call resolved to the synchronous "
+                "deployment-selection path, which never runs the routing-plugin pipeline. This "
+                "happens for sync Router methods (e.g. Router.completion()) and for async calls "
+                "with a routing_strategy that has no async-native selector (e.g. legacy "
+                "'usage-based-routing', v1). Silently skipping "
+                "configured plugins would let a policy plugin (e.g. a deny-all rule) be bypassed. "
+                "Use an async Router method with a supported routing_strategy (simple-shuffle, "
+                "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
+                "or remove `plugins` from the Router config."
+            )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 

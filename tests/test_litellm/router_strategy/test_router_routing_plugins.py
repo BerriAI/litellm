@@ -125,6 +125,45 @@ async def test_routing_plugin_narrowing_to_zero_candidates_raises():
         )
 
 
+def test_sync_get_available_deployment_rejects_configured_plugins():
+    """
+    Router.completion() (and any other sync entry point) resolves deployments via
+    the synchronous get_available_deployment(), which never runs the routing-plugin
+    pipeline. Silently allowing that would let a deny-all policy plugin be bypassed
+    just by calling the sync API -- must fail closed instead.
+    """
+    router = Router(model_list=_smart_router_model_list(), plugins=[TenantPolicy()])
+
+    with pytest.raises(ValueError, match="routing-plugin pipeline"):
+        router.get_available_deployment(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+
+def test_sync_router_completion_rejects_configured_plugins():
+    """End-to-end: Router.completion() (the sync API) must not silently skip plugins either."""
+    router = Router(model_list=_smart_router_model_list(), plugins=[TenantPolicy()])
+
+    with pytest.raises(ValueError, match="routing-plugin pipeline"):
+        router.completion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_async_completion_with_unsupported_strategy_rejects_configured_plugins():
+    """
+    async_get_available_deployment() itself delegates to the synchronous selector
+    for routing strategies outside {simple-shuffle, usage-based-routing-v2,
+    cost-based-routing, latency-based-routing, least-busy} -- e.g. "usage-based-routing"
+    (v1, not v2) -- which would silently bypass the plugin pipeline on the async path too.
+    """
+    router = Router(
+        model_list=_smart_router_model_list(),
+        plugins=[TenantPolicy()],
+        routing_strategy="usage-based-routing",
+    )
+
+    with pytest.raises(ValueError, match="routing-plugin pipeline"):
+        await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+
 @pytest.mark.asyncio
 async def test_router_without_plugins_is_unaffected():
     """Regression guard: a Router with no `plugins` configured behaves exactly as before."""
