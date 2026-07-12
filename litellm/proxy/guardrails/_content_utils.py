@@ -38,7 +38,7 @@ TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"
 # that guardrails should inspect.  ``function_call_output`` is the
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
 # counterpart (see ``ChatCompletionCustomToolCallOutput``).
-_OUTPUT_ITEM_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
+_OUTPUT_ITEM_TYPES: Frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
