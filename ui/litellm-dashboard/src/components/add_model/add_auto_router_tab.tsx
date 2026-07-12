@@ -11,7 +11,11 @@ import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
-import { buildComplexityRouterConfig, getSemanticConfigError } from "./build_complexity_router_config";
+import {
+  buildComplexityRouterConfig,
+  getMissingTiersError,
+  getSemanticConfigError,
+} from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
@@ -43,6 +47,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
 
   // Semantic router config (existing)
   const [routerConfig, setRouterConfig] = useState<any>(null);
@@ -86,19 +91,22 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       classifier_llm_config: classifierLlmConfig,
     } = complexityRouterConfig;
 
-    const filledTiers = Object.values(tiers).filter(Boolean);
-    if (filledTiers.length === 0) {
-      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+    const missingTiersError = getMissingTiersError(tiers);
+    if (missingTiersError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(missingTiersError);
       return;
     }
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
+      setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
       return;
     }
 
     const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (semanticError) {
+      setShowValidationErrors(true);
       NotificationManager.fromBackend(semanticError);
       return;
     }
@@ -296,6 +304,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 onEmbeddingModelChange={setEmbeddingModel}
                 matchThreshold={matchThreshold}
                 onMatchThresholdChange={setMatchThreshold}
+                showValidationErrors={showValidationErrors}
               />
             </div>
           ) : (

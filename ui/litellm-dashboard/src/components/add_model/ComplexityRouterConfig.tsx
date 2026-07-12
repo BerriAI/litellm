@@ -45,6 +45,7 @@ interface ComplexityRouterConfigProps {
   onEmbeddingModelChange?: (model: string) => void;
   matchThreshold?: number;
   onMatchThresholdChange?: (threshold: number) => void;
+  showValidationErrors?: boolean;
 }
 
 const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
@@ -84,12 +85,15 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEmbeddingModelChange = () => {},
   matchThreshold = 0.5,
   onMatchThresholdChange = () => {},
+  showValidationErrors = false,
 }) => {
-  // Prepare model options for dropdowns
-  const modelOptions = modelInfo.map((model) => ({
-    value: model.model_group,
-    label: model.model_group,
-  }));
+  // Embedding models can't serve a chat-completion role, so they're excluded here.
+  const modelOptions = modelInfo
+    .filter((model) => model.mode !== "embedding")
+    .map((model) => ({
+      value: model.model_group,
+      label: model.model_group,
+    }));
 
   const handleTierChange = (tier: keyof ComplexityTiers, model: string) => {
     onChange({
@@ -148,6 +152,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <Card>
         {(Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>).map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
+          const tierMissing = showValidationErrors && !value.tiers[tier];
           return (
             <div key={tier}>
               {index > 0 && <Divider style={{ margin: "16px 0" }} />}
@@ -170,7 +175,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
+                  status={tierMissing ? "error" : undefined}
                 />
+                {tierMissing && (
+                  <Text type="danger" style={{ fontSize: 12 }}>
+                    This tier is required
+                  </Text>
+                )}
               </div>
             </div>
           );
@@ -323,6 +334,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             matchThreshold={matchThreshold}
             onMatchThresholdChange={onMatchThresholdChange}
             modelInfo={modelInfo}
+            showValidationErrors={showValidationErrors}
           />
         </>
       )}

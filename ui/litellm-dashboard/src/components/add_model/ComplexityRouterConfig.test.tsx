@@ -4,9 +4,10 @@ import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 const mockModelInfo = [
-  { model_group: "gpt-4" },
-  { model_group: "gpt-3.5-turbo" },
-  { model_group: "claude-3-opus" },
+  { model_group: "gpt-4", mode: "chat" },
+  { model_group: "gpt-3.5-turbo", mode: "chat" },
+  { model_group: "claude-3-opus", mode: "chat" },
+  { model_group: "text-embedding-3-small", mode: "embedding" },
 ] as any[];
 
 const defaultValue: ComplexityRouterConfigValue = {
@@ -206,5 +207,33 @@ describe("ComplexityRouterConfig", () => {
     );
     await user.click(screen.getByRole("switch"));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
+  });
+
+  it("excludes embedding-mode models from the tier and classifier dropdowns", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+
+    const simpleTierSection = screen.getByText("Simple Tier").closest(".mb-4") as HTMLElement;
+    const combobox = within(simpleTierSection).getByRole("combobox");
+    await user.click(combobox);
+
+    expect((await screen.findAllByText("gpt-3.5-turbo")).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("text-embedding-3-small")).toHaveLength(0);
+  });
+
+  it("does not show tier validation errors by default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("This tier is required")).not.toBeInTheDocument();
+  });
+
+  it("shows a validation error only under unfilled tiers when showValidationErrors is true", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: "" } }}
+        showValidationErrors={true}
+      />,
+    );
+    expect(screen.getAllByText("This tier is required")).toHaveLength(1);
   });
 });
