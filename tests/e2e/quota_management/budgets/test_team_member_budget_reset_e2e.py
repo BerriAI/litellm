@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 from budget_client import BudgetClient
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
@@ -34,7 +34,7 @@ def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resource
     # the member can spend within the team while the window is live
     key = client.generate_key(team_id=team_id, user_id=user_id)
     resources.defer(lambda: client.delete_key(key))
-    require_successful_call(client.chat(key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16))
+    require_successful_call(client.chat(key, CHEAP_ANTHROPIC_MODEL, f"reset {unique_marker()}", max_tokens=16))
 
     # once the window elapses the reset job must move budget_reset_at forward; a job
     # that skips the member's budget row (the #25109 regression) leaves it pinned at

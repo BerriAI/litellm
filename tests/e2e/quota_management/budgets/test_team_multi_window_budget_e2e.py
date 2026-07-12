@@ -18,7 +18,7 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -29,7 +29,7 @@ WINDOW_SECONDS = 30
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
+    return client.chat(key, CHEAP_ANTHROPIC_MODEL, f"team-window {unique_marker()}", max_tokens=16)
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
@@ -42,7 +42,7 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
         ],
     )
     resources.defer(lambda: client.delete_team(team_id))
-    key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
+    key = client.generate_key(team_id=team_id, models=[CHEAP_ANTHROPIC_MODEL])
     resources.defer(lambda: client.delete_key(key))
 
     # 1. exhaust the tight window -> litellm returns budget_exceeded

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import unwrap
 from models import ChatBody, ChatMessage
 from passthrough_client import PassthroughClient
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.e2e
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt-5.5", "openai"),
-    ("claude-haiku-4-5", "anthropic"),
+    (CHEAP_ANTHROPIC_MODEL, "anthropic"),
     ("gemini-2.5-flash", "gemini"),
 )
 

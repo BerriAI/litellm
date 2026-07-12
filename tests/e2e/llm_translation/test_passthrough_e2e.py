@@ -13,7 +13,7 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 
 import pytest
 
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import StreamingResponse, require_successful_call
 from models import SpendLogRow
 from passthrough_client import (
@@ -112,7 +112,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
 def test_anthropic_passthrough_nonstreaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
-    result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
+    result = client.anthropic_message(scoped_key, CHEAP_ANTHROPIC_MODEL, "Say hello")
     require_successful_call(result)
 
     row = _fetch_cost_breakdown(client, result)
@@ -124,7 +124,7 @@ def test_anthropic_passthrough_streaming_logs_cost(
     client: PassthroughClient, scoped_key: str
 ) -> None:
     result = client.anthropic_message(
-        scoped_key, "claude-haiku-4-5", "Count to five", stream=True
+        scoped_key, CHEAP_ANTHROPIC_MODEL, "Count to five", stream=True
     )
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
@@ -138,7 +138,7 @@ def test_anthropic_passthrough_tool_call_logs_cost(
 ) -> None:
     result = client.anthropic_message(
         scoped_key,
-        "claude-haiku-4-5",
+        CHEAP_ANTHROPIC_MODEL,
         "What is the weather in Paris? Use the get_weather tool.",
         tools=[
             AnthropicTool(

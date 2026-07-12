@@ -19,14 +19,14 @@ from dataclasses import dataclass
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import Success, require_successful_call
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "claude-haiku-4-5"
+MODEL = CHEAP_ANTHROPIC_MODEL
 TEAM_BUDGET = 100.0
 MEMBER_BUDGET = 3e-6
 BURST = 6

@@ -19,7 +19,7 @@ from datetime import datetime
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -32,7 +32,7 @@ TINY_CAP = 3e-6
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"advance {unique_marker()}", max_tokens=16)
+    return client.chat(key, CHEAP_ANTHROPIC_MODEL, f"advance {unique_marker()}", max_tokens=16)
 
 
 def _as_datetime(value: str) -> datetime:
