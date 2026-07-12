@@ -12,9 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm import Router
 from litellm.router_strategy.complexity_router.complexity_router import (
@@ -126,9 +124,7 @@ class TestTokenScoring:
         tier, score, signals = complexity_router.classify("What is Python?")
         # Should be classified as SIMPLE due to short length and simple indicator
         assert tier == ComplexityTier.SIMPLE
-        assert any("short" in s.lower() for s in signals) or any(
-            "simple" in s.lower() for s in signals
-        )
+        assert any("short" in s.lower() for s in signals) or any("simple" in s.lower() for s in signals)
 
     def test_long_prompt_positive_score(self, complexity_router):
         """Long prompts should get positive scores (complex indicator)."""
@@ -139,9 +135,7 @@ class TestTokenScoring:
         tier, score, signals = complexity_router.classify(long_prompt)
         # Should have positive score and detect long token count or technical terms
         assert score > 0, f"Expected positive score for long prompt, got {score}"
-        assert any("long" in s.lower() for s in signals) or any(
-            "technical" in s.lower() for s in signals
-        )
+        assert any("long" in s.lower() for s in signals) or any("technical" in s.lower() for s in signals)
 
 
 class TestCodePresenceScoring:
@@ -216,9 +210,7 @@ class TestMultiStepPatterns:
 
     def test_first_then_pattern(self, complexity_router):
         """'First...then' patterns should increase complexity."""
-        prompt = (
-            "First analyze the data, then create a visualization, then write a report"
-        )
+        prompt = "First analyze the data, then create a visualization, then write a report"
         tier, score, signals = complexity_router.classify(prompt)
         assert any("multi-step" in s.lower() for s in signals)
 
@@ -262,9 +254,7 @@ class TestTierAssignment:
         )
         tier, score, signals = complexity_router.classify(prompt)
         # Should detect technical terms
-        assert any(
-            "technical" in s.lower() for s in signals
-        ), f"Expected technical signals, got {signals}"
+        assert any("technical" in s.lower() for s in signals), f"Expected technical signals, got {signals}"
         # Score should be positive due to technical content
         assert score > 0, f"Expected positive score, got {score}"
 
@@ -434,13 +424,9 @@ class TestConfigOverrides:
             complexity_router_config=config,
         )
         # With very low thresholds, even neutral prompts should be COMPLEX or higher
-        tier, score, signals = router.classify(
-            "Explain how HTTP works with REST APIs and distributed systems"
-        )
+        tier, score, signals = router.classify("Explain how HTTP works with REST APIs and distributed systems")
         # With boundaries this low, should be at least MEDIUM (anything above -0.5)
-        assert (
-            tier != ComplexityTier.SIMPLE
-        ), f"Expected non-SIMPLE tier, got {tier} with score {score}"
+        assert tier != ComplexityTier.SIMPLE, f"Expected non-SIMPLE tier, got {tier} with score {score}"
 
     def test_custom_token_thresholds(self, mock_router_instance):
         """Test custom token thresholds work correctly."""
@@ -465,9 +451,7 @@ class TestConfigOverrides:
         long_prompt = "This is a test prompt " * 30  # ~120 tokens
         tier, score, signals = router.classify(long_prompt)
         # Should get token length signal indicating "long"
-        assert any(
-            "long" in s.lower() if s else False for s in signals
-        ), f"Expected 'long' signal, got {signals}"
+        assert any("long" in s.lower() if s else False for s in signals), f"Expected 'long' signal, got {signals}"
 
 
 class TestCustomTechnicalKeywords:
@@ -482,9 +466,7 @@ class TestCustomTechnicalKeywords:
         )
         assert router.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS + ["udp", "kafka"]
 
-    def test_custom_keywords_appended_to_technical_keywords_override(
-        self, mock_router_instance
-    ):
+    def test_custom_keywords_appended_to_technical_keywords_override(self, mock_router_instance):
         """Custom keywords should be appended to a technical_keywords override."""
         router = ComplexityRouter(
             model_name="test-router",
@@ -501,9 +483,7 @@ class TestCustomTechnicalKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "custom_technical_keywords": ["TCP", "udp", "UDP", "kafka"]
-            },
+            complexity_router_config={"custom_technical_keywords": ["TCP", "udp", "UDP", "kafka"]},
         )
         lowered = [kw.lower() for kw in router.technical_keywords]
         assert lowered == [kw.lower() for kw in DEFAULT_TECHNICAL_KEYWORDS] + [
@@ -526,9 +506,7 @@ class TestCustomTechnicalKeywords:
         assert router_absent.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS
         assert router_none.technical_keywords == DEFAULT_TECHNICAL_KEYWORDS
 
-    def test_prompt_with_only_custom_keywords_scores_technical(
-        self, mock_router_instance, basic_config
-    ):
+    def test_prompt_with_only_custom_keywords_scores_technical(self, mock_router_instance, basic_config):
         """A prompt matching only custom keywords should score higher on technicalTerms."""
         prompt = "Configure udp multicast between kafka brokers"
         baseline_router = ComplexityRouter(
@@ -547,9 +525,7 @@ class TestCustomTechnicalKeywords:
         _, baseline_score, baseline_signals = baseline_router.classify(prompt)
         _, custom_score, custom_signals = custom_router.classify(prompt)
         assert not any("technical" in s.lower() for s in baseline_signals)
-        assert any(
-            "technical" in s.lower() for s in custom_signals
-        ), f"Expected technical signal, got {custom_signals}"
+        assert any("technical" in s.lower() for s in custom_signals), f"Expected technical signal, got {custom_signals}"
         assert custom_score > baseline_score
 
 
@@ -742,9 +718,7 @@ class TestKeywordFalsePositives:
         prompt = "What is the capital of France?"
         tier, score, signals = complexity_router.classify(prompt)
         # Should NOT detect code presence from 'api' in 'capital'
-        assert not any(
-            "code" in s.lower() for s in signals
-        ), "False positive: got code signal from 'capital'"
+        assert not any("code" in s.lower() for s in signals), "False positive: got code signal from 'capital'"
         # Should be SIMPLE (definition question)
         assert tier == ComplexityTier.SIMPLE
 
@@ -753,9 +727,7 @@ class TestKeywordFalsePositives:
         prompt = "Explain digital marketing strategies"
         tier, score, signals = complexity_router.classify(prompt)
         # Should NOT detect code presence from 'git' in 'digital'
-        assert not any(
-            "code" in s.lower() for s in signals
-        ), "False positive: got code signal from 'digital'"
+        assert not any("code" in s.lower() for s in signals), "False positive: got code signal from 'digital'"
 
     def test_try_not_in_entry(self, complexity_router):
         """'try' should not match in 'entry'."""
@@ -769,43 +741,33 @@ class TestKeywordFalsePositives:
         """'error' should not match in 'terrorism'."""
         prompt = "The country is dealing with terrorism"
         tier, score, signals = complexity_router.classify(prompt)
-        assert not any(
-            "code" in s.lower() for s in signals
-        ), "False positive: got code signal from 'terrorism'"
+        assert not any("code" in s.lower() for s in signals), "False positive: got code signal from 'terrorism'"
 
     def test_class_not_in_classical(self, complexity_router):
         """'class' should not match in 'classical'."""
         prompt = "I enjoy listening to classical music"
         tier, score, signals = complexity_router.classify(prompt)
-        assert not any(
-            "code" in s.lower() for s in signals
-        ), "False positive: got code signal from 'classical'"
+        assert not any("code" in s.lower() for s in signals), "False positive: got code signal from 'classical'"
 
     def test_merge_not_in_emerged(self, complexity_router):
         """'merge' should not match in 'emerged'."""
         prompt = "A new leader emerged from the crowd"
         tier, score, signals = complexity_router.classify(prompt)
-        assert not any(
-            "code" in s.lower() for s in signals
-        ), "False positive: got code signal from 'emerged'"
+        assert not any("code" in s.lower() for s in signals), "False positive: got code signal from 'emerged'"
 
     def test_actual_api_keyword_detected(self, complexity_router):
         """Actual 'api' usage should be detected."""
         prompt = "How do I call the REST api endpoint?"
         tier, score, signals = complexity_router.classify(prompt)
         # Should detect code presence from actual 'api' usage
-        assert any(
-            "code" in s.lower() for s in signals
-        ), f"Expected code signal for 'api', got {signals}"
+        assert any("code" in s.lower() for s in signals), f"Expected code signal for 'api', got {signals}"
 
     def test_actual_git_keyword_detected(self, complexity_router):
         """Actual 'git' usage should be detected."""
         prompt = "How do I use git to commit changes?"
         tier, score, signals = complexity_router.classify(prompt)
         # Should detect code presence from actual 'git' usage
-        assert any(
-            "code" in s.lower() for s in signals
-        ), f"Expected code signal for 'git', got {signals}"
+        assert any("code" in s.lower() for s in signals), f"Expected code signal for 'git', got {signals}"
 
 
 class TestEdgeCases:
@@ -825,9 +787,7 @@ class TestEdgeCases:
         # Should have positive score due to length
         assert score > 0, f"Expected positive score for very long prompt, got {score}"
         # Should detect long token count
-        assert any(
-            "long" in s.lower() for s in signals
-        ), f"Expected 'long' signal, got {signals}"
+        assert any("long" in s.lower() for s in signals), f"Expected 'long' signal, got {signals}"
 
     def test_unicode_prompt(self, complexity_router):
         """Test handling of unicode characters."""
@@ -845,9 +805,7 @@ class TestEdgeCases:
         """
         tier, score, signals = complexity_router.classify(prompt)
         # The "step N" pattern should be detected
-        assert any(
-            "multi-step" in s.lower() for s in signals
-        ), f"Expected multi-step signal, got {signals}"
+        assert any("multi-step" in s.lower() for s in signals), f"Expected multi-step signal, got {signals}"
 
 
 class TestRouterComplexityDeploymentMethods:
@@ -931,9 +889,7 @@ class TestAsyncPreRoutingHookMultiFormat:
         assert result.messages is not None
 
     @pytest.mark.asyncio
-    async def test_should_route_with_responses_api_string_input(
-        self, complexity_router
-    ):
+    async def test_should_route_with_responses_api_string_input(self, complexity_router):
         """Test routing with Responses API string input via handler dispatch."""
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
@@ -1021,9 +977,7 @@ class TestAsyncPreRoutingHookMultiFormat:
         assert result.model is not None
 
     @pytest.mark.asyncio
-    async def test_should_return_none_when_no_messages_or_input(
-        self, complexity_router
-    ):
+    async def test_should_return_none_when_no_messages_or_input(self, complexity_router):
         """Test that None is returned when neither messages nor input is available."""
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
@@ -1034,9 +988,7 @@ class TestAsyncPreRoutingHookMultiFormat:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_should_prefer_original_messages_over_conversion(
-        self, complexity_router
-    ):
+    async def test_should_prefer_original_messages_over_conversion(self, complexity_router):
         """Test that original messages are used when both messages and input are available."""
         messages = [{"role": "user", "content": "What is 2+2?"}]
         result = await complexity_router.async_pre_routing_hook(
@@ -1048,9 +1000,7 @@ class TestAsyncPreRoutingHookMultiFormat:
         assert result.messages == messages
 
     @pytest.mark.asyncio
-    async def test_should_include_instructions_in_classification(
-        self, complexity_router
-    ):
+    async def test_should_include_instructions_in_classification(self, complexity_router):
         """Test that Responses API instructions influence classification via system message."""
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
@@ -1087,9 +1037,7 @@ class TestExtractUserMessageAndSystemPrompt:
             {"role": "assistant", "content": "Hi!"},
             {"role": "user", "content": "How are you?"},
         ]
-        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
-            messages
-        )
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(messages)
         assert user_msg == "How are you?"
         assert sys_prompt == "You are helpful."
 
@@ -1099,9 +1047,7 @@ class TestExtractUserMessageAndSystemPrompt:
             {"role": "system", "content": "You are helpful."},
             {"role": "assistant", "content": "Hi!"},
         ]
-        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
-            messages
-        )
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(messages)
         assert user_msg is None
         assert sys_prompt == "You are helpful."
 
@@ -1119,17 +1065,13 @@ class TestExtractUserMessageAndSystemPrompt:
                 ],
             }
         ]
-        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
-            messages
-        )
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(messages)
         assert user_msg == "Describe this image"
         assert sys_prompt is None
 
     def test_should_handle_empty_messages(self):
         """Test with empty messages list."""
-        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
-            []
-        )
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt([])
         assert user_msg is None
         assert sys_prompt is None
 
@@ -1194,17 +1136,13 @@ class TestLLMClassifier:
         assert tier == ComplexityTier.SIMPLE
 
     @pytest.mark.asyncio
-    async def test_aclassify_llm_success_routes_by_llm_verdict(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_aclassify_llm_success_routes_by_llm_verdict(self, llm_complexity_router, mock_router_instance):
         """A well-formed structured LLM response should decide the tier directly.
 
         Uses a prompt that heuristic scoring alone would classify as SIMPLE, to prove
         the LLM verdict -- not the heuristic scorer -- is what decided the tier.
         """
-        mock_router_instance.acompletion = AsyncMock(
-            return_value=_llm_response('{"tier": "COMPLEX"}')
-        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
         tier, score, signals = await llm_complexity_router.aclassify("hi")
         assert tier == ComplexityTier.COMPLEX
         assert "llm-classifier:COMPLEX" in signals
@@ -1223,13 +1161,9 @@ class TestLLMClassifier:
         sees no user_api_key/team_id/user_id and silently drops all spend logging
         and budget accounting for the classifier call.
         """
-        mock_router_instance.acompletion = AsyncMock(
-            return_value=_llm_response('{"tier": "SIMPLE"}')
-        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
         request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
-        await llm_complexity_router.aclassify(
-            "hi", request_kwargs={"litellm_metadata": request_metadata}
-        )
+        await llm_complexity_router.aclassify("hi", request_kwargs={"litellm_metadata": request_metadata})
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == request_metadata
 
@@ -1245,18 +1179,14 @@ class TestLLMClassifier:
         business touching, so it must be stripped while the rest of the attribution
         metadata (key/team) is preserved.
         """
-        mock_router_instance.acompletion = AsyncMock(
-            return_value=_llm_response('{"tier": "SIMPLE"}')
-        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
         request_metadata = {
             "user_api_key": "sk-abc",
             "user_api_key_team_id": "team-1",
             "user_api_key_budget_reservation": {"reserved_cost": 1.0},
             "user_api_key_auth": {"budget_reservation": {"reserved_cost": 1.0}},
         }
-        await llm_complexity_router.aclassify(
-            "hi", request_kwargs={"litellm_metadata": request_metadata}
-        )
+        await llm_complexity_router.aclassify("hi", request_kwargs={"litellm_metadata": request_metadata})
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == {
             "user_api_key": "sk-abc",
@@ -1292,13 +1222,9 @@ class TestLLMClassifier:
         assert tier == ComplexityTier.SIMPLE
 
     @pytest.mark.asyncio
-    async def test_pre_routing_hook_uses_llm_classifier_end_to_end(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_pre_routing_hook_uses_llm_classifier_end_to_end(self, llm_complexity_router, mock_router_instance):
         """The full pre-routing hook should route using the LLM classifier's verdict."""
-        mock_router_instance.acompletion = AsyncMock(
-            return_value=_llm_response('{"tier": "REASONING"}')
-        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
         request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
         result = await llm_complexity_router.async_pre_routing_hook(
             model="test-model",
@@ -1309,3 +1235,109 @@ class TestLLMClassifier:
         assert result.model == "o1-preview"  # REASONING tier model
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == request_metadata
+
+
+class TestRouterPreRoutingAliasOverrides:
+    """
+    Regression tests for: litellm_params configured on a complexity-router alias
+    entry (e.g. `cache_control_injection_points`, `drop_params`) were silently
+    dropped, because `async_pre_routing_hook` swaps `model` from the alias name
+    to the selected tier's model *before* the deployment lookup - so the actual
+    outbound call only ever merges in the tier deployment's own litellm_params,
+    never the alias's.
+    """
+
+    def _make_router(self) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "drop_params": True,
+                        "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": "gpt-4o-mini",
+                                "MEDIUM": "gpt-4o",
+                            }
+                        },
+                        "complexity_router_default_model": "gpt-4o",
+                    },
+                },
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                },
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_alias_litellm_params_applied_to_request_kwargs(self):
+        """cache_control_injection_points/drop_params set on the alias entry
+        reach the outbound request even though the tier deployment is what
+        actually gets called."""
+        router = self._make_router()
+        request_kwargs: Dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result is not None
+        assert request_kwargs["drop_params"] is True
+        assert request_kwargs["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+
+    @pytest.mark.asyncio
+    async def test_alias_overrides_do_not_leak_routing_config_keys(self):
+        """Router-strategy config fields consumed at init time (e.g.
+        complexity_router_config) must never be forwarded to the LLM call."""
+        router = self._make_router()
+        request_kwargs: Dict = {}
+
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert "complexity_router_config" not in request_kwargs
+        assert "complexity_router_default_model" not in request_kwargs
+        assert "model" not in request_kwargs
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_kwargs_are_not_overwritten(self):
+        """A value the caller already passed for this request takes
+        precedence over the alias's configured default."""
+        router = self._make_router()
+        request_kwargs: Dict = {"drop_params": False}
+
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs["drop_params"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_alias_model_is_untouched(self):
+        """A plain (non-router-alias) model name is not affected by the
+        alias-override merge at all."""
+        router = self._make_router()
+        request_kwargs: Dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="gpt-4o-mini",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result is None
+        assert request_kwargs == {}

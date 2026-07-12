@@ -477,6 +477,11 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
+        # litellm_params configured on a router-alias deployment (e.g. `model:
+        # auto_router/complexity_router`) that aren't routing config itself -
+        # applied to whichever deployment a pre-routing hook ends up selecting,
+        # since the alias deployment itself is never the one actually called.
+        self.pre_routing_alias_overrides: Dict[str, Dict[str, Any]] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -7462,6 +7467,42 @@ class Router:
             else:
                 raise e
 
+    # Router-strategy config fields consumed at init time by the corresponding
+    # init_*_router_deployment() below - never forwarded to the LLM call itself.
+    _PRE_ROUTING_ALIAS_RESERVED_PARAMS = frozenset(
+        {
+            "model",
+            "auto_router_config_path",
+            "auto_router_config",
+            "auto_router_default_model",
+            "auto_router_embedding_model",
+            "complexity_router_config",
+            "complexity_router_default_model",
+            "adaptive_router_default_model",
+            "adaptive_router_config",
+            "quality_router_config",
+            "quality_router_default_model",
+        }
+    )
+
+    def _register_pre_routing_alias_overrides(self, deployment: Deployment) -> None:
+        """
+        Store non-routing-config litellm_params set on a router-alias deployment
+        (e.g. `model: auto_router/complexity_router`) so they can be applied to
+        whichever underlying deployment a pre-routing hook ends up selecting.
+
+        The alias deployment itself is never the one actually called - a
+        pre-routing hook swaps `model` to the selected tier/route's deployment
+        before the deployment lookup runs - so params like
+        `cache_control_injection_points` or `drop_params` configured on the
+        alias would otherwise be silently dropped.
+        """
+        overrides = deployment.litellm_params.model_dump(exclude_defaults=True, exclude_none=True)
+        for reserved_param in self._PRE_ROUTING_ALIAS_RESERVED_PARAMS:
+            overrides.pop(reserved_param, None)
+        if overrides:
+            self.pre_routing_alias_overrides[deployment.model_name] = overrides
+
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
         Check if the deployment is an auto-router deployment (semantic router).
@@ -7520,6 +7561,7 @@ class Router:
                 f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.auto_routers[deployment.model_name] = autor_router
+        self._register_pre_routing_alias_overrides(deployment=deployment)
 
     def _is_complexity_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
@@ -7571,6 +7613,7 @@ class Router:
                 f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.complexity_routers[deployment.model_name] = complexity_router
+        self._register_pre_routing_alias_overrides(deployment=deployment)
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -7678,6 +7721,7 @@ class Router:
             model_to_cost=model_to_cost,
         )
         self.adaptive_routers[deployment.model_name] = adaptive_router
+        self._register_pre_routing_alias_overrides(deployment=deployment)
         litellm.logging_callback_manager.add_litellm_callback(
             AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
         )
@@ -7734,6 +7778,7 @@ class Router:
                 f"Quality-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.quality_routers[deployment.model_name] = quality_router
+        self._register_pre_routing_alias_overrides(deployment=deployment)
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -7784,6 +7829,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self.pre_routing_alias_overrides = {}
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -10609,56 +10655,31 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        #########################################################
-        # Check if any auto-router should be used
-        #########################################################
-        if model in self.auto_routers:
-            return await self.auto_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        router_strategy = (
+            self.auto_routers.get(model)
+            or self.complexity_routers.get(model)
+            or self.adaptive_routers.get(model)
+            or self.quality_routers.get(model)
+        )
+        if router_strategy is None:
+            return None
 
-        #########################################################
-        # Check if any complexity-router should be used
-        #########################################################
-        if model in self.complexity_routers:
-            return await self.complexity_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
+            model=model,
+            request_kwargs=request_kwargs,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )
 
-        #########################################################
-        # Check if an adaptive-router should be used
-        #########################################################
-        adaptive_router = self.adaptive_routers.get(model)
-        if adaptive_router is not None:
-            return await adaptive_router.async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        # `model` (the alias, e.g. "smart-router") is never the deployment actually
+        # called - apply any non-routing-config litellm_params set on the alias to
+        # the request, since the tier/route deployment the hook selected won't have them.
+        if pre_routing_hook_response is not None:
+            for key, value in self.pre_routing_alias_overrides.get(model, {}).items():
+                request_kwargs.setdefault(key, value)
 
-        #########################################################
-        # Check if any quality-router should be used
-        #########################################################
-        if model in self.quality_routers:
-            return await self.quality_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
-
-        return None
+        return pre_routing_hook_response
 
     def get_available_deployment(
         self,
