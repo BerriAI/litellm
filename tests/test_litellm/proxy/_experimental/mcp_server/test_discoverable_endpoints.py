@@ -4672,11 +4672,11 @@ async def test_bridge_envelope_too_large_upstream_token_is_502():
 
 
 @pytest.mark.asyncio
-async def test_bridge_envelope_does_not_seal_upstream_refresh_token():
-    """The upstream refresh_token is never sealed into the client-held envelope: the edge never
-    consumes it and a long-lived upstream credential should not live in the client bearer. The opened
-    envelope's grant carries no refresh token even when the upstream returned one, and neither does
-    the response body."""
+async def test_bridge_access_envelope_never_carries_upstream_refresh_token():
+    """The upstream refresh token is never sealed into the ACCESS envelope, the bearer forwarded upstream
+    on every tool call: the opened access grant carries no refresh token even when the upstream returned
+    one, and the raw refresh token never appears in the access envelope. It rides only in the separate
+    refresh envelope returned as the response's refresh_token, encrypted, never in plaintext."""
     from datetime import datetime, timezone
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -4698,21 +4698,22 @@ async def test_bridge_envelope_does_not_seal_upstream_refresh_token():
     response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
 
     body = json.loads(response.body)
-    assert "refresh_token" not in body
     assert "UPSTREAM-REFRESH" not in body["access_token"]
     keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
     opened = open_envelope(body["access_token"], keys, datetime.now(timezone.utc))
     assert isinstance(opened, OpenedEnvelope)
     assert opened.grant.refresh_token is None
+    # the refresh token rides only in the separate, encrypted refresh envelope, never in plaintext
+    assert body["refresh_token"].startswith("llm_refresh_")
+    assert "UPSTREAM-REFRESH" not in body["refresh_token"]
 
 
 @pytest.mark.asyncio
-async def test_bridge_refresh_grant_is_rejected_before_upstream():
-    """A bridge oauth_delegate server issues only envelopes and seals no upstream refresh_token, so the
-    client never holds one to present. _prepare_bridge_mint rejects the refresh_token grant up front
-    with unsupported_grant_type, BEFORE any upstream exchange, so a stray refresh request can never
-    rotate or consume the client's upstream refresh credential; renewal is re-running
-    authorization_code. This is checked before identity resolution, so it holds even with a valid key."""
+async def test_bridge_refresh_grant_with_non_envelope_is_invalid_grant_before_upstream():
+    """A bridge oauth_delegate client only ever holds a refresh envelope, never a raw upstream refresh
+    token, so a refresh_token grant carrying a bare (non-envelope) value is invalid_grant, rejected in
+    _prepare_bridge_refresh BEFORE any upstream exchange. Rejecting before the exchange means a bad
+    refresh request can never consume or rotate an upstream refresh token."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
     from litellm.types.mcp import MCPAuth
 
@@ -4739,8 +4740,311 @@ async def test_bridge_refresh_grant_is_rejected_before_upstream():
         )
 
     assert response.status_code == 400
-    assert json.loads(response.body)["error"] == "unsupported_grant_type"
+    assert json.loads(response.body)["error"] == "invalid_grant"
     fake_http_client.post.assert_not_called()
+
+
+def _mint_test_refresh_envelope(
+    server_id="bridge_srv", key_hash="hashed-litellm-key-77", upstream_refresh="UPSTREAM-REFRESH", identity=None
+):
+    """Mint a refresh envelope the way the producer does, for driving the refresh_token grant in tests.
+    Defaults to a key_hash subject; pass ``identity`` to seal a specific subject (e.g. a user_id)."""
+    from datetime import datetime, timezone
+
+    from pydantic import SecretStr
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        build_bridge_refresh_token_response,
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        RefreshCredential,
+        SealedEnvelope,
+        key_hash_identity,
+    )
+
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    identity = identity if identity is not None else key_hash_identity(server_id=server_id, key_hash=key_hash)
+    sealed = build_bridge_refresh_token_response(
+        identity, RefreshCredential(refresh_token=SecretStr(upstream_refresh)), keys, datetime.now(timezone.utc)
+    )
+    assert isinstance(sealed, SealedEnvelope)
+    return sealed.token.get_secret_value()
+
+
+async def _refresh_for_bridge_server(
+    server, refresh_envelope_value, upstream_body, revalidate_result=None, fake_client_out=None
+):
+    """Drive a refresh_token grant for a bridge server: the client presents ``refresh_envelope_value``,
+    the sealed subject re-validates to ``revalidate_result`` (``None`` when the key or user is still
+    active, or a failure literal like "no_active_key" when revoked/deactivated), and the upstream returns
+    ``upstream_body``. Patching the single subject-revalidation dispatch covers both a key_hash and a
+    user_id refresh envelope. Returns the response; the captured client exposes the POST call so a test
+    can assert what refresh token was actually sent upstream."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = upstream_body
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    if fake_client_out is not None:
+        fake_client_out["client"] = fake_http_client
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            new=AsyncMock(return_value=revalidate_result),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        return await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token=refresh_envelope_value,
+        )
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_returns_refresh_envelope_that_opens_to_upstream_refresh():
+    """When the upstream returns a refresh token, the authorization_code mint returns a refresh envelope
+    alongside the access envelope. The refresh envelope is a distinct llm_refresh_ credential that opens
+    (under the same keys and server_id) to the upstream refresh token, so the client can renew later."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        OpenedRefreshEnvelope,
+        open_refresh_envelope,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "R-UP"}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+
+    body = json.loads(response.body)
+    refresh_env = body["refresh_token"]
+    assert refresh_env.startswith("llm_refresh_")
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = open_refresh_envelope(refresh_env, keys, datetime.now(timezone.utc))
+    assert isinstance(opened, OpenedRefreshEnvelope)
+    assert opened.identity.server_id == server.server_id
+    assert opened.refresh.refresh_token.get_secret_value() == "R-UP"
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_omits_refresh_envelope_when_upstream_has_no_refresh():
+    """No refresh envelope is issued when the upstream returns no refresh token, so the response carries
+    only the access envelope; the client re-authenticates at access expiry (nothing to renew with)."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {"access_token": "UP", "token_type": "Bearer", "expires_in": 3600}
+    response = await _exchange_for_bridge_server(server, upstream, key_hash="hashed-litellm-key-77")
+
+    body = json.loads(response.body)
+    assert body["access_token"].startswith("llm_env_")
+    assert "refresh_token" not in body
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_sends_unwrapped_upstream_token_and_renews():
+    """A refresh_token grant carrying a valid refresh envelope renews: the exchange unwraps the envelope
+    and sends the REAL upstream refresh token upstream (never the envelope), then returns a fresh access
+    envelope. This is the flow that lets the client renew without re-authenticating."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="UPSTREAM-REFRESH")
+    upstream = {"access_token": "NEW-ACCESS", "token_type": "Bearer", "expires_in": 3600}
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(server, refresh_env, upstream, None, fake_client_out=captured)
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["access_token"].startswith("llm_env_")
+    # the upstream exchange received the unwrapped upstream refresh token, never the client's envelope
+    sent = captured["client"].post.call_args.kwargs["data"]
+    assert sent["grant_type"] == "refresh_token"
+    assert sent["refresh_token"] == "UPSTREAM-REFRESH"
+    assert not sent["refresh_token"].startswith("llm_refresh_")
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_rotates_refresh_envelope_wrapping_new_upstream_token():
+    """When the upstream rotates the refresh token on renewal, the client receives a new refresh envelope
+    that wraps the NEW upstream refresh token, so the rotation is carried through faithfully."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        OpenedRefreshEnvelope,
+        open_refresh_envelope,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="OLD-UP-REFRESH")
+    upstream = {
+        "access_token": "NEW-ACCESS",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "NEW-UP-REFRESH",
+    }
+    response = await _refresh_for_bridge_server(server, refresh_env, upstream, None)
+
+    body = json.loads(response.body)
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = open_refresh_envelope(body["refresh_token"], keys, datetime.now(timezone.utc))
+    assert isinstance(opened, OpenedRefreshEnvelope)
+    assert opened.refresh.refresh_token.get_secret_value() == "NEW-UP-REFRESH"
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_with_revoked_key_is_invalid_grant_before_upstream():
+    """A valid refresh envelope whose sealed litellm key has since been revoked cannot keep refreshing:
+    the reload gate reports no_active_key and the refresh is invalid_grant, returned BEFORE the upstream
+    exchange so the upstream refresh token is never consumed. Revocation kills renewal."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id)
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(
+        server, refresh_env, {"access_token": "NEW"}, "no_active_key", fake_client_out=captured
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_grant"
+    captured["client"].post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_envelope_for_another_server_is_invalid_grant():
+    """A refresh envelope minted for one server cannot renew against another: the sealed server_id must
+    match the server the refresh targets, so a cross-server refresh envelope is invalid_grant and never
+    reaches the upstream exchange."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    foreign_env = _mint_test_refresh_envelope(server_id="some-other-server")
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(
+        server, foreign_env, {"access_token": "NEW"}, None, fake_client_out=captured
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_grant"
+    captured["client"].post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_renews_a_user_subject_envelope():
+    """The interactive SSO client mints a user_id-subject envelope, so its refresh envelope carries a
+    user subject too. Renewing it re-validates the user (still active here), unwraps the upstream refresh
+    token, and returns a fresh access envelope that opens back to the same user_id subject; the upstream
+    exchange received the real upstream refresh token, not the client's envelope."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        BridgeEnvelopeAdmitted,
+        envelope_keys_from_master_key,
+        resolve_bridge_envelope,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import user_identity
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    user_env = _mint_test_refresh_envelope(
+        identity=user_identity(server_id=server.server_id, user_id="sso-user-42"), upstream_refresh="UP-REFRESH-USER"
+    )
+    upstream = {"access_token": "NEW-ACCESS", "token_type": "Bearer", "expires_in": 3600}
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(server, user_env, upstream, None, fake_client_out=captured)
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = resolve_bridge_envelope(body["access_token"], keys, datetime.now(timezone.utc), server.server_id)
+    assert isinstance(opened, BridgeEnvelopeAdmitted)
+    assert opened.identity.subject_type == "user_id"
+    assert opened.identity.subject == "sso-user-42"
+    assert captured["client"].post.call_args.kwargs["data"]["refresh_token"] == "UP-REFRESH-USER"
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_grant_with_deactivated_user_is_invalid_grant_before_upstream():
+    """A user_id-subject refresh envelope whose user has since been deactivated (SCIM offboarding, or
+    the user no longer exists) cannot keep refreshing: subject re-validation reports no_active_key and
+    the refresh is invalid_grant, returned BEFORE the upstream exchange. Revocation kills renewal for the
+    user subject exactly as it does for the key subject."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import user_identity
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    user_env = _mint_test_refresh_envelope(identity=user_identity(server_id=server.server_id, user_id="gone-user"))
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(
+        server, user_env, {"access_token": "NEW"}, "no_active_key", fake_client_out=captured
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_grant"
+    captured["client"].post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_revalidate_active_subject_dispatches_on_subject_type():
+    """Subject re-validation routes a key_hash envelope to the key reload and a user_id envelope to the
+    user reload, so revocation gates renewal for either identity source through one dispatch point."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _ResolvedKey,
+        _revalidate_active_subject,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity, user_identity
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            new=AsyncMock(return_value=_ResolvedKey(key_hash="kh", key=MagicMock())),
+        ) as key_reload,
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            new=AsyncMock(return_value=None),
+        ) as user_reload,
+    ):
+        assert await _revalidate_active_subject(key_hash_identity(server_id="s", key_hash="kh")) is None
+        key_reload.assert_awaited_once_with("kh")
+        user_reload.assert_not_awaited()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            new=AsyncMock(),
+        ) as key_reload2,
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            new=AsyncMock(return_value="no_active_key"),
+        ) as user_reload2,
+    ):
+        assert await _revalidate_active_subject(user_identity(server_id="s", user_id="u42")) == "no_active_key"
+        user_reload2.assert_awaited_once_with("u42")
+        key_reload2.assert_not_awaited()
 
 
 @pytest.mark.asyncio
