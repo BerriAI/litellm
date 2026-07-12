@@ -2084,6 +2084,7 @@ class TestMCPServerManager:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        mock_response.aclose = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
