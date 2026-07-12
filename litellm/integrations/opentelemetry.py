@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Context as _Context
     from opentelemetry.trace import Span as _Span
     from opentelemetry.trace import Tracer as _Tracer
+    from opentelemetry.util.types import AnyValue
 
     from litellm.proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
@@ -110,6 +111,23 @@ METRIC_METADATA_KEYS: Tuple[str, ...] = (
     "mcp_tool_call_metadata",
     "vector_store_request_metadata",
 )
+
+
+def _prune_none(value: "AnyValue") -> "AnyValue":
+    """Recursively drop ``None`` entries from dicts and lists.
+
+    The OTLP exporter encodes a log record's body as ``AnyValue``, which has no
+    representation for ``None`` and raises ``Invalid type NoneType`` on it. That
+    aborts the export and makes ``BatchLogRecordProcessor`` drop the whole batch,
+    so a content event carrying a ``None`` (e.g. a ``content=None`` assistant
+    message) is silently lost. Pruning ``None`` first keeps it (Issue #32996).
+    """
+    if isinstance(value, dict):
+        return {key: _prune_none(val) for key, val in value.items() if val is not None}
+    if isinstance(value, list):
+        return [_prune_none(item) for item in value if item is not None]
+    return value
+
 
 TOKEN_TYPE_ATTRIBUTE: str = "gen_ai.token.type"
 
@@ -1639,7 +1657,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         otel_logger = self._logger_provider.get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
-        provider = (kwargs.get("litellm_params") or {}).get("custom_llm_provider", "Unknown")
+        provider = (kwargs.get("litellm_params") or {}).get("custom_llm_provider") or "Unknown"
 
         if self._gen_ai_semconv_latest_experimental:
             self._emit_inference_details_event(
@@ -1675,7 +1693,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=body,
+                body=_prune_none(body),
                 attributes=attrs,
             )
             otel_logger.emit(log_record)
@@ -1686,17 +1704,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 "event_name": "gen_ai.content.completion",
                 "gen_ai.system": provider,
                 "index": idx,
-                "finish_reason": choice.get("finish_reason"),
             }
+            finish_reason = choice.get("finish_reason")
+            if finish_reason is not None:
+                attrs["finish_reason"] = finish_reason
             body_msg = choice.get("message", {})
             capture_event_content = self._capture_in_event()
             if capture_event_content and body_msg.get("content"):
                 attrs["message.content"] = body_msg["content"]
             body = {
                 "index": idx,
-                "finish_reason": choice.get("finish_reason"),
                 "message": {"role": body_msg.get("role", "assistant")},
             }
+            if finish_reason is not None:
+                body["finish_reason"] = finish_reason
             if capture_event_content and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
 
@@ -1707,7 +1728,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=body,
+                body=_prune_none(body),
                 attributes=attrs,
             )
             otel_logger.emit(log_record)

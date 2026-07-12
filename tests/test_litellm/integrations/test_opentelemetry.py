@@ -755,6 +755,118 @@ class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
         self.assertTrue(kept._capture_in_event())
 
 
+def _contains_none(value):
+    """True if ``value`` is ``None`` or nests a ``None`` anywhere."""
+    if value is None:
+        return True
+    if isinstance(value, dict):
+        return any(_contains_none(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_none(v) for v in value)
+    return False
+
+
+class TestOpenTelemetryContentEventsNonePruning(unittest.TestCase):
+    """Regression for #32996: enable_events content logs carrying a ``None``
+    (unresolved provider/finish_reason, or a ``content=None`` message) must not
+    reach the OTLP exporter with a ``None``, which raises ``Invalid type
+    NoneType`` and makes BatchLogRecordProcessor drop the whole batch."""
+
+    @staticmethod
+    def _emit(kwargs, response_obj):
+        from opentelemetry import _logs
+        from opentelemetry._logs._internal import ProxyLoggerProvider
+
+        log_exporter = InMemoryLogExporter()
+        with (
+            patch.object(
+                _logs, "get_logger_provider", return_value=ProxyLoggerProvider()
+            ),
+            patch.object(_logs, "set_logger_provider"),
+            patch.object(
+                OpenTelemetry, "_get_log_exporter", return_value=log_exporter
+            ),
+        ):
+            h = OpenTelemetry(
+                config=OpenTelemetryConfig(exporter="console", enable_events=True)
+            )
+        h.message_logging = True
+        span = h.tracer.start_span("test")
+        h._emit_semantic_logs(kwargs, response_obj, span)
+        span.end()
+        h._logger_provider.force_flush(2000)
+        return log_exporter.get_finished_logs()
+
+    def test_none_laden_events_encode_and_carry_no_none(self):
+        from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+
+        kwargs = {
+            "model": "gpt-4",
+            "call_type": "acompletion",
+            "messages": [
+                {"role": "assistant", "content": None, "tool_calls": None},
+                {"role": "user", "content": "hi"},
+            ],
+            "litellm_params": {"custom_llm_provider": None},
+        }
+        response_obj = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": None},
+                    "finish_reason": None,
+                }
+            ]
+        }
+
+        logs = self._emit(kwargs, response_obj)
+        self.assertEqual(len(logs), 3)
+
+        encode_logs(logs)
+
+        for data in logs:
+            record = data.log_record
+            for key, value in dict(record.attributes or {}).items():
+                self.assertIsNotNone(value, msg=f"attr {key} is None")
+            self.assertFalse(
+                _contains_none(record.body), msg=f"body has None: {record.body}"
+            )
+
+    def test_unresolved_provider_falls_back_to_unknown(self):
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_params": {"custom_llm_provider": None},
+        }
+        response_obj = {"choices": []}
+        logs = self._emit(kwargs, response_obj)
+        self.assertEqual(len(logs), 1)
+        attrs = dict(logs[0].log_record.attributes or {})
+        self.assertEqual(attrs["gen_ai.system"], "Unknown")
+
+    def test_present_finish_reason_survives_pruning(self):
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_params": {"custom_llm_provider": "openai"},
+        }
+        response_obj = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        logs = self._emit(kwargs, response_obj)
+        completion = next(
+            data.log_record
+            for data in logs
+            if dict(data.log_record.attributes or {}).get("event_name")
+            == "gen_ai.content.completion"
+        )
+        attrs = dict(completion.attributes or {})
+        self.assertEqual(attrs["finish_reason"], "stop")
+        self.assertEqual(completion.body["finish_reason"], "stop")
+
+
 class TestOpenTelemetrySemconvStability(unittest.TestCase):
     """OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental opts into
     semconv-conformant span shape (name, kind, no raw_gen_ai_request child)."""
