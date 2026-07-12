@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  getMissingTiersError,
   getSemanticConfigError,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
@@ -121,6 +122,31 @@ describe("buildComplexityRouterConfig", () => {
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.keyword_tier_rules).toBeUndefined();
+  });
+});
+
+describe("getMissingTiersError", () => {
+  it("returns null when all four tiers have a model", () => {
+    expect(getMissingTiersError(tiers)).toBeNull();
+  });
+
+  it("names the specific missing tier when only one is blank", () => {
+    expect(getMissingTiersError({ ...tiers, REASONING: "" })).toBe(
+      "Select a model for the following tier(s): REASONING",
+    );
+  });
+
+  it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: "", REASONING: "" })).toBe(
+      "Select a model for the following tier(s): SIMPLE, REASONING",
+    );
+  });
+
+  it("names all four tiers when none are filled", () => {
+    const noTiers = { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" };
+    expect(getMissingTiersError(noTiers)).toBe(
+      "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
+    );
   });
 });
 
