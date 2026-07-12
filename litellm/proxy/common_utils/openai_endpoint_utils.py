@@ -2,12 +2,14 @@
 Contains utils used by OpenAI compatible endpoints
 """
 
-from typing import Optional, Set
+from typing import Optional, Set, Union
 
 from fastapi import Request
+from fastapi.responses import PlainTextResponse
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.utils import TranscriptionResponse
 
 SENSITIVE_DATA_MASKER = SensitiveDataMasker()
 
@@ -79,3 +81,22 @@ def get_custom_llm_provider_from_request_headers(request: Request) -> Optional[s
     if "custom-llm-provider" in request.headers:
         return request.headers["custom-llm-provider"]
     return None
+
+
+def get_transcription_proxy_response(
+    response: TranscriptionResponse,
+    response_format: Optional[str],
+    headers: Optional[dict] = None,
+) -> Union[TranscriptionResponse, PlainTextResponse]:
+    """
+    Preserve OpenAI-compatible HTTP envelopes for transcription response formats.
+
+    LiteLLM normalizes upstream transcription bodies into TranscriptionResponse
+    objects, but callers requesting response_format=text expect a text/plain body.
+    """
+    if response_format == "text":
+        return PlainTextResponse(
+            content=response.text or "",
+            headers=headers or {},
+        )
+    return response

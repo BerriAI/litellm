@@ -308,6 +308,7 @@ from litellm.proxy.common_utils.load_config_utils import (
 )
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_transcription_proxy_response,
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
@@ -9230,7 +9231,11 @@ async def audio_transcriptions(
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
 
-        return response
+        return get_transcription_proxy_response(
+            response=response,
+            response_format=data.get("response_format"),
+            headers=dict(fastapi_response.headers),
+        )
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
