@@ -41,3 +41,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 ✅ Test
 
 ## Changes
+
+## QA runbook
+
+<!-- For PRs that change behavior (features, fixes, tests): list the manual steps a reviewer can follow to QA each change by hand against a live proxy, mapping 1:1 to what the automated proof asserts. One "- [ ]" checklist per test or behavior, each item a concrete action (route, request body, expected response). Note environment prerequisites (provider credentials, config flags) and any nuances a manual run will hit. See PRs #32914 and #32963 for examples. Delete this section if there is nothing to QA by hand -->
