@@ -4609,6 +4609,35 @@ async def test_bridge_reported_expires_in_does_not_overstate_jwt_exp():
     assert before + body["expires_in"] <= claims["exp"]
 
 
+def test_bridge_reported_expires_in_can_be_zero_at_jwt_exp_boundary():
+    from datetime import datetime, timezone
+
+    from fastapi.responses import JSONResponse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _BridgeMintReady,
+        _finish_bridge_mint,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        envelope_keys_from_master_key,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    ready = _BridgeMintReady(
+        key_hash="hashed-litellm-key-77",
+        keys=envelope_keys_from_master_key(_BRIDGE_MASTER_KEY),
+    )
+    response = _finish_bridge_mint(
+        ready=ready,
+        mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
+        token_response={"access_token": "UP", "expires_in": 1},
+        now=datetime.fromtimestamp(100.25, tz=timezone.utc),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert json.loads(response.body)["expires_in"] == 0
+
+
 def test_bridge_grant_coerces_numeric_expires_in():
     """expires_in from an IdP may be an int, a float (3600.0), or a numeric string ("3600"); coerce
     it to a positive int so the envelope TTL honors the real lifetime instead of dropping a non-int
