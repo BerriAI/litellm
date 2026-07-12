@@ -44,7 +44,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## QA runbook
 
-<!-- Only needed when your PR edits tests/e2e; delete this section otherwise
+<!-- This QA runbook and the Final Attestation below are only needed when your PR edits tests/e2e; delete both sections otherwise
 
 For each e2e test you added or changed, list the manual steps a reviewer can follow to reproduce it by hand against a live proxy, mapping 1:1 to what the test asserts: one top-level bullet per test giving its pytest node id followed by what it proves in plain words, then a nested "- [ ]" checklist where each item is a concrete action (route, request body, expected response) and the final item is the sanity-check step shown in the examples. Note environment prerequisites (provider credentials, config flags) and any nuances a manual run will hit. See PRs #32914 and #32963 for full examples
 
@@ -63,5 +63,7 @@ Example checklists:
 -->
 
 ### Final Attestation
+
+<!-- Part of the QA runbook above; keep this only if you kept that section (your PR edits tests/e2e), otherwise delete this Final Attestation too -->
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
