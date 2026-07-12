@@ -6,7 +6,7 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -245,7 +245,7 @@ class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
     # string = pin; list = random pick from the tier pool
-    tiers: Dict[str, Union[str, List[str]]] = Field(
+    tiers: dict[str, str | list[str]] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description=(
             "Mapping of complexity tiers to a model or model pool. A list is randomly picked from for that tier"

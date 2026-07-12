@@ -451,7 +451,7 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(model: Union[str, List[str]], tier_key: str) -> str:
+    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
         if isinstance(model, str):
             return model
         if not model:
