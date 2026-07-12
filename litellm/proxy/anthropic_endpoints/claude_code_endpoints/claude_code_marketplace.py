@@ -18,7 +18,7 @@ Endpoints:
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import JSONResponse
@@ -54,11 +54,11 @@ async def _optional_user_api_key_auth(
     request: Request,
     api_key: str = Security(api_key_header),
     azure_api_key: str = Security(azure_api_key_header),
-    anthropic_api_key: Optional[str] = Security(anthropic_api_key_header),
-    google_ai_studio_api_key: Optional[str] = Security(google_ai_studio_api_key_header),
-    azure_apim_key: Optional[str] = Security(azure_apim_header),
-    custom_litellm_key: Optional[str] = Security(custom_litellm_key_header),
-) -> Optional[UserAPIKeyAuth]:
+    anthropic_api_key: str | None = Security(anthropic_api_key_header),
+    google_ai_studio_api_key: str | None = Security(google_ai_studio_api_key_header),
+    azure_apim_key: str | None = Security(azure_apim_header),
+    custom_litellm_key: str | None = Security(custom_litellm_key_header),
+) -> UserAPIKeyAuth | None:
     """
     Resolve UserAPIKeyAuth if a key is present (header or, for this route,
     the `key` query param wired up via RouteChecks.is_claude_code_marketplace_route),
@@ -95,7 +95,7 @@ async def _get_prisma_client():
     tags=["Claude Code Marketplace"],
 )
 async def get_marketplace(
-    user_api_key_dict: Optional[UserAPIKeyAuth] = Depends(_optional_user_api_key_auth),  # noqa: B008  # DI idiom
+    user_api_key_dict: UserAPIKeyAuth | None = Depends(_optional_user_api_key_auth),  # noqa: B008  # DI idiom
 ):
     """
     Serve marketplace.json for Claude Code plugin discovery.
@@ -120,7 +120,7 @@ async def get_marketplace(
     try:
         prisma_client = await _get_prisma_client()
 
-        allowed_skills: FrozenSet[str] = (
+        allowed_skills: frozenset[str] = (
             await get_allowed_skills(user_api_key_dict, prisma_client) if user_api_key_dict is not None else frozenset()
         )
         where = (

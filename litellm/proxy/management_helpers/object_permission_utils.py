@@ -708,7 +708,7 @@ async def validate_key_vector_stores_against_team(
 
 
 def _extract_requested_allowed_skills(
-    object_permission: Optional[ObjectPermissionDict],
+    object_permission: ObjectPermissionDict | None,
 ) -> set[str]:
     """Return allowed_skills names from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
@@ -720,8 +720,8 @@ def _extract_requested_allowed_skills(
 
 
 async def validate_key_allowed_skills_against_team(
-    object_permission: Optional[ObjectPermissionDict],
-    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    object_permission: ObjectPermissionDict | None,
+    team_obj: "LiteLLM_TeamTableCachedObj | None",
     is_proxy_admin: bool = False,
 ) -> None:
     """
@@ -752,7 +752,7 @@ async def validate_key_allowed_skills_against_team(
             },
         )
 
-    team_skills: List[str] = []
+    team_skills: list[str] = []
     if team_obj is not None and team_obj.object_permission is not None:
         skills = team_obj.object_permission.allowed_skills
         if skills:

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient
@@ -7,7 +5,7 @@ from litellm.proxy.utils import PrismaClient
 
 async def _get_allowed_skills_for_key(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> frozenset[str]:
     """Key's own allowed_skills ceiling from its object_permission.
 
@@ -36,7 +34,7 @@ async def _get_allowed_skills_for_key(
 
 async def _get_allowed_skills_for_team(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> frozenset[str]:
     """Team's allowed_skills ceiling from team.object_permission."""
     from litellm.proxy.auth.auth_checks import get_team_object
@@ -63,7 +61,7 @@ async def _get_allowed_skills_for_team(
 
 async def _get_allowed_skills_for_org(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> frozenset[str]:
     """Org's allowed_skills ceiling from org.object_permission."""
     from litellm.proxy.auth.auth_checks import get_object_permission, get_org_object
@@ -97,7 +95,7 @@ async def _get_allowed_skills_for_org(
 
 async def get_allowed_skills(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> frozenset[str]:
     """
     Resolve the set of Claude Code skill names (already-namespaced, e.g.

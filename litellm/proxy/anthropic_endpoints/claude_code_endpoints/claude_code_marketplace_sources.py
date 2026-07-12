@@ -13,7 +13,6 @@ Endpoints:
 """
 
 import re
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -100,7 +99,7 @@ async def _count_plugins(prisma_client, marketplace_id: str) -> int:
     return await ClaudeCodePluginRepository(prisma_client).table.count(where={"marketplace_id": marketplace_id})
 
 
-def _to_marketplace_source_response(marketplace, plugin_count: Optional[int]) -> MarketplaceSourceResponse:
+def _to_marketplace_source_response(marketplace, plugin_count: int | None) -> MarketplaceSourceResponse:
     return MarketplaceSourceResponse(
         id=marketplace.id,
         name=marketplace.name,
