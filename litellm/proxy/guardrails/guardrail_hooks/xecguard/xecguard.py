@@ -44,6 +44,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -62,6 +64,13 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
     )
+
+
+def _sanitize_scan_result_for_logging(scan_result: dict) -> dict:
+    without_secrets = {key: value for key, value in scan_result.items() if key != "secret_fields"}
+    redacted = redact_nested_match_and_regex_keys(without_secrets)
+    masked = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
+    return masked if isinstance(masked, dict) else without_secrets
 
 
 _DEFAULT_API_BASE = "https://api-xecguard.cycraft.ai"
@@ -253,7 +262,7 @@ class XecGuardGuardrail(CustomGuardrail):
             slg = StandardLoggingGuardrailInformation(
                 guardrail_name=self.guardrail_name or "xecguard",
                 guardrail_mode=GuardrailEventHooks.logging_only,
-                guardrail_response=scan_result,
+                guardrail_response=_sanitize_scan_result_for_logging(scan_result),
                 guardrail_status=guardrail_status,
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
