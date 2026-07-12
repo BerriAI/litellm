@@ -507,6 +507,55 @@ describe("DataTable layout", () => {
   });
 });
 
+describe("DataTable resizing width", () => {
+  const sizedColumns: ColumnDef<Person, unknown>[] = [
+    {
+      accessorKey: "name",
+      header: "Name",
+      size: 100,
+      cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+    },
+    {
+      accessorKey: "email",
+      header: "Email",
+      size: 200,
+      cell: ({ row }) => <span>{row.original.email}</span>,
+    },
+  ];
+
+  const tableEl = (container: HTMLElement): HTMLTableElement | null =>
+    container.querySelector<HTMLTableElement>('[data-slot="table"]');
+
+  it("fills the container and only floors the width at the summed column pixels", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={sizedColumns} enableColumnResizing />);
+    const table = tableEl(container);
+    // width tracks the container, not a fixed pixel sum, so leftover space is absorbed
+    expect(table?.style.width).toBe("100%");
+    // min-width preserves the summed columns so it scrolls rather than squishing when cramped
+    expect(table?.style.minWidth).toBe("300px");
+  });
+
+  it("keeps filling the container after a column is hidden", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={sizedColumns}
+        enableColumnResizing
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).toBeNull());
+
+    const table = tableEl(container);
+    expect(table?.style.width).toBe("100%");
+    expect(table?.style.minWidth).toBe("100px");
+  });
+});
+
 describe("DataTable misconfiguration guards", () => {
   it("throws when server sorting is missing required props", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});

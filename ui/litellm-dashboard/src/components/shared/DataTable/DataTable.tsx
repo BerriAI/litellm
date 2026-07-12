@@ -508,7 +508,9 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined;
-  const tableStyle = enableColumnResizing ? { width: table.getTotalSize() } : undefined;
+  const tableStyle: React.CSSProperties | undefined = enableColumnResizing
+    ? { width: "100%", minWidth: table.getTotalSize() }
+    : undefined;
 
   const renderPagination = (): React.ReactNode => {
     if (paginationSlot !== undefined) {
