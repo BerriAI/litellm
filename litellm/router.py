@@ -7593,15 +7593,6 @@ class Router:
             AdaptiveRouterPostCallHook,
         )
 
-        for _cb_list in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            litellm.logging_callback_manager.remove_callbacks_by_type(_cb_list, AdaptiveRouterPostCallHook)
-
         for entry in self.model_list or []:
             lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
             lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
@@ -7626,14 +7617,8 @@ class Router:
             if adaptive_router is not None:
                 self.adaptive_routers[model_name] = adaptive_router
 
-        for _cb_list in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            litellm.logging_callback_manager.remove_callbacks_by_type(_cb_list, AdaptiveRouterPostCallHook)
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
+            litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
         for adaptive_router in self.adaptive_routers.values():
             litellm.logging_callback_manager.add_litellm_callback(
                 AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
