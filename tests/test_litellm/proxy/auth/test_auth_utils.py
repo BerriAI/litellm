@@ -1749,6 +1749,47 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
         )
 
 
+class TestIsRequestBodySafeBlocksAwsProfileOverride:
+    def test_aws_profile_name_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="aws_profile_name"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock/anthropic.claude-v2",
+                    "aws_profile_name": "any-profile-on-the-proxy-host",
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock/anthropic.claude-v2",
+            )
+
+    def test_aws_profile_name_with_api_key_still_rejected(self):
+        with pytest.raises(ValueError, match="aws_profile_name"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock/anthropic.claude-v2",
+                    "api_key": "sk-anything",
+                    "aws_profile_name": "any-profile-on-the-proxy-host",
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock/anthropic.claude-v2",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_aws_profile_name(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock/anthropic.claude-v2",
+                    "aws_profile_name": "byok-profile",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock/anthropic.claude-v2",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
     """``nvcf_function_id`` is rejected as a request-body param unless the
     admin opted in proxy-wide or per-deployment."""

@@ -251,6 +251,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",
+    "aws_profile_name",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
