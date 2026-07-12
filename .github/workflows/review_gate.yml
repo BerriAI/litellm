@@ -41,7 +41,7 @@ on:
           - "true"
           - "false"
       grace_days:
-        description: "Hours/24 a failing, un-tagged PR may stay open before close."
+        description: "Days a failing, un-tagged PR may stay open before close."
         required: false
         default: "1"
       min_greptile_score:
