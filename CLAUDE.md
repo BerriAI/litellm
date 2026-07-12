@@ -39,7 +39,7 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Python max line length is 120, not 88
 
-On a fresh worktree or clone, run `make bootstrap` before anything else. It provisions everything tests, `make pre-commit`, and a local proxy need: the uv env with proxy extras, the Prisma client, and the dashboard's node_modules; on worktrees it also copies `.env` from the main checkout (it never overwrites an existing `.env`)
+On a fresh worktree or clone, run `make bootstrap` before anything else. It provisions everything tests, `make pre-commit`, and a local proxy need
 
 Run tests before you commit. Also, run `make pre-commit` right before each commit, which generates types (as needed) and formats/lints your code. Any errors found must be fixed. It only runs when there are staged frontend and/or backend changes and calculates violations, generates types, etc. based on the worktree, so stage what you need or stash/delete unwanted files in litellm/ or ui/ (where backend and frontend lint run, respectively) before running it. If it fails because dashboard api types are stale, it already regenerated them for you. You just need to stage the schema.d.ts, re-run `make pre-commit` to confirm it passes, and commit
 
