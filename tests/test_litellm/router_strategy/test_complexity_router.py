@@ -948,6 +948,60 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    def test_hybrid_initialization_waits_for_later_pool_deployments(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "tiers": {
+                                "SIMPLE": ["cheap"],
+                                "MEDIUM": ["cheap", "premium"],
+                            },
+                        },
+                    },
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "input_cost_per_token": 0.00000015,
+                    },
+                    "model_info": {
+                        "adaptive_router_preferences": {
+                            "quality_tier": 1,
+                            "strengths": [],
+                        }
+                    },
+                },
+                {
+                    "model_name": "premium",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "input_cost_per_token": 0.000005,
+                    },
+                    "model_info": {
+                        "adaptive_router_preferences": {
+                            "quality_tier": 3,
+                            "strengths": [],
+                        }
+                    },
+                },
+            ]
+        )
+
+        adaptive = router.adaptive_routers["hybrid"]
+        assert adaptive.model_to_cost == {
+            "cheap": pytest.approx(0.00000015),
+            "premium": pytest.approx(0.000005),
+        }
+        assert adaptive.model_to_prefs["cheap"].quality_tier == 1
+        assert adaptive.model_to_prefs["premium"].quality_tier == 3
+
 
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
@@ -1354,6 +1408,240 @@ class TestLLMClassifier:
         assert result.model == "o1-preview"  # REASONING tier model
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == request_metadata
+
+
+class TestAdaptiveSoftFloors:
+    def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
+        config = ComplexityRouterConfig(
+            adaptive=True,
+            tiers={"SIMPLE": ["cheap"]},
+        )
+        assert config.adaptive_weights.quality == pytest.approx(0.3)
+        assert config.adaptive_weights.cost == pytest.approx(0.7)
+        assert config.tier_distance_penalty == pytest.approx(0.5)
+
+    @pytest.fixture
+    def adaptive_router_instance(self):
+        router = MagicMock()
+        router.model_list = [
+            {
+                "model_name": "cheap",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0.00000015,
+                },
+                "model_info": {
+                    "adaptive_router_preferences": {"quality_tier": 1, "strengths": []}
+                },
+            },
+            {
+                "model_name": "premium",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "input_cost_per_token": 0.000005,
+                },
+                "model_info": {
+                    "adaptive_router_preferences": {"quality_tier": 3, "strengths": []}
+                },
+            },
+        ]
+        router.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        return router
+
+    @pytest.fixture
+    def hybrid_config(self) -> Dict:
+        return {
+            "adaptive": True,
+            "adaptive_weights": {"quality": 0.7, "cost": 0.3},
+            "tier_distance_penalty": 0.15,
+            "tiers": {
+                "SIMPLE": ["cheap"],
+                "MEDIUM": ["cheap"],
+                "COMPLEX": ["premium"],
+                "REASONING": ["premium"],
+            },
+            "default_model": "cheap",
+        }
+
+    def test_adaptive_config_requires_non_empty_pools(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(adaptive=True, tiers={"SIMPLE": []})
+
+    def test_cold_start_randomly_samples_unobserved_classified_tier_models(
+        self, adaptive_router_instance
+    ):
+        cr = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_router_instance,
+            complexity_router_config={
+                "adaptive": True,
+                "tiers": {
+                    "SIMPLE": ["cheap", "premium"],
+                    "MEDIUM": ["premium"],
+                },
+            },
+        )
+        request_kwargs: Dict = {"metadata": {}}
+
+        with patch(
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            return_value="premium",
+        ) as choice:
+            picked = cr._soft_floor_pick(ComplexityTier.SIMPLE, "hi", request_kwargs)
+
+        assert picked == "premium"
+        choice.assert_called_once_with(("cheap", "premium"))
+        decision = request_kwargs["metadata"]["adaptive_router_decision"]
+        assert decision["phase"] == "cold_start"
+        assert {candidate["model"] for candidate in decision["candidates"]} == {
+            "cheap",
+            "premium",
+        }
+
+    def test_get_model_for_tier_list_without_adaptive_random_choice(
+        self, mock_router_instance
+    ):
+        router = ComplexityRouter(
+            model_name="test",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "adaptive": False,
+                "tiers": {"SIMPLE": ["cheap", "premium"], "MEDIUM": "mid"},
+                "default_model": "mid",
+            },
+        )
+        pool = ["cheap", "premium"]
+        with patch(
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            return_value="premium",
+        ) as choice:
+            assert router.get_model_for_tier(ComplexityTier.SIMPLE) == "premium"
+            choice.assert_called_once_with(pool)
+        assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
+
+    def test_soft_floor_prefers_home_tier_when_posteriors_equal(
+        self, adaptive_router_instance, hybrid_config
+    ):
+        from litellm.router_strategy.adaptive_router.bandit import BanditCell
+        from litellm.types.router import RequestType
+
+        cr = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_router_instance,
+            complexity_router_config=hybrid_config,
+        )
+        adaptive = cr._ensure_adaptive_router()
+        assert adaptive is not None
+        for model in ("cheap", "premium"):
+            adaptive._cells[(RequestType.GENERAL, model)] = BanditCell(
+                alpha=5.0, beta=5.0
+            )
+
+        # Equal quality samples; home-tier penalty should favor cheap for SIMPLE.
+        with patch(
+            "litellm.router_strategy.adaptive_router.bandit.thompson_sample",
+            return_value=0.5,
+        ):
+            picked = cr._soft_floor_pick(ComplexityTier.SIMPLE, "hi")
+        assert picked == "cheap"
+
+    def test_soft_floor_allows_cross_tier_when_posterior_dominates(
+        self, adaptive_router_instance, hybrid_config
+    ):
+        from litellm.router_strategy.adaptive_router.bandit import BanditCell
+        from litellm.types.router import RequestType
+
+        cr = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_router_instance,
+            complexity_router_config=hybrid_config,
+        )
+        adaptive = cr._ensure_adaptive_router()
+        assert adaptive is not None
+        adaptive._cells[(RequestType.GENERAL, "cheap")] = BanditCell(
+            alpha=1.0, beta=20.0
+        )
+        adaptive._cells[(RequestType.GENERAL, "premium")] = BanditCell(
+            alpha=20.0, beta=1.0
+        )
+
+        with patch(
+            "litellm.router_strategy.adaptive_router.bandit.thompson_sample",
+            side_effect=lambda cell, rng=None: cell.alpha / (cell.alpha + cell.beta),
+        ):
+            picked = cr._soft_floor_pick(ComplexityTier.SIMPLE, "hi")
+        assert picked == "premium"
+
+    def test_reused_model_has_zero_distance_in_each_configured_tier(
+        self, adaptive_router_instance
+    ):
+        from litellm.router_strategy.adaptive_router.bandit import BanditCell
+        from litellm.types.router import RequestType
+
+        cr = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_router_instance,
+            complexity_router_config={
+                "adaptive": True,
+                "tiers": {
+                    "SIMPLE": ["cheap"],
+                    "MEDIUM": ["cheap", "premium"],
+                    "COMPLEX": ["premium"],
+                },
+            },
+        )
+        adaptive = cr._ensure_adaptive_router()
+        assert adaptive is not None
+        for model in ("cheap", "premium"):
+            adaptive._cells[(RequestType.GENERAL, model)] = BanditCell(
+                alpha=6.0, beta=5.0
+            )
+        request_kwargs: Dict = {"metadata": {}}
+
+        with patch(
+            "litellm.router_strategy.adaptive_router.bandit.thompson_sample",
+            return_value=0.5,
+        ):
+            cr._soft_floor_pick(ComplexityTier.MEDIUM, "hi", request_kwargs)
+
+        candidates = request_kwargs["metadata"]["adaptive_router_decision"][
+            "candidates"
+        ]
+        assert {
+            candidate["model"]: candidate["tier_distance"] for candidate in candidates
+        } == {
+            "cheap": 0,
+            "premium": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_adaptive_stashes_chosen_model(
+        self, adaptive_router_instance, hybrid_config
+    ):
+        cr = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_router_instance,
+            complexity_router_config=hybrid_config,
+        )
+        request_kwargs: Dict = {"metadata": {}}
+        result = await cr.async_pre_routing_hook(
+            model="hybrid",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model in {"cheap", "premium"}
+        assert (
+            request_kwargs["metadata"].get("adaptive_router_chosen_model")
+            == result.model
+        )
+        decision = request_kwargs["metadata"]["adaptive_router_decision"]
+        assert decision["phase"] == "cold_start"
+        assert decision["classified_tier"] == "SIMPLE"
+        assert decision["request_type"] == "general"
+        assert decision["eligible_mode"] == "classified_tier"
+        assert decision["chosen_model"] == result.model
+        assert {candidate["model"] for candidate in decision["candidates"]} == {"cheap"}
 
 
 class TestLexicalKeywordTierRules:
