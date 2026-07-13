@@ -103,6 +103,7 @@ from litellm.router_utils.batch_utils import (
     should_replace_model_in_jsonl,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -422,7 +423,7 @@ class Router:
         self.router_general_settings: RouterGeneralSettings = router_general_settings or RouterGeneralSettings()
 
         self.assistants_config = assistants_config
-        self.search_tools = search_tools or []
+        self.search_tools = SearchAPIRouter._expand_search_tools(search_tools or [])
         self.guardrail_list = guardrail_list or []
         self.deployment_names: List = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}

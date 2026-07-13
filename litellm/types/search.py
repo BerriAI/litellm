@@ -23,6 +23,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
 
     search_provider: Required[str]
     api_key: Optional[str]
+    api_keys: Optional[List[str]]
     api_base: Optional[str]
     timeout: Optional[float]
     max_retries: Optional[int]
