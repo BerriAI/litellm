@@ -17,28 +17,34 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: litellm_internal_staging
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.10.9"
-      - name: Update JSON Data
-        run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
-      - name: Create Pull Request
+      - name: Create and push updated branch
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for git push url
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for gh pr create
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
+          BRANCH_NAME="auto-update-price-and-context-window-$(date +'%Y-%m-%d')"
+          echo "Creating branch: ${BRANCH_NAME}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          BRANCH_NAME="auto-update-price-and-context-window-$(date +'%Y-%m-%d')"
-          git checkout -b "${BRANCH_NAME}"
+
+          git fetch origin main "${BRANCH_NAME}" || true
+
+          if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+            echo "Branch ${BRANCH_NAME} already exists. Skipping creation."
+            exit 0
+          fi
+
+          git checkout -b "${BRANCH_NAME}" origin/main
+          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
           git add model_prices_and_context_window.json
           git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head "${BRANCH_NAME}" \
-            --base litellm_internal_staging
+          echo "Successfully created and pushed branch: ${BRANCH_NAME}"
