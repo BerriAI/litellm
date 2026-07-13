@@ -58,7 +58,7 @@ class McpDenied:
     message: str
 
 
-type ListToolsOutcome = McpToolNames | McpDenied
+ListToolsOutcome = McpToolNames | McpDenied
 
 
 @dataclass(frozen=True, slots=True)
