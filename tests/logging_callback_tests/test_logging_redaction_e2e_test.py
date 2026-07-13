@@ -128,34 +128,65 @@ async def test_redaction_with_custom_logger_streaming():
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
 
-    litellm_logging_obj = LoggingWithoutSyncSuccessHandler(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        call_type="acompletion",
-        litellm_call_id="1234",
-        start_time=datetime.now(),
-        function_id="1234",
-        dynamic_async_success_callbacks=[test_custom_logger],
-    )
+    try:
+        litellm_logging_obj = LoggingWithoutSyncSuccessHandler(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            litellm_call_id="1234",
+            start_time=datetime.now(),
+            function_id="1234",
+            dynamic_async_success_callbacks=[test_custom_logger],
+        )
 
-    response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="hello",
-        stream=True,
-        litellm_logging_obj=litellm_logging_obj,
-    )
-    
-    # Consume the stream to trigger logging
-    chunks = []
-    async for chunk in response:
-        chunks.append(chunk)
-    
-    await asyncio.sleep(1)
-    async_complete_streaming_response = test_custom_logger.response_obj
-    assert async_complete_streaming_response is not None    
-    assert (async_complete_streaming_response.choices[0].message.content == "redacted-by-litellm")
+        response = await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            stream=True,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+        # Consume the stream to trigger logging
+        chunks = []
+        async for chunk in response:
+            chunks.append(chunk)
+
+        await asyncio.sleep(1)
+        async_complete_streaming_response = test_custom_logger.response_obj
+        assert async_complete_streaming_response is not None
+        assert async_complete_streaming_response.choices[0].message.content == "redacted-by-litellm"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+@pytest.mark.asyncio
+async def test_streaming_redaction_scoped_to_opted_out_logger():
+    """One logger opting out of message logging must not blank the response for other loggers"""
+    litellm.turn_off_message_logging = False
+    opted_out_logger = TestCustomLogger(message_logging=False)
+    compliant_logger = TestCustomLogger()
+    litellm.callbacks = [opted_out_logger, compliant_logger]
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            stream=True,
+        )
+        async for _ in response:
+            pass
+
+        await asyncio.sleep(1)
+        assert opted_out_logger.response_obj is not None
+        assert opted_out_logger.response_obj.choices[0].message.content == "redacted-by-litellm"
+        assert compliant_logger.response_obj is not None
+        assert compliant_logger.response_obj.choices[0].message.content == "hello"
+    finally:
+        litellm.callbacks = []
+
 
 @pytest.mark.asyncio
 async def test_redaction_responses_api():
