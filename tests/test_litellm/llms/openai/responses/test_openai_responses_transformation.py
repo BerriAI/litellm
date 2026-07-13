@@ -72,6 +72,32 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["max_output_tokens"] == 256
 
+    def test_map_openai_params_leaves_max_output_tokens_absent(self):
+        """A request without max_output_tokens must not gain the key."""
+        result = self.config.map_openai_params(
+            response_api_optional_params={"input": "hi"},
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert "max_output_tokens" not in result
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (1, 16),
+            (15, 16),
+            (16, 16),
+            (17, 17),
+            (256, 256),
+            (None, None),
+        ],
+    )
+    def test_enforce_min_max_output_tokens(self, value, expected):
+        """Below the minimum clamps to 16; the boundary, larger values, and None
+        are returned unchanged so no previously-valid request regresses."""
+        assert self.config._enforce_min_max_output_tokens(value) == expected
+
     def validate_responses_api_request_params(self, params, expected_fields):
         """
         Validate that the params dict has the expected structure of ResponsesAPIRequestParams
