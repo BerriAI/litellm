@@ -189,3 +189,43 @@ class TestOtelTraceCompleteness:
             settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric")
+    def test_messages_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """One successful non-streaming /v1/messages call must export ONE
+        complete OTEL trace: a single root SERVER span ("POST /v1/messages")
+        with auth/db/cost children and the gen-AI CLIENT span in the same tree,
+        exactly one trace for the call at the destination.
+
+        A split trace hits Anthropic-native users hardest during incidents:
+        teams running Claude Code or the Anthropic SDK through the proxy see
+        their LLM spans detached from the request that caused them, so "which
+        request was slow/expensive and why" becomes unanswerable from the
+        destination UI even though data is flowing.
+
+        /v1/messages is a separate handler path from /chat/completions
+        (Anthropic-native body, its own pre/post hooks), so completeness proven
+        on chat does not transfer; the orphan bug class is route-agnostic and
+        must be pinned on each live route (verified: at the pre-fix foil commit
+        1bd603d1ac this route orphans exactly like chat does).
+        """
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-trace-messages-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}")
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            marker=marker,
+            settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+        )
+        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")

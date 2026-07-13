@@ -75,6 +75,14 @@ WEATHER_TOOL = ChatTool(
 )
 
 
+class MessagesRequestBody(BaseModel):
+    """Anthropic-native /v1/messages request (non-streaming)."""
+
+    model: str
+    max_tokens: int
+    messages: list[ChatMessage]
+
+
 class TeamCallbackBody(BaseModel):
     callback_name: Literal["langfuse_otel", "langfuse", "langsmith", "gcs"]
     callback_type: Literal["success", "failure", "success_and_failure"]
@@ -453,6 +461,19 @@ class LoggingClient:
             "/chat/completions",
             headers=self.gateway.transport.bearer(key),
             json=body,
+        )
+
+    def messages_raw(self, key: str, model: str, text: str, *, max_tokens: int = 16) -> StreamingResponse:
+        """Non-streaming POST /v1/messages (Anthropic-native body): raw outcome
+        judged by status/body/headers, for tests that need x-litellm-call-id."""
+        return self.gateway.transport.send(
+            "/v1/messages",
+            headers=self.gateway.transport.bearer(key),
+            json=MessagesRequestBody(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=text)],
+            ),
         )
 
     def scrape_metrics(self) -> str:
