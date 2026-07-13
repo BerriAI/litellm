@@ -959,7 +959,7 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail = callback.uses_apply_guardrail_interface()
         use_unified = has_apply_guardrail and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
