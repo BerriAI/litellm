@@ -2853,6 +2853,36 @@ def test_input_scans_tool_result_alongside_plain_text_in_order():
     }
 
 
+def test_input_scans_bare_string_content_list_item():
+    """A raw string sitting directly in a content list is still scanned."""
+    messages = [{"role": "user", "content": ["ssn 324-12-3212"]}]
+
+    assert _input_request(messages) == {
+        "source": "INPUT",
+        "content": [{"text": {"text": "ssn 324-12-3212"}}],
+    }
+
+
+def test_input_tool_result_without_text_contributes_nothing():
+    """A tool_result carrying no scannable text (missing content, or only images)
+    is dropped from the scan payload rather than crashing or sending empty text."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_2",
+                    "content": [{"type": "image", "source": {"data": "xx"}}],
+                },
+            ],
+        }
+    ]
+
+    assert _input_request(messages) == {"source": "INPUT", "content": []}
+
+
 def test_masking_writes_back_into_tool_result_and_keeps_alignment():
     """Masked outputs return 1:1 in scan order. Because the tool_result text was
     scanned it owns its masked output, so the write-back masks the tool_result and
