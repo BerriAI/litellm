@@ -544,10 +544,12 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
     deactivated user cannot keep refreshing, mirroring how admission re-validates the same user subject on
-    the egress side. Classification matches :func:`_reload_active_key_by_hash`: no DB connection or an
-    unexpected error is a gateway fault, a ``ProxyException`` / ``HTTPException`` from ``get_user_object``
-    or a missing / deactivated user is ``no_active_key`` (the caller maps it to invalid_grant on refresh),
-    and a database-service-unavailable error is a retryable outage."""
+    the egress side. No DB connection is a gateway fault (``unresolvable``) and a
+    database-service-unavailable error is a retryable outage (``unavailable``). Everything else fails
+    closed as ``no_active_key`` (the caller maps it to invalid_grant): a ``ProxyException`` /
+    ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user, because
+    ``get_user_object`` raises a bare ``Exception`` for a deleted user rather than a ``ProxyException``,
+    so a missing user must not be misclassified as an opaque gateway fault."""
     from litellm.proxy._types import (
         ProxyException,  # noqa: PLC0415  # inline import avoids a module-load circular import
     )
@@ -573,11 +575,11 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
         )
     except (ProxyException, HTTPException):
         return "no_active_key"
-    except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
+    except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (bare Exception) or any other resolution failure fails closed as no_active_key, never a 500
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
             return "unavailable"
-        verbose_logger.debug("_reload_active_user_by_id: unexpected user-resolution error (%s)", type(exc).__name__)
-        return "unresolvable"
+        verbose_logger.debug("_reload_active_user_by_id: user-resolution error (%s)", type(exc).__name__)
+        return "no_active_key"
     if user_object is None:
         return "no_active_key"
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
@@ -1136,10 +1138,12 @@ async def _prepare_bridge_mint(
 @dataclass(frozen=True, slots=True)
 class _BridgeRefreshReady:
     """A validated refresh request: the identity+keys to mint the renewed pair under, and the upstream
-    refresh token (unwrapped from the client's refresh envelope) to exchange with the upstream IdP."""
+    refresh token (unwrapped from the client's refresh envelope) to exchange with the upstream IdP. The
+    upstream refresh token is a ``SecretStr`` like every other credential in this layer, so a repr or a
+    traceback that captures this value never exposes the raw upstream refresh token in plaintext."""
 
     ready: "_BridgeMintReady"
-    upstream_refresh_token: str
+    upstream_refresh_token: SecretStr
 
 
 def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _BridgeMintError:
@@ -1160,14 +1164,15 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
 
 
 async def _prepare_bridge_refresh(
-    request: Request, mcp_server: MCPServer, refresh_value: str | None
+    mcp_server: MCPServer, refresh_value: str | None
 ) -> "_BridgeRefreshReady | _BridgeMintError":
     """Phase 1 for the refresh_token grant, BEFORE the upstream exchange: open the client's refresh
     envelope, re-validate the sealed litellm identity so a revoked key cannot keep refreshing, and
-    recover the upstream refresh token to exchange. The client presents a refresh envelope, never a raw
-    upstream refresh token, so a missing value, a non-envelope, an unopenable envelope, or one minted for
-    another server is ``invalid_grant``. Running before the exchange means a rejected refresh never
-    consumes or rotates the upstream refresh token."""
+    recover the upstream refresh token to exchange. Identity comes entirely from the sealed envelope, not
+    the HTTP request, so the request object is not needed here. The client presents a refresh envelope,
+    never a raw upstream refresh token, so a missing value, a non-envelope, an unopenable envelope, or one
+    minted for another server is ``invalid_grant``. Running before the exchange means a rejected refresh
+    never consumes or rotates the upstream refresh token."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         BridgeRefreshOpened,
         envelope_keys_from_master_key,
@@ -1190,7 +1195,7 @@ async def _prepare_bridge_refresh(
         return _refresh_key_failure_to_mint_error(failure)
     return _BridgeRefreshReady(
         ready=_BridgeMintReady(identity=opened.identity, keys=keys),
-        upstream_refresh_token=opened.refresh.refresh_token.get_secret_value(),
+        upstream_refresh_token=opened.refresh.refresh_token,
     )
 
 
@@ -1320,7 +1325,7 @@ async def exchange_token_with_server(
 
     bridge_identity: _BridgeAuthorizationCode | None = None
     bridge_mint_ready: _BridgeMintReady | None = None
-    bridge_upstream_refresh: str | None = None
+    bridge_upstream_refresh: SecretStr | None = None
     is_bridge = mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge
 
     if grant_type == "refresh_token":
@@ -1328,14 +1333,16 @@ async def exchange_token_with_server(
         # identity, and unwrap the real upstream refresh token BEFORE building token_data, so the exchange
         # sends the upstream token and never the envelope. A failure returns without touching the upstream.
         if is_bridge:
-            prepared_refresh = await _prepare_bridge_refresh(request, mcp_server, refresh_token)
+            prepared_refresh = await _prepare_bridge_refresh(mcp_server, refresh_token)
             if not isinstance(prepared_refresh, _BridgeRefreshReady):
                 return _bridge_mint_error_response(prepared_refresh)
             bridge_mint_ready = prepared_refresh.ready
             bridge_upstream_refresh = prepared_refresh.upstream_refresh_token
         # A bridge server sends the unwrapped upstream refresh token recovered from the client's refresh
         # envelope above; every other server sends the client's own refresh token verbatim.
-        upstream_refresh_token = bridge_upstream_refresh if bridge_upstream_refresh is not None else refresh_token
+        upstream_refresh_token = (
+            bridge_upstream_refresh.get_secret_value() if bridge_upstream_refresh is not None else refresh_token
+        )
         if not upstream_refresh_token:
             raise HTTPException(
                 status_code=400,
