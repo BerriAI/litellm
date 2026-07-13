@@ -1,5 +1,6 @@
 "use client";
 
+import { deriveKeyModelScope } from "@/components/key_team_helpers/key_scope";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { Badge } from "@/components/ui/badge";
 
@@ -8,6 +9,7 @@ import { CellTooltip } from "./cell_tooltip";
 interface ModelsCellProps {
   models: string[] | null | undefined;
   maxVisible?: number;
+  allowedRoutes?: string[] | null;
 }
 
 const WILDCARD_MODEL = "all-proxy-models";
@@ -20,8 +22,21 @@ const formatModel = (model: string): string => {
   return name.length > 30 ? `${name.slice(0, 30)}...` : name;
 };
 
-export function ModelsCell({ models, maxVisible = 3 }: ModelsCellProps) {
+export function ModelsCell({ models, maxVisible = 3, allowedRoutes }: ModelsCellProps) {
   if (!Array.isArray(models) || models.length === 0) {
+    const scope = deriveKeyModelScope(allowedRoutes);
+    if (!scope.hasModelAccess) {
+      return (
+        <CellTooltip
+          content={`Scoped to ${scope.label} routes; this key cannot call any models`}
+          trigger={
+            <Badge variant="secondary" className="cursor-default">
+              No model access
+            </Badge>
+          }
+        />
+      );
+    }
     return <Badge variant="secondary">All Proxy Models</Badge>;
   }
 

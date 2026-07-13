@@ -322,7 +322,12 @@ export const getKeyTableColumns = ({
     header: "Models",
     size: 220,
     enableSorting: false,
-    cell: (info) => <ModelsCell models={info.getValue() as string[] | null | undefined} />,
+    cell: (info) => (
+      <ModelsCell
+        models={info.getValue() as string[] | null | undefined}
+        allowedRoutes={info.row.original.allowed_routes}
+      />
+    ),
   },
   {
     id: "rate_limits",
