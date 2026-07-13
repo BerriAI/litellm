@@ -286,6 +286,19 @@ def test_print_verbose_redacts_secrets_before_logging(caplog):
     ), f"secret leaked into debug logs: {logged_messages}"
 
 
+def test_print_verbose_still_prints_when_set_verbose_true(monkeypatch, capfd):
+    """
+    Regression test: print_verbose() must still print() to stdout when the deprecated
+    `set_verbose` flag is True, alongside the new verbose_logger.debug() call.
+    """
+    monkeypatch.setattr("litellm._logging.set_verbose", True)
+
+    print_verbose("legacy set_verbose output")
+
+    out, _ = capfd.readouterr()
+    assert "legacy set_verbose output" in out, f"expected print() output, got: {out!r}"
+
+
 @pytest.mark.asyncio
 async def test_cache_hit_includes_custom_llm_provider():
     """
