@@ -3550,7 +3550,7 @@ async def team_info(
         try:
             team_info: Optional[BaseModel] = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": team_id},
-                include={"object_permission": True},
+                include={"litellm_model_table": True, "object_permission": True},
             )
             if team_info is None:
                 raise Exception

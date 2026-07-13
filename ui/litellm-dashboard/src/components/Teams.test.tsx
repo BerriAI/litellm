@@ -4,7 +4,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
-import OldTeams from "./OldTeams";
+import Teams from "./Teams";
 import { teamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 
 const mockTeamInfoView = vi.fn();
@@ -131,7 +131,7 @@ const renderWithQueryClient = (component: React.ReactElement) => {
   return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
 };
 
-describe("OldTeams - handleCreate organization handling", () => {
+describe("Teams - handleCreate organization handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
@@ -372,7 +372,7 @@ describe("OldTeams - handleCreate organization handling", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await waitFor(() => {
       expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
     });
@@ -384,7 +384,7 @@ describe("OldTeams - handleCreate organization handling", () => {
   });
 });
 
-describe("OldTeams - empty state", () => {
+describe("Teams - empty state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
@@ -392,7 +392,7 @@ describe("OldTeams - empty state", () => {
 
   it("should display empty state message when teams array is empty", async () => {
     vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("No teams yet")).toBeInTheDocument();
@@ -404,7 +404,7 @@ describe("OldTeams - empty state", () => {
 
   it("should display empty state message when teams is null", async () => {
     vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("No teams yet")).toBeInTheDocument();
@@ -437,7 +437,7 @@ describe("OldTeams - empty state", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("Test Team")).toBeInTheDocument();
@@ -449,7 +449,7 @@ describe("OldTeams - empty state", () => {
   });
 });
 
-describe("OldTeams - helper functions", () => {
+describe("Teams - helper functions", () => {
   describe("getAdminOrganizations", () => {
     it("should return all organizations for Admin role", () => {
       const organizations = [
@@ -575,7 +575,7 @@ describe("OldTeams - helper functions", () => {
   });
 });
 
-describe("OldTeams - premium props", () => {
+describe("Teams - premium props", () => {
   beforeEach(() => {
     mockTeamInfoView.mockClear();
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
@@ -607,7 +607,7 @@ describe("OldTeams - premium props", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" premiumUser={true} />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" premiumUser={true} />);
 
     const teamIdElement = await screen.findByText("team-123456789");
     act(() => {
@@ -620,7 +620,7 @@ describe("OldTeams - premium props", () => {
   });
 });
 
-describe("OldTeams - Default Team Settings tab visibility", () => {
+describe("Teams - Default Team Settings tab visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
@@ -649,7 +649,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
   });
@@ -677,7 +677,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="proxy_admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="proxy_admin" />);
 
     expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
   });
@@ -705,7 +705,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="proxy_admin_viewer" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="proxy_admin_viewer" />);
 
     expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
   });
@@ -733,13 +733,13 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
 
     expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
   });
 });
 
-describe("OldTeams - access_group_ids in team create", () => {
+describe("Teams - access_group_ids in team create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
@@ -762,7 +762,7 @@ describe("OldTeams - access_group_ids in team create", () => {
 
   it("should pass access_group_ids to teamCreateCall when creating team", async () => {
     vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
     act(() => {
@@ -806,7 +806,7 @@ describe("OldTeams - access_group_ids in team create", () => {
   });
 });
 
-describe("OldTeams - models dropdown options", () => {
+describe("Teams - models dropdown options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
@@ -817,7 +817,7 @@ describe("OldTeams - models dropdown options", () => {
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
 
     vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(fetchAvailableModelsForTeamOrKey).toHaveBeenCalled();
@@ -836,7 +836,7 @@ describe("OldTeams - models dropdown options", () => {
   });
 });
 
-describe("OldTeams - organization alias display", () => {
+describe("Teams - organization alias display", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
@@ -887,7 +887,7 @@ describe("OldTeams - organization alias display", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("Test Organization")).toBeInTheDocument();
@@ -920,7 +920,7 @@ describe("OldTeams - organization alias display", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("org-unknown")).toBeInTheDocument();
@@ -952,7 +952,7 @@ describe("OldTeams - organization alias display", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       // When organization_id is null, the table shows "—" in the Organization column
@@ -961,7 +961,7 @@ describe("OldTeams - organization alias display", () => {
   });
 });
 
-describe("OldTeams - Resources column keys badge", () => {
+describe("Teams - Resources column keys badge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
@@ -991,9 +991,7 @@ describe("OldTeams - Resources column keys badge", () => {
       page_size: 100,
       total_pages: 1,
     });
-    const { container } = renderWithQueryClient(
-      <OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />,
-    );
+    const { container } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("Team With Keys")).toBeInTheDocument();
@@ -1026,9 +1024,7 @@ describe("OldTeams - Resources column keys badge", () => {
       page_size: 100,
       total_pages: 1,
     });
-    const { container } = renderWithQueryClient(
-      <OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />,
-    );
+    const { container } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
       expect(screen.getByText("Legacy Team")).toBeInTheDocument();
@@ -1039,7 +1035,7 @@ describe("OldTeams - Resources column keys badge", () => {
   });
 });
 
-describe("OldTeams - delete team warning copy", () => {
+describe("Teams - delete team warning copy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
@@ -1053,7 +1049,7 @@ describe("OldTeams - delete team warning copy", () => {
       page_size: 100,
       total_pages: 1,
     });
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await waitFor(() => {
       expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
     });
@@ -1098,7 +1094,7 @@ describe("OldTeams - delete team warning copy", () => {
   });
 });
 
-describe("OldTeams - LIT-2530 organization stays optional for proxy admin with a single org", () => {
+describe("Teams - LIT-2530 organization stays optional for proxy admin with a single org", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
@@ -1121,7 +1117,7 @@ describe("OldTeams - LIT-2530 organization stays optional for proxy admin with a
   });
 
   it("creates a team with no organization when exactly one organization exists", async () => {
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
     act(() => {

@@ -1546,22 +1546,6 @@
       "count": 1
     }
   },
-  "src/components/OldTeams.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
-  "src/components/OldTeams.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
   "src/components/SCIM.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1652,6 +1636,22 @@
       "count": 1
     }
   },
+  "src/components/Teams.test.tsx": {
+    "max-nested-callbacks": {
+      "count": 4
+    }
+  },
+  "src/components/Teams.tsx": {
+    "no-nested-ternary": {
+      "count": 4
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
   "src/components/ToolDetail.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
@@ -1687,14 +1687,6 @@
       "count": 1
     },
     "react-hooks/static-components": {
-      "count": 1
-    }
-  },
-  "src/components/VirtualKeysPage/VirtualKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1998,11 +1990,6 @@
   },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/mcp_tools/ByokCredentialModal.tsx": {
-    "no-restricted-syntax": {
       "count": 1
     }
   },

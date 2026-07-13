@@ -2182,7 +2182,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             loadMCPServers();
             setByokModalServer(null);
           }}
-          accessToken={accessToken || ""}
         />
       )}
 

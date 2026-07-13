@@ -684,7 +684,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             refetch();
             setByokModalServer(null);
           }}
-          accessToken={accessToken || ""}
         />
       )}
 

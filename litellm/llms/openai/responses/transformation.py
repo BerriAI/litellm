@@ -20,6 +20,8 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
 
+OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -59,6 +61,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             key="supports_none_reasoning_effort",
         )
 
+    @staticmethod
+    def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
+        """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
+
+        OpenAI's Responses API rejects max_output_tokens below 16 for every model
+        (not gpt-5 specific), so a client like Claude Code that sends a max_tokens=1
+        warmup probe on model switch would otherwise 400. Values that are None or
+        already at/above the minimum are returned unchanged.
+        """
+        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+            return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
+        return max_output_tokens
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
@@ -91,6 +106,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Apply the same validation used by the chat completions path.
         """
         params = dict(response_api_optional_params)
+
+        if "max_output_tokens" in params:
+            params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
