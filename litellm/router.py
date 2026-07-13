@@ -1994,7 +1994,7 @@ class Router:
                     if (
                         e.is_pre_first_chunk
                         or not e.generated_content
-                        or initial_kwargs.get("tools")
+                        or initial_kwargs.get("tools") is not None
                     ):
                         # Retry with the original messages when:
                         # - no content was generated before the error
@@ -2555,7 +2555,7 @@ class Router:
                     if (
                         e.is_pre_first_chunk
                         or not e.generated_content
-                        or initial_kwargs.get("tools")
+                        or initial_kwargs.get("tools") is not None
                     ):
                         initial_kwargs["messages"] = messages
                     else:
