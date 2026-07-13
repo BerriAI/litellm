@@ -1463,7 +1463,30 @@ def _get_cors_config(
     return computed_origins, computed_credentials
 
 
+def _get_cors_expose_headers(
+    expose_headers_env: str | None = None,
+) -> list[str]:
+    """
+    Compute the CORS Access-Control-Expose-Headers value.
+
+    Defaults to LITELLM_UI_ALLOW_HEADERS. When LITELLM_CORS_EXPOSE_HEADERS is set
+    (comma-separated, parsed like LITELLM_CORS_ORIGINS), its entries are appended to
+    the defaults (de-duplicated, order preserved) so browser clients can read
+    additional x-litellm-* response headers. Unset leaves the default behaviour.
+
+    Args:
+        expose_headers_env: Value of LITELLM_CORS_EXPOSE_HEADERS (defaults to os.getenv).
+
+    Returns:
+        List[str]: headers to expose via Access-Control-Expose-Headers.
+    """
+    _raw = expose_headers_env if expose_headers_env is not None else os.getenv("LITELLM_CORS_EXPOSE_HEADERS")
+    extra = [h.strip() for h in _raw.split(",") if h.strip()] if _raw else []
+    return list(dict.fromkeys([*LITELLM_UI_ALLOW_HEADERS, *extra]))
+
+
 origins, allow_cors_credentials = _get_cors_config()
+cors_expose_headers = _get_cors_expose_headers()
 
 
 # get current directory
@@ -1776,7 +1799,7 @@ app.add_middleware(
     allow_credentials=allow_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=LITELLM_UI_ALLOW_HEADERS,
+    expose_headers=cors_expose_headers,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
