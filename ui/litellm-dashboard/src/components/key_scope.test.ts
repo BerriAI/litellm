@@ -33,4 +33,20 @@ describe("deriveKeyModelScope", () => {
       label: null,
     });
   });
+
+  it("prefers a persisted key_type over allowed_routes for the no-inference buckets", () => {
+    expect(deriveKeyModelScope([], "management")).toEqual({ hasModelAccess: false, label: "Management" });
+    expect(deriveKeyModelScope([], "read_only")).toEqual({ hasModelAccess: false, label: "Read-only" });
+    expect(deriveKeyModelScope(["some_future_mgmt_preset"], "management")).toEqual({
+      hasModelAccess: false,
+      label: "Management",
+    });
+  });
+
+  it("falls back to allowed_routes for null/default/llm_api key_type", () => {
+    expect(deriveKeyModelScope(["/scim/*"], null)).toEqual({ hasModelAccess: false, label: "SCIM" });
+    expect(deriveKeyModelScope(["/scim/*"], "default")).toEqual({ hasModelAccess: false, label: "SCIM" });
+    expect(deriveKeyModelScope([], "default")).toEqual({ hasModelAccess: true, label: null });
+    expect(deriveKeyModelScope([], "llm_api")).toEqual({ hasModelAccess: true, label: null });
+  });
 });

@@ -326,6 +326,7 @@ export const getKeyTableColumns = ({
       <ModelsCell
         models={info.getValue() as string[] | null | undefined}
         allowedRoutes={info.row.original.allowed_routes}
+        keyType={info.row.original.key_type}
       />
     ),
   },

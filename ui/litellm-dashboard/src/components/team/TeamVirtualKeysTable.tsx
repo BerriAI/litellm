@@ -340,7 +340,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const models = info.getValue() as string[];
-          const scope = deriveKeyModelScope(info.row.original.allowed_routes);
+          const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
           const emptyModelsBadge = !scope.hasModelAccess ? (
             <Tooltip title={`Scoped to ${scope.label} routes; this key cannot call any models`}>
               <Badge size="xs" className="mb-1" color="gray">

@@ -422,6 +422,7 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")

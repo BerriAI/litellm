@@ -10,6 +10,7 @@ interface ModelsCellProps {
   models: string[] | null | undefined;
   maxVisible?: number;
   allowedRoutes?: string[] | null;
+  keyType?: string | null;
 }
 
 const WILDCARD_MODEL = "all-proxy-models";
@@ -22,9 +23,9 @@ const formatModel = (model: string): string => {
   return name.length > 30 ? `${name.slice(0, 30)}...` : name;
 };
 
-export function ModelsCell({ models, maxVisible = 3, allowedRoutes }: ModelsCellProps) {
+export function ModelsCell({ models, maxVisible = 3, allowedRoutes, keyType }: ModelsCellProps) {
   if (!Array.isArray(models) || models.length === 0) {
-    const scope = deriveKeyModelScope(allowedRoutes);
+    const scope = deriveKeyModelScope(allowedRoutes, keyType);
     if (!scope.hasModelAccess) {
       return (
         <CellTooltip
