@@ -53,6 +53,11 @@ const eslintConfig = [
               group: ["@tremor/react", "@tremor/react/*"],
               message: "@tremor/react is being phased out; build new UI with antd instead of adding tremor imports.",
             },
+            {
+              group: ["lodash", "lodash/*", "lodash.*"],
+              message:
+                "lodash was removed from the dashboard; for debouncing use @tanstack/react-pacer (see src/utils/debounceConstants.ts for the shared wait).",
+            },
           ],
         },
       ],
