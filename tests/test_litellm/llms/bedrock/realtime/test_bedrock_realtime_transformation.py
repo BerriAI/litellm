@@ -614,6 +614,51 @@ class TestBedrockRealtimeResponseTransformation:
         args = json.loads(function_call["arguments"])
         assert args["location"] == "San Francisco"
 
+    def test_transform_tool_use_event_directly(self):
+        """Test transform_tool_use_event directly for guard clause and input parsing"""
+        config = BedrockRealtimeConfig()
+
+        # Guard clause: missing IDs returns empty result
+        events, tool_call_id, tool_name = config.transform_tool_use_event(
+            {"toolUse": {}}, None, "resp_123"
+        )
+        assert events == []
+        assert tool_call_id == ""
+        assert tool_name == ""
+
+        # JSON string content is parsed and converted to a function call event
+        events, tool_call_id, tool_name = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_123",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "San Francisco"}),
+                }
+            },
+            "item_123",
+            "resp_123",
+        )
+        assert len(events) == 1
+        assert events[0]["type"] == "response.function_call_arguments.done"
+        assert events[0]["call_id"] == "tool_call_123"
+        assert events[0]["name"] == "get_weather"
+        assert json.loads(events[0]["arguments"]) == {"location": "San Francisco"}
+
+        # Invalid JSON content falls back to empty arguments
+        events, _, _ = config.transform_tool_use_event(
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_124",
+                    "toolName": "get_weather",
+                    "content": "not valid json",
+                }
+            },
+            "item_123",
+            "resp_123",
+        )
+        assert len(events) == 1
+        assert json.loads(events[0]["arguments"]) == {}
+
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
         config = BedrockRealtimeConfig()
