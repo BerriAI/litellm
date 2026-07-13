@@ -17,6 +17,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.azure_ai.ocr.common_utils import (
+    is_azure_document_intelligence_model,
+)
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
@@ -83,6 +86,8 @@ def _prepare_ocr_request(
     if doc_type not in ["document_url", "image_url"]:
         raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
+    caller_supplied_api_base = api_base is not None
+
     (
         model,
         custom_llm_provider,
@@ -95,9 +100,14 @@ def _prepare_ocr_request(
         api_key=api_key,
     )
 
+    suppress_dynamic_api_base = (
+        not caller_supplied_api_base
+        and custom_llm_provider == "azure_ai"
+        and is_azure_document_intelligence_model(model)
+    )
     if dynamic_api_key:
         api_key = dynamic_api_key
-    if dynamic_api_base:
+    if dynamic_api_base and not suppress_dynamic_api_base:
         api_base = dynamic_api_base
 
     ocr_provider_config = ProviderConfigManager.get_provider_ocr_config(
@@ -191,8 +201,7 @@ def _rust_bridge_api_base(
     if prepared_request.api_base is not None:
         return prepared_request.api_base
     if prepared_request.custom_llm_provider == "azure_ai":
-        model = prepared_request.model.lower()
-        if "doc-intelligence" in model or "documentintelligence" in model:
+        if is_azure_document_intelligence_model(prepared_request.model):
             return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
         return resolve_secret("AZURE_AI_API_BASE")
     return None

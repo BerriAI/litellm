@@ -525,10 +525,11 @@ class RedisUpdateBuffer:
         # Slots 1-5: daily spend categories
         daily_results: List[Optional[Dict[str, Any]]] = []
         for slot in range(1, 6):
-            if raw_results[slot] is None:
+            slot_result = raw_results[slot]
+            if slot_result is None:
                 daily_results.append(None)
             else:
-                list_of_daily = [json.loads(t) for t in raw_results[slot]]  # type: ignore
+                list_of_daily = [json.loads(t) for t in slot_result]
                 aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(list_of_daily)
                 daily_results.append(aggregated)
 

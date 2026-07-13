@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import sys
 from datetime import datetime, timedelta
@@ -64,6 +65,26 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+_DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+
+def _get_budget_metrics_per_request_timeout() -> float:
+    raw = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    try:
+        parsed = float(raw)
+    except ValueError:
+        parsed = None
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
+        verbose_logger.debug(
+            "[Non-Blocking] Prometheus: invalid PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT=%r; using default %ss.",
+            raw,
+            _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT,
+        )
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    return parsed
 
 
 class PrometheusLogger(CustomLogger):
@@ -1597,6 +1618,14 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str] = None,
         user_api_key_org_id: Optional[str] = None,
     ):
+        if (
+            isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
+        ):
+            return
+
         _metadata = litellm_params.get("metadata") or {}
         _team_spend = _metadata.get("user_api_key_team_spend", None)
         _team_max_budget = _metadata.get("user_api_key_team_max_budget", None)
@@ -1607,7 +1636,15 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        results = await asyncio.gather(
+        # Bound the per-request budget-metric emission so that slow Redis/DB
+        # lookups under load cannot consume the whole LoggingWorker watchdog
+        # (LOGGING_WORKER_MAX_TIME_PER_COROUTINE, default 20s) and get the entire
+        # success-logging event cancelled. Budget gauges are also refreshed by the
+        # periodic cron every PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+        # so dropping one slow per-request emission only loses sub-cron real-time
+        # detail, not correctness.
+        budget_metrics_timeout = _get_budget_metrics_per_request_timeout()
+        gather_coro = asyncio.gather(
             self._set_api_key_budget_metrics_after_api_request(
                 user_api_key=user_api_key,
                 user_api_key_alias=user_api_key_alias,
@@ -1634,6 +1671,16 @@ class PrometheusLogger(CustomLogger):
             ),
             return_exceptions=True,
         )
+        try:
+            results = await asyncio.wait_for(gather_coro, timeout=budget_metrics_timeout)
+        except asyncio.TimeoutError:
+            verbose_logger.debug(
+                "[Non-Blocking] Prometheus: per-request budget metric emission "
+                "exceeded %ss under load; skipping (values are refreshed by the "
+                "periodic budget-metrics cron job).",
+                budget_metrics_timeout,
+            )
+            return
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 verbose_logger.debug(
@@ -1669,6 +1716,35 @@ class PrometheusLogger(CustomLogger):
             amount=float(response_cost),
         )
 
+    @staticmethod
+    def _get_remaining_from_v3_rate_limit_headers(
+        standard_logging_payload: StandardLoggingPayload | None,
+        rate_limit_type: Literal["requests", "tokens"],
+    ) -> int | None:
+        """
+        Read the per-(key, model) remaining value emitted by the v3 rate
+        limiter (``parallel_request_limiter_v3.py``), which writes
+        ``x-ratelimit-model_per_key-remaining-{requests,tokens}`` into
+        ``standard_logging_object.hidden_params.additional_headers`` instead
+        of the ``litellm-key-remaining-*`` metadata keys the legacy limiter
+        sets. The header carries no model group; it always refers to this
+        request's model group, which is what the gauges are labeled with.
+        Values are written in-process as plain ints (never HTTP-serialized
+        strings), so anything else is rejected rather than coerced.
+        """
+        if standard_logging_payload is None:
+            return None
+        hidden_params = standard_logging_payload.get("hidden_params")
+        if hidden_params is None:
+            return None
+        additional_headers = hidden_params.get("additional_headers")
+        if additional_headers is None:
+            return None
+        value = dict(additional_headers).get(f"x-ratelimit-model_per_key-remaining-{rate_limit_type}")
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
     def _set_virtual_key_rate_limit_metrics(
         self,
         user_api_key: Optional[str],
@@ -1686,11 +1762,20 @@ class PrometheusLogger(CustomLogger):
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
 
         remaining_requests = metadata.get(remaining_requests_variable_name)
         if remaining_requests is None:
+            remaining_requests = self._get_remaining_from_v3_rate_limit_headers(
+                standard_logging_payload=standard_logging_payload, rate_limit_type="requests"
+            )
+        if remaining_requests is None:
             remaining_requests = sys.maxsize
         remaining_tokens = metadata.get(remaining_tokens_variable_name)
+        if remaining_tokens is None:
+            remaining_tokens = self._get_remaining_from_v3_rate_limit_headers(
+                standard_logging_payload=standard_logging_payload, rate_limit_type="tokens"
+            )
         if remaining_tokens is None:
             remaining_tokens = sys.maxsize
 
@@ -2004,6 +2089,43 @@ class PrometheusLogger(CustomLogger):
 
         return False
 
+    @staticmethod
+    def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
+        """
+        Best-effort provider for the client-side failure path.
+
+        A request can fail before a deployment is resolved, so the provider is
+        not always known. Prefer the resolved ``custom_llm_provider`` on
+        ``litellm_params``, then any provider recovered onto a partial
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
+        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``openai``) since the proxy's failure ``request_data`` usually carries
+        only the client-supplied model. Return ``None`` when it cannot be
+        determined so the label emits empty rather than a guess.
+        """
+        litellm_params = request_data.get("litellm_params") or {}
+        provider = litellm_params.get("custom_llm_provider")
+        if provider:
+            return provider
+        standard_logging_object = request_data.get("standard_logging_object") or {}
+        provider = standard_logging_object.get("custom_llm_provider")
+        if provider:
+            return provider
+        model = litellm_params.get("model") or request_data.get("model")
+        if not model:
+            return None
+        try:
+            return litellm.get_llm_provider(model=model)[1] or None
+        except litellm.exceptions.BadRequestError:
+            return None
+        except Exception as e:  # noqa: BLE001 - metrics labeling must never break request/failure handling
+            verbose_logger.debug(
+                "prometheus: unexpected error inferring api_provider from model=%s: %s",
+                model,
+                e,
+            )
+            return None
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -2039,6 +2161,7 @@ class PrometheusLogger(CustomLogger):
             _metadata = request_data.get("metadata", {}) or {}
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
+            api_provider = self._extract_api_provider_from_request_data(request_data)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2060,6 +2183,7 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)
@@ -3254,6 +3378,9 @@ class PrometheusLogger(CustomLogger):
             - looks up team info from db if not available in metadata
         - Set team budget metrics
         """
+        if isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric):
+            return
+
         if user_api_team:
             team_object = await self._assemble_team_object(
                 team_id=user_api_team,
@@ -3375,6 +3502,9 @@ class PrometheusLogger(CustomLogger):
         - Fetches org info via cache (get_org_object)
         - Sets org budget metrics
         """
+        if isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric):
+            return
+
         if not org_id:
             return
 
@@ -3504,6 +3634,9 @@ class PrometheusLogger(CustomLogger):
         key_max_budget: Optional[float],
         key_spend: Optional[float],
     ):
+        if isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric):
+            return
+
         if user_api_key:
             user_api_key_dict = await self._assemble_key_object(
                 user_api_key=user_api_key,
@@ -3541,6 +3674,7 @@ class PrometheusLogger(CustomLogger):
                     hashed_token=user_api_key_dict.token,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    check_cache_only=True,
                 )
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
@@ -3563,6 +3697,9 @@ class PrometheusLogger(CustomLogger):
             - looks up user info from db if not available in metadata
         - Set user budget metrics
         """
+        if isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric):
+            return
+
         if user_id:
             user_object = await self._assemble_user_object(
                 user_id=user_id,

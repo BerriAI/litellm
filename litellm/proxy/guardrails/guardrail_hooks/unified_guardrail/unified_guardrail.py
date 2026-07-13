@@ -8,7 +8,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 
 import copy
 import json
-from typing import Any, AsyncGenerator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Union
 
 from fastapi import HTTPException
 
@@ -22,6 +22,11 @@ from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
+
+if TYPE_CHECKING:
+    # Imported lazily at runtime (inside the streaming hook) to avoid a
+    # module-level cyclic import with litellm.integrations.custom_guardrail.
+    from litellm.integrations.custom_guardrail import ModifyResponseException
 
 # Call types that use NDJSON streaming (A2A); guardrail HTTPException is emitted as in-stream error
 A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
@@ -197,6 +202,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
 
         if guardrail_to_apply is None:
@@ -238,17 +247,50 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
-        response = await endpoint_translation.process_output_response(
-            response=response,  # type: ignore
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=data.get("litellm_logging_obj"),
-            user_api_key_dict=user_api_key_dict,
-            request_data=data,
-        )
+        try:
+            response = await endpoint_translation.process_output_response(
+                response=response,  # type: ignore
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+        except ModifyResponseException as e:
+            # The guardrail blocked the response. Attach the original LLM
+            # response so the endpoint handler can report its real token usage
+            # instead of discarding it (the block replaces the content, but the
+            # upstream call already consumed those tokens).
+            if e.original_response is None:
+                e.original_response = response
+            raise
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
 
         return response
+
+    async def _handle_streaming_block(
+        self,
+        exc: "ModifyResponseException",
+        endpoint_translation: Any,
+        stream_started: bool,
+        responses_so_far: list[Any],
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Terminate a streamed response cleanly when a guardrail blocks it.
+
+        Format-agnostic routing: delegates to the provider translation handler's
+        ``build_block_sse_chunks`` (see ``BaseTranslation.build_block_sse_chunks``
+        for the ``stream_started`` / ``responses_so_far`` contract). When the
+        format has no safe terminator the handler returns None and we re-raise
+        ``exc`` so the proxy can surface a clean error.
+        """
+        block_chunks = endpoint_translation.build_block_sse_chunks(
+            exc, stream_started=stream_started, responses_so_far=responses_so_far
+        )
+        if block_chunks is None:
+            raise exc
+        for chunk in block_chunks:
+            yield chunk
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -271,26 +313,53 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         global endpoint_guardrail_translation_mappings
 
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
         guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
 
-        # Get streaming configuration from guardrail or optional_params
-        sampling_rate = 5
-        end_of_stream_only = False  # If True, only apply guardrail at end of stream
+        # Get streaming configuration. Resolution order (later wins): default
+        # < guardrail attribute < guardrail_config dict < this callback's
+        # optional_params.
+        def _streaming_flag(name: str, default: Any) -> Any:
+            value = default
+            if guardrail_to_apply is not None:
+                value = getattr(guardrail_to_apply, name, value)
+                config = getattr(guardrail_to_apply, "guardrail_config", {})
+                if isinstance(config, dict):
+                    value = config.get(name, value)
+            return self.optional_params.get(name, value)
 
-        if guardrail_to_apply is not None:
-            # Check direct attributes on guardrail first
-            sampling_rate = getattr(guardrail_to_apply, "streaming_sampling_rate", sampling_rate)
-            end_of_stream_only = getattr(guardrail_to_apply, "streaming_end_of_stream_only", end_of_stream_only)
+        sampling_rate = _streaming_flag("streaming_sampling_rate", 5)
+        # Only apply the guardrail at end of stream (not per chunk).
+        end_of_stream_only = _streaming_flag("streaming_end_of_stream_only", False)
+        # Withhold every chunk until end-of-stream moderation passes, then
+        # release the original chunks (clean) or only the block message
+        # (blocked) -- moderating the whole response *before* any content
+        # reaches the client. Only safe for allow/block guardrails: on
+        # release the original chunks are replayed as-is, so a
+        # content-rewriting guardrail (e.g. PII masking) would leak
+        # unredacted content. Guarded below via mask_response_content.
+        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", False)
 
-            # Also check guardrail_config dict if present
-            guardrail_config = getattr(guardrail_to_apply, "guardrail_config", {})
-            if isinstance(guardrail_config, dict):
-                sampling_rate = guardrail_config.get("streaming_sampling_rate", sampling_rate)
-                end_of_stream_only = guardrail_config.get("streaming_end_of_stream_only", end_of_stream_only)
+        if (
+            buffer_until_moderated
+            and guardrail_to_apply is not None
+            and getattr(guardrail_to_apply, "mask_response_content", False)
+        ):
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
+                "because mask_response_content=True -- buffered replay would release "
+                "unredacted original chunks instead of the moderated output.",
+                guardrail_to_apply.guardrail_name,
+            )
+            buffer_until_moderated = False
 
-        # Also check optional_params as fallback
-        sampling_rate = self.optional_params.get("streaming_sampling_rate", sampling_rate)
-        end_of_stream_only = self.optional_params.get("streaming_end_of_stream_only", end_of_stream_only)
+        # Buffering can only moderate the assembled response, so it always
+        # defers to end-of-stream.
+        if buffer_until_moderated:
+            end_of_stream_only = True
 
         if guardrail_to_apply is None:
             async for item in response:
@@ -315,6 +384,12 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type = None
         chunk_counter = 0
         responses_so_far: List[Any] = []
+        responses_yielded: list[Any] = []
+        pending_end_of_stream_items: list[Any] = []
+        # Whether any real response chunk has been forwarded to the client.
+        # Drives how a block terminates the stream: continue the in-progress
+        # message (True) vs emit a standalone block message (False, buffered).
+        chunks_yielded = False
 
         async for item in response:
             chunk_counter += 1
@@ -336,9 +411,22 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield remaining_item
                 return
 
-            # If end_of_stream_only mode, yield chunks without processing
+            # If end_of_stream_only mode, yield chunks without processing.
+            # When buffering, withhold them instead -- they are released (or
+            # replaced by the block message) only after end-of-stream
+            # moderation runs below.
             if end_of_stream_only:
-                yield item
+                if not buffer_until_moderated:
+                    endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+                    stream_has_ended = hasattr(
+                        endpoint_translation, "_check_streaming_has_ended"
+                    ) and endpoint_translation._check_streaming_has_ended(responses_so_far)
+                    if pending_end_of_stream_items or stream_has_ended:
+                        pending_end_of_stream_items.append(item)
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
                 continue
 
             # Process chunk based on sampling rate
@@ -368,6 +456,26 @@ class UnifiedLLMGuardrails(CustomLogger):
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                     )
+                except ModifyResponseException as e:
+                    if e.original_response is None:
+                        e.original_response = responses_so_far
+                    # Guardrail blocked the response mid-stream. Emit a clean
+                    # terminating SSE sequence delivering the block message
+                    # instead of letting the exception propagate into a bare
+                    # `data: {"error": ...}` blob (which truncates the stream).
+                    # Chunks have already been forwarded here, so the block
+                    # continues the in-progress message (stream_started=True).
+                    # The current chunk was appended to responses_so_far but not
+                    # yet yielded, so exclude it: the continuation must reflect
+                    # only what the client has actually received.
+                    async for block_chunk in self._handle_streaming_block(
+                        e,
+                        endpoint_translation,
+                        stream_started=chunks_yielded,
+                        responses_so_far=responses_yielded,
+                    ):
+                        yield block_chunk
+                    return
                 except HTTPException as e:
                     # Response already started (we already yielded chunks); cannot send 400.
                     # For A2A (NDJSON), yield an in-stream JSON-RPC error so the client sees it.
@@ -394,8 +502,12 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield error_chunk
                         return
                     raise
+                chunks_yielded = True
+                responses_yielded.append(original_item)
                 yield original_item
             else:
+                chunks_yielded = True
+                responses_yielded.append(item)
                 yield item
 
         # Stream has ended - do final processing with all collected chunks
@@ -408,6 +520,15 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
+            # When buffering, snapshot the original chunks before moderation.
+            # A shallow copy suffices: end-of-stream
+            # process_output_streaming_response builds a separate assembled
+            # response (it does not mutate the individual chunks in place), and
+            # the chunks themselves are replayed verbatim -- so we only need to
+            # preserve the list, not clone every chunk (deepcopy would double
+            # peak memory for large responses).
+            buffered_items = list(responses_so_far) if buffer_until_moderated else None
+
             try:
                 await endpoint_translation.process_output_streaming_response(
                     responses_so_far=responses_so_far,
@@ -416,6 +537,28 @@ class UnifiedLLMGuardrails(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                 )
+                # Moderation passed: release the withheld original chunks.
+                if buffered_items is not None:
+                    for buffered_item in buffered_items:
+                        yield buffered_item
+                for pending_item in pending_end_of_stream_items:
+                    responses_yielded.append(pending_item)
+                    yield pending_item
+            except ModifyResponseException as e:
+                if e.original_response is None:
+                    e.original_response = responses_so_far
+                # Block detected during end-of-stream processing. Emit a clean
+                # terminating SSE sequence with the block message rather than
+                # propagating into a bare error blob that truncates the stream.
+                # The withheld original chunks are never released.
+                async for block_chunk in self._handle_streaming_block(
+                    e,
+                    endpoint_translation,
+                    stream_started=bool(responses_yielded),
+                    responses_so_far=responses_yielded,
+                ):
+                    yield block_chunk
+                return
             except HTTPException as e:
                 if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
                     request_id = _get_a2a_request_id(responses_so_far, request_data)

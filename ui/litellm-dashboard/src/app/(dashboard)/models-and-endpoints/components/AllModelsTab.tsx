@@ -14,11 +14,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Grid, TabPanel } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
-import debounce from "lodash/debounce";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
 type ModelViewMode = "all" | "current_team";
+
+const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const { Text } = Typography;
 
 interface AllModelsTabProps {
@@ -59,23 +61,17 @@ const AllModelsTab = ({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
 
-  // Debounce search input
-  const debouncedUpdateSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setDebouncedSearch(value);
-        // Reset to page 1 when search changes
-        setCurrentPage(1);
-        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-      }, 200),
-    [],
+  const debouncedUpdateSearch = useDebouncedCallback(
+    (value: string) => {
+      setDebouncedSearch(value);
+      setCurrentPage(1);
+      setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+    },
+    { wait: SEARCH_DEBOUNCE_WAIT_MS },
   );
 
   useEffect(() => {
     debouncedUpdateSearch(modelNameSearch);
-    return () => {
-      debouncedUpdateSearch.cancel();
-    };
   }, [modelNameSearch, debouncedUpdateSearch]);
 
   // Determine teamId to pass to the query - only pass if not "personal"
@@ -239,7 +235,7 @@ const AllModelsTab = ({
     <TabPanel>
       <Grid>
         <div className="flex flex-col space-y-4">
-          <div className="bg-white rounded-lg shadow">
+          <div className="bg-white rounded-lg shadow-sm">
             {/* Current Team and View Mode Selector - Prominent Section */}
             <div className="border-b px-6 py-4 bg-gray-50">
               <div className="flex items-center justify-between">
@@ -339,7 +335,7 @@ const AllModelsTab = ({
 
               {modelViewMode === "current_team" && (
                 <div className="flex items-start gap-2 mt-3">
-                  <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
+                  <InfoCircleOutlined className="text-gray-400 mt-0.5 shrink-0 text-xs" />
                   <div className="text-xs text-gray-500">
                     {currentTeam === "personal" ? (
                       <span>
@@ -381,7 +377,7 @@ const AllModelsTab = ({
                         type="text"
                         placeholder="Search model names..."
                         data-testid="model-search-input"
-                        className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={modelNameSearch}
                         onChange={(e) => setModelNameSearch(e.target.value)}
                       />

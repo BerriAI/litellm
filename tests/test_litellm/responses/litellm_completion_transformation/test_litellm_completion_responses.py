@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -1066,7 +1068,13 @@ class TestToolTransformation:
         assert web_search_options is None
 
     def test_transform_computer_use_tools(self):
-        """Test that computer_use tools are passed through as-is"""
+        """Test that computer_use tools are dropped (no Chat Completions equivalent).
+
+        This deliberately reverses the previous pass-through regression guard:
+        forwarding computer_use verbatim made Chat Completions providers reject
+        the whole request with "'function' is a required property", so the
+        bridge now drops such tools (with a warning log) instead.
+        """
         computer_use_tool = {
             "type": "computer_use",
             "display_width_px": 1024,
@@ -1083,11 +1091,129 @@ class TestToolTransformation:
             tools=tools
         )
 
+        # Assert - computer_use has no Chat Completions equivalent, so it is dropped
+        assert len(result_tools) == 0
+        assert web_search_options is None
+
+    def test_transform_custom_tools_to_function_tools(self):
+        """Test that custom (freeform/grammar) tools are converted to function tools"""
+        custom_tool = {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch to files",
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: begin_patch hunk+ end_patch",
+            },
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert - custom tool is converted to a function tool
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "apply_patch"
+        assert "content" in result_tools[0]["function"]["parameters"]["properties"]
+        assert result_tools[0]["function"]["parameters"]["required"] == ["content"]
+        assert "begin_patch" in result_tools[0]["function"]["description"]
+        assert web_search_options is None
+
+    def test_transform_custom_tools_without_format(self):
+        """Test that custom tools without format info are still converted"""
+        custom_tool = {
+            "type": "custom",
+            "name": "exec",
+            "description": "Execute code",
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
         # Assert
         assert len(result_tools) == 1
-        assert result_tools[0] == computer_use_tool
-        assert result_tools[0]["type"] == "computer_use"
-        assert web_search_options is None
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "exec"
+        assert result_tools[0]["function"]["description"] == "Execute code"
+
+    def test_transform_custom_tools_preserves_allowed_callers(self):
+        """allowed_callers on a custom tool gates direct model invocation in the
+        Anthropic adapter, so it must survive the custom->function conversion."""
+        custom_tool = {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch to files",
+            "allowed_callers": ["exec"],
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["allowed_callers"] == ["exec"]
+
+    def test_transform_custom_tools_without_allowed_callers(self):
+        """A custom tool without allowed_callers must not synthesize the field."""
+        custom_tool = {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch to files",
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 1
+        assert "allowed_callers" not in result_tools[0]
+
+    def test_transform_custom_tools_rejects_invalid_allowed_callers(self):
+        """Invalid allowed_callers must raise rather than silently dropping the
+        provider-side allowlist."""
+        custom_tool = {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch to files",
+            "allowed_callers": "exec",
+        }
+
+        tools = [custom_tool]
+
+        with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
 
     def test_transform_web_search_tools_to_web_search_options(self):
         """Test that web_search tools are converted to web_search_options"""
@@ -1833,6 +1959,110 @@ class TestUsageTransformation:
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
+    def test_reasoning_tokens_not_forced_to_zero_when_absent(self):
+        # Regression: previously the else branch wrote reasoning_tokens=0 even when
+        # completion_tokens_details had no reasoning (reasoning_tokens=None). That caused
+        # the proxy to always report reasoning_tokens=0 for non-thinking responses.
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=50,
+            total_tokens=60,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=50,
+                # reasoning_tokens intentionally absent -> None
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens is None
+
+    def test_reasoning_tokens_preserved_when_thinking_occurred(self):
+        # Regression: reasoning_tokens must survive the chat->responses translation
+        # when the provider actually did thinking.
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=612,
+            total_tokens=712,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=512,
+                text_tokens=100,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 512
+
+    def test_reasoning_tokens_explicit_zero_preserved(self):
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=50,
+            total_tokens=60,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-5.6",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+
 
 class TestStreamingIDConsistency:
     """Test cases for consistent IDs across streaming events (issue #14962)"""
@@ -2183,6 +2413,155 @@ class TestStreamingIDConsistency:
             else getattr(assistant_messages[0], "tool_calls", None)
         )
         assert tool_calls is not None and len(tool_calls) == 1
+
+
+class TestCompletedResponseLatchedOnStreamEnd:
+    """Regression: LiteLLMCompletionStreamingIterator (the Chat Completions
+    bridge path) never set ``self.completed_response`` because it overrides
+    __anext__ and bypasses the base class's _process_chunk where that
+    attribute is normally latched. FallbackResponsesStreamWrapper reads
+    ``completed_response`` via getattr to record container ownership; when
+    it stays None the proxy logs a "Container ownership recording skipped"
+    warning and follow-up /v1/containers/<id>/files calls 403 for non-admin
+    keys. Codex CLI's apply_patch tool also surfaces as "aborted" because
+    the terminal response.completed event never propagates correctly."""
+
+    def _make_iterator_with_stop(self, model_response):
+        """Build a LiteLLMCompletionStreamingIterator whose underlying
+        CustomStreamWrapper raises StopAsyncIteration immediately (simulating
+        a stream that already delivered all content chunks)."""
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_wrapper.logging_obj = Mock()
+        mock_wrapper.logging_obj._response_cost_calculator = Mock(return_value=0.0)
+        mock_wrapper.__aiter__ = Mock(return_value=mock_wrapper)
+        mock_wrapper.__anext__ = Mock(side_effect=StopAsyncIteration)
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="deepseek/deepseek-chat",
+            litellm_custom_stream_wrapper=mock_wrapper,
+            request_input="test",
+            responses_api_request={},
+        )
+        iterator.litellm_model_response = model_response
+        return iterator
+
+    def test_completed_response_set_after_common_done_event_logic(self):
+        """common_done_event_logic builds a ResponseCompletedEvent and must
+        latch it onto self.completed_response so downstream wrappers can
+        read it. Before the fix the event was returned but
+        completed_response stayed None."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        complete_response = ModelResponse(
+            id="resp_test",
+            created=1234567890,
+            model="deepseek-chat",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="hello", role="assistant"),
+                )
+            ],
+        )
+        iterator = self._make_iterator_with_stop(complete_response)
+
+        import asyncio
+
+        async def drain():
+            results = []
+            try:
+                async for chunk in iterator:
+                    results.append(chunk)
+            except StopAsyncIteration:
+                pass
+            return results
+
+        results = asyncio.run(drain())
+        assert len(results) > 0
+        assert iterator.completed_response is not None, (
+            "LiteLLMCompletionStreamingIterator.completed_response is still None "
+            "after common_done_event_logic ran — downstream wrappers and the "
+            "proxy container-ownership hook will see no terminal event"
+        )
+        assert iterator.completed_response.type == "response.completed"
+
+
+class TestFallbackWrapperStopAsyncIterationFallback:
+    """Regression: FallbackResponsesStreamWrapper.__anext__ only sniffed
+    terminal events off forwarded chunks. When the inner generator raises
+    StopAsyncIteration without a sniffable chunk (the bridge path ends this
+    way), the wrapper re-raised without checking source_iterator for a
+    latched completed_response, leaving its own completed_response None."""
+
+    def test_falls_back_to_source_completed_response_on_stop(self):
+        """When the inner async generator raises StopAsyncIteration and the
+        wrapper never sniffed a terminal chunk, it must copy
+        source_iterator.completed_response so the proxy ownership hook
+        still sees the terminal event."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from litellm.router import Router
+
+        source = SimpleNamespace(
+            response=None,
+            model="deepseek/deepseek-chat",
+            logging_obj=None,
+            responses_api_provider_config=None,
+            start_time=None,
+            litellm_metadata=None,
+            custom_llm_provider="deepseek",
+            request_data={},
+            call_type="aresponses",
+            _hidden_params={},
+            completed_response=SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(id="resp_src", output=[], container=None),
+            ),
+        )
+
+        async def empty_gen():
+            return
+            yield  # pragma: no cover
+
+        async def _drive():
+            router = Router(
+                model_list=[
+                    {
+                        "model_name": "deepseek/deepseek-chat",
+                        "litellm_params": {"model": "deepseek/deepseek-chat", "api_key": "sk-test"},
+                    }
+                ]
+            )
+            wrapper = await router._aresponses_streaming_iterator(
+                response=source,  # type: ignore[arg-type]
+                initial_kwargs={},
+            )
+            wrapper._async_generator = empty_gen()
+            out = []
+            try:
+                async for chunk in wrapper:
+                    out.append(chunk)
+            except StopAsyncIteration:
+                pass
+            return wrapper, out
+
+        wrapper, _ = asyncio.run(_drive())
+        assert wrapper.completed_response is not None, (
+            "FallbackResponsesStreamWrapper.completed_response is None after "
+            "StopAsyncIteration even though source_iterator had one — the "
+            "proxy ownership hook will log a spurious warning"
+        )
+        assert wrapper.completed_response.type == "response.completed"
 
 
 class TestEnsureOutputItemContentPartAdded:

@@ -39,6 +39,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
 
 
 class AuthSpecKind(str, Enum):
@@ -67,11 +68,15 @@ class Unauthorized:
 
     ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
     challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
+    ``claims`` carries an IdP step-up challenge (e.g. Entra Conditional Access) so the edge can
+    fold it into the ``WWW-Authenticate`` it builds; the client replays the claims to the IdP to
+    satisfy the step-up, then retries with the fresh token.
     """
 
     detail: str
     www_authenticate: str | None = None
     body: Mapping[str, str] | None = None
+    claims: str | None = None
 
 
 @tagged_union(frozen=True)
@@ -104,8 +109,16 @@ class CredError:
         *,
         www_authenticate: str | None = None,
         body: Mapping[str, str] | None = None,
+        claims: str | None = None,
     ) -> CredError:
-        return CredError(unauthorized=Unauthorized(detail=detail, www_authenticate=www_authenticate, body=body))
+        return CredError(
+            unauthorized=Unauthorized(
+                detail=detail,
+                www_authenticate=www_authenticate,
+                body=body,
+                claims=claims,
+            )
+        )
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
@@ -182,18 +195,33 @@ class ClientCredentialsConfig(BaseModel):
 
 
 class TokenExchangeConfig(BaseModel):
-    """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience (`server.resource`, RFC 8707). The gateway authenticates to the exchange endpoint
-    as an OAuth client (`client_id`/`client_secret`); the inbound token is sent only to that
-    endpoint, never to the upstream.
+    """OBO: swap the caller's live inbound token for a token bound to the upstream's audience. The
+    gateway authenticates to the exchange endpoint as an OAuth client (`client_id`/`client_secret`);
+    the inbound token is sent only to that endpoint, never to the upstream.
+
+    `profile` selects the wire dialect, since not every IdP speaks RFC 8693:
+      - `rfc8693` (default) is the standard token-exchange grant: the inbound token is the
+        `subject_token` (typed by `subject_token_type`), the target is the optional `audience`.
+      - `entra_obo` is Microsoft Entra On-Behalf-Of, which is the RFC 7523 `jwt-bearer` grant rather
+        than 8693: the inbound token rides as `assertion`, the target resource is carried in `scopes`
+        (`api://<app-id>/.default`, since Entra has no audience parameter), and the Microsoft-only
+        `requested_token_use=on_behalf_of` extension makes the jwt-bearer grant a delegation.
+        `subject_token_type` and `audience` are unused in this profile.
+
+    `audience` (rfc8693 only) is optional and sent only when the operator configured one, since both
+    `audience` and `resource` are optional in RFC 8693 and the authorization server applies its own
+    default when neither is sent (fabricating one risks `invalid_target`).
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    profile: Literal["rfc8693", "entra_obo"] = "rfc8693"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
     token_exchange_endpoint: str | None = None
+    audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
+    token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
 
 

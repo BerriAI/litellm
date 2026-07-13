@@ -710,6 +710,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_flex": {"type": "number"},
+                "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
@@ -833,6 +836,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
+                "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
@@ -851,6 +855,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
@@ -870,6 +875,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/embeddings",
                             "/v1/chat/completions",
                             "/v1/completions",
+                            "/v1/messages",
                             "/v1/images/generations",
                             "/v1/realtime",
                             "/v1/realtime/transcription_sessions",
@@ -880,7 +886,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
-                            "/v1/realtime/transcription_sessions",
                         ],
                     },
                 },
@@ -1060,6 +1065,43 @@ def test_get_model_info_gemini():
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_cost_map):
+    """Regression LIT-4056: with the bedrock/ routing prefix (plain, converse/, or
+    invoke/), the exact regional cost-map entry must win over the region-stripped
+    base entry, matching the unprefixed control form."""
+    regional = litellm.model_cost["au.anthropic.claude-opus-4-8"]
+    base = litellm.model_cost["anthropic.claude-opus-4-8"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+
+    for model in (
+        "bedrock/au.anthropic.claude-opus-4-8",
+        "bedrock/converse/au.anthropic.claude-opus-4-8",
+        "bedrock/invoke/au.anthropic.claude-opus-4-8",
+    ):
+        info = litellm.get_model_info(model=model)
+        assert info["key"] == "au.anthropic.claude-opus-4-8", model
+        assert info["input_cost_per_token"] == regional["input_cost_per_token"], model
+        assert info["output_cost_per_token"] == regional["output_cost_per_token"], model
+
+    control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
+    assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
+    """A regional profile with no dedicated cost-map entry must still resolve to its
+    region-stripped base entry."""
+    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
+    assert info["key"] == "anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost_map):
+    """A doubled bedrock/ prefix routes at runtime via strip_bedrock_routing_prefix,
+    so model info must resolve it to the same entry the request actually bills as."""
+    info = litellm.get_model_info(model="bedrock/bedrock/us.anthropic.claude-sonnet-4-6")
+    assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
 def test_openai_models_in_model_info():
@@ -4576,3 +4618,122 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
 
+
+
+class TestGetOptionalParamsTencent:
+    """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
+
+    def test_tencent_supports_thinking_param(self):
+        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                thinking={"type": "enabled"},
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supports_reasoning_effort(self):
+        """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                reasoning_effort="medium",
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
+        """Verify get_supported_openai_params for tencent includes custom params."""
+        from unittest.mock import patch
+
+        from litellm.litellm_core_utils.get_supported_openai_params import (
+            get_supported_openai_params,
+        )
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            params = get_supported_openai_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+            )
+        assert "thinking" in params
+        assert "reasoning_effort" in params
+
+    def test_tencent_messages_config_routing(self):
+        """Verify ProviderConfigManager routes tencent to TencentAnthropicMessagesConfig."""
+        import litellm
+        from litellm.llms.tencent.messages.transformation import (
+            TencentAnthropicMessagesConfig,
+        )
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="deepseek-v4-pro",
+            provider=litellm.LlmProviders.TENCENT,
+        )
+        assert isinstance(config, TencentAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "tencent"
+
+
+class TestValidateEnvironmentTencent:
+    """Tests that validate_environment resolves TENCENT_API_KEY for the tencent provider."""
+
+    def test_reports_key_present(self):
+        with patch.dict(os.environ, {"TENCENT_API_KEY": "sk-tencent"}):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is True
+        assert result["missing_keys"] == []
+
+    def test_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is False
+        assert "TENCENT_API_KEY" in result["missing_keys"]
+
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_models_do_not_support_reasoning(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert model in litellm.model_cost, (
+        f"{model} is missing from the local model cost map. "
+        "Add its entry to litellm/model_prices_and_context_window_backup.json."
+    )
+    assert litellm.supports_reasoning(model) is False, (
+        f"{model} incorrectly classified as reasoning-capable. "
+        "Add 'supports_reasoning: false' to its model_cost entry."
+    )
