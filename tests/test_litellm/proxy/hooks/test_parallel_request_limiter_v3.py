@@ -1,4 +1,4 @@
-"""
+﻿"""
 Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
@@ -2853,6 +2853,7 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         _LITELLM_STASH_KEYS,
         RATE_LIMIT_DESCRIPTORS_KEY,
+        NO_RATE_LIMITS_KEY,
         TPM_RESERVED_TOKENS_KEY,
     )
 
@@ -2917,6 +2918,7 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         _LITELLM_STASH_KEYS,
         RATE_LIMIT_DESCRIPTORS_KEY,
+        NO_RATE_LIMITS_KEY,
         TPM_RESERVED_TOKENS_KEY,
     )
 
@@ -2955,15 +2957,110 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
         call_type="completion",
     )
 
+    # NO_RATE_LIMITS_KEY is excluded from this leak check: this key has no
+    # configured tpm/rpm limits, so the server itself legitimately sets it
+    # in the `else` branch of `if descriptors:` -- unlike the other stash
+    # keys, its presence here is correct behavior, not a leak. The actual
+    # anti-forgery property for NO_RATE_LIMITS_KEY is covered separately by
+    # test_pre_call_hook_rejects_caller_supplied_no_rate_limits_marker,
+    # which uses a key WITH real limits configured (so the server's own
+    # `else` branch never fires) to prove a client-forged marker is
+    # stripped rather than trusted.
+    non_marker_stash_keys = [k for k in _LITELLM_STASH_KEYS if k != NO_RATE_LIMITS_KEY]
     for channel in (
         data,
         data.get("metadata") or {},
         data.get("litellm_metadata") or {},
     ):
-        leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
+        leaked = [k for k in non_marker_stash_keys if k in channel]
         assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
 
+    # The marker's value should be the server's own True, not preserved
+    # unmodified from caller input (caller never set it in this test, but
+    # this guards against a future accidental pass-through of caller data).
+    metadata = data.get("metadata") or {}
+    assert metadata.get(NO_RATE_LIMITS_KEY) is True
 
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_caller_supplied_no_rate_limits_marker():
+    """Client-supplied metadata: {"_no_rate_limits": true} must be stripped
+    before async_pre_call_hook processes the request. The server sets this
+    marker itself in the else branch when descriptors are empty -- a client
+    must not be able to forge it to bypass TPM accounting."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        NO_RATE_LIMITS_KEY,
+        RATE_LIMIT_DESCRIPTORS_KEY,
+    )
+
+    _api_key = hash_token("sk-inject-no-rate-limits")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        tpm_limit=1000,
+        rpm_limit=5,
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        return {"overall_code": "OK", "statuses": []}
+
+    async def mock_reserve_tpm_tokens(descriptors, estimated_tokens, **kwargs):
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "current_limit": 1000,
+                    "limit_remaining": 1000 - estimated_tokens,
+                    "descriptor_key": d["key"],
+                    "descriptor_value": d["value"],
+                    "rate_limit_type": "tokens",
+                }
+                for d in descriptors
+            ],
+        }
+
+    handler.should_rate_limit = mock_should_rate_limit
+    handler.reserve_tpm_tokens = mock_reserve_tpm_tokens
+
+    # Client injects _no_rate_limits in metadata BEFORE the hook runs
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"_no_rate_limits": True},
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    metadata = data.get("metadata") or {}
+    assert NO_RATE_LIMITS_KEY not in metadata, (
+        "client-injected _no_rate_limits must be stripped by _strip_stash_keys_from_all_channels"
+    )
+    assert RATE_LIMIT_DESCRIPTORS_KEY in metadata, (
+        "real descriptors should still be reserved for a key with tpm_limit"
+    )
+
+    # TPM scope targets must NOT be empty -- accounting must not be skipped
+    standard_metadata = {
+        "user_api_key_hash": _api_key,
+        "user_api_key_team_id": None,
+        "user_api_key_user_id": None,
+    }
+    targets = handler._collect_tpm_scope_targets(
+        standard_logging_metadata=standard_metadata,
+        kwargs={"litellm_params": {"metadata": metadata}},
+        model_group="gpt-4o-mini",
+    )
+    assert len(targets) > 0, "TPM scope targets must not be empty when _no_rate_limits was stripped"
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 
 
@@ -3537,3 +3634,180 @@ async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
     )
 
     assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_marker_set_when_descriptors_empty():
+    """When no rate-limit descriptors are built for a request, async_pre_call_hook
+    sets _no_rate_limits=True in data['metadata'] so downstream callbacks can
+    skip Redis writes entirely."""
+    _api_key = hash_token("sk-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+
+    should_rate_limit_called = False
+
+    async def mock_should_rate_limit(*args, **kwargs):
+        nonlocal should_rate_limit_called
+        should_rate_limit_called = True
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert not should_rate_limit_called, "should_rate_limit must not run when descriptors is empty"
+    assert data["metadata"]["_no_rate_limits"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_tpm_scope_targets():
+    """_collect_tpm_scope_targets returns [] when _no_rate_limits is set in
+    litellm_params metadata, preventing any TPM counter writes."""
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    standard_metadata = {
+        "user_api_key_hash": hash_token("sk-test"),
+        "user_api_key_team_id": "team-1",
+    }
+
+    # Without _no_rate_limits: should return non-empty targets
+    kwargs_without = {"litellm_params": {"metadata": {}}}
+    targets = handler._collect_tpm_scope_targets(
+        standard_logging_metadata=standard_metadata,
+        kwargs=kwargs_without,
+        model_group="gpt-4",
+    )
+    assert len(targets) > 0, "should return targets when marker is absent"
+
+    # With _no_rate_limits: must return empty list
+    kwargs_with = {"litellm_params": {"metadata": {"_no_rate_limits": True}}}
+    targets = handler._collect_tpm_scope_targets(
+        standard_logging_metadata=standard_metadata,
+        kwargs=kwargs_with,
+        model_group="gpt-4",
+    )
+    assert targets == [], "must return [] when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_failure_event_writes():
+    """async_log_failure_event returns early without touching Redis when
+    _no_rate_limits is set in litellm_params metadata."""
+    _api_key = hash_token("sk-fail-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        "litellm_params": {"metadata": {"_no_rate_limits": True}},
+    }
+
+    await handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None,
+    )
+
+    assert captured_ops == [], "no Redis writes should happen when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_no_rate_limits_skips_success_event_writes():
+    """async_log_success_event returns early without touching Redis when
+    _no_rate_limits is set in litellm_params metadata."""
+    from unittest.mock import MagicMock
+
+    _api_key = hash_token("sk-success-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": _api_key}
+        },
+        "litellm_params": {"metadata": {"_no_rate_limits": True}},
+    }
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs, response_obj=mock_response, start_time=None, end_time=None,
+    )
+
+    assert captured_ops == [], "no Redis writes should happen when _no_rate_limits is set"
+
+
+@pytest.mark.asyncio
+async def test_with_rate_limits_still_writes_redis():
+    """Regression guard: when descriptors ARE present (rate limits configured),
+    async_log_success_event and async_log_failure_event still write Redis as before."""
+    from unittest.mock import MagicMock
+
+    _api_key = hash_token("sk-with-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    captured_ops: List[Any] = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_pipeline
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": _api_key}
+        },
+        "litellm_params": {"metadata": {}},
+    }
+
+    # --- success event ---
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs, response_obj=mock_response, start_time=None, end_time=None,
+    )
+
+    assert len(captured_ops) > 0, "success event must write Redis ops when _no_rate_limits is absent"
+    captured_ops.clear()
+
+    # --- failure event ---
+    await handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None,
+    )
+
+    assert len(captured_ops) > 0, "failure event must write Redis ops when _no_rate_limits is absent"
