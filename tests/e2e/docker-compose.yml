@@ -131,6 +131,8 @@ services:
         condition: service_healthy
       dd-sink:
         condition: service_healthy
+      mcp-stub:
+        condition: service_healthy
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
