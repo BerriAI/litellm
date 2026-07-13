@@ -4,8 +4,10 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
+import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +24,35 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     _count_model_entries,
     _finalize_model_cost_map,
 )
+
+
+def test_minimax_m27_native_model_cost_map_entry():
+    repo_root = Path(__file__).parents[3]
+    root_map = json.loads(
+        (repo_root / "model_prices_and_context_window.json").read_text()
+    )
+    backup_map = GetModelCostMap.load_local_model_cost_map()
+
+    expected = {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "cache_read_input_token_cost": 6e-08,
+        "litellm_provider": "minimax",
+        "mode": "chat",
+        "supports_function_calling": True,
+        "supports_tool_choice": True,
+        "supports_prompt_caching": True,
+        "supports_reasoning": True,
+        "supports_system_messages": True,
+        "max_input_tokens": 204800,
+        "max_output_tokens": 196608,
+    }
+
+    for model_map in [root_map, backup_map]:
+        entry = model_map["minimax/MiniMax-M2.7"]
+        for key, value in expected.items():
+            assert entry[key] == value
+        assert "supports_vision" not in entry
 
 
 def _make_models(n: int) -> dict:
