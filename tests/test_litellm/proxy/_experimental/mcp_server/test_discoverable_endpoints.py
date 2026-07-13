@@ -5858,6 +5858,38 @@ async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_glob
 
 
 @pytest.mark.asyncio
+async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_globals):
+    """A user_id refresh envelope whose user has been deleted must fail closed to no_active_key (the
+    refresh path maps it to invalid_grant), not unresolvable/500. get_user_object raises a bare Exception
+    for a missing user, so a missing user must not be misclassified as an opaque gateway fault."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    with patch("litellm.proxy.auth.auth_checks.get_user_object", new=AsyncMock(side_effect=Exception("no user"))):
+        assert await _reload_active_user_by_id("gone-user") == "no_active_key"
+
+
+@pytest.mark.asyncio
+async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
+    """A transient DB outage while re-validating the user on refresh is a retryable outage, distinct from
+    a missing user, so the refresh path can surface a 503 rather than blaming the caller."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        new=AsyncMock(side_effect=ConnectionError("user database unreachable")),
+    ):
+        assert await _reload_active_user_by_id("sso-user-7") == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_token_endpoint_uses_client_secret_basic_when_configured():
     """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
     credentials as an HTTP Basic Authorization header and omit client_secret from the body;
