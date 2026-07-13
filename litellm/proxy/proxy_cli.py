@@ -18,6 +18,8 @@ from litellm.proxy.db.db_connection_pool import (
     DEFAULT_DB_CONNECTION_POOL_LIMIT,
     DEFAULT_DB_CONNECTION_POOL_TIMEOUT,
     append_query_params,
+)
+from litellm.proxy.db.db_connection_pool import (
     build_db_connection_url_params as _build_db_connection_url_params,
 )
 from litellm.secret_managers.main import get_secret_bool
