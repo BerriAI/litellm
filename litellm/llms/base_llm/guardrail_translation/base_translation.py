@@ -35,7 +35,7 @@ class StreamTransformSink:
 class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Optional[Any],
+        user_api_key_dict: Any | None,
     ) -> Dict[str, Any]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
@@ -94,7 +94,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -113,8 +113,8 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
-        stream_transform_sink: Optional[StreamTransformSink] = None,
+        request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
@@ -129,8 +129,8 @@ class BaseTranslation(ABC):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: Optional[list[Any]] = None,
-    ) -> Optional[list[bytes]]:
+        responses_so_far: list[Any] | None = None,
+    ) -> list[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
         cleanly terminate the stream in this provider's wire format.
@@ -149,7 +149,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
+    def get_structured_messages(self, data: dict) -> List["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 

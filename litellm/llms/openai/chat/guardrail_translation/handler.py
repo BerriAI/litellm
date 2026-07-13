@@ -56,7 +56,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
-    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
+    def get_structured_messages(self, data: dict) -> List[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
 
@@ -71,7 +71,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -86,7 +86,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolParam] = []
-        text_task_mappings: List[Tuple[int, Optional[int]]] = []
+        text_task_mappings: List[Tuple[int, int | None]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
 
         # Step 1: Extract all text content, images, and tool calls
@@ -190,7 +190,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         tool_calls_to_check: List[ChatCompletionToolParam],
-        text_task_mappings: List[Tuple[int, Optional[int]]],
+        text_task_mappings: List[Tuple[int, int | None]],
         tool_call_task_mappings: List[Tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
@@ -245,7 +245,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         messages: List[Dict[str, Any]],
         responses: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        task_mappings: List[Tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to input message text content.
@@ -255,7 +255,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         for task_idx, guardrail_response in enumerate(responses):
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
-            content_idx_optional = cast(Optional[int], mapping[1])
+            content_idx_optional = cast(int | None, mapping[1])
 
             # Handle content
             content = messages[msg_idx].get("content", None)
@@ -297,9 +297,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.
@@ -326,7 +326,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[Dict[str, Any]] = []
-        text_task_mappings: List[Tuple[int, Optional[int]]] = []
+        text_task_mappings: List[Tuple[int, int | None]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
         # text_task_mappings: Track (choice_index, content_index) for each text
         # content_index is None for string content, int for list content
@@ -408,10 +408,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses_so_far: List["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
-        stream_transform_sink: Optional[StreamTransformSink] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
     ) -> List["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -458,9 +458,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any],
-        user_api_key_dict: Optional[Any],
-        request_data: Optional[dict],
+        litellm_logging_obj: Any | None,
+        user_api_key_dict: Any | None,
+        request_data: dict | None,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
         terminate the stream. Text rewrites are not propagated to the client here
@@ -510,7 +510,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 2: Create lists for guardrail processing
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        task_mappings: List[Tuple[int, Optional[int]]] = []
+        task_mappings: List[Tuple[int, int | None]] = []
         # Track (choice_index, content_index) for each combined text
 
         for (map_choice_idx, map_content_idx), combined_text in combined_texts.items():
@@ -594,9 +594,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any],
-        user_api_key_dict: Optional[Any],
-        request_data: Optional[dict],
+        litellm_logging_obj: Any | None,
+        user_api_key_dict: Any | None,
+        request_data: dict | None,
         sink: StreamTransformSink,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
@@ -612,8 +612,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             sink.holdback_per_choice = {}
             return
 
-        indices = list(raw_by_index.keys())
-        texts_to_check = list(raw_by_index.values())
+        # Fix #2 — sort by StreamingChoices.index so an n>1 stream that emits
+        # choice 1 before choice 0 still hands the guardrail texts in a
+        # deterministic index order. Without this, the guardrail's returned
+        # texts (aligned to the input order it received) would map back to the
+        # wrong choice indices when we rebuild the sink dicts by
+        # ``enumerate(indices)``.
+        indices = sorted(raw_by_index.keys())
+        texts_to_check = [raw_by_index[i] for i in indices]
 
         if request_data is None:
             request_data = {"responses": responses_so_far}
@@ -659,7 +665,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _combine_streaming_texts(
         self, responses_so_far: List["ModelResponseStream"]
-    ) -> Dict[Tuple[int, Optional[int]], str]:
+    ) -> Dict[Tuple[int, int | None], str]:
         """
         Combine all streaming chunks into complete text per choice.
 
@@ -671,7 +677,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         Returns:
             Dict mapping (choice_idx, content_idx) to combined text string
         """
-        combined_texts: Dict[Tuple[int, Optional[int]], str] = {}
+        combined_texts: Dict[Tuple[int, int | None], str] = {}
 
         for response_idx, response in enumerate(responses_so_far):
             for choice_idx, choice in enumerate(response.choices):
@@ -687,7 +693,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content - accumulate for this choice
-                    str_key: Tuple[int, Optional[int]] = (choice_idx, None)
+                    str_key: Tuple[int, int | None] = (choice_idx, None)
                     if str_key not in combined_texts:
                         combined_texts[str_key] = ""
                     combined_texts[str_key] += content
@@ -697,7 +703,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     for content_idx, content_item in enumerate(content):
                         text_str = content_item.get("text")
                         if text_str:
-                            list_key: Tuple[int, Optional[int]] = (
+                            list_key: Tuple[int, int | None] = (
                                 choice_idx,
                                 content_idx,
                             )
@@ -744,7 +750,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         tool_calls_to_check: List[Dict[str, Any]],
-        text_task_mappings: List[Tuple[int, Optional[int]]],
+        text_task_mappings: List[Tuple[int, int | None]],
         tool_call_task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
@@ -756,7 +762,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls: Optional[List[Any]] = None
+        tool_calls: List[Any] | None = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls
@@ -799,7 +805,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
 
-    def _convert_tool_call_to_dict(self, tool_call: Union[Dict[str, Any], Any]) -> Optional[Dict[str, Any]]:
+    def _convert_tool_call_to_dict(self, tool_call: Union[Dict[str, Any], Any]) -> Dict[str, Any] | None:
         """
         Convert a tool call object to dictionary format.
 
@@ -828,7 +834,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         responses: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        task_mappings: List[Tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail text responses back to output response.
@@ -838,7 +844,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         for task_idx, guardrail_response in enumerate(responses):
             mapping = task_mappings[task_idx]
             choice_idx = cast(int, mapping[0])
-            content_idx_optional = cast(Optional[int], mapping[1])
+            content_idx_optional = cast(int | None, mapping[1])
 
             choice = cast(Choices, response.choices[choice_idx])
 
@@ -892,7 +898,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses: List["ModelResponseStream"],
         guardrailed_texts: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        task_mappings: List[Tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to output streaming responses.
@@ -908,16 +914,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         Override this method to customize how responses are applied to streaming responses.
         """
         # Build a mapping of what guardrailed text to use for each (choice_idx, content_idx)
-        guardrail_map: Dict[Tuple[int, Optional[int]], str] = {}
+        guardrail_map: Dict[Tuple[int, int | None], str] = {}
         for task_idx, guardrail_response in enumerate(guardrailed_texts):
             mapping = task_mappings[task_idx]
             choice_idx = cast(int, mapping[0])
-            content_idx_optional = cast(Optional[int], mapping[1])
+            content_idx_optional = cast(int | None, mapping[1])
             guardrail_map[(choice_idx, content_idx_optional)] = guardrail_response
 
         # Track which choices we've already set the guardrailed text for
         # Key: (choice_idx, content_idx), Value: boolean (True if already set)
-        already_set: Dict[Tuple[int, Optional[int]], bool] = {}
+        already_set: Dict[Tuple[int, int | None], bool] = {}
 
         # Iterate through all responses and update content
         for response_idx, response in enumerate(responses):
@@ -934,7 +940,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content
-                    str_key: Tuple[int, Optional[int]] = (choice_idx_in_response, None)
+                    str_key: Tuple[int, int | None] = (choice_idx_in_response, None)
                     if str_key in guardrail_map:
                         if str_key not in already_set:
                             # First chunk - set the complete guardrailed text
@@ -954,7 +960,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # List content - handle each content item
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
-                            list_key: Tuple[int, Optional[int]] = (
+                            list_key: Tuple[int, int | None] = (
                                 choice_idx_in_response,
                                 content_idx,
                             )

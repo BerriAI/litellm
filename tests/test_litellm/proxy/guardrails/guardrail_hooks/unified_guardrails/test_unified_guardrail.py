@@ -658,10 +658,10 @@ class _StreamingTextGuardrail(CustomGuardrail):
     exercise the streaming underflow guard.
     """
 
-    def __init__(self, *, holdback_schedule=None, shrink_to=None, shrink_after=0):
+    def __init__(self, *, holdback_schedule=None, shrink_to=None, shrink_after=0, sampling_rate=1):
         super().__init__(guardrail_name="streaming-text-guardrail")
         self.streaming_transform_mode = "incremental_diff"
-        self.streaming_sampling_rate = 1
+        self.streaming_sampling_rate = sampling_rate
         self.streaming_end_of_stream_only = False
         self.guardrail_config = {}
         self._holdback_schedule = list(holdback_schedule or [])
@@ -1209,6 +1209,168 @@ class TestStreamingTransform:
         all_text = "".join(c.delta.content or "" for i in out for c in i.choices)
         assert "secret" not in all_text
         assert "SECRET" in all_text
+
+    @pytest.mark.asyncio
+    async def test_mixed_chunk_finish_reason_arrives_after_transformed_text(self):
+        """Fix #1: when a single chunk carries both delta.content and tool_calls
+        with finish_reason set, the passthrough must NOT emit finish_reason
+        before the transformed text — SSE clients that stop reading at
+        finish_reason would silently drop the guardrailed text. finish_reason
+        must ride on a terminator after the transformed text."""
+        guardrail = _StreamingTextGuardrail()
+        mixed = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content="secret",
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, [mixed])
+
+        passthrough_idx = next(i for i, item in enumerate(out) if item.choices and item.choices[0].delta.tool_calls)
+        # Passthrough MUST NOT carry finish_reason for a mixed chunk (deferred).
+        assert out[passthrough_idx].choices[0].finish_reason is None, (
+            f"passthrough of mixed chunk leaked finish_reason: {out[passthrough_idx].choices[0].finish_reason}"
+        )
+        # finish_reason arrives via a terminator that comes AFTER the passthrough,
+        # so an SSE client reading top-down sees the transformed text before it
+        # sees the terminator.
+        finish_carriers = [
+            i for i, item in enumerate(out) if item.choices and item.choices[0].finish_reason == "tool_calls"
+        ]
+        assert finish_carriers, "finish_reason=tool_calls never delivered"
+        assert min(finish_carriers) > passthrough_idx
+        # And the redacted text ("SECRET") reached the wire on some non-tool
+        # chunk (i.e. the text terminator).
+        transformed = "".join(
+            item.choices[0].delta.content or ""
+            for item in out
+            if item.choices and not item.choices[0].delta.tool_calls
+        )
+        assert "SECRET" in transformed
+        assert "secret" not in transformed
+
+    @pytest.mark.asyncio
+    async def test_text_flush_precedes_tool_call_passthrough(self):
+        """Fix #3: text chunks followed by a pure tool-call chunk carrying
+        finish_reason="tool_calls" must emit transformed text BEFORE the
+        passthrough, otherwise SSE-compliant clients stop reading at
+        finish_reason and drop the transformed text."""
+        # sampling_rate 5: no mid-stream round would fire on 2 text chunks
+        # without the pre-tool-call flush.
+        guardrail = _StreamingTextGuardrail(sampling_rate=5)
+        chunks = [
+            _stream_chunk("hello "),
+            _stream_chunk("world"),
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "f", "arguments": "{}"},
+                                }
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+            ),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        text_indices = [
+            i
+            for i, item in enumerate(out)
+            if item.choices and (item.choices[0].delta.content or "") and not item.choices[0].delta.tool_calls
+        ]
+        tool_indices = [i for i, item in enumerate(out) if item.choices and item.choices[0].delta.tool_calls]
+        assert text_indices, "transformed text was never emitted"
+        assert tool_indices, "tool-call passthrough missing"
+        assert max(text_indices) < min(tool_indices)
+        transformed = "".join(out[i].choices[0].delta.content or "" for i in text_indices)
+        assert "HELLO WORLD" in transformed
+
+    @pytest.mark.asyncio
+    async def test_final_finish_reason_flushed_when_guardrail_suppresses_text(self):
+        """Fix #4: when the guardrail returns texts=[] (full suppression) and a
+        mixed content+tool_call chunk had deferred its finish_reason to the
+        text flush, the final flush must still emit a terminator chunk carrying
+        finish_reason. Otherwise the SSE stream ends without finish_reason."""
+
+        class _SuppressAll(_StreamingTextGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                self.received_texts.append(list(inputs.get("texts") or []))
+                return {"texts": []}
+
+        mixed = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content="secret",
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), _SuppressAll(), [mixed])
+        finishes = [c.finish_reason for item in out for c in item.choices if c.index == 0]
+        assert "tool_calls" in finishes
+
+    @pytest.mark.asyncio
+    async def test_transform_sends_texts_sorted_by_choice_index(self):
+        """Fix #2: for n>1 streams where choice 1 emits before choice 0, the
+        transform must send texts to the guardrail in ascending choice-index
+        order so its returned texts realign to the correct choice indices."""
+
+        class _RecordingGuardrail(_StreamingTextGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                self.received_texts.append(list(inputs.get("texts") or []))
+                return {"texts": list(inputs.get("texts") or [])}
+
+        guardrail = _RecordingGuardrail()
+        chunks = [
+            _stream_chunk("beta", index=1),
+            _stream_chunk("alpha", index=0),
+            _stream_chunk("", index=0, finish_reason="stop"),
+        ]
+        await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        last = guardrail.received_texts[-1]
+        # Sorted ascending: alpha (index 0) before beta (index 1).
+        assert last[0].startswith("alpha")
+        assert last[1].startswith("beta")
 
     @pytest.mark.asyncio
     async def test_guardrail_always_sees_raw_accumulated_text(self):

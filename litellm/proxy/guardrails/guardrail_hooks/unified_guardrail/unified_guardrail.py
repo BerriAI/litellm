@@ -45,7 +45,7 @@ class _StreamTerminated(Exception):
     its terminal chunks (block message or in-stream error) and must stop."""
 
 
-def _get_a2a_request_id(responses_so_far: List[Any], request_data: dict) -> Optional[str]:
+def _get_a2a_request_id(responses_so_far: List[Any], request_data: dict) -> str | None:
     """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
     for item in responses_so_far:
         if isinstance(item, dict) and "id" in item:
@@ -227,7 +227,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
 
-        call_type: Optional[CallTypesLiteral] = None
+        call_type: CallTypesLiteral | None = None
         if user_api_key_dict.request_route is not None:
             call_types = get_call_types_for_route(user_api_key_dict.request_route)
             if call_types is not None and len(call_types) > 0:  # type: ignore
@@ -307,7 +307,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     def _resolve_transform_call_type(
         user_api_key_dict: UserAPIKeyAuth,
         mappings: dict,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Resolve the call type for the incremental_diff path, or None if the
         route is unresolvable / unsupported.
 
@@ -338,7 +338,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     async def _emit_streaming_http_error(
         self,
         exc: HTTPException,
-        call_type: Optional[str],
+        call_type: str | None,
         responses_so_far: list[Any],
         request_data: dict,
     ) -> AsyncGenerator[Any, None]:
@@ -374,9 +374,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         mutated_text_per_choice: dict[int, str],
         emitted_text_per_choice: dict[int, str],
         holdback_per_choice: dict[int, int],
-        finish_reason_per_choice: dict[int, Optional[str]],
+        finish_reason_per_choice: dict[int, str | None],
         is_final: bool,
-    ) -> Optional[ModelResponseStream]:
+    ) -> ModelResponseStream | None:
         """Build the synthetic chunk carrying the newly-guardrailed deltas.
 
         For each choice, the new delta is the mutated accumulated text past what
@@ -394,6 +394,29 @@ class UnifiedLLMGuardrails(CustomLogger):
         rewrite recent output must withhold it first via ``stream_holdback_chars``.
         """
         if not mutated_text_per_choice:
+            # Fix #4 — on the final flush a deferred finish_reason (from a mixed
+            # content+tool_calls chunk whose passthrough suppressed it) still
+            # needs to reach the client, even if the guardrail returned no text
+            # to emit. Build a terminator chunk carrying finish_reason per choice.
+            if is_final and finish_reason_per_choice:
+                terminator_choices: list[StreamingChoices] = []
+                for choice_idx, finish_reason in finish_reason_per_choice.items():
+                    if finish_reason is None:
+                        continue
+                    terminator_choices.append(
+                        StreamingChoices(
+                            index=choice_idx,
+                            delta=Delta(content="", role=None, tool_calls=None),
+                            finish_reason=finish_reason,
+                        )
+                    )
+                if terminator_choices:
+                    return ModelResponseStream(
+                        id=getattr(reference_chunk, "id", None),
+                        created=getattr(reference_chunk, "created", None),
+                        model=getattr(reference_chunk, "model", None),
+                        choices=terminator_choices,
+                    )
             return None
 
         deltas: dict[int, str] = {}
@@ -469,7 +492,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: list[Any],
         responses_yielded: list[Any],
         emitted_text_per_choice: dict[int, str],
-        finish_reason_per_choice: dict[int, Optional[str]],
+        finish_reason_per_choice: dict[int, str | None],
         is_final: bool,
     ) -> AsyncGenerator[Any, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
@@ -544,9 +567,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: list[Any] = []
         responses_yielded: list[Any] = []
         emitted_text_per_choice: dict[int, str] = {}
-        finish_reason_per_choice: dict[int, Optional[str]] = {}
+        finish_reason_per_choice: dict[int, str | None] = {}
         chunk_counter = 0
-        last_chunk: Optional[Any] = None
+        last_chunk: Any | None = None
 
         def _round(reference_chunk: Any, is_final: bool) -> AsyncGenerator[Any, None]:
             return self._emit_transform_round(
@@ -564,6 +587,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
 
         saw_tool_calls = False
+        saw_text_content = False
 
         try:
             async for item in response:
@@ -579,17 +603,34 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # tool-only chunk, so it is not recorded for the text flush.
                 if self._chunk_has_tool_calls(item):
                     saw_tool_calls = True
-                    tool_only = self._tool_call_passthrough_chunk(item)
-                    responses_yielded.append(tool_only)
-                    yield tool_only
                     responses_so_far.append(item)
                     last_chunk = item
+                    # Fix #3 — flush accumulated text BEFORE the tool-call
+                    # passthrough. Without this, a stream of text chunks that
+                    # hasn't yet hit a sampled round can be trailed by a
+                    # tool-call chunk carrying finish_reason="tool_calls"; an
+                    # SSE-compliant client stops reading at that finish_reason
+                    # and drops the end-of-stream text flush that would follow.
+                    if saw_text_content:
+                        async for out in _round(item, is_final=False):
+                            yield out
+                    # Fix #1 — pass finish_reason_per_choice into the
+                    # passthrough so a mixed content+tool_call chunk defers its
+                    # finish_reason to the final text terminator (see the
+                    # _tool_call_passthrough_chunk docstring).
+                    tool_only = self._tool_call_passthrough_chunk(
+                        item, finish_reason_per_choice=finish_reason_per_choice
+                    )
+                    responses_yielded.append(tool_only)
+                    yield tool_only
                     continue
 
                 chunk_counter += 1
                 responses_so_far.append(item)
                 last_chunk = item
                 self._record_finish_reasons(item, finish_reason_per_choice)
+                if self._chunk_carries_text(item):
+                    saw_text_content = True
                 # Skip the sampled round for a terminal chunk: the end-of-stream
                 # flush below processes it once with holdback forced to 0, so a
                 # sampled round here would guardrail the same content twice.
@@ -672,26 +713,55 @@ class UnifiedLLMGuardrails(CustomLogger):
         return False
 
     @staticmethod
-    def _tool_call_passthrough_chunk(item: Any) -> ModelResponseStream:
+    def _chunk_carries_text(item: Any) -> bool:
+        """True if any choice in this chunk has non-empty string ``delta.content``."""
+        for choice in getattr(item, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            content = getattr(delta, "content", None)
+            if isinstance(content, str) and content != "":
+                return True
+        return False
+
+    @staticmethod
+    def _tool_call_passthrough_chunk(
+        item: Any,
+        finish_reason_per_choice: "dict[int, str | None] | None" = None,
+    ) -> ModelResponseStream:
         """Copy of a chunk carrying tool calls with all text content stripped.
 
         Only tool_calls, role and finish_reason are forwarded; content is set to
         None so response text can never be delivered raw (it flows through the
         transform instead). Applies per choice so an n>1 chunk mixing a text
         choice and a tool-call choice does not leak the text choice.
+
+        For a choice that carries BOTH text content AND tool_calls, ``finish_reason``
+        is suppressed on the passthrough and recorded on
+        ``finish_reason_per_choice`` (when provided) so the final synthetic text
+        chunk delivers it. Emitting the passthrough's ``finish_reason`` before the
+        text flush would let a spec-compliant SSE client stop reading at
+        ``finish_reason`` and silently drop the guardrailed text, defeating the
+        redaction purpose.
         """
         synthetic_choices: list[StreamingChoices] = []
         for choice in getattr(item, "choices", None) or []:
             delta = getattr(choice, "delta", None)
+            idx = getattr(choice, "index", 0) or 0
+            original_finish = getattr(choice, "finish_reason", None)
+            has_text = isinstance(getattr(delta, "content", None), str) and getattr(delta, "content", "") != ""
+            if has_text and original_finish is not None and finish_reason_per_choice is not None:
+                finish_reason_per_choice[idx] = original_finish
+                passthrough_finish: str | None = None
+            else:
+                passthrough_finish = original_finish
             synthetic_choices.append(
                 StreamingChoices(
-                    index=getattr(choice, "index", 0) or 0,
+                    index=idx,
                     delta=Delta(
                         content=None,
                         role=getattr(delta, "role", None),
                         tool_calls=getattr(delta, "tool_calls", None),
                     ),
-                    finish_reason=getattr(choice, "finish_reason", None),
+                    finish_reason=passthrough_finish,
                 )
             )
         return ModelResponseStream(
@@ -702,7 +772,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
 
     @staticmethod
-    def _record_finish_reasons(item: Any, finish_reason_per_choice: dict[int, Optional[str]]) -> None:
+    def _record_finish_reasons(item: Any, finish_reason_per_choice: dict[int, str | None]) -> None:
         for choice in getattr(item, "choices", None) or []:
             finish_reason = getattr(choice, "finish_reason", None)
             if finish_reason is not None:
