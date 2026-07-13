@@ -8411,6 +8411,10 @@ def stream_chunk_builder(
         if not chunks:
             return None
 
+        chunks = [chunk for chunk in chunks if not isinstance(chunk, (bytes, bytearray, memoryview, str))]
+        if not chunks:
+            return None
+
         processor = ChunkProcessor(chunks, messages)
         chunks = processor.chunks
 
