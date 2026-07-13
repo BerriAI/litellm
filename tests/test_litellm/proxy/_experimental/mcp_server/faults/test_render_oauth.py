@@ -9,8 +9,9 @@ from litellm.proxy._experimental.mcp_server.faults.render_oauth import (
 )
 from litellm.proxy._experimental.mcp_server.faults.types import (
     CallerRejected,
-    GatewayCredentialsRejected,
+    GatewayRejected,
     UpstreamProtocolFault,
+    UpstreamReportedFault,
 )
 
 
@@ -38,8 +39,8 @@ def test_caller_rejected_includes_error_uri_only_when_present():
     }
 
 
-def test_gateway_credentials_rejected_renders_502_with_gateway_prose():
-    response = render_token_fault(GatewayCredentialsRejected(code="invalid_client"))
+def test_gateway_rejected_renders_502_with_gateway_prose():
+    response = render_token_fault(GatewayRejected(code="invalid_client"))
     assert response.status_code == 502
     body = json.loads(response.body)
     assert body["error"] == "server_error"
@@ -48,7 +49,7 @@ def test_gateway_credentials_rejected_renders_502_with_gateway_prose():
 
 
 def test_gateway_invalid_target_prose_names_resource_indicators():
-    response = render_token_fault(GatewayCredentialsRejected(code="invalid_target"))
+    response = render_token_fault(GatewayRejected(code="invalid_target"))
     body = json.loads(response.body)
     assert response.status_code == 502
     assert "RFC 8707" in body["error_description"]
@@ -73,3 +74,23 @@ def test_dcr_protocol_fault_is_502():
     status_code, detail = dcr_fault_detail(UpstreamProtocolFault(note="upstream registration failed with HTTP 500"))
     assert status_code == 502
     assert detail == "upstream registration failed with HTTP 500"
+
+
+def test_upstream_reported_server_error_renders_502_with_matching_code():
+    response = render_token_fault(UpstreamReportedFault(code="server_error"))
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"] == "server_error"
+
+
+def test_upstream_reported_temporarily_unavailable_renders_503_with_matching_code():
+    response = render_token_fault(UpstreamReportedFault(code="temporarily_unavailable"))
+    assert response.status_code == 503
+    body = json.loads(response.body)
+    assert body["error"] == "temporarily_unavailable"
+    assert "retry" in body["error_description"]
+
+
+def test_dcr_upstream_reported_fault_maps_to_5xx():
+    status_code, detail = dcr_fault_detail(UpstreamReportedFault(code="server_error"))
+    assert status_code == 502
+    assert "internal error" in detail

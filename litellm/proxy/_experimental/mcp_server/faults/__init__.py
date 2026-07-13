@@ -18,17 +18,19 @@ from litellm.proxy._experimental.mcp_server.faults.render_oauth import (
 from litellm.proxy._experimental.mcp_server.faults.types import (
     CallerRejected,
     CredentialSource,
-    GatewayCredentialsRejected,
+    GatewayRejected,
     UpstreamOAuthFault,
     UpstreamProtocolFault,
+    UpstreamReportedFault,
 )
 
 __all__ = [
     "CallerRejected",
     "CredentialSource",
-    "GatewayCredentialsRejected",
+    "GatewayRejected",
     "UpstreamOAuthFault",
     "UpstreamProtocolFault",
+    "UpstreamReportedFault",
     "classify_upstream_dcr_rejection",
     "classify_upstream_token_rejection",
     "dcr_fault_detail",
