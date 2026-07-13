@@ -1658,18 +1658,35 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                from litellm.proxy.management_endpoints.internal_user_endpoints import (
+                    add_new_user_to_default_team,
+                    check_if_default_team_set,
+                )
+
+                default_params = litellm.default_internal_user_params or {}
+                scalar_default_params = {
+                    key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
+                }
                 new_user_params: Dict[str, Any] = {
                     "user_id": user_id,
+                    **({"user_email": user_email} if user_email is not None else {}),
+                    **scalar_default_params,
                 }
-                if user_email is not None:
-                    new_user_params["user_email"] = user_email
-                if litellm.default_internal_user_params is not None:
-                    new_user_params.update(litellm.default_internal_user_params)
 
                 response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
+
+                default_teams = check_if_default_team_set()
+                if default_teams:
+                    await add_new_user_to_default_team(
+                        user_id=user_id,
+                        user_email=user_email,
+                        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                        teams=default_teams,
+                        prisma_client=prisma_client,
+                    )
             else:
                 if should_check_db:
                     _update_last_db_access_time(
