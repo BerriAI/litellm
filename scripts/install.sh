@@ -86,7 +86,7 @@ echo ""
 
 # --python-preference system: reuse a compatible system Python when present,
 # otherwise download a managed one. Either way uv honours litellm's requires-python,
-# so a too-old (3.9) or too-new (3.14+) system Python is skipped, not forced.
+# so a too-old (3.9) or too-new (3.15+) system Python is skipped, not forced.
 "$UV_BIN" tool install --python-preference system --force "${LITELLM_PACKAGE}" \
   || die "uv tool install failed. Try manually: $UV_BIN tool install '${LITELLM_PACKAGE}'"
 

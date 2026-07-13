@@ -23,7 +23,7 @@ where
     T: Send,
 {
     GIL_RELEASES.fetch_add(1, Ordering::Relaxed);
-    py.allow_threads(f)
+    py.detach(f)
 }
 
 /// Total GIL releases performed by the bridge so far.
