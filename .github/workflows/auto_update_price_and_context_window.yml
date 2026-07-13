@@ -26,11 +26,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           BRANCH_NAME="auto-update-price-and-context-window-$(date +'%Y-%m-%d')"
-          BASE_BRANCH="${{ github.event.repository.default_branch }}"
           git fetch origin "${BASE_BRANCH}" "${BRANCH_NAME}" || true
           if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
             git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
