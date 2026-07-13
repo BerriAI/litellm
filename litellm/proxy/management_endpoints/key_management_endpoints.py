@@ -3569,7 +3569,7 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
-    key_type: Optional[str] = None,
+    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,

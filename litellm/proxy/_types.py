@@ -1118,7 +1118,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
-    key_type: Optional[str] = None
+    key_type: str | None = None
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
