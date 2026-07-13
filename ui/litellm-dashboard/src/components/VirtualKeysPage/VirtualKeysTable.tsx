@@ -27,13 +27,17 @@ import {
 } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
-import React, { useDeferredValue, useMemo, useState } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import KeyInfoView from "../templates/key_info_view";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { transformKeyInfo } from "../key_team_helpers/transform_key_info";
+import { keyInfoV1Call } from "../networking";
+import { useVirtualKeySearchParam } from "./useVirtualKeySearchParam";
 
 type KeyFilterState = {
   "Team ID": string;
@@ -65,9 +69,13 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
 });
 
 export function VirtualKeysTable() {
+  const { accessToken } = useAuthorized();
+  const { virtualKeyId, setVirtualKeyId } = useVirtualKeySearchParam();
   const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const dismissedVirtualKeyRef = useRef<string | null>(null);
+  const previousVirtualKeyIdRef = useRef<string | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
@@ -75,6 +83,45 @@ export function VirtualKeysTable() {
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
   const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
+
+  const openKeyDetail = useCallback(
+    async (token: string, keyFromList: KeyResponse | null, syncUrl: boolean) => {
+      if (keyFromList) {
+        setSelectedKey(keyFromList);
+        if (syncUrl) {
+          setVirtualKeyId(token);
+        }
+        return;
+      }
+      if (!accessToken) {
+        return;
+      }
+      try {
+        const keyInfo = await keyInfoV1Call(accessToken, token);
+        setSelectedKey(transformKeyInfo(keyInfo));
+        if (syncUrl) {
+          setVirtualKeyId(token);
+        }
+      } catch (error) {
+        console.error("Error fetching virtual key info:", error);
+      }
+    },
+    [accessToken, setVirtualKeyId],
+  );
+
+  const handleSelectKey = useCallback(
+    (key: KeyResponse) => {
+      dismissedVirtualKeyRef.current = null;
+      void openKeyDetail(key.token, key, true);
+    },
+    [openKeyDetail],
+  );
+
+  const handleCloseKeyDetail = useCallback(() => {
+    dismissedVirtualKeyRef.current = virtualKeyId;
+    setSelectedKey(null);
+    setVirtualKeyId(null);
+  }, [setVirtualKeyId, virtualKeyId]);
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -94,6 +141,29 @@ export function VirtualKeysTable() {
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
+
+  useEffect(() => {
+    const previousVirtualKeyId = previousVirtualKeyIdRef.current;
+    previousVirtualKeyIdRef.current = virtualKeyId;
+
+    if (!virtualKeyId) {
+      dismissedVirtualKeyRef.current = null;
+      // Only close when the URL param was removed (back/replace), not while
+      // router.replace is still catching up after a local key click.
+      if (previousVirtualKeyId && selectedKey) {
+        setSelectedKey(null);
+      }
+      return;
+    }
+    if (dismissedVirtualKeyRef.current === virtualKeyId) {
+      return;
+    }
+    if (selectedKey?.token === virtualKeyId) {
+      return;
+    }
+    const fromList = keyList.find((key) => key.token === virtualKeyId) ?? null;
+    void openKeyDetail(virtualKeyId, fromList, false);
+  }, [keyList, openKeyDetail, selectedKey, virtualKeyId]);
 
   const { data: fetchedTeams, isLoading: isTeamsLoading } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
@@ -155,7 +225,7 @@ export function VirtualKeysTable() {
                 variant="light"
                 className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
                 style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
+                onClick={() => handleSelectKey(info.row.original)}
               >
                 {value ?? "-"}
               </Button>
@@ -577,7 +647,7 @@ export function VirtualKeysTable() {
         },
       },
     ],
-    [allTeams, resolvedOrganizations],
+    [allTeams, handleSelectKey, resolvedOrganizations],
   );
 
   const filterOptions: FilterOption[] = [
@@ -669,7 +739,7 @@ export function VirtualKeysTable() {
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
+          onClose={handleCloseKeyDetail}
           keyData={selectedKey}
           teams={allTeams}
         />

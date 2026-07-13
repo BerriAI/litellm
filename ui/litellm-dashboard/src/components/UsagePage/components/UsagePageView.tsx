@@ -43,12 +43,14 @@ import { Tag } from "../../tag_management/types";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
+import { useUsagePageSearchParams } from "../hooks/useUsagePageSearchParams";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
+import MyBudgetsUsageView from "./MyBudgetsUsageView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -141,11 +143,33 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [usageView, setUsageView] = useState<UsageOption>("global");
+  const { view: usageView, teamId: budgetTeamId, updateSearchParams } = useUsagePageSearchParams();
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
+
+  const handleUsageViewChange = useCallback(
+    (value: UsageOption) => {
+      updateSearchParams({
+        view: value,
+        key: null,
+        // Keep team when staying on my-budgets; clear it only when leaving so the
+        // default-team effect cannot race and write view=my-budgets back.
+        team: value === "my-budgets" ? budgetTeamId : null,
+      });
+    },
+    [budgetTeamId, updateSearchParams],
+  );
+
+  const handleBudgetTeamChange = useCallback(
+    (teamId: string) => {
+      // Team only — never re-assert view here or a late default-team effect can
+      // pin the dropdown on my-budgets after the user picked another view.
+      updateSearchParams({ team: teamId });
+    },
+    [updateSearchParams],
+  );
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -447,11 +471,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
             <UsageViewSelect
               value={usageView}
-              onChange={(value) => setUsageView(value)}
+              onChange={handleUsageViewChange}
               isAdmin={isAdmin}
               canViewTagUsage={canViewTagUsage}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            {usageView !== "my-budgets" && (
+              <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            )}
           </div>
           {paginatedResult.isFetchingMore && (
             <Alert
@@ -878,6 +904,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+            />
+          )}
+
+          {/* My Budgets — personal spend vs team member / model caps */}
+          {usageView === "my-budgets" && (
+            <MyBudgetsUsageView
+              teams={teams ?? []}
+              selectedTeamId={budgetTeamId}
+              onTeamChange={handleBudgetTeamChange}
             />
           )}
 

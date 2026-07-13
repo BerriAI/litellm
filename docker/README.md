@@ -7,6 +7,48 @@ This guide provides instructions for building and running the LiteLLM applicatio
 - Docker
 - Docker Compose
 
+## Quick local UI verification
+
+One command that builds the proxy **from this repo**, with Postgres + Redis, sample config-scoped team budgets, and hot-reload:
+
+```bash
+docker compose -f docker-compose.local.yml up --build
+```
+
+Then:
+
+- **API + baked UI**: http://localhost:4000/ui/ (sign in as `admin` / `sk-1234`)
+- **UI hot-reload**: http://localhost:3000 (Next.js HMR; talks to the proxy on :4000)
+- **Teams → Local Demo → Overview** for per-user / per-model budgets, and **My User** for spend progress
+
+Python changes under `./litellm` reload automatically (`--reload` + `PYTHONPATH=/app`). Dashboard source changes are live on :3000. To push a static build into :4000/ui without rebuilding the image, run `npm run build` in `ui/litellm-dashboard` (the `out/` folder is bind-mounted).
+
+Usage page deep links (refresh-safe):
+
+- `/ui/usage?view=my-budgets` — My Budgets view
+- `/ui/usage?view=my-budgets&team=local-demo-team` — My Budgets for a team
+- `/ui/usage?view=team` — Team Usage
+- `/ui/usage?view=global` — Global Usage
+
+Virtual Keys page deep link:
+
+- `/ui/api-keys?virtual_key=<token_hash>` — opens that key's detail view
+
+Navigating away clears those params from the new page; browser back restores the previous URL. Changing the Usage view or selecting another virtual key updates the query string in place.
+
+After first login, add yourself to the demo team (role must be `user`; team admin is enterprise-gated):
+
+```bash
+curl -X POST http://localhost:4000/team/member_add \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"local-demo-team","member":{"user_id":"default_user_id","role":"user"}}'
+```
+
+Then refresh **My User** to see your `$100` / monthly progress bar.
+
+Config used: `docker/local_ui_verify_config.yaml`. First build is slow; later rebuilds reuse cache. Stop with `docker compose -f docker-compose.local.yml down`.
+
 ## Building and Running the Application
 
 To build and run the application, you will use the `docker-compose.yml` file located in the root of the project. This file is configured to use the `Dockerfile.non_root` for a secure, non-root container environment.

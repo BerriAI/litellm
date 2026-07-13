@@ -2,12 +2,13 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 import { BarChart, Button } from "@tremor/react";
 import { Segmented, Tooltip } from "antd";
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { DataTable } from "../../../view_logs/table";
+import { useUsagePageSearchParams } from "../../hooks/useUsagePageSearchParams";
 import { TagUsage } from "../../types";
 
 interface TopKeyViewProps {
@@ -20,11 +21,13 @@ interface TopKeyViewProps {
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { keyId: urlKeyId, updateSearchParams } = useUsagePageSearchParams();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+  const hydratedUrlKeyRef = useRef<string | null>(null);
 
   const toggleTagsExpansion = (apiKey: string) => {
     setExpandedTags((prev) => {
@@ -38,26 +41,50 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
+  const openKeyModal = useCallback(
+    async (apiKey: string, syncUrl: boolean) => {
+      if (!accessToken) return;
+
+      try {
+        const keyInfo = await keyInfoV1Call(accessToken, apiKey);
+        const transformedKeyData = transformKeyInfo(keyInfo);
+
+        setKeyData(transformedKeyData);
+        setSelectedKey(apiKey);
+        setIsModalOpen(true);
+        if (syncUrl) {
+          updateSearchParams({ key: apiKey });
+        }
+      } catch (error) {
+        console.error("Error fetching key info:", error);
+      }
+    },
+    [accessToken, updateSearchParams],
+  );
+
   const handleKeyClick = async (item: any) => {
-    if (!accessToken) return;
-
-    try {
-      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
-      const transformedKeyData = transformKeyInfo(keyInfo);
-
-      setKeyData(transformedKeyData);
-      setSelectedKey(item.api_key);
-      setIsModalOpen(true); // Open modal when key is clicked
-    } catch (error) {
-      console.error("Error fetching key info:", error);
-    }
+    await openKeyModal(item.api_key, true);
   };
 
   const handleClose = () => {
     setIsModalOpen(false);
     setSelectedKey(null);
     setKeyData(undefined);
+    hydratedUrlKeyRef.current = null;
+    updateSearchParams({ key: null });
   };
+
+  // Hydrate modal from ?key= on load / when the param changes
+  useEffect(() => {
+    if (!urlKeyId || !accessToken) {
+      return;
+    }
+    if (hydratedUrlKeyRef.current === urlKeyId && isModalOpen && selectedKey === urlKeyId) {
+      return;
+    }
+    hydratedUrlKeyRef.current = urlKeyId;
+    void openKeyModal(urlKeyId, false);
+  }, [accessToken, isModalOpen, openKeyModal, selectedKey, urlKeyId]);
 
   // Handle clicking outside the modal
   const handleOutsideClick = (e: React.MouseEvent<HTMLDivElement>) => {

@@ -323,7 +323,7 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Team Spend")).toBeInTheDocument();
       });
     });
 
@@ -375,8 +375,10 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Per-User Budget")).toBeInTheDocument();
       });
+      expect(screen.getByText(/\$500(\.00)?/)).toBeInTheDocument();
+      expect(screen.getByText(/monthly per user/i)).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -434,7 +436,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Team Spend")).toBeInTheDocument();
     });
 
     it("should open Overview tab by default when editTeam is true but user cannot edit", async () => {
@@ -449,7 +451,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Team Spend")).toBeInTheDocument();
     });
   });
 

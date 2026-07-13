@@ -74,6 +74,7 @@ vi.mock("@ant-design/icons", async () => {
 
   return {
     GlobalOutlined: Icon,
+    AccountBookOutlined: Icon,
     BankOutlined: Icon,
     TeamOutlined: Icon,
     ShoppingCartOutlined: Icon,
@@ -98,6 +99,12 @@ describe("UsageViewSelect", () => {
     expect(screen.getByText("Usage View")).toBeInTheDocument();
     expect(screen.getByText("Select the usage data you want to view")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
+  });
+
+  it("should show My Budgets for non-admin users", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
+
+    expect(screen.getByRole("option", { name: "My Budgets" })).toBeInTheDocument();
   });
 
   it("should call onChange when value changes", () => {

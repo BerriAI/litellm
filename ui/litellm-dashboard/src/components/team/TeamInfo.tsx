@@ -37,6 +37,7 @@ import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import {
   resolveModelBudgetOptions,
@@ -750,18 +751,60 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             children: (
               <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
                 <Card>
-                  <Text>Budget Status</Text>
+                  <Text>Per-User Budget</Text>
+                  <div className="mt-2">
+                    {info.team_member_budget_table?.max_budget != null ? (
+                      <>
+                        <Title>
+                          ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
+                        </Title>
+                        <Text>
+                          {info.team_member_budget_table.budget_duration
+                            ? getBudgetDurationLabel(info.team_member_budget_table.budget_duration)
+                            : "per cycle"}{" "}
+                          per user
+                        </Text>
+                        <Text className="text-gray-500 text-xs mt-1 block">
+                          Applies to each human user (all their keys) and each service-account key
+                        </Text>
+                        {isFromConfig && (
+                          <Badge color="gray" className="mt-2">
+                            Config
+                          </Badge>
+                        )}
+                      </>
+                    ) : (
+                      <Text className="text-gray-500">No per-user budget configured</Text>
+                    )}
+                  </div>
+                </Card>
+
+                <Card>
+                  <Text>Per-Model Budgets</Text>
+                  <ModelMaxBudgetOverview
+                    teamModelMaxBudget={info.model_max_budget}
+                    memberships={teamData.team_memberships}
+                    keys={teamData.keys}
+                    variant="card"
+                  />
+                  {isFromConfig && info.model_max_budget && Object.keys(info.model_max_budget).length > 0 && (
+                    <Badge color="gray" className="mt-2">
+                      Config
+                    </Badge>
+                  )}
+                </Card>
+
+                <Card>
+                  <Text>Team Spend</Text>
                   <div className="mt-2">
                     <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
-                    <Text>
-                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
-                    </Text>
-                    {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
-                    <br />
-                    {info.team_member_budget_table && (
-                      <Text className="text-gray-500">
-                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
-                      </Text>
+                    {info.max_budget === null || info.max_budget === undefined ? (
+                      <Text className="text-gray-500">No shared team pool</Text>
+                    ) : (
+                      <Text>of ${formatNumberWithCommas(info.max_budget, 4)} team-wide</Text>
+                    )}
+                    {info.budget_duration && info.max_budget != null && (
+                      <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                     )}
                   </div>
                 </Card>
@@ -789,16 +832,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       );
                     })()}
                   </div>
-                </Card>
-
-                <Card>
-                  <Text>Per-Model Budgets</Text>
-                  <ModelMaxBudgetOverview
-                    teamModelMaxBudget={info.model_max_budget}
-                    memberships={teamData.team_memberships}
-                    keys={teamData.keys}
-                    variant="card"
-                  />
                 </Card>
 
                 <Card>

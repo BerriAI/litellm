@@ -1,4 +1,5 @@
 import {
+  AccountBookOutlined,
   BankOutlined,
   BarChartOutlined,
   GlobalOutlined,
@@ -14,6 +15,7 @@ import React from "react";
 export type UsageOption =
   | "global"
   | "my-usage"
+  | "my-budgets"
   | "organization"
   | "team"
   | "customer"
@@ -59,6 +61,12 @@ const OPTIONS: OptionConfig[] = [
     description: "View your own usage",
     icon: <UserOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
+  },
+  {
+    value: "my-budgets",
+    label: "My Budgets",
+    description: "Track spend against your per-user and per-model team budgets",
+    icon: <AccountBookOutlined style={{ fontSize: "16px" }} />,
   },
   {
     value: "organization",

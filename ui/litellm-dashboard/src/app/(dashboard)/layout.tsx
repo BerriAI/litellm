@@ -104,7 +104,18 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   const navigateToPage = (newPage: string) => {
     const migratedRoute = MIGRATED_PAGES[newPage];
-    router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
+    const href = migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage);
+    // Clicking the already-active sidebar item (e.g. Virtual Keys while
+    // ?virtual_key= is open) is often a Next no-op; clear leftover deep-link
+    // query params so refresh does not reopen the detail view.
+    if (typeof window !== "undefined") {
+      const targetPath = href.split("?")[0];
+      if (window.location.pathname === targetPath && window.location.search) {
+        window.history.replaceState(null, "", targetPath);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
+    }
+    router.push(href);
   };
 
   return (

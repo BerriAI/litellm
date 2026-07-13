@@ -1,0 +1,691 @@
+2026-07-13 13:51:44,464 - litellm_proxy_extras - INFO - Using v2 migration resolver (--use_v2_migration_resolver)
+2026-07-13 13:51:44,533 - litellm_proxy_extras - INFO - Found 129 migrations at /Users/mattchaffe/Projects/bitovi/litellm/litellm-proxy-extras/litellm_proxy_extras
+2026-07-13 13:51:48,140 - litellm_proxy_extras - INFO - prisma migrate deploy stdout: Prisma schema loaded from schema.prisma
+Datasource "client": PostgreSQL database "litellm", schema "public" at "localhost:5432"
+
+129 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+[92m13:51:48 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:29 - License Str value - None
+[92m13:51:48 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:102 - litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=None
+[92m13:51:48 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:112 - litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - None
+[92m13:51:48 - LiteLLM Proxy:INFO[0m: proxy_server.py:1615 - Using packaged UI directory: /Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/_experimental/out
+[92m13:51:48 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:1516 - Detected restructured UI via pattern: found models-and-endpoints/index.html
+[92m13:51:48 - LiteLLM Proxy:INFO[0m: proxy_server.py:1725 - Skipping UI restructuring: /Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/_experimental/out is already pre-restructured
+[92m13:51:48 - LiteLLM:DEBUG[0m: logging_callback_manager.py:299 - Custom logger of type _PROXY_VirtualKeyModelMaxBudgetLimiter, key: _PROXY_VirtualKeyModelMaxBudgetLimiter already exists in [<litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x115aed2b0>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x1187d7a10>], not adding again..
+[92m13:51:48 - LiteLLM Proxy:WARNING[0m: proxy_cli.py:301 - LiteLLM --reload: worker processes re-read .env with override, so .env values win over shell-exported environment variables. Unset a key in .env to let a shell-exported value take precedence.
+INFO:     Will watch for changes in these directories: ['/Users/mattchaffe/Projects/bitovi/claude-usage-proxy/deploy/manifests', '/Users/mattchaffe/Projects/bitovi/litellm']
+INFO:     Uvicorn running on http://0.0.0.0:4000 (Press CTRL+C to quit)
+WARNING:  --reload-include and --reload-exclude have no effect unless watchfiles is installed.
+INFO:     Started reloader process [49885] using StatReload
+INFO:     Started server process [50171]
+INFO:     Waiting for application startup.
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:825 - litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - False
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:836 - worker_config: {"model": null, "alias": null, "api_base": null, "api_version": "2025-02-01-preview", "debug": false, "detailed_debug": true, "temperature": null, "max_tokens": null, "request_timeout": null, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": "../claude-usage-proxy/deploy/manifests/litellm_config.yaml", "use_queue": false}
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4297 - [94m setting litellm.drop_params=True[0m
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4040 - passed cache type=redis
+[92m13:51:54 - LiteLLM:DEBUG[0m: _redis.py:648 - get_redis_connection_pool: redis_kwargs
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:3751 - enable_redis_auth_cache=True: attached Redis to user_api_key_cache — virtual-key lookups are now shared across all proxy workers.
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4099 - [94mSet Cache on LiteLLM Proxy[0m
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4297 - [94m setting litellm.enable_redis_auth_cache=True[0m
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4297 - [94m setting litellm.default_internal_user_params={'user_role': 'internal_user', 'teams': ['0fc814df-71ba-4539-8b35-a6310336654b']}[0m
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4297 - [94m setting litellm.key_generation_settings={'personal_key_generation': {'allowed_user_roles': ['proxy_admin', 'internal_user', 'internal_user_viewer']}}[0m
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4757 - _alerting_callbacks: {'REDACTED, 'REDACTED', 'store_model_in_db': True, 'forward_client_headers_to_llm_api': True, 'ui_access_mode': 'none', 'default_team_disabled': True}
+[92m13:51:54 - LiteLLM Proxy:CRITICAL[0m: proxy_server.py:4357 - LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use.
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:4491 - background_health_check_config enabled=False shared=False interval_seconds=300 max_concurrency=None details=True health_check_routing=False
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e', 'combined_model_name': 'fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e', 'stripped_model_name': 'fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e', 'combined_stripped_model_name': 'fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e in litellm.model_cost: fcae303e9de523431d4efa40d91647fa72c61ddd5c397230ebff77113389da0e
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-sonnet-4-6', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-sonnet-4-6', 'stripped_model_name': 'anthropic.claude-sonnet-4-6', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-sonnet-4-6', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'us.anthropic.claude-sonnet-4-6', 'combined_model_name': 'bedrock/us.anthropic.claude-sonnet-4-6', 'stripped_model_name': 'anthropic.claude-sonnet-4-6', 'combined_stripped_model_name': 'anthropic.claude-sonnet-4-6', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=anthropic.claude-sonnet-4-6 in litellm.model_cost: anthropic.claude-sonnet-4-6
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e', 'combined_model_name': '8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e', 'stripped_model_name': '8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e', 'combined_stripped_model_name': '8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e in litellm.model_cost: 8e4b676eaef5835a328fdc3495b56c1ddacd5a3371d2d332abaf44d87729038e
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-opus-4-8', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-opus-4-8', 'stripped_model_name': 'anthropic.claude-opus-4-8', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-opus-4-8', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'us.anthropic.claude-opus-4-8', 'combined_model_name': 'bedrock/us.anthropic.claude-opus-4-8', 'stripped_model_name': 'anthropic.claude-opus-4-8', 'combined_stripped_model_name': 'anthropic.claude-opus-4-8', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=anthropic.claude-opus-4-8 in litellm.model_cost: anthropic.claude-opus-4-8
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'd3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b', 'combined_model_name': 'd3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b', 'stripped_model_name': 'd3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b', 'combined_stripped_model_name': 'd3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=d3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=d3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b in litellm.model_cost: d3d9c0a5390ad22ba768b079dd7d6df9a658779e65e8484a677519e6986bd92b
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=anthropic.claude-haiku-4-5-20251001-v1:0 in litellm.model_cost: anthropic.claude-haiku-4-5-20251001-v1:0
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e', 'combined_model_name': '530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e', 'stripped_model_name': '530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e', 'combined_stripped_model_name': '530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e in litellm.model_cost: 530951074681fe56c51f206a34789667462ff43d3876d18b82137bac3f7bcb0e
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'bedrock_converse/anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'us.anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_model_name': 'bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', 'stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'combined_stripped_model_name': 'anthropic.claude-haiku-4-5-20251001-v1:0', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=anthropic.claude-haiku-4-5-20251001-v1:0 in litellm.model_cost: anthropic.claude-haiku-4-5-20251001-v1:0
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da', 'combined_model_name': '463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da', 'stripped_model_name': '463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da', 'combined_stripped_model_name': '463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da in litellm.model_cost: 463f962367e12913d1e061e42558074edd28034fff0555dad1e19b171ed1c0da
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-30b-a3b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-30b-a3b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-30b-a3b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-30b-a3b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-30b-a3b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-30b-a3b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'qwen.qwen3-coder-30b-a3b-v1:0', 'combined_model_name': 'bedrock/qwen.qwen3-coder-30b-a3b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-30b-a3b-v1:0', 'combined_stripped_model_name': 'qwen.qwen3-coder-30b-a3b-v1:0', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=qwen.qwen3-coder-30b-a3b-v1:0 in litellm.model_cost: qwen.qwen3-coder-30b-a3b-v1:0
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe', 'combined_model_name': '071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe', 'stripped_model_name': '071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe', 'combined_stripped_model_name': '071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe in litellm.model_cost: 071f9d7146b8c8d340d2bdc71f5f7b26169ab0ae61e85c53f16aed58e697cfbe
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-480b-a35b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-480b-a35b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-480b-a35b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-480b-a35b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'combined_model_name': 'bedrock_converse/bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-480b-a35b-v1:0', 'combined_stripped_model_name': 'bedrock_converse/qwen.qwen3-coder-480b-a35b-v1:0', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'qwen.qwen3-coder-480b-a35b-v1:0', 'combined_model_name': 'bedrock/qwen.qwen3-coder-480b-a35b-v1:0', 'stripped_model_name': 'qwen.qwen3-coder-480b-a35b-v1:0', 'combined_stripped_model_name': 'qwen.qwen3-coder-480b-a35b-v1:0', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=qwen.qwen3-coder-480b-a35b-v1:0 in litellm.model_cost: qwen.qwen3-coder-480b-a35b-v1:0
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f', 'combined_model_name': '517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f', 'stripped_model_name': '517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f', 'combined_stripped_model_name': '517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f in litellm.model_cost: 517c86a103b830012a730b22b0f5f5f88705b25027cc90100c4a11a33dc03a0f
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/mistral.devstral-2-123b', 'combined_model_name': 'bedrock_converse/bedrock/mistral.devstral-2-123b', 'stripped_model_name': 'mistral.devstral-2-123b', 'combined_stripped_model_name': 'bedrock_converse/mistral.devstral-2-123b', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/mistral.devstral-2-123b', 'combined_model_name': 'bedrock_converse/bedrock/mistral.devstral-2-123b', 'stripped_model_name': 'mistral.devstral-2-123b', 'combined_stripped_model_name': 'bedrock_converse/mistral.devstral-2-123b', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'mistral.devstral-2-123b', 'combined_model_name': 'bedrock_converse/mistral.devstral-2-123b', 'stripped_model_name': 'mistral.devstral-2-123b', 'combined_stripped_model_name': 'bedrock_converse/mistral.devstral-2-123b', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'mistral.devstral-2-123b', 'combined_model_name': 'bedrock/mistral.devstral-2-123b', 'stripped_model_name': 'mistral.devstral-2-123b', 'combined_stripped_model_name': 'mistral.devstral-2-123b', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=mistral.devstral-2-123b in litellm.model_cost: mistral.devstral-2-123b
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81', 'combined_model_name': '34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81', 'stripped_model_name': '34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81', 'combined_stripped_model_name': '34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81 not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81 in litellm.model_cost: 34fdb40900da9b3f25729f3e07165728d9b7cb1c489c341eb64aaac2546a2a81
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/moonshotai.kimi-k2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/moonshotai.kimi-k2.5', 'stripped_model_name': 'moonshotai.kimi-k2.5', 'combined_stripped_model_name': 'bedrock_converse/moonshotai.kimi-k2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/moonshotai.kimi-k2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/moonshotai.kimi-k2.5', 'stripped_model_name': 'moonshotai.kimi-k2.5', 'combined_stripped_model_name': 'bedrock_converse/moonshotai.kimi-k2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/moonshotai.kimi-k2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/moonshotai.kimi-k2.5', 'stripped_model_name': 'moonshotai.kimi-k2.5', 'combined_stripped_model_name': 'bedrock_converse/moonshotai.kimi-k2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'moonshotai.kimi-k2.5', 'combined_model_name': 'bedrock_converse/moonshotai.kimi-k2.5', 'stripped_model_name': 'moonshotai.kimi-k2.5', 'combined_stripped_model_name': 'bedrock_converse/moonshotai.kimi-k2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'converse/moonshotai.kimi-k2.5', 'combined_model_name': 'bedrock/converse/moonshotai.kimi-k2.5', 'stripped_model_name': 'moonshotai.kimi-k2.5', 'combined_stripped_model_name': 'moonshotai.kimi-k2.5', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=moonshotai.kimi-k2.5 in litellm.model_cost: moonshotai.kimi-k2.5
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': '2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06', 'combined_model_name': '2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06', 'stripped_model_name': '2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06', 'combined_stripped_model_name': '2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06', 'custom_llm_provider': None}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5493 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m13:51:54 - LiteLLM:WARNING[0m: utils.py:2708 - register_model: model=2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06 not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06 in litellm.model_cost: 2e2395e1562b77ff242cfaa606709a6f076a55eaa3e72008da22ab5dd2c0bc06
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/minimax.minimax-m2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/minimax.minimax-m2.5', 'stripped_model_name': 'minimax.minimax-m2.5', 'combined_stripped_model_name': 'bedrock_converse/minimax.minimax-m2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/minimax.minimax-m2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/minimax.minimax-m2.5', 'stripped_model_name': 'minimax.minimax-m2.5', 'combined_stripped_model_name': 'bedrock_converse/minimax.minimax-m2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'bedrock/converse/minimax.minimax-m2.5', 'combined_model_name': 'bedrock_converse/bedrock/converse/minimax.minimax-m2.5', 'stripped_model_name': 'minimax.minimax-m2.5', 'combined_stripped_model_name': 'bedrock_converse/minimax.minimax-m2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'minimax.minimax-m2.5', 'combined_model_name': 'bedrock_converse/minimax.minimax-m2.5', 'stripped_model_name': 'minimax.minimax-m2.5', 'combined_stripped_model_name': 'bedrock_converse/minimax.minimax-m2.5', 'custom_llm_provider': 'bedrock_converse'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:5205 - checking potential_model_names in litellm.model_cost: {'split_model': 'converse/minimax.minimax-m2.5', 'combined_model_name': 'bedrock/converse/minimax.minimax-m2.5', 'stripped_model_name': 'minimax.minimax-m2.5', 'combined_stripped_model_name': 'minimax.minimax-m2.5', 'custom_llm_provider': 'bedrock'}
+[92m13:51:54 - LiteLLM:DEBUG[0m: utils.py:2743 - added/updated model=minimax.minimax-m2.5 in litellm.model_cost: minimax.minimax-m2.5
+[92m13:51:54 - LiteLLM Router:DEBUG[0m: router.py:7754 - 
+Initialized Model List ['claude-kimi-k2.5', 'claude-minimax-m2.5', 'claude-devstral-2-123b', 'claude-qwen-480b', 'claude-qwen-30b', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'qwen3-coder-30b-a3b', 'qwen3-coder-480b-a35b', 'devstral-2-123b', 'kimi-k2.5', 'minimax-m2.5']
+[92m13:51:54 - LiteLLM Router:INFO[0m: router.py:866 - Routing strategy: simple-shuffle
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4735 - Policy engine: no policies in config, skipping
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: utils.py:2793 - Creating Prisma Client..
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: utils.py:2919 - Success - Created Prisma Client
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: utils.py:4048 - PrismaClient: connect() called Attempting to Connect to DB
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: utils.py:4050 - PrismaClient: DB not connected, Attempting to Connect to DB
+query-engine ac9d7041ed77bcc8a8dbd2ab6616b39013829574
+[92m13:51:54 - LiteLLM:DEBUG[0m: _redis.py:648 - get_redis_connection_pool: redis_kwargs
+
+[1;37m#------------------------------------------------------------#[0m
+[1;37m#                                                            #[0m
+[1;37m#         'The worst thing about this product is...'          #[0m
+[1;37m#        https://github.com/BerriAI/litellm/issues/new        #[0m
+[1;37m#                                                            #[0m
+[1;37m#------------------------------------------------------------#[0m
+
+ Thank you for using LiteLLM! - Krrish & Ishaan
+
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+
+
+[94m
+Setting Cache on Proxy
+[32mLiteLLM: Proxy initialized with Config, Set models:[0m
+[32m    claude-sonnet-4-6[0m
+[32m    claude-opus-4-8[0m
+[32m    claude-haiku-4-5[0m
+[32m    claude-haiku-4-5-20251001[0m
+[32m    qwen3-coder-30b-a3b[0m
+[32m    qwen3-coder-480b-a35b[0m
+[32m    devstral-2-123b[0m
+[32m    kimi-k2.5[0m
+[32m    minimax-m2.5[0m
+[32mLiteLLM: Config declares 1 team(s) for DB sync[0m
+
+
+╭────────────────────────────────────────────────────────────────╮
+│ Redis Configuration                                            │
+╰────────────────────────────────────────────────────────────────╯
+📊 Connection Info                  
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ Property        ┃ Value          ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ Connection Type │ Standard Redis │
+└─────────────────┴────────────────┘
+🔧 Redis Connection Parameters
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Parameter      ┃ Value     ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ port           │ 6379      │
+│ host           │ localhost │
+│ socket_timeout │ 5.0       │
+└────────────────┴───────────┘
+
+
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: prisma_client.py:428 - IAM token auth not enabled, skipping token refresh task
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: utils.py:4693 - Started Prisma DB health watchdog (interval=30s, reconnect_cooldown=15s, probe_timeout=5.0s, reconnect_timeout=30.0s)
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: utils.py:4406 - Found prisma-query-engine at PID 50275.
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: utils.py:4410 - Watching engine PID 50275 via waitpid thread.
+[92m13:51:54 - LiteLLM:DEBUG[0m: logging_callback_manager.py:299 - Custom logger of type SkillsInjectionHook, key: SkillsInjectionHook-max_iterations=10-sandbox_timeout=120-message_logging=True-turn_off_message_logging=False already exists in [<litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x111e5e660>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x114c3d2b0>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x1231b1d30>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x1231afc50>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x1231b1e80>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x1231afed0>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x1231b1fd0>], not adding again..
+[92m13:51:54 - LiteLLM:DEBUG[0m: logging_callback_manager.py:299 - Custom logger of type _ProxyDBLogger, key: _ProxyDBLogger-message_logging=True-turn_off_message_logging=False already exists in ['cache', <bound method Router.deployment_callback_on_success of <litellm.router.Router object at 0x123151e80>>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x1231af610>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x111e5e660>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x114c3d2b0>], not adding again..
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:945 - About to initialize semantic tool filter
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:948 - litellm_settings keys = ['drop_params', 'cache', 'cache_params', 'enable_redis_auth_cache', 'default_internal_user_params', 'key_generation_settings']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7255 - Semantic tool filter not configured or not enabled, skipping initialization
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:953 - After semantic tool filter initialization
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:967 - prisma_client: <litellm.proxy.utils.PrismaClient object at 0x123152e40>
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:7534 - Tag spend update job scheduled at 34s interval (2.3x main job interval)
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: hanging_request_check.py:153 - Checking for hanging requests....
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: utils.py:5429 - Starting spend logs queue monitor (threshold: 100, poll_interval: 2.0s)
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: utils.py:3021 - All necessary views exist!
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:884 - Password migration: No plaintext passwords found
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:51:54 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qohash
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.prompt_security
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.vigil_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ovalix
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aporia_ai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.custom_code
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.xecguard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.azure
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.noma
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.unified_guardrail
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.hiddenlayer
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.javelin
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.semantic_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qualifire
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.promptguard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.dynamoai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pillar
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.repelloai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.enkryptai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.model_armor
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.onyx
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_security
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.guardrails_ai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.block_code_execution
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.cato_networks
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.grayswan
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.lasso
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pangea
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.microsoft_purview
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.headroom
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aim
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.rubrik
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.openai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:178 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.akto
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qohash
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.qohash: ['qostodian_nexus']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.prompt_security
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.prompt_security: ['prompt_security']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs: ['panw_prisma_airs']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard: ['zscaler_ai_guard']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.vigil_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.vigil_guard: ['vigil_guard']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense: ['cisco_ai_defense']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ovalix
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.ovalix: ['ovalix']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aporia_ai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.aporia_ai: ['aporia']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.custom_code
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.custom_code: ['custom_code']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.xecguard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.xecguard: ['xecguard']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.azure
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.azure: ['azure/prompt_shield', 'azure/text_moderations']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.noma
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.noma: ['noma', 'noma_v2']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.unified_guardrail
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.hiddenlayer
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.hiddenlayer: ['hiddenlayer']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.javelin
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.javelin: ['javelin']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.semantic_guard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.semantic_guard: ['semantic_guard']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qualifire
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.qualifire: ['qualifire']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.promptguard
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.promptguard: ['promptguard']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.dynamoai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.dynamoai: ['dynamoai']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pillar
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.pillar: ['pillar']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr: ['crowdstrike_aidr']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.repelloai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.repelloai: ['repelloai']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.enkryptai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.enkryptai: ['enkryptai']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.model_armor
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.model_armor: ['model_armor']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.onyx
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.onyx: ['onyx']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_security
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_security: ['mcp_security']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.guardrails_ai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.guardrails_ai: ['guardrails_ai']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter: ['litellm_content_filter']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.block_code_execution
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.block_code_execution: ['block_code_execution']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.cato_networks
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.cato_networks: ['cato_networks']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.grayswan
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.grayswan: ['grayswan']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer: ['mcp_jwt_signer']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails: ['ibm_guardrails']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:117 - Found initialize_guardrail function in litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission: ['mcp_end_user_permission']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.lasso
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.lasso: ['lasso']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pangea
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.pangea: ['pangea']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.microsoft_purview
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.microsoft_purview: ['microsoft_purview']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.headroom
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.headroom: ['headroom']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:117 - Found initialize_guardrail function in litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api: ['generic_guardrail_api']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aim
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.aim: ['aim']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.rubrik
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.rubrik: ['rubrik']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.openai
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.openai: ['openai_moderation']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:99 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.akto
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:108 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.akto: ['akto']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:126 - Discovered 46 guardrail initializers: ['qostodian_nexus', 'prompt_security', 'panw_prisma_airs', 'zscaler_ai_guard', 'vigil_guard', 'cisco_ai_defense', 'ovalix', 'aporia', 'custom_code', 'xecguard', 'azure/prompt_shield', 'azure/text_moderations', 'noma', 'noma_v2', 'hiddenlayer', 'javelin', 'semantic_guard', 'qualifire', 'promptguard', 'dynamoai', 'pillar', 'crowdstrike_aidr', 'repelloai', 'enkryptai', 'model_armor', 'onyx', 'mcp_security', 'guardrails_ai', 'litellm_content_filter', 'block_code_execution', 'cato_networks', 'grayswan', 'mcp_jwt_signer', 'ibm_guardrails', 'tool_policy', 'mcp_end_user_permission', 'lasso', 'pangea', 'microsoft_purview', 'headroom', 'llm_as_a_judge', 'generic_guardrail_api', 'aim', 'rubrik', 'openai_moderation', 'akto']
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:51:54 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:51:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:51:54 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:51:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:51:54 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.weave
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.litellm_agent
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.dotprompt
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:63 - Found prompt_initializer_registry in litellm.integrations.dotprompt: ['dotprompt']
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.code_interpreter_interception
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.gitlab
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:63 - Found prompt_initializer_registry in litellm.integrations.gitlab: ['gitlab']
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.azure_sentinel
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.otel
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.arize
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:63 - Found prompt_initializer_registry in litellm.integrations.arize: ['arize_phoenix']
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.agentops
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.compression_interception
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.focus
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.prometheus_helpers
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.generic_prompt_management
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:63 - Found prompt_initializer_registry in litellm.integrations.generic_prompt_management: ['generic_prompt_management']
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.levo
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.websearch_interception
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.deepeval
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.newrelic
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.bitbucket
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:63 - Found prompt_initializer_registry in litellm.integrations.bitbucket: ['bitbucket']
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.vantage
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.mavvrik_focus
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:74 - Discovered 5 prompt initializers: ['dotprompt', 'gitlab', 'arize_phoenix', 'generic_prompt_management', 'bitbucket']
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB
+[92m13:51:55 - LiteLLM:DEBUG[0m: focus_logger.py:145 - No Focus export logger registered; skipping scheduler
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: mavvrik_focus_logger.py:273 - No MavvrikFocusLogger registered; skipping scheduler
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7807 - key_rotation_enabled: False
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7837 - Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7862 - expired_ui_session_key_cleanup_enabled: False
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7897 - Expired UI session key cleanup disabled (set LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:7672 - Batch cost check job scheduled successfully
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:7702 - Responses cost check job scheduled successfully
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:7717 - APScheduler started with memory leak prevention settings: removed jitter, increased intervals, misfire_grace_time=3600
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: team_endpoints.py:1698 - /team/update - team_id='0fc814df-71ba-4539-8b35-a6310336654b' team_alias='Bitovi' organization_id=None metadata={'is_from_config': True, 'team_member_budget_id': 'team-Bitovi-budget-81e4e6f733994798992a2213517ae102'} tpm_limit=None rpm_limit=None max_budget=None soft_budget=None models=None blocked=None budget_duration=None tags=None model_aliases=None guardrails=None policies=None object_permission=None disable_global_guardrails=None team_member_budget=100.0 team_member_budget_duration='30d' team_member_rpm_limit=None team_member_tpm_limit=None team_member_key_duration=None allowed_passthrough_routes=None secret_manager_settings=None prompts=None model_rpm_limit=None model_tpm_limit=None mcp_rpm_limit=None allowed_vector_store_indexes=None enforced_batch_output_expires_after=None enforced_file_expires_after=None router_settings=None access_group_ids=None budget_limits=None default_team_member_models=None model_max_budget={'claude-opus-4-8': BudgetConfig(max_budget=20.0, budget_duration='1d', tpm_limit=None, rpm_limit=None)}
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: team_endpoints.py:357 - Updated team member budget table: team-Bitovi-budget-81e4e6f733994798992a2213517ae102, with team_member_budget=100.0, team_member_rpm_limit=None, team_member_tpm_limit=None
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: team_endpoints.py:1969 - Successfully updated team - 0fc814df-71ba-4539-8b35-a6310336654b, info
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: config_teams_sync.py:242 - Updated config team team_id=0fc814df-71ba-4539-8b35-a6310336654b team_alias=Bitovi
+[92m13:51:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:8047 - LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable).
+[92m13:51:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:768 - SESSION REUSE: Created shared aiohttp session for connection pooling (ID: 4899292224, limit=1000, limit_per_host=500)
+INFO:     Application startup complete.
+[92m13:51:55 - LiteLLM Proxy:ERROR[0m: proxy_server.py:13102 - litellm.proxy.proxy_server.login_v2(): Exception occurred - Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.
+Traceback (most recent call last):
+  File "/Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/proxy_server.py", line 13064, in login_v2
+    login_result = await authenticate_user(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "/Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/auth/login_utils.py", line 132, in authenticate_user
+    raise ProxyException(
+    ...<4 lines>...
+    )
+litellm.proxy._types.ProxyException: Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.
+INFO:     127.0.0.1:57784 - "POST /v2/login HTTP/1.1" 500 Internal Server Error
+[92m13:51:56 - LiteLLM Proxy:ERROR[0m: proxy_server.py:13102 - litellm.proxy.proxy_server.login_v2(): Exception occurred - Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.
+Traceback (most recent call last):
+  File "/Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/proxy_server.py", line 13064, in login_v2
+    login_result = await authenticate_user(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "/Users/mattchaffe/Projects/bitovi/litellm/litellm/proxy/auth/login_utils.py", line 132, in authenticate_user
+    raise ProxyException(
+    ...<4 lines>...
+    )
+litellm.proxy._types.ProxyException: Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.
+INFO:     127.0.0.1:57786 - "POST /v2/login HTTP/1.1" 500 Internal Server Error
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:52:09 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:52:24 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:52:24 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:52:24 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:52:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:52:24 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:52:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:52:24 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:52:24 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:52:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB
+[92m13:52:28 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:52:39 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:52:54 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:52:54 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:52:54 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:52:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:52:54 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:52:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:52:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:52:54 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:52:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB
+[92m13:53:02 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:53:09 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:53:24 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:53:24 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:53:24 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:53:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:53:24 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:53:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:53:24 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:53:24 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:53:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB
+[92m13:53:36 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:53:39 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:53:54 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:53:54 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:53:54 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:53:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:53:54 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:53:54 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:53:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:53:54 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:53:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:54:09 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:54:10 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:37 - Aggregating updates by entity type: []
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1089 - User Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1121 - End-User Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1131 - KEY Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1164 - Team Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1197 - Team Membership Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1256 - Org Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Tag Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1339 - Agent Spend transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily User Spend transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Team Spend transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Org Spend transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily End_user Spend transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:93 - Aggregated daily spend update transactions: {}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1479 - Daily Agent Spend transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: utils.py:5281 - Spend Logs transactions: 0
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: hanging_request_check.py:153 - Checking for hanging requests....
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5088 - len new_models: 0
+[92m13:54:24 - LiteLLM Router:DEBUG[0m: router.py:9656 - Updated Router settings: {'routing_strategy_args': {}, 'routing_strategy': 'simple-shuffle', 'allowed_fails': 3, 'cooldown_time': 5, 'num_retries': 2, 'timeout': 6000.0, 'retry_after': 0, 'fallbacks': None, 'context_window_fallbacks': None, 'model_group_retry_policy': {}, 'retry_policy': None, 'model_group_alias': {'claude-kimi-k2.5': 'kimi-k2.5', 'claude-minimax-m2.5': 'minimax-m2.5', 'claude-devstral-2-123b': 'devstral-2-123b', 'claude-qwen-480b': 'qwen3-coder-480b-a35b', 'claude-qwen-30b': 'qwen3-coder-30b-a3b'}, 'enable_weighted_failover': False, 'routing_groups': []}
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6214 - guardrails from the DB []
+[92m13:54:24 - LiteLLM Proxy:INFO[0m: policy_registry.py:548 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m13:54:24 - LiteLLM Proxy:INFO[0m: attachment_registry.py:453 - Synced 0 attachments from DB to in-memory registry
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6252 - Successfully synced policies and attachments from DB
+[92m13:54:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3746 - Loading MCP servers from database into registry...
+[92m13:54:24 - LiteLLM:INFO[0m: mcp_server_manager.py:3765 - Found 0 MCP servers in database
+[92m13:54:24 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3838 - MCP registry refreshed (0 servers in registry)
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2640 - initializing pass through endpoints
+[92m13:54:24 - LiteLLM Proxy:INFO[0m: proxy_server.py:6367 - Loading 0 search tool(s) from database into router
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6383 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m13:54:24 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:328 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m13:54:24 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6268 - Successfully synced tool policy from DB

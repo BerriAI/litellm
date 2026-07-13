@@ -29,10 +29,23 @@ vi.mock("../../../templates/key_info_view", () => ({
   ),
 }));
 
+vi.mock("../../hooks/useUsagePageSearchParams", () => ({
+  useUsagePageSearchParams: vi.fn(() => ({
+    view: "global",
+    teamId: null,
+    keyId: null,
+    updateSearchParams: vi.fn(),
+  })),
+}));
+
+import { useUsagePageSearchParams } from "../../hooks/useUsagePageSearchParams";
+
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockKeyInfoV1Call = vi.mocked(networking.keyInfoV1Call);
   const mockTransformKeyInfo = vi.mocked(transformKeyInfo.transformKeyInfo);
+  const mockUseUsagePageSearchParams = vi.mocked(useUsagePageSearchParams);
+  const mockUpdateSearchParams = vi.fn();
 
   const mockAuth = {
     token: "mock-token",
@@ -60,6 +73,13 @@ describe("TopKeyView", () => {
     mockSetTopKeysLimit.mockClear();
     mockKeyInfoV1Call.mockClear();
     mockTransformKeyInfo.mockClear();
+    mockUpdateSearchParams.mockClear();
+    mockUseUsagePageSearchParams.mockReturnValue({
+      view: "global",
+      teamId: null,
+      keyId: null,
+      updateSearchParams: mockUpdateSearchParams,
+    });
   });
 
   it("should render", () => {
@@ -388,6 +408,30 @@ describe("TopKeyView", () => {
     await waitFor(() => {
       expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
     });
+    expect(mockUpdateSearchParams).toHaveBeenCalledWith({ key: "key-123" });
+  });
+
+  it("should open modal from ?key= without rewriting the URL", async () => {
+    const mockKeyInfo = { key: "info" };
+    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
+    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
+    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockUseUsagePageSearchParams.mockReturnValue({
+      view: "global",
+      teamId: null,
+      keyId: "key-from-url",
+      updateSearchParams: mockUpdateSearchParams,
+    });
+
+    render(<TopKeyView {...baseProps} />);
+
+    await waitFor(() => {
+      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-from-url");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
+    });
+    expect(mockUpdateSearchParams).not.toHaveBeenCalledWith({ key: "key-from-url" });
   });
 
   it("should close modal when close button is clicked", async () => {

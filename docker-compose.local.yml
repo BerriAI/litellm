@@ -1,0 +1,97 @@
+# Local UI verification with hot-reload (proxy Python + Next.js UI)
+#
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Proxy API + UI at /ui: http://localhost:4000/ui/
+# UI hot-reload (recommended for dashboard work): http://localhost:3000
+# Login: admin / sk-1234
+# Team Overview: Teams -> Local Demo
+#
+# Python edits under ./litellm reload via --reload (PYTHONPATH prefers /app/litellm).
+# UI edits: use the `ui` service on :3000 (Next HMR). To refresh :4000/ui,
+# run `npm run build` in ui/litellm-dashboard (out/ is bind-mounted).
+
+services:
+  litellm:
+    build:
+      context: .
+      target: runtime
+    image: litellm-local:ui-verify
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./docker/local_ui_verify_config.yaml:/app/config.yaml:ro
+      # Prefer repo source over the image's site-packages copy (watched by --reload)
+      - ./litellm:/app/litellm
+      - ./ui/litellm-dashboard/out:/app/litellm/proxy/_experimental/out
+      - ./enterprise:/app/enterprise
+    command:
+      - "--config=/app/config.yaml"
+      - "--detailed_debug"
+      - "--reload"
+    environment:
+      LITELLM_MASTER_KEY: sk-1234
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      PYTHONPATH: /app
+      PYTHONDONTWRITEBYTECODE: "1"
+      # Optional: real completions for spend demos. UI budget display works without it.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  ui:
+    image: node:20.18-alpine3.20@sha256:3488b10bf958af7125a176419d2d8a9937d895bf124012aae811651988d2ffe6
+    working_dir: /ui
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./ui/litellm-dashboard:/ui
+      - ui_node_modules:/ui/node_modules
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    command:
+      - sh
+      - -c
+      - npm ci --prefer-offline && npm run dev -- --hostname 0.0.0.0 --port 3000
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5432:5432"
+    volumes:
+      - litellm_local_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  litellm_local_postgres:
+  ui_node_modules:

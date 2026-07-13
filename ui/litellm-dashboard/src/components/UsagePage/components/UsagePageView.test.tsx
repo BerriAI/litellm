@@ -42,6 +42,34 @@ vi.mock("./EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
+vi.mock("../hooks/useUsagePageSearchParams", async () => {
+  const React = await import("react");
+  return {
+    parseUsageView: (raw: string | null | undefined) => raw || "global",
+    useUsagePageSearchParams: () => {
+      const [view, setView] = React.useState("global");
+      const [teamId, setTeamId] = React.useState<string | null>(null);
+      const [keyId, setKeyId] = React.useState<string | null>(null);
+      return {
+        view,
+        teamId,
+        keyId,
+        updateSearchParams: (patch: { view?: string | null; team?: string | null; key?: string | null }) => {
+          if ("view" in patch) {
+            setView(patch.view || "global");
+          }
+          if ("team" in patch) {
+            setTeamId(patch.team ?? null);
+          }
+          if ("key" in patch) {
+            setKeyId(patch.key ?? null);
+          }
+        },
+      };
+    },
+  };
+});
+
 vi.mock("./EntityUsage/EntityUsage", () => ({
   default: () => <div>Entity Usage</div>,
   EntityList: [],
@@ -68,6 +96,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
         "data-testid": "usage-view-select",
       },
       React.createElement("option", { value: "global" }, "Global Usage"),
+      React.createElement("option", { value: "my-budgets" }, "My Budgets"),
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
       React.createElement("option", { value: "customer" }, "Customer Usage"),

@@ -17,6 +17,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -8864,6 +8865,77 @@ async def test_team_member_me_returns_defaults_when_no_membership_row(mock_db_cl
     assert response.role == "user"
     assert response.spend == 0.0
     assert response.litellm_budget_table is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_me_fills_team_default_budget_when_no_membership_row(
+    mock_db_client,
+):
+    """When membership has no budget row, surface the team's default member budget."""
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_me
+
+    team_id = "team-me-default-budget"
+    caller_id = "alice@example.com"
+    caller_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id
+    )
+    default_budget = LiteLLM_BudgetTable(
+        budget_id="team-default-b",
+        max_budget=100.0,
+        budget_duration="30d",
+        model_max_budget=None,
+    )
+    team = LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        team_alias="team-vec",
+        members_with_roles=[
+            Member(user_id=caller_id, user_email=None, role="user"),
+        ],
+        metadata={"team_member_budget_id": "team-default-b"},
+        models=[],
+        spend=0.0,
+        model_max_budget={
+            "claude-opus-4-8": {"budget_limit": 20, "time_period": "1d"},
+        },
+    )
+
+    p_team, p_membership, p_user = _patch_member_me_helpers(team=team)
+    with (
+        p_team,
+        p_membership,
+        p_user,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_member_default_budget",
+            AsyncMock(return_value=default_budget),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._build_model_max_budget_usage_for_member_me",
+            AsyncMock(
+                return_value={
+                    "claude-opus-4-8": {
+                        "current_spend": 5.0,
+                        "budget_limit": 20.0,
+                        "time_period": "1d",
+                        "scope": "team",
+                        "percent_used": 25.0,
+                    }
+                }
+            ),
+        ),
+    ):
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=caller_auth,
+        )
+
+    assert response.using_team_default_budget is True
+    assert response.litellm_budget_table is not None
+    assert response.litellm_budget_table.max_budget == 100.0
+    assert response.model_max_budget_usage is not None
+    assert response.model_max_budget_usage["claude-opus-4-8"]["percent_used"] == 25.0
 
 
 @pytest.mark.asyncio

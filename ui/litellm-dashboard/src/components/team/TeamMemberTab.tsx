@@ -62,10 +62,22 @@ export default function TeamMemberTab({
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
     const maxBudget = membership?.litellm_budget_table?.max_budget;
-    if (maxBudget === null || maxBudget === undefined) {
-      return null;
+    if (maxBudget !== null && maxBudget !== undefined) {
+      return formatNumber(maxBudget);
     }
-    return formatNumber(maxBudget);
+    const teamDefault = teamData.team_info.team_member_budget_table?.max_budget;
+    if (teamDefault !== null && teamDefault !== undefined) {
+      return formatNumber(teamDefault);
+    }
+    return null;
+  };
+
+  const getUserBudgetDuration = (userId: string | null): string | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const memberDuration = membership?.litellm_budget_table?.budget_duration;
+    if (memberDuration) return memberDuration;
+    return teamData.team_info.team_member_budget_table?.budget_duration ?? null;
   };
 
   // Helper function to get rate limits for a user
@@ -168,8 +180,24 @@ export default function TeamMemberTab({
       key: "budget",
       render: (_: unknown, record: Member) => {
         const budget = getUserBudget(record.user_id);
+        const spend = getUserCurrentCycleSpend(record.user_id);
+        if (!budget) {
+          return <Typography.Text>No Limit</Typography.Text>;
+        }
+        const budgetNum = Number(budget);
+        const percent =
+          budgetNum > 0 ? Math.min(Math.round((spend / budgetNum) * 1000) / 10, 999.9) : 0;
+        const duration = getUserBudgetDuration(record.user_id);
         return (
-          <Typography.Text>{budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}</Typography.Text>
+          <div>
+            <Typography.Text>
+              ${formatNumberWithCommas(spend, 2)} of ${formatNumberWithCommas(budgetNum, 2)}
+              {duration ? ` / ${duration}` : ""}
+            </Typography.Text>
+            <Typography.Text type="secondary" className="block text-xs">
+              {percent}% used
+            </Typography.Text>
+          </div>
         );
       },
     },

@@ -243,7 +243,9 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText(/\$100\.5/)).toBeInTheDocument();
+    expect(screen.getAllByText(/\$100\.5/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/of \$1,?000/)).toBeInTheDocument();
+    expect(screen.getByText(/10\.1% used/)).toBeInTheDocument();
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });
