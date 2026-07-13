@@ -3678,8 +3678,8 @@ def _merge_budget_alert_email_configs(
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
-    user_obj: Optional[LiteLLM_UserTable] = None,
-    thresholds: Optional[list[float]] = None,
+    user_obj: LiteLLM_UserTable | None = None,
+    thresholds: list[float] | None = None,
 ):
     """
     Fires a non-blocking budget alert for each configured threshold the key has crossed
@@ -3692,7 +3692,7 @@ async def _virtual_key_max_budget_alert_check(
         return
 
     owner_email = user_obj.user_email if user_obj else None
-    alert_email_config: Optional[dict[str, list[str]]] = _merge_budget_alert_email_configs(
+    alert_email_config: dict[str, list[str]] | None = _merge_budget_alert_email_configs(
         global_cfg=litellm.default_key_max_budget_alert_emails,
         per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
     )
@@ -3773,11 +3773,11 @@ def _sanitize_alert_thresholds(thresholds: list[float]) -> list[float]:
 
 
 async def _team_max_budget_alert_check(
-    team_object: Optional[LiteLLM_TeamTable],
-    valid_token: Optional[UserAPIKeyAuth],
+    team_object: LiteLLM_TeamTable | None,
+    valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
     spend: float,
-    thresholds: Optional[list[float]] = None,
+    thresholds: list[float] | None = None,
 ) -> None:
     """
     Fires a non-blocking budget alert for each configured threshold the team has crossed
@@ -3831,11 +3831,11 @@ async def _team_max_budget_alert_check(
 
 
 async def _user_max_budget_alert_check(
-    user_object: Optional[LiteLLM_UserTable],
-    valid_token: Optional[UserAPIKeyAuth],
+    user_object: LiteLLM_UserTable | None,
+    valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
     spend: float,
-    thresholds: Optional[list[float]] = None,
+    thresholds: list[float] | None = None,
 ) -> None:
     """
     Fires a non-blocking budget alert for each configured threshold the user has crossed
