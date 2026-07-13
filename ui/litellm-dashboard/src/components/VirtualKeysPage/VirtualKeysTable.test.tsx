@@ -266,7 +266,8 @@ it("should render the redesigned table headers", () => {
   expect(screen.getByText("Key")).toBeInTheDocument();
   expect(screen.getByText("Team")).toBeInTheDocument();
   expect(screen.getByText("Models")).toBeInTheDocument();
-  expect(screen.getByText("Spend / Budget")).toBeInTheDocument();
+  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" })).toBeInTheDocument();
+  expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toBeInTheDocument();
 });
 
 it("sorts by the backend key_alias field (not the column label) when the Key header is clicked", async () => {
@@ -294,6 +295,23 @@ it("sorts by the backend max_budget field when 'Budget descending' is chosen fro
       expect.objectContaining({ sortBy: "max_budget", sortOrder: "desc" }),
     );
   });
+});
+
+it("emphasizes the active field in the Spend / Budget header so the sorted column reads without opening the menu", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+
+  await user.click(screen.getByTestId("sort-trigger-spend"));
+  await user.click(await screen.findByText("Budget descending"));
+
+  await waitFor(() => {
+    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" }).className).toContain(
+      "font-semibold",
+    );
+  });
+  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" }).className).toContain(
+    "text-muted-foreground",
+  );
 });
 
 it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {

@@ -103,22 +103,17 @@ export interface DataTableSortField {
 
 interface DataTableMultiSortHeaderProps<TData> {
   table: Table<TData>;
-  title: React.ReactNode;
   fields: DataTableSortField[];
   className?: string;
 }
 
 /**
  * Sort header for a column that merges several backend-sortable fields into one cell
- * (e.g. a combined Spend / Budget cell). The chevron opens a menu offering each field in
- * both directions, so the user picks which field drives the sort while the cell stays merged.
+ * (e.g. a combined Spend / Budget cell). The header label is the field labels joined by " / ",
+ * with the field currently driving the sort emphasized so the active column reads at a glance
+ * without opening the menu. The chevron opens a menu offering each field in both directions.
  */
-export function DataTableMultiSortHeader<TData>({
-  table,
-  title,
-  fields,
-  className,
-}: DataTableMultiSortHeaderProps<TData>) {
+export function DataTableMultiSortHeader<TData>({ table, fields, className }: DataTableMultiSortHeaderProps<TData>) {
   const active = table.getState().sorting[0];
   const activeField = active !== undefined && fields.some((field) => field.id === active.id) ? active : undefined;
   const activeDirection: SortDirection = activeField?.desc === true ? "desc" : "asc";
@@ -129,9 +124,31 @@ export function DataTableMultiSortHeader<TData>({
     { key: `${field.id}-desc`, id: field.id, desc: true, label: `${field.label} descending`, Icon: ChevronDown },
   ]);
 
+  const segmentClass = (isActive: boolean): string => {
+    if (isActive) return "font-semibold text-foreground";
+    if (activeField) return "text-muted-foreground";
+    return "";
+  };
+
+  const labelSegments = fields.flatMap((field, index) => {
+    const isActive = activeField?.id === field.id;
+    const segment = (
+      <span key={field.id} data-sort-field={field.id} className={segmentClass(isActive)}>
+        {field.label}
+      </span>
+    );
+    if (index === 0) return [segment];
+    return [
+      <span key={`sep-${field.id}`} className="text-muted-foreground">
+        {" / "}
+      </span>,
+      segment,
+    ];
+  });
+
   return (
     <div className={cn("flex items-center gap-1", className)}>
-      <span className="font-medium">{title}</span>
+      <span className="font-medium">{labelSegments}</span>
       <Menu.Root>
         <Menu.Trigger
           render={

@@ -62,7 +62,6 @@ const multiSortColumns: ColumnDef<Person, unknown>[] = [
     header: ({ table }) => (
       <DataTableMultiSortHeader
         table={table}
-        title="Spend / Budget"
         fields={[
           { id: "spend", label: "Spend" },
           { id: "max_budget", label: "Budget" },
