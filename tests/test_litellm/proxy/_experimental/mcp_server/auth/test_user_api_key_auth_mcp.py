@@ -5103,7 +5103,13 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             self._patch_user_reload(
-                return_value=MagicMock(user_id="sso-user-7", metadata={"scim_active": True})
+                return_value=MagicMock(
+                    user_id="sso-user-7",
+                    metadata={"scim_active": True},
+                    user_role=None,
+                    object_permission=None,
+                    object_permission_id=None,
+                )
             ) as get_user_object,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
@@ -5115,6 +5121,44 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert mcp_server_auth_headers == {
             "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
         }
+
+    async def test_user_subject_envelope_carries_the_users_mcp_object_permission(self):
+        """The admitted user's own MCP object permission rides on the returned auth so the shared
+        get_allowed_mcp_servers grants the user their litellm-granted servers, rather than admitting a
+        bare user with no MCP access. Regression for the signed-in SSO client getting zero tools because
+        the reload dropped the user's object permission."""
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-user-7", mcp_servers=["bridge_delegate_server"]
+        )
+        envelope = self._mint_bridge_envelope(user_id="sso-user-7")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_user_reload(
+                return_value=MagicMock(
+                    user_id="sso-user-7",
+                    metadata={"scim_active": True},
+                    user_role=None,
+                    object_permission=object_permission,
+                    object_permission_id="op-user-7",
+                )
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            (auth_result, _h, _s, _headers, _o, _r) = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert auth_result.object_permission is not None
+        assert auth_result.object_permission.mcp_servers == ["bridge_delegate_server"]
 
     async def test_user_subject_envelope_missing_user_fails_closed_401(self):
         """A user_id envelope whose user has since been deleted must fail closed with a 401, not a 500.

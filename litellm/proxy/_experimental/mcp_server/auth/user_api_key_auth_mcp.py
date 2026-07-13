@@ -601,11 +601,14 @@ class MCPRequestHandler:
 
         The DCR client authenticates via SSO at the bridged authorize, which yields a user
         subject rather than a virtual key, so the envelope admits under the user's own
-        identity: the reloaded ``user_id`` rides on the returned ``UserAPIKeyAuth`` and the
-        caller's centralized policy gate then enforces the user's live budget and org state,
-        and a SCIM-deactivated owner fails closed here exactly as the key path enforces it. No
-        team is bound; a user may belong to many teams or none, so the envelope grants the
-        user's own access rather than silently selecting one team's scope.
+        identity: the reloaded ``user_id`` and the user's own MCP object permission ride on the
+        returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers`` the key path uses then
+        computes which servers the user may reach, so the user's litellm MCP grants and access groups
+        gate the request exactly as a key's do. Only the user's OWN object permission is bound: a
+        ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams, so
+        team-inherited MCP grants for a user are a follow-up (they need a many-teams union
+        ``get_allowed_mcp_servers`` does not do off one auth object). The caller's centralized policy
+        gate enforces the user's live budget and org state, and a SCIM-deactivated owner fails closed.
 
         Error handling mirrors the key path's retryable-503 contract, with one deliberate
         difference: ``get_key_object`` raises a ``ProxyException`` for a missing key, but
@@ -613,7 +616,7 @@ class MCPRequestHandler:
         ``ProxyException``/``HTTPException``). So a transient DB outage still surfaces as a retryable
         503 via ``_raise_503_if_db_unavailable``, while a missing user, or any other non-outage
         resolution failure, fails closed as a 401 rather than propagating as an opaque 500."""
-        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
@@ -634,7 +637,22 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
-        return UserAPIKeyAuth(user_id=user_object.user_id)
+        # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
+        # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
+        # get_object_permission resolver the key and team paths use; no permission logic is duplicated.
+        object_permission = user_object.object_permission
+        if user_object.object_permission_id and object_permission is None:
+            object_permission = await get_object_permission(
+                object_permission_id=user_object.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+        return UserAPIKeyAuth(
+            user_id=user_object.user_id,
+            user_role=user_object.user_role,
+            object_permission=object_permission,
+            object_permission_id=user_object.object_permission_id,
+        )
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
