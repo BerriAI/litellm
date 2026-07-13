@@ -461,7 +461,7 @@ class TestPerformRedaction:
             "async_complete_streaming_response": response_obj,
         }
 
-        result = perform_redaction(model_call_details, result=None)
+        perform_redaction(model_call_details, result=None)
 
         redacted_response = model_call_details["async_complete_streaming_response"]
         assert redacted_response.choices[0].message.content == "redacted-by-litellm"
@@ -484,7 +484,7 @@ class TestPerformRedaction:
             "complete_streaming_response": response_obj,
         }
 
-        result = perform_redaction(model_call_details, result=None)
+        perform_redaction(model_call_details, result=None)
 
         redacted_response = model_call_details["complete_streaming_response"]
         assert redacted_response.choices[0].message.content == "redacted-by-litellm"

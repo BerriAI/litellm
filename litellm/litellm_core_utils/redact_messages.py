@@ -163,10 +163,7 @@ def perform_redaction(model_call_details: dict, result):
 
     # Redact streaming response
     for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-        if (
-            model_call_details.get("stream", False) is True
-            and _streaming_key in model_call_details
-        ):
+        if model_call_details.get("stream", False) is True and _streaming_key in model_call_details:
             _streaming_response = model_call_details[_streaming_key]
             if _streaming_response is None:
                 continue
