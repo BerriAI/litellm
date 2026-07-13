@@ -9,6 +9,7 @@ Covers:
 """
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -74,7 +75,6 @@ class TestGenericAPILoggerCaching:
             }
         }
         logger_a = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
-        flush_task_a = logger_a._flush_task
 
         litellm.callback_settings["cb"]["endpoint"] = "http://127.0.0.1:9/b"
         logger_b = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
@@ -82,8 +82,9 @@ class TestGenericAPILoggerCaching:
         try:
             assert logger_a is not logger_b
 
-            await asyncio.sleep(0)
-            assert flush_task_a.cancelled() is True
+            with contextlib.suppress(asyncio.CancelledError):
+                await logger_a._flush_task
+            assert logger_a._flush_task.cancelled()
         finally:
             logger_b.shutdown()
 
@@ -109,3 +110,25 @@ class TestGenericAPILoggerCaching:
             assert _generic_api_logger_cache["cb"] is logger_a
         finally:
             logger_a.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_final_flush_error_on_cancellation_is_swallowed(self):
+        litellm.callback_settings = {
+            "cb": {
+                "callback_type": "generic_api",
+                "endpoint": "http://127.0.0.1:9/a",
+                "headers": {"Authorization": "Bearer t"},
+            }
+        }
+        logger = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
+
+        async def _raise_on_flush():
+            raise Exception("boom")
+
+        logger.flush_queue = _raise_on_flush
+
+        logger.shutdown()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await logger._flush_task
+        assert logger._flush_task.cancelled() is True
