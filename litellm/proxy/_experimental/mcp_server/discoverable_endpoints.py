@@ -547,9 +547,10 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     the egress side. No DB connection is a gateway fault (``unresolvable``) and a
     database-service-unavailable error is a retryable outage (``unavailable``). Everything else fails
     closed as ``no_active_key`` (the caller maps it to invalid_grant): a ``ProxyException`` /
-    ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user, because
-    ``get_user_object`` raises a bare ``Exception`` for a deleted user rather than a ``ProxyException``,
-    so a missing user must not be misclassified as an opaque gateway fault."""
+    ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user. ``get_user_object``
+    catches every DB failure and re-raises a bare ``ValueError`` (a deleted user and a real outage look
+    identical, the original error surviving only as ``__context__``), so the outage check walks the cause
+    chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault."""
     from litellm.proxy._types import (
         ProxyException,  # noqa: PLC0415  # inline import avoids a module-load circular import
     )
@@ -575,8 +576,8 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
         )
     except (ProxyException, HTTPException):
         return "no_active_key"
-    except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (bare Exception) or any other resolution failure fails closed as no_active_key, never a 500
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
+    except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (get_user_object's wrapped ValueError) or any other resolution failure fails closed as no_active_key, never a 500
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
             return "unavailable"
         verbose_logger.debug("_reload_active_user_by_id: user-resolution error (%s)", type(exc).__name__)
         return "no_active_key"
@@ -587,15 +588,52 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     return None
 
 
+async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:
+    """True only when the key's owning user was explicitly SCIM-deactivated, so a refresh revokes an
+    offboarded owner's key exactly as admission does via ``_reject_if_admitted_owner_scim_deactivated``.
+    A key with no owner, a missing owner record, or a failed lookup fails OPEN (returns ``False``),
+    matching admission and the standard builder: a key may outlive its owner record, and a transient DB
+    blip must not revoke a live key. Only an explicit ``scim_active`` of ``False`` gates renewal."""
+    if key.user_id is None:
+        return False
+    from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        get_user_object,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return False
+    try:
+        owner = await get_user_object(
+            user_id=key.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+    except Exception as exc:  # noqa: BLE001  # fail open: a missing owner (get_user_object's wrapped ValueError) or a DB blip must not revoke a live key
+        verbose_logger.debug("refresh: key-owner SCIM lookup failed, not revoking (%s)", type(exc).__name__)
+        return False
+    return owner is not None and isinstance(owner.metadata, dict) and owner.metadata.get("scim_active") is False
+
+
 async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResolutionFailure | None":
     """Re-validate that the subject sealed in a refresh envelope is still live, dispatching on its type:
     a key_hash reloads the virtual key, a user_id reloads the user. Returns ``None`` when the subject is
-    active or a precise failure otherwise, so revocation (a blocked key, a deactivated user) gates renewal
-    for either identity source, the same way admission gates the egress."""
+    active or a precise failure otherwise, so revocation gates renewal for either identity source the same
+    way admission gates the egress: a blocked or expired key, a SCIM-deactivated key owner (mirroring
+    admission's owner check, so an offboarded user cannot keep renewing a still-active key), and a
+    deactivated or deleted user all fail closed to ``no_active_key``."""
     match identity.subject_type:
         case "key_hash":
             reloaded = await _reload_active_key_by_hash(identity.subject)
-            return None if isinstance(reloaded, _ResolvedKey) else reloaded
+            if not isinstance(reloaded, _ResolvedKey):
+                return reloaded
+            if await _key_owner_scim_deactivated(reloaded.key):
+                return "no_active_key"
+            return None
         case "user_id":
             return await _reload_active_user_by_id(identity.subject)
         case _:
@@ -1242,7 +1280,11 @@ def _upstream_refresh_credential(token_response: object) -> "RefreshCredential |
     """Extract the upstream refresh grant from a token response, or ``None`` when there is none to seal.
     Each field is isinstance-checked so nothing untyped reaches the refresh envelope; ``refresh_expires_in``
     (the refresh token's own lifetime, when the upstream reports it) is classified like ``expires_in`` and
-    bounds the refresh envelope's TTL."""
+    bounds the refresh envelope's TTL. An upstream that reports the refresh token itself as already elapsed
+    (``refresh_expires_in`` non-positive) yields ``None`` rather than a refresh envelope: sealing a dead
+    token would hand the client a full-TTL-capped envelope the IdP will reject, so the exchange degrades to
+    an access-only response (the client re-authenticates at access expiry), mirroring how
+    :func:`_bridge_grant_from_token_response` refuses an already-elapsed access token instead of capping it."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         RefreshCredential,
     )
@@ -1252,8 +1294,10 @@ def _upstream_refresh_credential(token_response: object) -> "RefreshCredential |
     refresh = token_response.get("refresh_token")
     if not isinstance(refresh, str) or not refresh:
         return None
-    scope = token_response.get("scope")
     lifetime = _classify_upstream_lifetime(token_response.get("refresh_expires_in"))
+    if lifetime == "expired":
+        return None
+    scope = token_response.get("scope")
     return RefreshCredential(
         refresh_token=SecretStr(refresh),
         scope=scope if isinstance(scope, str) and scope else None,
@@ -1422,6 +1466,20 @@ async def exchange_token_with_server(
                 "does not send yet (tracked as LIT-4339)",
                 mcp_server.server_id,
             )
+        upstream_rejected_bridge_refresh = (
+            is_bridge
+            and grant_type == "refresh_token"
+            and exc.response.status_code == 400
+            and "invalid_grant" in exc.response.text
+        )
+        if upstream_rejected_bridge_refresh:
+            verbose_logger.info(
+                "bridge refresh: the upstream rejected the sealed refresh token for server=%s with "
+                "invalid_grant (revoked or expired at the IdP); returning invalid_grant so the client "
+                "re-runs authorization_code rather than an opaque upstream error",
+                mcp_server.server_id,
+            )
+            return _bridge_mint_error_response("invalid_refresh")
         raise
     token_response = response.json()
 
