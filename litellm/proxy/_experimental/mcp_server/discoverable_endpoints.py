@@ -1,8 +1,10 @@
 import asyncio
 import html as _html
 import json
+import math
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -10,7 +12,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,6 +40,10 @@ from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        EnvelopeKeys,
+        UpstreamTokenGrant,
+    )
     from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
@@ -326,66 +333,136 @@ def _litellm_key_from_request(request: Request) -> Optional[str]:
     return None
 
 
-def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
-    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
+    """``True`` when the presented key is neither blocked nor past its expiry.
 
-    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
-    identity is trusted to key a stored credential; a revoked or expired key must not be able to
-    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
-    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
-    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
-    ``get_key_object`` raises on a row that no longer exists.
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before it is
+    trusted; a revoked or expired key must not mint a bridge envelope or write a stored credential.
+    ``get_key_object`` resolves a row without these checks (the main ``user_api_key_auth`` pipeline
+    enforces them downstream, which this endpoint bypasses), so they are applied here. Deleted keys
+    are already rejected upstream, where ``get_key_object`` raises on a row that no longer exists.
+
+    This is an active-state gate only; it deliberately does not require a ``user_id``. A valid
+    team-scoped or service-account key has no ``user_id`` yet is a legitimate credential, so gating
+    on ``user_id`` presence would wrongly reject it. Callers that need the user (the per-user token
+    store) derive it separately via :func:`_active_key_user_id`.
+
+    Total by design: ``expires`` is typed ``str | datetime``, and an unparseable string would make
+    ``datetime.fromisoformat`` raise. Since the callers run this outside their key-resolution
+    ``try``, an uncaught parse error would surface as a 500 instead of the endpoint's fail-closed
+    behavior, so a malformed expiry is treated as inactive (return ``False``) rather than raising.
     """
     if key_obj.blocked is True:
-        return None
+        return False
     expires = key_obj.expires
     if expires is not None:
-        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if isinstance(expires, datetime):
+            expiry = expires
+        else:
+            try:
+                expiry = datetime.fromisoformat(expires)
+            except (ValueError, TypeError):
+                return False
         if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry < datetime.now(timezone.utc):
-            return None
-    return key_obj.user_id
+            return False
+    return True
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
-    under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> str | None:
+    """The active key's ``user_id``, or ``None`` when the key is blocked/expired or simply has no
+    ``user_id`` (a team-scoped or service-account key). Used only by the per-user token store, which
+    needs a user to key the stored credential; the bridge mint uses the key hash and does not."""
+    return key_obj.user_id if _key_is_active(key_obj) else None
 
-    Resolves authoritatively via ``get_key_object`` (cache first, then DB) instead of a raw cache
-    peek. On a multi-replica gateway the token-exchange request can land on a worker whose in-memory
-    cache never saw the key, and a cross-replica Redis hit deserializes to a plain ``dict`` rather
-    than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
-    ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
-    silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
-    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
-    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
-    be resolved, or it is blocked/expired.
-    """
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedKey:
+    """An active litellm key resolved from the token request: its hash (the value ``get_key_object``
+    and the cache/DB layer key the record by) and the live record."""
+
+    key_hash: str
+    key: "UserAPIKeyAuth"
+
+
+_KeyResolutionFailure = Literal["no_active_key", "unavailable", "unresolvable"]
+"""Why a token request yielded no active litellm key, kept distinct so a caller statuses each truthfully
+instead of blaming the client for a gateway problem:
+- ``no_active_key``: none was presented, or the presented key is unknown / blocked / expired (the
+  caller's request is at fault)
+- ``unavailable``: the auth database was transiently unreachable while resolving (retryable)
+- ``unresolvable``: the gateway cannot resolve identity right now (no DB connection, or an unexpected
+  error) -- a gateway fault, not the caller's
+The classification mirrors admission's ``_reload_admitted_key`` so the mint (ingress) and admission
+(egress) never disagree on the status of the same outage."""
+
+
+async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyResolutionFailure":
+    """Resolve the presented litellm key to an active key record, or say precisely why not.
+
+    Single resolution path the OAuth token endpoint reuses, resolving authoritatively via
+    ``get_key_object`` (cache first, then DB). The failure is a value, not a bare ``None``, so a caller
+    can tell "the client sent no usable credential" (a request error) apart from "the gateway could not
+    check" (an infrastructure error) and status each truthfully; collapsing both to ``None`` is what let
+    a DB outage read as a 400. A resolved key is still gated by ``_key_is_active``, so a blocked or
+    expired key is ``no_active_key`` while a valid team-scoped or service-account key (no ``user_id``)
+    resolves. Classification mirrors admission's ``_reload_admitted_key``: no DB connection is a gateway
+    fault, a ``ProxyException`` / ``HTTPException`` from ``get_key_object`` is an unknown or invalid key,
+    a database-service-unavailable error is a retryable outage, and anything else is an unexpected
+    gateway fault."""
     token = _litellm_key_from_request(request)
     if not token:
-        return None
-    try:
-        from litellm.proxy._types import hash_token  # noqa: PLC0415
-        from litellm.proxy.auth.auth_checks import get_key_object  # noqa: PLC0415
-        from litellm.proxy.proxy_server import (  # noqa: PLC0415
-            prisma_client,
-            user_api_key_cache,
-        )
+        return "no_active_key"
+    from litellm.proxy._types import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        ProxyException,
+        hash_token,
+    )
+    from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        get_key_object,
+    )
+    from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        PrismaDBExceptionHandler,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        prisma_client,
+        user_api_key_cache,
+    )
 
+    if prisma_client is None:
+        return "unresolvable"
+    key_hash = hash_token(token)
+    try:
         key_obj = await get_key_object(
-            hashed_token=hash_token(token),
+            hashed_token=key_hash,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-        return _active_key_user_id(key_obj)
-    except Exception as exc:
+    except (ProxyException, HTTPException):
+        return "no_active_key"
+    except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
+            return "unavailable"
         verbose_logger.debug(
-            "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
-            "key (%s); per-user token will not be stored server-side.",
+            "_resolve_active_litellm_key: unexpected key-resolution error (%s)",
             type(exc).__name__,
         )
+        return "unresolvable"
+    if not _key_is_active(key_obj):
+        return "no_active_key"
+    return _ResolvedKey(key_hash=key_hash, key=key_obj)
+
+
+async def _extract_user_id_from_request(request: Request) -> str | None:
+    """The litellm ``user_id`` for the token request, so a per-user token is stored under the same
+    identity the egress later reads it by. Storage is best-effort, so every non-resolved outcome
+    (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
+    the bridge mint, which must status those outcomes differently, consumes
+    :func:`_resolve_active_litellm_key` directly."""
+    resolved = await _resolve_active_litellm_key(request)
+    if not isinstance(resolved, _ResolvedKey):
         return None
+    return _active_key_user_id(resolved.key)
 
 
 async def _store_per_user_token_server_side(
@@ -448,6 +525,12 @@ async def _store_per_user_token_server_side(
         )
         return  # Don't warm Redis if DB write failed
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+
+    await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server.server_id)
+
     # Warm the Redis cache so the first subsequent MCP call is a cache hit
     ttl = _compute_per_user_token_ttl(server, expires_in)
     await mcp_per_user_token_cache.set(
@@ -459,8 +542,20 @@ async def _store_per_user_token_server_side(
 
 
 def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
-    """Reject a non-oauth2 server from the gateway's OAuth authorize/token/register flow."""
-    if mcp_server.auth_type == MCPAuth.oauth2:
+    """Reject a server without upstream OAuth from the gateway's authorize/token/register flow.
+
+    The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are allowed
+    through: the caller owns the upstream token, and this relayed flow is how a browser obtains
+    one against the upstream IdP (the admin UI's browser-only Authorize uses it). The minted
+    token is upstream-audienced and held by the caller; the gateway persists nothing for these
+    modes (``_persist_dcr_client_registration`` skips them unconditionally, so even the admin
+    Authorize path with ``persist_credentials`` enabled writes nothing to the server row).
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
+        _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+    )
+
+    if mcp_server.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
         return
     raise HTTPException(
         status_code=400,
@@ -481,21 +576,84 @@ def _raise_unless_oauth2_discovery_server(
     mcp_server_name: Optional[str],
     description: str,
 ) -> None:
-    """404 a NAMED discovery request unless it resolves to an oauth2 server.
+    """404 a NAMED discovery request unless it resolves to an oauth2 or DCR-bridge server.
 
     A named server that is unknown (or hidden from the caller) and one that exists
     but is non-oauth2 both return the same 404, so the well-known discovery paths
     cannot be used to enumerate non-OAuth server names. Root discovery (no name) is
     unaffected, and pass-through servers are resolved by the caller before this runs.
+    DCR-bridge servers are admitted because they serve the gateway's own authorization
+    server metadata (the register, authorize, and token relays).
     """
     if mcp_server_name is None:
         return
     if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2:
         return
+    if mcp_server is not None and mcp_server.is_dcr_bridge:
+        return
     raise HTTPException(
         status_code=404,
         detail=f"MCP server '{mcp_server_name}' is {description}",
     )
+
+
+def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
+    """True when a DCR-bridge server relays client registration to the upstream authorization
+    server instead of short-circuiting to an admin-configured OAuth client. In the relay arm the
+    upstream holds each client's own registration, so the authorize and token relays pass the
+    client's ``client_id`` and ``redirect_uri`` through verbatim and the authorization code
+    returns directly to the client's redirect URI without transiting the gateway. Gateway-side
+    redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
+    arm, where the upstream only knows the gateway's own callback."""
+    return mcp_server.is_dcr_bridge and bool(mcp_server.registration_url) and not mcp_server.client_id
+
+
+def _require_s256_pkce(
+    code_challenge: Optional[str],
+    code_challenge_method: Optional[str],
+) -> Tuple[str, str]:
+    """DCR-bridge servers serve unauthenticated public OAuth clients, so the PKCE downgrade
+    paths (no challenge, or a non-S256 method; RFC 7636 defaults a missing method to ``plain``)
+    are rejected at the gateway instead of relying on upstream enforcement. Returns the
+    validated pair so callers get non-optional values."""
+    if code_challenge and code_challenge_method == "S256":
+        return code_challenge, code_challenge_method
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "This server requires PKCE: send code_challenge with "
+            "code_challenge_method=S256 on the authorization request"
+        ),
+    )
+
+
+def _redirect_to_upstream_authorize(
+    *,
+    mcp_server: MCPServer,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str,
+    code_challenge_method: str,
+    response_type: Optional[str],
+    scope: Optional[str],
+) -> RedirectResponse:
+    """The bridge relay arm's authorize redirect: every client-supplied parameter passes through
+    to the upstream authorize endpoint verbatim, no relay state cookie is set, and the upstream
+    enforces its own registered redirect binding for the client."""
+    scope_value = scope or (" ".join(mcp_server.scopes) if mcp_server.scopes else None)
+    passthrough_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "response_type": response_type or "code",
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        **({"scope": scope_value} if scope_value else {}),
+    }
+    parsed_auth_url = urlparse(mcp_server.authorization_url or "")
+    merged_params = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
+    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
 
 
 async def authorize_with_server(
@@ -509,10 +667,27 @@ async def authorize_with_server(
     response_type: Optional[str] = None,
     scope: Optional[str] = None,
 ):
-    if mcp_server.auth_type != "oauth2":
-        raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
+    _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+
+    if mcp_server.is_dcr_bridge:
+        # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
+        # now-non-optional pair to the upstream authorize; the short-circuit arm keeps
+        # calling this for its enforcement side effect, then falls through to the gateway
+        # /callback flow below, which reads the original code_challenge names.
+        bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
+        if _dcr_bridge_relays_client_registration(mcp_server):
+            return _redirect_to_upstream_authorize(
+                mcp_server=mcp_server,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=bridge_challenge,
+                code_challenge_method=bridge_method,
+                response_type=response_type,
+                scope=scope,
+            )
 
     # Trusted redirect_uri: same-origin, loopback, or ops-allowlisted.
     # The URI is encrypted into the OAuth state and decoded on
@@ -556,6 +731,255 @@ async def authorize_with_server(
     return response
 
 
+_UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
+"""Why an upstream token response cannot back a bridge envelope:
+- ``no_access_token``: the response carries no usable ``access_token``
+- ``expired_lifetime``: the response reports a parseable, non-positive ``expires_in``, i.e. an upstream
+  token that is already dead, so sealing it would forward a bearer the edge cannot use
+An absent or unparseable ``expires_in`` is NOT a rejection; the lifetime is merely unknown and the
+envelope caps it, the by-design behaviour for an upstream that omits the field."""
+
+
+def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
+    """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
+    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
+    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
+    envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
+    (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
+    ``Infinity`` / oversized input, which reads as unparseable rather than surfacing as a 500."""
+    if raw_expires_in is None or isinstance(raw_expires_in, bool) or not isinstance(raw_expires_in, (int, float, str)):
+        return "unspecified"
+    try:
+        numeric = float(raw_expires_in)
+        seconds = int(numeric)
+    except (ValueError, TypeError, OverflowError):
+        return "unspecified"
+    if numeric <= 0:
+        return "expired"
+    return max(1, seconds)
+
+
+def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenGrant | _UpstreamGrantRejection":
+    """Validate an upstream OAuth token response into a typed grant, or say why it cannot back an
+    envelope. Each field is isinstance-checked so nothing untyped from ``response.json()`` reaches the
+    grant. ``expires_in`` is read three ways (see :func:`_classify_upstream_lifetime`): an unknown
+    lifetime leaves the grant ``expires_in`` ``None`` for the envelope to cap, a positive value is
+    honoured, and an explicit already-elapsed value is a rejection rather than a silent fall-through to
+    the cap."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        UpstreamTokenGrant,
+    )
+
+    if not isinstance(token_response, dict):
+        return "no_access_token"
+    access = token_response.get("access_token")
+    if not isinstance(access, str) or not access:
+        return "no_access_token"
+    lifetime = _classify_upstream_lifetime(token_response.get("expires_in"))
+    if lifetime == "expired":
+        return "expired_lifetime"
+    token_type = token_response.get("token_type")
+    scope = token_response.get("scope")
+    return UpstreamTokenGrant(
+        access_token=SecretStr(access),
+        token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
+        # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
+        # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
+        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
+        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        refresh_token=None,
+        scope=scope if isinstance(scope, str) and scope else None,
+        expires_in=lifetime if isinstance(lifetime, int) else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DCR-bridge oauth_delegate mint: a three-phase pipeline whose failures are values.
+#
+#   prepare  (before the upstream exchange) -> validate every precondition and resolve identity+keys
+#   exchange (the single-use upstream code is consumed here, in exchange_token_with_server)
+#   finish   (after the exchange)           -> seal the upstream grant into the client-held envelope
+#
+# Every precondition lives in ``prepare``, which runs BEFORE the exchange, so no failure can burn the
+# single-use code or rotate a refresh token, for either grant type -- that whole class of bug is gone
+# by construction rather than guarded case by case. Failures are values mapped to an OAuth-shaped
+# response in one place (``_bridge_mint_error_response``), so status codes and the RFC 6749 §5.2 body
+# shape are uniform. Adding a failure mode is a new literal plus a match arm the type checker forces.
+# ---------------------------------------------------------------------------
+
+_BridgeMintError = Literal[
+    "no_identity",
+    "unsupported_grant",
+    "identity_unavailable",
+    "identity_unresolvable",
+    "not_configured",
+    "no_upstream_token",
+    "upstream_token_expired",
+    "too_large",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _BridgeMintReady:
+    """Everything the seal needs, resolved once before the exchange: the authorizing key hash and the
+    master-key-derived envelope keys. Passing this forward means identity resolution and key derivation
+    happen exactly once, and ``_finish_bridge_mint`` has no preconditions left that could fail."""
+
+    key_hash: str
+    keys: "EnvelopeKeys"
+
+
+def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
+    """Map a bridge-mint failure value to its token-endpoint response: one place, RFC 6749 §5.2 shape
+    (top-level ``error``, no-store headers) for every case, with a status truthful about where the
+    failure is. The caller's request is 400, a transient gateway outage is 503, a gateway
+    misconfiguration is 500, and an upstream problem is 502. The identity-resolution statuses match how
+    admission statuses the same conditions on the egress side, so mint and admit never disagree under
+    one outage."""
+    match error:
+        case "no_identity":
+            status, code, desc = (
+                400,
+                "invalid_request",
+                "this server issues a gateway-bound credential; send a litellm credential "
+                "(x-litellm-api-key or Authorization) on the token request",
+            )
+        case "unsupported_grant":
+            status, code, desc = (
+                400,
+                "unsupported_grant_type",
+                "this server issues a gateway-bound credential and supports only the authorization_code "
+                "grant; re-run authorization_code to renew rather than refresh_token",
+            )
+        case "identity_unavailable":
+            status, code, desc = (
+                503,
+                "temporarily_unavailable",
+                "the authentication database is temporarily unreachable; retry shortly",
+            )
+        case "identity_unresolvable":
+            status, code, desc = (
+                500,
+                "server_error",
+                "the gateway could not resolve the litellm identity for this request",
+            )
+        case "not_configured":
+            status, code, desc = (
+                500,
+                "server_error",
+                "the gateway is not configured to mint a gateway-bound credential (master_key is not set)",
+            )
+        case "no_upstream_token":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response has no usable access_token",
+            )
+        case "upstream_token_expired":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response reports an already-expired lifetime",
+            )
+        case "too_large":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token is too large to seal into a gateway-bound credential",
+            )
+        case _:
+            assert_never(error)
+    return JSONResponse(
+        status_code=status, content={"error": code, "error_description": desc}, headers=TOKEN_NO_CACHE_HEADERS
+    )
+
+
+def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _BridgeMintError:
+    """Lift an identity-resolution failure into the mint taxonomy, preserving origin so the status stays
+    truthful: the caller's missing credential is 400, a transient DB outage is 503, and a gateway that
+    cannot resolve identity is 500."""
+    match failure:
+        case "no_active_key":
+            return "no_identity"
+        case "unavailable":
+            return "identity_unavailable"
+        case "unresolvable":
+            return "identity_unresolvable"
+        case _:
+            assert_never(failure)
+
+
+def _upstream_rejection_to_mint_error(rejection: _UpstreamGrantRejection) -> _BridgeMintError:
+    """Lift an upstream-response rejection into the mint taxonomy; both are upstream faults (502)."""
+    match rejection:
+        case "no_access_token":
+            return "no_upstream_token"
+        case "expired_lifetime":
+            return "upstream_token_expired"
+        case _:
+            assert_never(rejection)
+
+
+async def _prepare_bridge_mint(request: Request, grant_type: str) -> "_BridgeMintReady | _BridgeMintError":
+    """Phase 1, BEFORE the upstream exchange: reject a grant this mint does not support, confirm the
+    gateway can mint (master_key set), resolve the litellm identity, and derive the envelope keys.
+    Returns a ready context or a precise failure value. Running before the exchange is what makes every
+    failure here fail closed without consuming the single-use code or rotating a refresh token. A bridge
+    server issues only envelopes and seals no upstream refresh_token, so the client holds none to
+    present: the refresh_token grant is rejected up front rather than exchanged (which could rotate the
+    upstream credential) and its result then discarded. Identity-resolution failures keep their origin
+    so the mapper statuses each truthfully."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        master_key,
+    )
+
+    if grant_type != "authorization_code":
+        return "unsupported_grant"
+    if not master_key:
+        return "not_configured"
+    resolved = await _resolve_active_litellm_key(request)
+    if not isinstance(resolved, _ResolvedKey):
+        return _key_resolution_failure_to_mint_error(resolved)
+    return _BridgeMintReady(key_hash=resolved.key_hash, keys=envelope_keys_from_master_key(master_key))
+
+
+def _finish_bridge_mint(
+    ready: "_BridgeMintReady", mcp_server: MCPServer, token_response: object, now: datetime
+) -> "JSONResponse | _BridgeMintError":
+    """Phase 3, AFTER the upstream exchange: seal the upstream grant into the client-held envelope using
+    the pre-resolved identity and keys, so the client holds one bearer that admits it and forwards the
+    upstream token with nothing stored server-side. The only failures here are properties of the
+    upstream response (no usable token, an already-expired lifetime, or a token too large to seal),
+    returned as values."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        build_bridge_token_response,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeIdentity,
+        SealedEnvelope,
+        UpstreamTokenGrant,
+    )
+
+    grant = _bridge_grant_from_token_response(token_response)
+    if not isinstance(grant, UpstreamTokenGrant):
+        return _upstream_rejection_to_mint_error(grant)
+    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=ready.key_hash)
+    sealed = build_bridge_token_response(identity, grant, ready.keys, now)
+    if not isinstance(sealed, SealedEnvelope):
+        return "too_large"
+    # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the
+    # client is never told the bearer lives past the point admission (which uses that exp) rejects it.
+    expires_in = max(0, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
+    body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
+    return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -575,8 +999,12 @@ async def exchange_token_with_server(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
+    # The id and secret must come from the same source. When the server-side client_id wins,
+    # falling back to the caller's secret pairs the persisted client with a foreign secret; the
+    # register short-circuit hands clients a placeholder secret ("dummy"), so a re-auth against a
+    # persisted public PKCE client (no stored secret) would send that placeholder and the IdP 401s.
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
-    resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    resolved_client_secret = mcp_server.client_secret if mcp_server.client_id else client_secret
     try:
         client_auth = build_token_endpoint_client_auth(
             auth_method=mcp_server.token_endpoint_auth_method,
@@ -605,15 +1033,35 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="code is required for authorization_code grant",
             )
+        bridge_token_relay = _dcr_bridge_relays_client_registration(mcp_server)
+        if bridge_token_relay and not redirect_uri:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "redirect_uri is required for the authorization_code grant on this server; "
+                    "send the same redirect_uri used on the authorization request"
+                ),
+            )
         proxy_base_url = get_request_base_url(request)
+        resolved_redirect_uri = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": f"{proxy_base_url}/callback",
+            "redirect_uri": resolved_redirect_uri,
             **client_auth.body,
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
+
+    # Phase 1: for a bridge oauth_delegate mint, validate all preconditions and resolve identity+keys
+    # BEFORE the exchange below consumes the single-use upstream code, and carry the ready context to
+    # phase 3. A failure here returns without ever touching the upstream credential.
+    bridge_mint_ready: _BridgeMintReady | None = None
+    if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
+        prepared = await _prepare_bridge_mint(request, grant_type)
+        if not isinstance(prepared, _BridgeMintReady):
+            return _bridge_mint_error_response(prepared)
+        bridge_mint_ready = prepared
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
@@ -627,9 +1075,18 @@ async def exchange_token_with_server(
             detail="MCP upstream token endpoint returned no response",
         )
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if "invalid_target" in exc.response.text:
+            verbose_logger.warning(
+                "MCP server %s: the upstream authorization server rejected the token request with "
+                "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
+                "does not send yet (tracked as LIT-4339)",
+                mcp_server.server_id,
+            )
+        raise
     token_response = response.json()
-    access_token = token_response["access_token"]
 
     # Validate token response against server-configured rules before any storage.
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
@@ -669,8 +1126,17 @@ async def exchange_token_with_server(
                 mcp_server.server_id,
             )
 
+    # A DCR-bridge oauth_delegate server hands the client a gateway-bound envelope (identity plus the
+    # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
+    # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
+    if bridge_mint_ready is not None:
+        # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
+        # OAuth-shaped response as the phase-1 preconditions.
+        minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
+        return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
+
     result = {
-        "access_token": access_token,
+        "access_token": token_response["access_token"],
         "token_type": token_response.get("token_type", "Bearer"),
     }
 
@@ -698,6 +1164,22 @@ class _PersistedDcrCredentials(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     token_endpoint_auth_method: Optional[str] = None
+    redirect_uris: Optional[list[str]] = None
+
+
+def _redirect_uri_not_registered(credentials: _PersistedDcrCredentials, current_redirect_uri: str) -> bool:
+    """Whether a persisted DCR client is positively known NOT to cover the current callback.
+
+    A DCR client is bound to the redirect_uris it was registered with; if the proxy's
+    resolved public origin has since changed, every authorize built for it will be
+    rejected by the IdP. Clients persisted before ``redirect_uris`` was recorded (and
+    admin-configured clients, which never get a recording) return False so they are
+    grandfathered rather than re-registered, because re-minting a client_id orphans
+    every user's refresh tokens for that server."""
+    recorded = credentials.redirect_uris
+    if not recorded:
+        return False
+    return current_redirect_uri not in recorded
 
 
 def _get_persisted_dcr_credentials(credentials: object) -> Optional[_PersistedDcrCredentials]:
@@ -764,11 +1246,23 @@ async def _get_persisted_mcp_server_with_dcr_client_id(
     return persisted_mcp_server, credentials
 
 
-async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> bool:
+async def _reuse_persisted_dcr_client_if_available(
+    mcp_server: MCPServer, current_redirect_uri: Optional[str] = None
+) -> bool:
     persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
     if persisted is None:
         return False
     persisted_mcp_server, credentials = persisted
+    if current_redirect_uri is not None and _redirect_uri_not_registered(credentials, current_redirect_uri):
+        verbose_logger.debug(
+            "register_client_with_server: not reusing persisted DCR client for server_id=%s; its registered "
+            "redirect_uris=%s do not include the current callback %s. The operator-facing warning for this "
+            "re-registration event is emitted once by _persisted_dcr_redirect_uri_is_stale.",
+            mcp_server.server_id,
+            credentials.redirect_uris,
+            current_redirect_uri,
+        )
+        return False
     if not _apply_persisted_dcr_credentials(mcp_server, credentials):
         return False
 
@@ -787,11 +1281,36 @@ async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> boo
     return bool(mcp_server.client_id)
 
 
-DcrRegistrationPersistenceResult = Literal["persisted", "reused", "failed"]
+async def _persisted_dcr_redirect_uri_is_stale(mcp_server: MCPServer, current_redirect_uri: str) -> bool:
+    """Whether the server's persisted DCR client is bound to redirect_uris that no longer
+    cover the current proxy callback, meaning authorize is guaranteed to fail IdP-side.
+
+    Consulted when the in-memory server already carries a hydrated client_id, which
+    otherwise short-circuits registration before any redirect check can run. Servers
+    without a persisted DCR recording (admin-configured client_id, or registered before
+    redirect_uris were recorded) are never reported stale."""
+    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
+    if persisted is None:
+        return False
+    _, credentials = persisted
+    if not _redirect_uri_not_registered(credentials, current_redirect_uri):
+        return False
+    verbose_logger.warning(
+        "register_client_with_server: persisted DCR client for server_id=%s is registered with redirect_uris=%s "
+        "which do not include the current callback %s (proxy origin changed); registering a replacement client. "
+        "Users previously signed in to this server will need to re-authenticate.",
+        mcp_server.server_id,
+        credentials.redirect_uris,
+        current_redirect_uri,
+    )
+    return True
+
+
+DcrRegistrationPersistenceResult = Literal["persisted", "reused", "skipped", "failed"]
 
 
 async def _persist_dcr_client_registration(
-    mcp_server: MCPServer, registration_response: object
+    mcp_server: MCPServer, registration_response: object, current_redirect_uri: str
 ) -> DcrRegistrationPersistenceResult:
     """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
 
@@ -801,7 +1320,23 @@ async def _persist_dcr_client_registration(
     full re-authorization instead of a silent refresh. Mirrors the ``encrypt_credentials``
     write that ``client_credentials`` and token exchange already use. Failures are logged,
     never raised: registration still returns to the caller even when persistence fails.
+
+    The client-forwarded token modes (``true_passthrough`` / ``oauth_delegate``) are skipped
+    unconditionally: the caller holds the upstream token and the gateway must hold no OAuth
+    client identity for these servers. Persisting here would stamp ``oauth2_flow`` and a
+    ``client_id`` onto a server whose mode promises the gateway stores nothing, making a
+    fresh pass-through server read as gateway-authorized.
+
+    ``redirect_uris`` records what the client is bound to so a later origin change can be
+    detected as a positive mismatch and trigger re-registration instead of stranding the
+    server on IdP-side redirect_uri rejections. ``client_secret`` and
+    ``token_endpoint_auth_method`` are written explicitly (None when absent) because
+    ``update_mcp_server`` merges credential blobs: a re-registered public client must not
+    inherit the previous client's secret or auth method.
     """
+    if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        return "skipped"
+
     try:
         registration = _DcrClientRegistration.model_validate(registration_response)
     except ValidationError as exc:
@@ -813,17 +1348,16 @@ async def _persist_dcr_client_registration(
         )
         return "failed"
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(mcp_server, current_redirect_uri=current_redirect_uri):
         return "reused"
 
     credentials: MCPCredentials = {
         "client_id": registration.client_id,
-        **({"client_secret": registration.client_secret} if registration.client_secret is not None else {}),
-        **(
-            {"token_endpoint_auth_method": "client_secret_basic"}
-            if registration.token_endpoint_auth_method == "client_secret_basic"
-            else {}
+        "client_secret": registration.client_secret,
+        "token_endpoint_auth_method": (
+            "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
         ),
+        "redirect_uris": [current_redirect_uri],
     }
 
     from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
@@ -858,6 +1392,21 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
+_MAX_UPSTREAM_ERROR_CHARS = 500
+
+
+def _safe_upstream_error_detail(response: httpx.Response) -> str:
+    """Bounded plaintext summary of an upstream registration failure for the client.
+
+    RFC 7591 error bodies are small JSON objects (``error`` / ``error_description``); relaying the
+    text lets the client read the real reason instead of a bare 500, and the length bound keeps a
+    hostile or oversized upstream body from bloating the gateway response."""
+    body = response.text
+    if not body:
+        return response.reason_phrase or "upstream registration failed"
+    return body[:_MAX_UPSTREAM_ERROR_CHARS]
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -867,19 +1416,28 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
+    client_redirect_uris: Optional[list] = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
+    current_redirect_uri = f"{request_base_url}/callback"
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": [current_redirect_uri],
     }
 
-    if mcp_server.client_id:
+    if mcp_server.client_id and not (
+        persist_credentials
+        and mcp_server.registration_url
+        and await _persisted_dcr_redirect_uri_is_stale(mcp_server, current_redirect_uri)
+    ):
         return dummy_return
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+    if await _reuse_persisted_dcr_client_if_available(
+        mcp_server,
+        current_redirect_uri=current_redirect_uri if persist_credentials else None,
+    ):
         return dummy_return
 
     if mcp_server.authorization_url is None:
@@ -888,12 +1446,19 @@ async def register_client_with_server(
     if mcp_server.registration_url is None:
         return dummy_return
 
+    bridge_relay = _dcr_bridge_relays_client_registration(mcp_server)
+    if bridge_relay and not client_redirect_uris:
+        raise HTTPException(
+            status_code=400,
+            detail="redirect_uris is required to register a client with this server",
+        )
+
     register_data = {
         "client_name": client_name,
-        "redirect_uris": [f"{request_base_url}/callback"],
-        "grant_types": grant_types or [],
-        "response_types": response_types or [],
-        "token_endpoint_auth_method": token_endpoint_auth_method or "",
+        "redirect_uris": client_redirect_uris if bridge_relay else [current_redirect_uri],
+        "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
+        "response_types": response_types or (["code"] if bridge_relay else []),
+        "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
     }
     headers = {
         "Content-Type": "application/json",
@@ -911,12 +1476,14 @@ async def register_client_with_server(
             status_code=502,
             detail="MCP upstream registration endpoint returned no response",
         )
+    if bridge_relay and response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
     response.raise_for_status()
 
     token_response = response.json()
 
-    if persist_credentials:
-        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response)
+    if persist_credentials and not bridge_relay:
+        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
 
@@ -1292,11 +1859,15 @@ async def _build_oauth_protected_resource_response(
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
-    For pass-through MCP servers (``MCPServer.is_oauth_passthrough``), the
-    gateway proxies the upstream's own ``oauth-protected-resource`` metadata
-    so that standards-compliant MCP clients discover the **upstream** IdP
-    instead of the gateway. The ``resource`` field is rewritten to the
-    gateway's own URL so clients present the bearer token back to the gateway.
+    For pass-through MCP servers, the gateway proxies the upstream's own
+    ``oauth-protected-resource`` metadata so standards-compliant MCP clients
+    discover the **upstream** IdP instead of the gateway. For ``true_passthrough``
+    and ``oauth_delegate`` the metadata is returned verbatim (``resource`` stays
+    the upstream): the caller's token is forwarded to and validated by the
+    upstream, so its audience must be the upstream — rewriting it to the gateway
+    would make a strict IdP (e.g. Entra) refuse to mint it or the upstream reject
+    it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
+    the gateway's own URL so clients present the bearer token back to the gateway.
 
     Args:
         request: FastAPI Request object
@@ -1335,9 +1906,18 @@ async def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
+        return {
+            "authorization_servers": [f"{request_base_url}/{mcp_server_name}"],
+            "resource": resource_url,
+            "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+        }
+
     # Pass-through branch: proxy the upstream's own metadata so discovery
     # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
-    if mcp_server is not None and mcp_server.is_oauth_passthrough:
+    if mcp_server is not None and (
+        mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate or mcp_server.is_true_passthrough
+    ):
         try:
             upstream_metadata = await fetch_upstream_oauth_protected_resource(mcp_server)
         except Exception as exc:
@@ -1353,8 +1933,9 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            response = {**upstream_metadata, "resource": resource_url}
-            return response
+            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+                return upstream_metadata
+            return {**upstream_metadata, "resource": resource_url}
 
         # Upstream responded but with non-200 or non-dict payload. For
         # pass-through servers the gateway is NOT the authorization server,
@@ -1661,6 +2242,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
+                client_redirect_uris=data.get("redirect_uris"),
             )
         return dummy_return
 
@@ -1675,4 +2257,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
+        client_redirect_uris=data.get("redirect_uris"),
     )

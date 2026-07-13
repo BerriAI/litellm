@@ -98,8 +98,11 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
-from .auth_checks_organization import organization_role_based_access_check
-from .auth_utils import get_model_from_request
+from .auth_checks_organization import (
+    add_team_org_context_to_request_body,
+    organization_role_based_access_check,
+)
+from .auth_utils import get_model_from_request, get_request_route_template
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -707,10 +710,29 @@ async def common_checks(
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
 
+    async def _fetch_team_org_id(team_id: str) -> Optional[str]:
+        try:
+            team = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except HTTPException:
+            return None
+        return team.organization_id
+
+    request_body_for_route_check = await add_team_org_context_to_request_body(
+        route=route,
+        request_body=request_body,
+        fetch_team_org_id=_fetch_team_org_id,
+        route_template=get_request_route_template(request),
+    )
+
     _is_route_allowed = _is_api_route_allowed(
         route=route,
         request=request,
-        request_data=request_body,
+        request_data=request_body_for_route_check,
         valid_token=valid_token,
         user_obj=user_object,
     )
@@ -1474,7 +1496,7 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     elif last_db_access_time[key][0] is not None:  # check db for non-null values (for refresh operations)
         return True
     elif last_db_access_time[key][0] is None:
-        if current_time - last_db_access_time[key] >= db_cache_expiry:
+        if current_time - last_db_access_time[key][1] >= db_cache_expiry:
             return True
     return False
 
@@ -1649,6 +1671,12 @@ async def get_user_object(
                     include={"organization_memberships": True},
                 )
             else:
+                if should_check_db:
+                    _update_last_db_access_time(
+                        key=db_access_time_key,
+                        value=None,
+                        last_db_access_time=last_db_access_time,
+                    )
                 raise Exception
 
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
@@ -4355,14 +4383,23 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     or
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
+
+    A model that already carries a namespace get_llm_provider did not consume
+    (e.g. `bedrockz/anthropic.claude-...`) is never granted here: its provider was
+    inferred from a fragment of the full string, so rebuilding
+    `{provider}/{model}` would produce `bedrock/bedrockz/...` and slip an
+    unrecognized namespace through a `bedrock/*` key.
     """
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         return False
 
+    if stripped_model == model and "/" in model:
+        return False
+
     return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{model}",
+        model=f"{custom_llm_provider}/{stripped_model}",
         allowed_model_pattern=allowed_model_pattern,
     )
 

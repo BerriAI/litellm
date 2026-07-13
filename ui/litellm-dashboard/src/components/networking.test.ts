@@ -514,3 +514,19 @@ describe("sessionSpendLogsCall", () => {
     expect(parsed.searchParams.get("page_size")).toBe("100");
   });
 });
+
+describe("buildModelGroupTestRequest", () => {
+  it("builds a chat completion request with NO max_tokens (reasoning models 400 on a tiny cap)", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("o3", "chat");
+    expect(path).toBe("/v1/chat/completions");
+    expect(body).toEqual({ model: "o3", messages: [{ role: "user", content: "test from litellm" }] });
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("builds an embeddings request for embedding mode", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("text-embedding-3-small", "embedding");
+    expect(path).toBe("/v1/embeddings");
+    expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
+  });
+});

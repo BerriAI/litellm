@@ -111,6 +111,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
@@ -1496,6 +1497,7 @@ async def generate_key_fn(
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
+    - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -2514,6 +2516,7 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
+    - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -3551,6 +3554,7 @@ async def generate_key_helper_fn(
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
+    tag_rpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     policies: Optional[list] = None,
     prompts: Optional[list] = None,
@@ -3624,6 +3628,9 @@ async def generate_key_helper_fn(
     if mcp_rpm_limit is not None:
         metadata = metadata or {}
         metadata["mcp_rpm_limit"] = mcp_rpm_limit
+    if tag_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["tag_rpm_limit"] = tag_rpm_limit
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
@@ -5134,6 +5141,9 @@ async def get_member_team_ids(
     return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
+VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -5173,6 +5183,10 @@ async def list_keys(
         False,
         description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
+    expires: str | None = Query(
+        None,
+        description="Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration.",
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -5206,6 +5220,12 @@ async def list_keys(
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Invalid status value. Currently only 'deleted' is supported."},
+            )
+
+        if isinstance(expires, str) and expires not in VALID_EXPIRES_FILTER_VALUES:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid expires value. Supported: 'active', 'expired'."},
             )
 
         complete_user_info = await validate_key_list_check(
@@ -5288,6 +5308,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            expires_filter=expires if isinstance(expires, str) else None,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5495,6 +5516,12 @@ def _validate_sort_params(sort_by: Optional[str], sort_order: str) -> Optional[D
     return order_by
 
 
+def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, Any]:
+    if expires_filter == "expired":
+        return {"AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]}
+    return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
+
+
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5509,6 +5536,7 @@ def _build_key_filter_conditions(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: str | None = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5616,6 +5644,8 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+    if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
+        where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5645,6 +5675,7 @@ async def _list_key_helper(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5682,6 +5713,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        expires_filter=expires_filter,
     )
 
     # Calculate skip for pagination
@@ -6285,8 +6317,13 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     """
     Validate the format of the key_alias.
 
-    Gated behind ``litellm.enable_key_alias_format_validation`` (default **False**).
-    When disabled, no validation is performed so existing workflows are not broken.
+    A baseline validation always runs, regardless of
+    ``litellm.enable_key_alias_format_validation``.
+
+    The remaining charset/length rules are gated behind
+    ``litellm.enable_key_alias_format_validation`` (default **False**). When disabled,
+    only the baseline validation above is performed, so existing workflows are not
+    broken.
 
     Rules (when enabled):
     - None is OK (no alias).
@@ -6294,10 +6331,20 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     - start/end with alphanumeric
     - only allow a-zA-Z0-9_-/.@
     """
-    if not litellm.enable_key_alias_format_validation:
+    if key_alias is None:
         return
 
-    if key_alias is None:
+    try:
+        raise_if_unsafe_secret_name(key_alias)
+    except ValueError:
+        raise ProxyException(
+            message="Invalid key_alias",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
+        )
+
+    if not litellm.enable_key_alias_format_validation:
         return
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):

@@ -167,7 +167,7 @@ class TestKeyRoutes:
 
 
 class TestTeamRoutes:
-    @pytest.mark.covers("management.team.new.persists")
+    @pytest.mark.covers("mgmt.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -212,7 +212,7 @@ class TestTeamRoutes:
 
 
 class TestUserRoutes:
-    @pytest.mark.covers("mgmt.user.new.persists")
+    @pytest.mark.covers("mgmt.user.new.happy_path")
     def test_new_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         email = f"e2e-mgmt-{unique_marker()}@example.com"
         user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
@@ -225,7 +225,7 @@ class TestUserRoutes:
 
 
 class TestOrganizationRoutes:
-    @pytest.mark.covers("mgmt.organization.new.persists")
+    @pytest.mark.covers("mgmt.organization.new.happy_path")
     def test_new_persists_to_organization_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -252,7 +252,7 @@ def _assert_route_forbidden(route: str, outcome: StreamingResponse) -> None:
 
 
 class TestManagementRoutePermissions:
-    @pytest.mark.covers("mgmt.key.generate.member_forbidden")
+    @pytest.mark.covers("other.auth.virtual_key.route_permission_enforced")
     def test_llm_only_key_forbidden_from_management_writes(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

@@ -3,7 +3,7 @@ from uuid import uuid4
 import httpx
 
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 from urllib.parse import urlparse
 
 import requests
@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
     HiddenlayerAction,
     HiddenlayerMessages,
@@ -63,6 +64,13 @@ def _get_jwt(auth_url, api_id, api_key):
 class HiddenlayerGuardrail(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_id: Optional[str] = None,
@@ -71,6 +79,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         auth_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
         self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
         self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"

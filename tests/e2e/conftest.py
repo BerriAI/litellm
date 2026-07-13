@@ -1,9 +1,9 @@
 """Shared fixtures for all live e2e suites under tests/e2e/.
 
-Design rule: skip on environment, fail on behavior. Live tests (marked `e2e`)
-skip when no proxy answers; once a request reaches the proxy, behavior is
-asserted. Pure unit coverage of the harness itself carries no `e2e` marker and
-runs regardless of whether a proxy is up.
+Design rule: hard failures only. Live tests (marked `e2e`) fail when no proxy
+answers or when credentials/env are missing; they never skip. Pure unit coverage
+of the harness itself carries no `e2e` marker and runs regardless of whether a
+proxy is up.
 
 Lifecycle: the `resources` fixture maps the init -> run -> teardown contract
 (lifecycle.E2ECase) onto pytest - setup is init(), the test body is run(), and
@@ -40,7 +40,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
-    """None if `base_url` answers its liveness probe, else a skip reason."""
+    """None if `base_url` answers its liveness probe, else a failure reason."""
     try:
         resp = requests.get(f"{base_url}/health/liveliness", timeout=5)
     except requests.RequestException as exc:
@@ -51,10 +51,10 @@ def _liveness_reason(label: str, base_url: str) -> str | None:
 
 
 @functools.lru_cache(maxsize=1)
-def _proxy_skip_reason() -> str | None:
-    """Probe the proxy once per session. None if it answers, else a skip reason. In
-    a split deployment the management/admin control plane is a separate service, so
-    require it too (when it differs) - else its tests would fail rather than skip."""
+def _proxy_fail_reason() -> str | None:
+    """Probe the proxy once per session. None if it answers, else a failure reason.
+    In a split deployment the management/admin control plane is a separate service,
+    so require it too when it differs."""
     reason = _liveness_reason("proxy", PROXY_BASE_URL)
     if reason is not None:
         return reason
@@ -64,19 +64,19 @@ def _proxy_skip_reason() -> str | None:
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Skip `e2e`-marked tests unless a proxy answers its liveness probe. Unmarked
-    tests (unit coverage of the harness) don't touch the proxy, so they run even
-    when none is up."""
+    """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
+    Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
+    run even when none is up. Never skip for a missing proxy."""
     if item.get_closest_marker("e2e") is None:
         return
-    reason = _proxy_skip_reason()
+    reason = _proxy_fail_reason()
     if reason is not None:
-        pytest.skip(reason)
+        pytest.fail(reason)
 
 
 def pytest_runtest_call(item: pytest.Item) -> None:
-    """Mark that an e2e test body actually ran (not skipped at setup). Skipped
-    sessions never reach this hook, so the session-finish cleanup can use it as a
+    """Mark that an e2e test body actually ran (setup passed). Sessions that fail
+    setup never reach this hook, so the session-finish cleanup can use it as a
     guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
     `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
     so they must not arm the destructive DB truncate."""
@@ -87,25 +87,32 @@ def pytest_runtest_call(item: pytest.Item) -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Once the whole e2e session is done (all suites), truncate the spend logs so
-    the DB doesn't accumulate test rows. Skipped sessions (no live proxy, no test
-    actually executed) leave the DB alone so a `DATABASE_URL` pointing at a shared
-    instance is never wiped without an e2e run. Best-effort: a cleanup failure (no
-    DB reachable) must not fail the run. The spend_tracking dir goes on sys.path
-    only for this import and is removed after, so a broader `pytest tests/` run is
-    not left with a mutated path."""
+    the DB doesn't accumulate test rows. Sessions where no e2e test body ran leave
+    the DB alone so a `DATABASE_URL` pointing at a shared instance is never wiped
+    without an e2e run. Best-effort: a cleanup failure (no DB reachable) must not
+    fail the run. The spend_tracking dir goes on sys.path only for this import and
+    is removed after, so a broader `pytest tests/` run is not left with a mutated
+    path."""
     if not session.stash.get(_E2E_TEST_RAN, False):
         return
-    spend_dir = str(Path(__file__).parent / "spend_tracking")
+    spend_dir = str(Path(__file__).parent / "quota_management" / "spend_tracking")
     sys.path.insert(0, spend_dir)
     try:
         from spend_e2e_client import reset_spend_logs  # pyright: ignore
 
         reset_spend_logs()
     except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
-        print(f"spend-log cleanup skipped: {exc}")
+        print(f"spend-log cleanup best-effort failed: {exc}")
     finally:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)
+
+    try:
+        from bob_the_builder import remediate
+
+        remediate(session)
+    except Exception as exc:  # noqa: BLE001 - remediation is best-effort
+        print(f"devin remediation best-effort failed: {exc}")
 
 
 @pytest.fixture
