@@ -318,6 +318,52 @@ class TestPerformRedaction:
         assert choice.message.content == "redacted-by-litellm"
         assert choice.message.reasoning_content == "redacted-by-litellm"
 
+    def test_redacts_tool_call_arguments(self):
+        tool_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "sensitive city"}'},
+        }
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        tool_calls=[dict(tool_call)],
+                    )
+                )
+            ]
+        )
+
+        redacted = perform_redaction({}, result)
+
+        redacted_call = redacted.choices[0].message.tool_calls[0]
+        assert redacted_call.function.arguments == "redacted-by-litellm"
+        assert redacted_call.function.name == "get_weather"
+
+    def test_redacts_tool_call_arguments_in_dict_choices(self):
+        tool_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "sensitive city"}'},
+        }
+        result = {
+            "choices": [
+                {"message": {"content": "message content", "tool_calls": [dict(tool_call)]}},
+                {"delta": {"content": "delta content", "tool_calls": [dict(tool_call)]}},
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        message_call = redacted["choices"][0]["message"]["tool_calls"][0]
+        assert message_call["function"]["arguments"] == "redacted-by-litellm"
+        assert message_call["function"]["name"] == "get_weather"
+
+        delta_call = redacted["choices"][1]["delta"]["tool_calls"][0]
+        assert delta_call["function"]["arguments"] == "redacted-by-litellm"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
