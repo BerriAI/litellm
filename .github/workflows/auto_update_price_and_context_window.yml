@@ -44,12 +44,12 @@ jobs:
           else
             git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
             git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
-          fi
-          if gh pr view "${BRANCH_NAME}" >/dev/null 2>&1; then
-            echo "PR already exists for ${BRANCH_NAME}."
-          else
-            gh pr create --title "Update model_prices_and_context_window.json file" \
-              --body "Automated update for model_prices_and_context_window.json" \
-              --head "${BRANCH_NAME}" \
-              --base "${BASE_BRANCH}"
+            if gh pr view "${BRANCH_NAME}" >/dev/null 2>&1; then
+              echo "PR already exists for ${BRANCH_NAME}."
+            else
+              gh pr create --title "Update model_prices_and_context_window.json file" \
+                --body "Automated update for model_prices_and_context_window.json" \
+                --head "${BRANCH_NAME}" \
+                --base "${BASE_BRANCH}"
+            fi
           fi
