@@ -58,7 +58,7 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
             assert_never(fault.tag)
 
 
-def dcr_fault_detail(fault: UpstreamOAuthFault) -> "tuple[int, str]":
+def dcr_fault_detail(fault: UpstreamOAuthFault) -> tuple[int, str]:
     """Status and detail string for a registration fault, raised as HTTPException by the caller.
     RFC 7591 §3.2.2 defines registration errors as 400, so a contract-conformant rejection is 400
     regardless of the status the upstream chose; everything else is a 502 upstream fault."""
