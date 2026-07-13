@@ -16,6 +16,8 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
       const [value, setValue] = React.useState(initial);
       return [value, setValue, { cancel: vi.fn(), flush: vi.fn() }];
     },
+    useDebouncedCallback: (fn: (...args: unknown[]) => void) => fn,
+    useDebouncer: (fn: (...args: unknown[]) => void) => ({ maybeExecute: fn, cancel: vi.fn(), flush: vi.fn() }),
   };
 });
 
