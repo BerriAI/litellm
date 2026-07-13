@@ -1,8 +1,10 @@
 import asyncio
 import html as _html
 import json
+import math
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -10,7 +12,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,6 +40,10 @@ from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        EnvelopeKeys,
+        UpstreamTokenGrant,
+    )
     from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
@@ -326,66 +333,136 @@ def _litellm_key_from_request(request: Request) -> Optional[str]:
     return None
 
 
-def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
-    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
+    """``True`` when the presented key is neither blocked nor past its expiry.
 
-    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
-    identity is trusted to key a stored credential; a revoked or expired key must not be able to
-    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
-    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
-    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
-    ``get_key_object`` raises on a row that no longer exists.
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before it is
+    trusted; a revoked or expired key must not mint a bridge envelope or write a stored credential.
+    ``get_key_object`` resolves a row without these checks (the main ``user_api_key_auth`` pipeline
+    enforces them downstream, which this endpoint bypasses), so they are applied here. Deleted keys
+    are already rejected upstream, where ``get_key_object`` raises on a row that no longer exists.
+
+    This is an active-state gate only; it deliberately does not require a ``user_id``. A valid
+    team-scoped or service-account key has no ``user_id`` yet is a legitimate credential, so gating
+    on ``user_id`` presence would wrongly reject it. Callers that need the user (the per-user token
+    store) derive it separately via :func:`_active_key_user_id`.
+
+    Total by design: ``expires`` is typed ``str | datetime``, and an unparseable string would make
+    ``datetime.fromisoformat`` raise. Since the callers run this outside their key-resolution
+    ``try``, an uncaught parse error would surface as a 500 instead of the endpoint's fail-closed
+    behavior, so a malformed expiry is treated as inactive (return ``False``) rather than raising.
     """
     if key_obj.blocked is True:
-        return None
+        return False
     expires = key_obj.expires
     if expires is not None:
-        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if isinstance(expires, datetime):
+            expiry = expires
+        else:
+            try:
+                expiry = datetime.fromisoformat(expires)
+            except (ValueError, TypeError):
+                return False
         if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry < datetime.now(timezone.utc):
-            return None
-    return key_obj.user_id
+            return False
+    return True
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
-    under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> str | None:
+    """The active key's ``user_id``, or ``None`` when the key is blocked/expired or simply has no
+    ``user_id`` (a team-scoped or service-account key). Used only by the per-user token store, which
+    needs a user to key the stored credential; the bridge mint uses the key hash and does not."""
+    return key_obj.user_id if _key_is_active(key_obj) else None
 
-    Resolves authoritatively via ``get_key_object`` (cache first, then DB) instead of a raw cache
-    peek. On a multi-replica gateway the token-exchange request can land on a worker whose in-memory
-    cache never saw the key, and a cross-replica Redis hit deserializes to a plain ``dict`` rather
-    than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
-    ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
-    silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
-    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
-    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
-    be resolved, or it is blocked/expired.
-    """
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedKey:
+    """An active litellm key resolved from the token request: its hash (the value ``get_key_object``
+    and the cache/DB layer key the record by) and the live record."""
+
+    key_hash: str
+    key: "UserAPIKeyAuth"
+
+
+_KeyResolutionFailure = Literal["no_active_key", "unavailable", "unresolvable"]
+"""Why a token request yielded no active litellm key, kept distinct so a caller statuses each truthfully
+instead of blaming the client for a gateway problem:
+- ``no_active_key``: none was presented, or the presented key is unknown / blocked / expired (the
+  caller's request is at fault)
+- ``unavailable``: the auth database was transiently unreachable while resolving (retryable)
+- ``unresolvable``: the gateway cannot resolve identity right now (no DB connection, or an unexpected
+  error) -- a gateway fault, not the caller's
+The classification mirrors admission's ``_reload_admitted_key`` so the mint (ingress) and admission
+(egress) never disagree on the status of the same outage."""
+
+
+async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyResolutionFailure":
+    """Resolve the presented litellm key to an active key record, or say precisely why not.
+
+    Single resolution path the OAuth token endpoint reuses, resolving authoritatively via
+    ``get_key_object`` (cache first, then DB). The failure is a value, not a bare ``None``, so a caller
+    can tell "the client sent no usable credential" (a request error) apart from "the gateway could not
+    check" (an infrastructure error) and status each truthfully; collapsing both to ``None`` is what let
+    a DB outage read as a 400. A resolved key is still gated by ``_key_is_active``, so a blocked or
+    expired key is ``no_active_key`` while a valid team-scoped or service-account key (no ``user_id``)
+    resolves. Classification mirrors admission's ``_reload_admitted_key``: no DB connection is a gateway
+    fault, a ``ProxyException`` / ``HTTPException`` from ``get_key_object`` is an unknown or invalid key,
+    a database-service-unavailable error is a retryable outage, and anything else is an unexpected
+    gateway fault."""
     token = _litellm_key_from_request(request)
     if not token:
-        return None
-    try:
-        from litellm.proxy._types import hash_token  # noqa: PLC0415
-        from litellm.proxy.auth.auth_checks import get_key_object  # noqa: PLC0415
-        from litellm.proxy.proxy_server import (  # noqa: PLC0415
-            prisma_client,
-            user_api_key_cache,
-        )
+        return "no_active_key"
+    from litellm.proxy._types import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        ProxyException,
+        hash_token,
+    )
+    from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        get_key_object,
+    )
+    from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        PrismaDBExceptionHandler,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        prisma_client,
+        user_api_key_cache,
+    )
 
+    if prisma_client is None:
+        return "unresolvable"
+    key_hash = hash_token(token)
+    try:
         key_obj = await get_key_object(
-            hashed_token=hash_token(token),
+            hashed_token=key_hash,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-        return _active_key_user_id(key_obj)
-    except Exception as exc:
+    except (ProxyException, HTTPException):
+        return "no_active_key"
+    except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
+            return "unavailable"
         verbose_logger.debug(
-            "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
-            "key (%s); per-user token will not be stored server-side.",
+            "_resolve_active_litellm_key: unexpected key-resolution error (%s)",
             type(exc).__name__,
         )
+        return "unresolvable"
+    if not _key_is_active(key_obj):
+        return "no_active_key"
+    return _ResolvedKey(key_hash=key_hash, key=key_obj)
+
+
+async def _extract_user_id_from_request(request: Request) -> str | None:
+    """The litellm ``user_id`` for the token request, so a per-user token is stored under the same
+    identity the egress later reads it by. Storage is best-effort, so every non-resolved outcome
+    (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
+    the bridge mint, which must status those outcomes differently, consumes
+    :func:`_resolve_active_litellm_key` directly."""
+    resolved = await _resolve_active_litellm_key(request)
+    if not isinstance(resolved, _ResolvedKey):
         return None
+    return _active_key_user_id(resolved.key)
 
 
 async def _store_per_user_token_server_side(
@@ -654,6 +731,255 @@ async def authorize_with_server(
     return response
 
 
+_UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
+"""Why an upstream token response cannot back a bridge envelope:
+- ``no_access_token``: the response carries no usable ``access_token``
+- ``expired_lifetime``: the response reports a parseable, non-positive ``expires_in``, i.e. an upstream
+  token that is already dead, so sealing it would forward a bearer the edge cannot use
+An absent or unparseable ``expires_in`` is NOT a rejection; the lifetime is merely unknown and the
+envelope caps it, the by-design behaviour for an upstream that omits the field."""
+
+
+def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
+    """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
+    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
+    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
+    envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
+    (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
+    ``Infinity`` / oversized input, which reads as unparseable rather than surfacing as a 500."""
+    if raw_expires_in is None or isinstance(raw_expires_in, bool) or not isinstance(raw_expires_in, (int, float, str)):
+        return "unspecified"
+    try:
+        numeric = float(raw_expires_in)
+        seconds = int(numeric)
+    except (ValueError, TypeError, OverflowError):
+        return "unspecified"
+    if numeric <= 0:
+        return "expired"
+    return max(1, seconds)
+
+
+def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenGrant | _UpstreamGrantRejection":
+    """Validate an upstream OAuth token response into a typed grant, or say why it cannot back an
+    envelope. Each field is isinstance-checked so nothing untyped from ``response.json()`` reaches the
+    grant. ``expires_in`` is read three ways (see :func:`_classify_upstream_lifetime`): an unknown
+    lifetime leaves the grant ``expires_in`` ``None`` for the envelope to cap, a positive value is
+    honoured, and an explicit already-elapsed value is a rejection rather than a silent fall-through to
+    the cap."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        UpstreamTokenGrant,
+    )
+
+    if not isinstance(token_response, dict):
+        return "no_access_token"
+    access = token_response.get("access_token")
+    if not isinstance(access, str) or not access:
+        return "no_access_token"
+    lifetime = _classify_upstream_lifetime(token_response.get("expires_in"))
+    if lifetime == "expired":
+        return "expired_lifetime"
+    token_type = token_response.get("token_type")
+    scope = token_response.get("scope")
+    return UpstreamTokenGrant(
+        access_token=SecretStr(access),
+        token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
+        # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
+        # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
+        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
+        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        refresh_token=None,
+        scope=scope if isinstance(scope, str) and scope else None,
+        expires_in=lifetime if isinstance(lifetime, int) else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DCR-bridge oauth_delegate mint: a three-phase pipeline whose failures are values.
+#
+#   prepare  (before the upstream exchange) -> validate every precondition and resolve identity+keys
+#   exchange (the single-use upstream code is consumed here, in exchange_token_with_server)
+#   finish   (after the exchange)           -> seal the upstream grant into the client-held envelope
+#
+# Every precondition lives in ``prepare``, which runs BEFORE the exchange, so no failure can burn the
+# single-use code or rotate a refresh token, for either grant type -- that whole class of bug is gone
+# by construction rather than guarded case by case. Failures are values mapped to an OAuth-shaped
+# response in one place (``_bridge_mint_error_response``), so status codes and the RFC 6749 §5.2 body
+# shape are uniform. Adding a failure mode is a new literal plus a match arm the type checker forces.
+# ---------------------------------------------------------------------------
+
+_BridgeMintError = Literal[
+    "no_identity",
+    "unsupported_grant",
+    "identity_unavailable",
+    "identity_unresolvable",
+    "not_configured",
+    "no_upstream_token",
+    "upstream_token_expired",
+    "too_large",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _BridgeMintReady:
+    """Everything the seal needs, resolved once before the exchange: the authorizing key hash and the
+    master-key-derived envelope keys. Passing this forward means identity resolution and key derivation
+    happen exactly once, and ``_finish_bridge_mint`` has no preconditions left that could fail."""
+
+    key_hash: str
+    keys: "EnvelopeKeys"
+
+
+def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
+    """Map a bridge-mint failure value to its token-endpoint response: one place, RFC 6749 §5.2 shape
+    (top-level ``error``, no-store headers) for every case, with a status truthful about where the
+    failure is. The caller's request is 400, a transient gateway outage is 503, a gateway
+    misconfiguration is 500, and an upstream problem is 502. The identity-resolution statuses match how
+    admission statuses the same conditions on the egress side, so mint and admit never disagree under
+    one outage."""
+    match error:
+        case "no_identity":
+            status, code, desc = (
+                400,
+                "invalid_request",
+                "this server issues a gateway-bound credential; send a litellm credential "
+                "(x-litellm-api-key or Authorization) on the token request",
+            )
+        case "unsupported_grant":
+            status, code, desc = (
+                400,
+                "unsupported_grant_type",
+                "this server issues a gateway-bound credential and supports only the authorization_code "
+                "grant; re-run authorization_code to renew rather than refresh_token",
+            )
+        case "identity_unavailable":
+            status, code, desc = (
+                503,
+                "temporarily_unavailable",
+                "the authentication database is temporarily unreachable; retry shortly",
+            )
+        case "identity_unresolvable":
+            status, code, desc = (
+                500,
+                "server_error",
+                "the gateway could not resolve the litellm identity for this request",
+            )
+        case "not_configured":
+            status, code, desc = (
+                500,
+                "server_error",
+                "the gateway is not configured to mint a gateway-bound credential (master_key is not set)",
+            )
+        case "no_upstream_token":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response has no usable access_token",
+            )
+        case "upstream_token_expired":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response reports an already-expired lifetime",
+            )
+        case "too_large":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token is too large to seal into a gateway-bound credential",
+            )
+        case _:
+            assert_never(error)
+    return JSONResponse(
+        status_code=status, content={"error": code, "error_description": desc}, headers=TOKEN_NO_CACHE_HEADERS
+    )
+
+
+def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _BridgeMintError:
+    """Lift an identity-resolution failure into the mint taxonomy, preserving origin so the status stays
+    truthful: the caller's missing credential is 400, a transient DB outage is 503, and a gateway that
+    cannot resolve identity is 500."""
+    match failure:
+        case "no_active_key":
+            return "no_identity"
+        case "unavailable":
+            return "identity_unavailable"
+        case "unresolvable":
+            return "identity_unresolvable"
+        case _:
+            assert_never(failure)
+
+
+def _upstream_rejection_to_mint_error(rejection: _UpstreamGrantRejection) -> _BridgeMintError:
+    """Lift an upstream-response rejection into the mint taxonomy; both are upstream faults (502)."""
+    match rejection:
+        case "no_access_token":
+            return "no_upstream_token"
+        case "expired_lifetime":
+            return "upstream_token_expired"
+        case _:
+            assert_never(rejection)
+
+
+async def _prepare_bridge_mint(request: Request, grant_type: str) -> "_BridgeMintReady | _BridgeMintError":
+    """Phase 1, BEFORE the upstream exchange: reject a grant this mint does not support, confirm the
+    gateway can mint (master_key set), resolve the litellm identity, and derive the envelope keys.
+    Returns a ready context or a precise failure value. Running before the exchange is what makes every
+    failure here fail closed without consuming the single-use code or rotating a refresh token. A bridge
+    server issues only envelopes and seals no upstream refresh_token, so the client holds none to
+    present: the refresh_token grant is rejected up front rather than exchanged (which could rotate the
+    upstream credential) and its result then discarded. Identity-resolution failures keep their origin
+    so the mapper statuses each truthfully."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        master_key,
+    )
+
+    if grant_type != "authorization_code":
+        return "unsupported_grant"
+    if not master_key:
+        return "not_configured"
+    resolved = await _resolve_active_litellm_key(request)
+    if not isinstance(resolved, _ResolvedKey):
+        return _key_resolution_failure_to_mint_error(resolved)
+    return _BridgeMintReady(key_hash=resolved.key_hash, keys=envelope_keys_from_master_key(master_key))
+
+
+def _finish_bridge_mint(
+    ready: "_BridgeMintReady", mcp_server: MCPServer, token_response: object, now: datetime
+) -> "JSONResponse | _BridgeMintError":
+    """Phase 3, AFTER the upstream exchange: seal the upstream grant into the client-held envelope using
+    the pre-resolved identity and keys, so the client holds one bearer that admits it and forwards the
+    upstream token with nothing stored server-side. The only failures here are properties of the
+    upstream response (no usable token, an already-expired lifetime, or a token too large to seal),
+    returned as values."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        build_bridge_token_response,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeIdentity,
+        SealedEnvelope,
+        UpstreamTokenGrant,
+    )
+
+    grant = _bridge_grant_from_token_response(token_response)
+    if not isinstance(grant, UpstreamTokenGrant):
+        return _upstream_rejection_to_mint_error(grant)
+    identity = EnvelopeIdentity(server_id=mcp_server.server_id, key_hash=ready.key_hash)
+    sealed = build_bridge_token_response(identity, grant, ready.keys, now)
+    if not isinstance(sealed, SealedEnvelope):
+        return "too_large"
+    # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the
+    # client is never told the bearer lives past the point admission (which uses that exp) rejects it.
+    expires_in = max(0, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
+    body = {"access_token": sealed.token.get_secret_value(), "token_type": "Bearer", "expires_in": expires_in}
+    return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -727,6 +1053,16 @@ async def exchange_token_with_server(
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
+    # Phase 1: for a bridge oauth_delegate mint, validate all preconditions and resolve identity+keys
+    # BEFORE the exchange below consumes the single-use upstream code, and carry the ready context to
+    # phase 3. A failure here returns without ever touching the upstream credential.
+    bridge_mint_ready: _BridgeMintReady | None = None
+    if mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge:
+        prepared = await _prepare_bridge_mint(request, grant_type)
+        if not isinstance(prepared, _BridgeMintReady):
+            return _bridge_mint_error_response(prepared)
+        bridge_mint_ready = prepared
+
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
         mcp_server.token_url,
@@ -751,7 +1087,6 @@ async def exchange_token_with_server(
             )
         raise
     token_response = response.json()
-    access_token = token_response["access_token"]
 
     # Validate token response against server-configured rules before any storage.
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
@@ -791,8 +1126,17 @@ async def exchange_token_with_server(
                 mcp_server.server_id,
             )
 
+    # A DCR-bridge oauth_delegate server hands the client a gateway-bound envelope (identity plus the
+    # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
+    # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
+    if bridge_mint_ready is not None:
+        # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
+        # OAuth-shaped response as the phase-1 preconditions.
+        minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
+        return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
+
     result = {
-        "access_token": access_token,
+        "access_token": token_response["access_token"],
         "token_type": token_response.get("token_type", "Bearer"),
     }
 
