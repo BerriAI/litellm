@@ -411,6 +411,40 @@ class TestPerformRedaction:
         assert tool_calls[1] == {"type": "function"}
         assert tool_calls[2]["function"]["arguments"] == "redacted-by-litellm"
 
+    def test_redacts_legacy_function_call_arguments_object(self):
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        function_call={"name": "get_weather", "arguments": '{"city": "sensitive city"}'},
+                    )
+                )
+            ]
+        )
+
+        redacted = perform_redaction({}, result)
+
+        function_call = redacted.choices[0].message.function_call
+        assert function_call.arguments == "redacted-by-litellm"
+        assert function_call.name == "get_weather"
+
+    def test_redacts_legacy_function_call_arguments_dict(self):
+        function_call = {"name": "get_weather", "arguments": '{"city": "sensitive city"}'}
+        result = {
+            "choices": [
+                {"message": {"content": "message content", "function_call": dict(function_call)}},
+                {"delta": {"content": "delta content", "function_call": dict(function_call)}},
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["choices"][0]["message"]["function_call"]["arguments"] == "redacted-by-litellm"
+        assert redacted["choices"][0]["message"]["function_call"]["name"] == "get_weather"
+        assert redacted["choices"][1]["delta"]["function_call"]["arguments"] == "redacted-by-litellm"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
