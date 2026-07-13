@@ -80,6 +80,38 @@ def patched_speech_error(monkeypatch):
 
 
 @pytest.fixture
+def patched_speech_client_error(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _raise(*args, **kwargs):
+        import litellm
+
+        raise litellm.BadRequestError(
+            message="OperationNotSupported: speech is not supported",
+            model="gpt-audio",
+            llm_provider="azure",
+        )
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise)
+    yield
+
+
+@pytest.fixture
 def patched_transcription(monkeypatch):
     router = MagicMock()
     router.model_names = ["whisper-1"]
@@ -160,6 +192,19 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_client_error_preserves_status(
+    client, auth_as, patched_speech_client_error, path
+):
+    """A client-side (4xx) provider error on speech must surface as 4xx, not 500."""
+    payload = {"model": "gpt-audio", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert "OperationNotSupported" in body["error"]["message"]
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
