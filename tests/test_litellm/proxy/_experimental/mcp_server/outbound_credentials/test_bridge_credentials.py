@@ -28,13 +28,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     EnvelopeTooLarge,
     SealedEnvelope,
     UpstreamTokenGrant,
+    key_hash_identity,
     mint_envelope,
 )
 
 _NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
 _MASTER_KEY = "sk-master-key-for-derivation-tests-0123456789"
 _ACCESS_TOKEN = "upstream-access-token-do-not-leak-8f14e45fceea"
-_IDENTITY = EnvelopeIdentity(server_id="srv-456", key_hash="hashed-key-123")
+_IDENTITY = key_hash_identity(server_id="srv-456", key_hash="hashed-key-123")
 _SERVER_ID = _IDENTITY.server_id
 
 
@@ -138,7 +139,7 @@ def test_resolve_envelope_minted_for_another_server_is_invalid():
     captured or misrouted envelope cannot forward one server's upstream credential to
     another. The valid access token stays sealed; the mismatch alone fails the resolve."""
     keys = envelope_keys_from_master_key(_MASTER_KEY)
-    other_server_identity = EnvelopeIdentity(server_id="srv-OTHER", key_hash=_IDENTITY.key_hash)
+    other_server_identity = key_hash_identity(server_id="srv-OTHER", key_hash=_IDENTITY.subject)
     token = _sealed_token(keys, identity=other_server_identity)
     result = resolve_bridge_envelope(token, keys, _NOW, _SERVER_ID)
     assert isinstance(result, BridgeEnvelopeInvalid)
@@ -155,7 +156,7 @@ def test_resolve_non_ascii_server_id_stays_total_and_does_not_raise():
     unicode server_id); it stays total and returns a typed result. A matching non-ASCII id admits,
     a mismatching one is BridgeEnvelopeInvalid, and neither raises."""
     keys = envelope_keys_from_master_key(_MASTER_KEY)
-    unicode_identity = EnvelopeIdentity(server_id="srv-café", key_hash=_IDENTITY.key_hash)
+    unicode_identity = key_hash_identity(server_id="srv-café", key_hash=_IDENTITY.subject)
     token = _sealed_token(keys, identity=unicode_identity)
     assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-café"), BridgeEnvelopeAdmitted)
     assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-cafe"), BridgeEnvelopeInvalid)

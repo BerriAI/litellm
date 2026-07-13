@@ -36,8 +36,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     SealedEnvelope,
     UpstreamTokenGrant,
     is_envelope,
+    key_hash_identity,
     mint_envelope,
     open_envelope,
+    user_identity,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
 
@@ -51,7 +53,7 @@ _WRONG_SIGNING = EnvelopeKeys(signing_key=SecretStr(_OTHER_SIGNING_KEY), encrypt
 _WRONG_ENCRYPTION = EnvelopeKeys(signing_key=SecretStr(_SIGNING_KEY), encryption_key=SecretStr(_OTHER_ENCRYPTION_KEY))
 _ACCESS_TOKEN = "upstream-access-token-do-not-leak-8f14e45fceea"
 _REFRESH_TOKEN = "upstream-refresh-token-do-not-leak-1d0aa4b7"
-_IDENTITY = EnvelopeIdentity(server_id="srv-456", key_hash="hashed-key-123")
+_IDENTITY = key_hash_identity(server_id="srv-456", key_hash="hashed-key-123")
 
 
 def _full_grant() -> UpstreamTokenGrant:
@@ -137,12 +139,13 @@ def test_minimal_grant_round_trips_without_none_leakage_into_claims():
 def test_claim_layout_and_no_plaintext_token_in_envelope():
     token = _sealed_token(_full_grant())
     claims = _unverified_claims(token)
-    assert set(claims) == {"iss", "iat", "exp", "server_id", "key_hash", "grant"}
+    assert set(claims) == {"iss", "iat", "exp", "server_id", "subject_type", "subject", "grant"}
     assert claims["iss"] == ENVELOPE_ISSUER
     assert claims["iat"] == int(_NOW.timestamp())
     assert claims["exp"] == int(_NOW.timestamp()) + 600
     assert claims["server_id"] == "srv-456"
-    assert claims["key_hash"] == "hashed-key-123"
+    assert claims["subject_type"] == "key_hash"
+    assert claims["subject"] == "hashed-key-123"
     assert _ACCESS_TOKEN not in token
     assert _ACCESS_TOKEN not in json.dumps(claims)
     assert _REFRESH_TOKEN not in json.dumps(claims)
@@ -226,11 +229,11 @@ def test_wrong_issuer_is_malformed_payload():
 
 def test_missing_identity_claim_is_malformed_payload():
     claims = _unverified_claims(_sealed_token(_full_grant()))
-    forged = _forge({key: value for key, value in claims.items() if key != "key_hash"})
+    forged = _forge({key: value for key, value in claims.items() if key != "subject"})
     assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
 
 
-@pytest.mark.parametrize("identity_claim", ["server_id", "key_hash"])
+@pytest.mark.parametrize("identity_claim", ["server_id", "subject"])
 def test_signed_empty_identity_claim_is_malformed_payload_not_a_raise(identity_claim):
     claims = _unverified_claims(_sealed_token(_full_grant()))
     forged = _forge({**claims, identity_claim: ""})
@@ -463,15 +466,31 @@ def test_non_positive_expires_in_is_rejected_at_construction_without_leaking():
 
 def test_empty_identity_and_key_fields_are_rejected_at_construction():
     with pytest.raises(ValidationError):
-        EnvelopeIdentity(server_id="", key_hash="hashed-key-123")
+        EnvelopeIdentity(server_id="", subject_type="key_hash", subject="hashed-key-123")
     with pytest.raises(ValidationError):
-        EnvelopeIdentity(server_id="srv-456", key_hash="")
+        EnvelopeIdentity(server_id="srv-456", subject_type="key_hash", subject="")
+    with pytest.raises(ValidationError):
+        EnvelopeIdentity(server_id="srv-456", subject_type="not-a-subject-type", subject="x")
     with pytest.raises(ValidationError):
         EnvelopeKeys(signing_key=SecretStr(""), encryption_key=SecretStr(_ENCRYPTION_KEY))
     with pytest.raises(ValidationError):
         EnvelopeKeys(signing_key=SecretStr(_SIGNING_KEY), encryption_key=SecretStr(""))
     with pytest.raises(ValidationError):
         UpstreamTokenGrant(access_token=SecretStr(""), token_type="Bearer")
+
+
+def test_user_subject_identity_round_trips():
+    """The user_id subject variant seals and opens with its discriminator intact, so the edge can
+    tell an interactively-minted (user) envelope from a scripted (key_hash) one and reload the right
+    kind of record."""
+    identity = user_identity(server_id="srv-456", user_id="user-42")
+    sealed = mint_envelope(identity, _full_grant(), _KEYS, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+    opened = open_envelope(sealed.token.get_secret_value(), _KEYS, _NOW)
+    assert isinstance(opened, OpenedEnvelope)
+    assert opened.identity.server_id == "srv-456"
+    assert opened.identity.subject_type == "user_id"
+    assert opened.identity.subject == "user-42"
 
 
 def test_public_models_are_frozen():
@@ -484,4 +503,4 @@ def test_public_models_are_frozen():
     with pytest.raises(ValidationError):
         opened.grant = _minimal_grant()
     with pytest.raises(ValidationError):
-        _IDENTITY.key_hash = "someone-elses-hash"
+        _IDENTITY.subject = "someone-elses-hash"
