@@ -18,6 +18,9 @@ litellm-rust/target/
 bun.lockb
 **/.DS_Store
 .aider*
+.agents/
+.mimocode/
+skills-lock.json
 litellm_results.jsonl
 secrets.toml
 litellm/proxy/litellm_secrets.toml

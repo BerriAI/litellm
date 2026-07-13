@@ -2,22 +2,17 @@
 """
 Test to verify the Google GenAI adapter fixes
 """
+
 import json
 import os
 import sys
-import unittest
 from unittest.mock import patch
 
-import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
-import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
 
@@ -88,49 +83,21 @@ def test_streaming_tool_call_with_empty_args():
         GoogleGenAIStreamWrapper,
     )
     from litellm.types.utils import (
-        ChatCompletionDeltaToolCall,
         Delta,
-        Function,
         StreamingChoices,
     )
 
     adapter = GoogleGenAIAdapter()
 
-    # Create a tool call with empty arguments
-    mock_function = Function(name="test_function", arguments="")  # Empty arguments
-
-    mock_tool_call_delta = ChatCompletionDeltaToolCall(
-        id="call_123", type="function", function=mock_function, index=0
-    )
-
-    mock_delta = Delta(content=None, tool_calls=[mock_tool_call_delta])
-
-    mock_choice = StreamingChoices(finish_reason=None, index=0, delta=mock_delta)
-
-    mock_response = ModelResponse(
-        id="test-streaming",
-        choices=[mock_choice],
-        created=1234567890,
-        model="gpt-3.5-turbo",
-        object="chat.completion.chunk",
-    )
-
-    # Create a proper wrapper
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=iter([]))
 
     # Manually set up the accumulated tool call to simulate what would happen during streaming
-    mock_wrapper.accumulated_tool_calls = {
-        0: {"name": "test_function", "arguments": ""}
-    }
+    mock_wrapper.accumulated_tool_calls = {0: {"name": "test_function", "arguments": ""}}
 
     # Create a mock response that has a finish_reason to trigger the final processing
     mock_response_with_finish = ModelResponse(
         id="test-streaming",
-        choices=[
-            StreamingChoices(
-                finish_reason="stop", index=0, delta=Delta(content=None, tool_calls=[])
-            )
-        ],
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, tool_calls=[]))],
         created=1234567890,
         model="gpt-3.5-turbo",
         object="chat.completion.chunk",
@@ -153,9 +120,7 @@ def test_streaming_tool_call_with_empty_args():
             if "functionCall" in part:
                 function_call = part["functionCall"]
                 assert function_call["name"] == "test_function"
-                assert (
-                    function_call["args"] == {}
-                )  # Empty args should become empty object
+                assert function_call["args"] == {}  # Empty args should become empty object
     else:
         # If streaming_chunk is None, it's acceptable as it might indicate no meaningful content
         # This is a valid case in streaming where we might skip empty chunks
@@ -191,9 +156,7 @@ def test_tool_config_transformation():
         expected_tool_choice = case["expected_tool_choice"]
 
         # Transform tool config
-        openai_tool_choice = adapter._transform_google_genai_tool_config_to_openai(
-            tool_config
-        )
+        openai_tool_choice = adapter._transform_google_genai_tool_config_to_openai(tool_config)
 
         # Verify transformation
         assert openai_tool_choice == expected_tool_choice
@@ -221,9 +184,7 @@ def test_stream_transformation_error_handling():
 
     # Try to transform - this should handle errors gracefully
     try:
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
-            mock_response, mock_wrapper
-        )
+        adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
         # If no exception is raised, that's fine - we just want to ensure no crash
         assert True
     except Exception as e:
@@ -299,14 +260,9 @@ def test_extra_headers_forwarding():
     )
 
     # Verify extra_headers is forwarded
-    assert (
-        "extra_headers" in completion_kwargs
-    ), "extra_headers should be forwarded to completion call"
+    assert "extra_headers" in completion_kwargs, "extra_headers should be forwarded to completion call"
     assert completion_kwargs["extra_headers"]["Editor-Version"] == "vscode/1.95.0"
-    assert (
-        completion_kwargs["extra_headers"]["Editor-Plugin-Version"]
-        == "copilot-chat/0.22.4"
-    )
+    assert completion_kwargs["extra_headers"]["Editor-Plugin-Version"] == "copilot-chat/0.22.4"
     assert completion_kwargs["extra_headers"]["Custom-Header"] == "custom-value"
 
     # Verify metadata is also forwarded (existing behavior)
@@ -337,3 +293,209 @@ def test_extra_headers_not_present():
     # Verify metadata is still forwarded
     assert "metadata" in completion_kwargs
     assert completion_kwargs["metadata"]["user_id"] == "test-user"
+
+
+def test_fallback_usage_attached_to_terminating_chunk():
+    """
+    Test that fallback usage is attached to a chunk with finishReason,
+    not emitted as a standalone usage-only chunk, and that the finishReason
+    chunk is emitted exactly once (no duplication).
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from litellm.google_genai.adapters.transformation import GoogleGenAIStreamWrapper
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+
+    async def mock_stream_no_usage():
+        chunks = []
+        for i in range(3):
+            streaming_choice = StreamingChoices(
+                index=0,
+                delta=Delta(content=f"Chunk {i}", tool_calls=[]),
+                finish_reason=("stop" if i == 2 else None),
+            )
+            response = ModelResponseStream(
+                id=f"test-{i}",
+                choices=[streaming_choice],
+                created=1234567890 + i,
+                model="gemini-2.0-flash",
+                object="chat.completion.chunk",
+            )
+            chunks.append(response)
+        for chunk in chunks:
+            yield chunk
+
+    stream = mock_stream_no_usage()
+    wrapper = GoogleGenAIStreamWrapper(completion_stream=stream)
+
+    mock_assembled = MagicMock()
+    mock_assembled.usage = MagicMock()
+    mock_assembled.usage.prompt_tokens = 100
+    mock_assembled.usage.completion_tokens = 50
+    mock_assembled.usage.total_tokens = 150
+
+    collected_chunks = []
+
+    async def collect_and_test():
+        with patch("litellm.main.stream_chunk_builder", return_value=mock_assembled):
+            async for chunk in wrapper.async_google_genai_sse_wrapper():
+                collected_chunks.append(chunk)
+
+    asyncio.run(collect_and_test())
+
+    parsed_chunks = []
+    for raw_chunk in collected_chunks:
+        data = raw_chunk.decode().strip()
+        if data.startswith("data: "):
+            parsed = json.loads(data[6:])
+            parsed_chunks.append(parsed)
+
+    finish_chunks = [c for c in parsed_chunks if c.get("candidates", [{}])[0].get("finishReason")]
+    assert len(finish_chunks) == 1, (
+        f"Expected exactly one finishReason chunk, got {len(finish_chunks)}. "
+        f"Duplication corrupts gemini-cli per-message token persistence."
+    )
+
+    usage_chunks = [c for c in parsed_chunks if c.get("usageMetadata")]
+    assert len(usage_chunks) == 1, f"Expected exactly one usageMetadata chunk, got {len(usage_chunks)}"
+
+    finish_chunk = finish_chunks[0]
+    assert finish_chunk.get("usageMetadata") is not None, "The finishReason chunk must carry usageMetadata"
+
+    final_usage = finish_chunk["usageMetadata"]
+    assert final_usage["promptTokenCount"] == 100
+    assert final_usage["candidatesTokenCount"] == 50
+    assert final_usage["totalTokenCount"] == 150
+
+
+def test_no_zero_usage_emitted_when_response_has_no_usage():
+    """
+    Regression test: when a finish_reason chunk arrives without usage data,
+    the adapter must NOT emit a zero-filled usageMetadata. Emitting zeros
+    causes gemini-cli to record {0, 0, 0} before real usage arrives.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from litellm.google_genai.adapters.transformation import GoogleGenAIStreamWrapper
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+
+    async def mock_stream():
+        streaming_choice = StreamingChoices(
+            index=0,
+            delta=Delta(content="Hello", tool_calls=[]),
+            finish_reason="stop",
+        )
+        response = ModelResponseStream(
+            id="test-1",
+            choices=[streaming_choice],
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+        )
+        yield response
+
+    wrapper = GoogleGenAIStreamWrapper(completion_stream=mock_stream())
+
+    mock_assembled = MagicMock()
+    mock_assembled.usage = MagicMock()
+    mock_assembled.usage.prompt_tokens = 10
+    mock_assembled.usage.completion_tokens = 5
+    mock_assembled.usage.total_tokens = 15
+
+    collected = []
+
+    async def collect():
+        with patch("litellm.main.stream_chunk_builder", return_value=mock_assembled):
+            async for chunk in wrapper.async_google_genai_sse_wrapper():
+                collected.append(chunk)
+
+    asyncio.run(collect())
+
+    parsed = []
+    for raw in collected:
+        data = raw.decode().strip()
+        if data.startswith("data: "):
+            parsed.append(json.loads(data[6:]))
+
+    usage_chunks = [c for c in parsed if c.get("usageMetadata")]
+    assert len(usage_chunks) == 1, "Only one chunk should carry usageMetadata"
+
+    usage = usage_chunks[0]["usageMetadata"]
+    assert usage["totalTokenCount"] == 15, "Should carry fallback usage, not zeros"
+    assert not (
+        usage["promptTokenCount"] == 0 and usage["candidatesTokenCount"] == 0 and usage["totalTokenCount"] == 0
+    ), "Must not emit zero-filled usageMetadata"
+
+
+def test_usage_only_chunk_merged_into_buffered_finish():
+    """
+    When the upstream sends a usage-only chunk (choices=[], usage=set) after
+    the finish_reason chunk, the adapter should merge the usage into the
+    buffered finish_reason chunk and emit it once, rather than dropping the
+    usage or emitting a duplicate frame.
+    """
+    import asyncio
+
+    from litellm.google_genai.adapters.transformation import GoogleGenAIStreamWrapper
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, Usage
+
+    async def mock_stream():
+        content_chunk = ModelResponseStream(
+            id="test-content",
+            choices=[StreamingChoices(index=0, delta=Delta(content="Hello", tool_calls=[]), finish_reason=None)],
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+        )
+        yield content_chunk
+
+        finish_chunk = ModelResponseStream(
+            id="test-finish",
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[]), finish_reason="stop")],
+            created=1234567891,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+        )
+        yield finish_chunk
+
+        usage_chunk = ModelResponseStream(
+            id="test-usage",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+            created=1234567892,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+            usage=Usage(prompt_tokens=42, completion_tokens=7, total_tokens=49),
+        )
+        yield usage_chunk
+
+    wrapper = GoogleGenAIStreamWrapper(completion_stream=mock_stream())
+    collected = []
+
+    async def collect():
+        async for chunk in wrapper.async_google_genai_sse_wrapper():
+            collected.append(chunk)
+
+    asyncio.run(collect())
+
+    parsed = []
+    for raw in collected:
+        data = raw.decode().strip()
+        if data.startswith("data: "):
+            parsed.append(json.loads(data[6:]))
+
+    finish_chunks = [c for c in parsed if c.get("candidates", [{}])[0].get("finishReason")]
+    assert len(finish_chunks) == 1, "Finish chunk must be emitted exactly once"
+
+    usage_chunks = [c for c in parsed if c.get("usageMetadata")]
+    assert len(usage_chunks) == 1, "Usage must be emitted exactly once"
+
+    assert finish_chunks[0] is usage_chunks[0], (
+        "Usage must be merged into the finishReason chunk, not emitted separately"
+    )
+
+    usage = usage_chunks[0]["usageMetadata"]
+    assert usage["promptTokenCount"] == 42
+    assert usage["candidatesTokenCount"] == 7
+    assert usage["totalTokenCount"] == 49
