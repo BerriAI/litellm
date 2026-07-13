@@ -16,6 +16,7 @@ import {
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { updateExistingKeys } from "@/utils/dataUtils";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -86,7 +87,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
   const [activeTab, setActiveTab] = useState("users");
   const [filters, setFilters] = useState<FilterState>(initialFilters);
-  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
+  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: DEBOUNCE_WAIT_MS });
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);

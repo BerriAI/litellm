@@ -4,6 +4,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
@@ -64,7 +65,7 @@ export function VirtualKeysTable() {
     pageSize: 50,
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
-  const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
+  const [debouncedFilters] = useDebouncedValue(filters, { wait: DEBOUNCE_WAIT_MS });
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
