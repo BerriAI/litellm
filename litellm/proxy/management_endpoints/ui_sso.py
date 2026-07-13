@@ -4041,23 +4041,35 @@ class MicrosoftSSOHandler:
             "Content-Type": "application/json",
         }
 
-        response = await async_client.get(url, headers=headers)
-        response_json = response.json()
-        verbose_proxy_logger.debug(f"Response from service principal app role assigned to: {response_json}")
         group_ids: List[str] = []
         service_principal_teams: List[MicrosoftServicePrincipalTeam] = []
+        next_link: Optional[str] = url
+        page_count = 0
 
-        for _object in response_json.get("value", []):
-            if _object.get("principalType") == "Group":
-                # Append the group ID to the list
-                group_ids.append(_object.get("principalId"))
-                # Append the service principal team to the list
-                service_principal_teams.append(
-                    MicrosoftServicePrincipalTeam(
-                        principalDisplayName=_object.get("principalDisplayName"),
-                        principalId=_object.get("principalId"),
+        while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            response = await async_client.get(next_link, headers=headers)
+            response_json = response.json()
+            verbose_proxy_logger.debug(f"Response from service principal app role assigned to: {response_json}")
+
+            for _object in response_json.get("value", []):
+                principal_id = _object.get("principalId")
+                if _object.get("principalType") == "Group" and principal_id is not None:
+                    group_ids.append(principal_id)
+                    service_principal_teams.append(
+                        MicrosoftServicePrincipalTeam(
+                            principalDisplayName=_object.get("principalDisplayName"),
+                            principalId=principal_id,
+                        )
                     )
-                )
+
+            next_link = response_json.get("@odata.nextLink")
+            page_count += 1
+
+        if next_link is not None and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            verbose_proxy_logger.warning(
+                f"Reached maximum page limit of {MicrosoftSSOHandler.MAX_GRAPH_API_PAGES}. "
+                "Some service principal groups may not be included."
+            )
 
         return group_ids, service_principal_teams
 

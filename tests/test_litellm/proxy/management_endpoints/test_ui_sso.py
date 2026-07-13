@@ -461,6 +461,87 @@ async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoi
     ]
 
 
+@pytest.mark.asyncio
+async def test_get_group_ids_from_service_principal_follows_next_link():
+    next_link = "https://graph.microsoft.com/v1.0/servicePrincipals/sp-123/appRoleAssignedTo?$skiptoken=page-2"
+    first_response = MagicMock()
+    first_response.json.return_value = {
+        "value": [
+            {
+                "principalType": "Group",
+                "principalId": "group-1",
+                "principalDisplayName": "Group 1",
+            },
+            {
+                "principalType": "User",
+                "principalId": "user-1",
+                "principalDisplayName": "User 1",
+            },
+            {
+                "principalType": "Group",
+                "principalId": None,
+                "principalDisplayName": "Invalid Group",
+            },
+        ],
+        "@odata.nextLink": next_link,
+    }
+    second_response = MagicMock()
+    second_response.json.return_value = {
+        "value": [
+            {
+                "principalType": "Group",
+                "principalId": "group-2",
+                "principalDisplayName": "Group 2",
+            }
+        ]
+    }
+    async_client = MagicMock()
+    async_client.get = AsyncMock(side_effect=[first_response, second_response])
+
+    group_ids, teams = await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+        service_principal_id="sp-123",
+        async_client=async_client,
+        access_token="mock_token",
+    )
+
+    assert group_ids == ["group-1", "group-2"]
+    assert teams == [
+        MicrosoftServicePrincipalTeam(
+            principalDisplayName="Group 1",
+            principalId="group-1",
+        ),
+        MicrosoftServicePrincipalTeam(
+            principalDisplayName="Group 2",
+            principalId="group-2",
+        ),
+    ]
+    assert [call.args[0] for call in async_client.get.await_args_list] == [
+        "https://graph.microsoft.com/v1.0/servicePrincipals/sp-123/appRoleAssignedTo",
+        next_link,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_group_ids_from_service_principal_stops_at_page_limit():
+    response = MagicMock()
+    response.json.return_value = {
+        "value": [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+    }
+    async_client = MagicMock()
+    async_client.get = AsyncMock(return_value=response)
+
+    group_ids, teams = await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+        service_principal_id="sp-123",
+        async_client=async_client,
+        access_token="mock_token",
+    )
+
+    assert group_ids == []
+    assert teams == []
+    assert async_client.get.await_count == MicrosoftSSOHandler.MAX_GRAPH_API_PAGES
+
+
 def test_get_group_ids_from_graph_api_response():
     # Arrange
     mock_response = MicrosoftGraphAPIUserGroupResponse(
