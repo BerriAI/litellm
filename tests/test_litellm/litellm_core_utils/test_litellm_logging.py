@@ -3707,3 +3707,36 @@ def test_set_cost_breakdown_stores_reasoning_cost():
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
     assert "reasoning_cost" not in no_reasoning.cost_breakdown
+
+
+def test_scrub_sensitive_keys_scrubs_logging_in_user_api_key_auth_metadata():
+    """Regression (LIT-4306): scrub_sensitive_keys_in_metadata must scrub the
+    `logging` credential array under user_api_key_auth_metadata, not only under
+    the differently-named user_api_key_metadata, while leaving other key
+    metadata (e.g. priority read by the rate limiter) untouched."""
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key_auth_metadata": {
+                "logging": [{"callback_vars": {"langsmith_api_key": "lsv2_sk_secret"}}],
+                "priority": "high",
+            },
+            "user_api_key_metadata": {
+                "logging": [{"callback_vars": {"langsmith_api_key": "lsv2_sk_secret"}}],
+            },
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    auth_metadata = result["metadata"]["user_api_key_auth_metadata"]
+    assert auth_metadata["logging"] == "scrubbed_by_litellm_for_sensitive_keys"
+    assert auth_metadata["priority"] == "high"
+    # the pre-existing user_api_key_metadata path still scrubs too
+    assert (
+        result["metadata"]["user_api_key_metadata"]["logging"]
+        == "scrubbed_by_litellm_for_sensitive_keys"
+    )

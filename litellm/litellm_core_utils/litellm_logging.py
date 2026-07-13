@@ -5477,17 +5477,14 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
             litellm_params["_langfuse_masking_function"] = masking_fn
         litellm_params["metadata"] = metadata
 
-    ## check user_api_key_metadata for sensitive logging keys
-    cleaned_user_api_key_metadata = {}
-    if "user_api_key_metadata" in metadata and isinstance(metadata["user_api_key_metadata"], dict):
-        for k, v in metadata["user_api_key_metadata"].items():
-            if k == "logging":  # prevent logging user logging keys
-                cleaned_user_api_key_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
-            else:
-                cleaned_user_api_key_metadata[k] = v
-
-        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
-        litellm_params["metadata"] = metadata
+    ## scrub sensitive logging credentials from key metadata (both field names)
+    for field in ("user_api_key_metadata", "user_api_key_auth_metadata"):
+        key_metadata = metadata.get(field)
+        if isinstance(key_metadata, dict):
+            metadata[field] = {
+                k: ("scrubbed_by_litellm_for_sensitive_keys" if k == "logging" else v) for k, v in key_metadata.items()
+            }
+            litellm_params["metadata"] = metadata
 
     return litellm_params
 

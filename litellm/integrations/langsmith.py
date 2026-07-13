@@ -200,12 +200,13 @@ class LangsmithLogger(CustomBatchLogger):
 
             metadata = payload["metadata"]
             extra_metadata = self._build_extra_metadata(dict(metadata))
+            inputs = {**payload, "metadata": redact_user_api_key_info(metadata=dict(metadata))}
             outputs = self._build_outputs_with_usage(payload)
 
             data = {
                 "name": fields["run_name"],
                 "run_type": "llm",
-                "inputs": payload,
+                "inputs": inputs,
                 "outputs": outputs,
                 "session_name": fields["project_name"],
                 "start_time": payload["startTime"],
