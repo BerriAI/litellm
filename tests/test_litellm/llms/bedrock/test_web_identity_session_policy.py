@@ -158,6 +158,58 @@ class TestClaudePlatformActionsCovered:
         )
 
 
+class TestMantleActionsCovered:
+    """#33094: the bedrock-mantle endpoint (``bedrock_mantle/<model>``
+    route) is served under its own ``bedrock-mantle:*`` IAM action
+    namespace, distinct from both ``bedrock:*`` and
+    ``aws-external-anthropic:*``. Without a matching statement every
+    mantle request 403s on OIDC auth with::
+
+        is not authorized to perform: bedrock-mantle:CreateInference
+    """
+
+    def test_mantle_create_inference_present(self):
+        policy = _captured_policy()
+        all_actions: set = set()
+        for stmt in policy["Statement"]:
+            stmt_actions = stmt.get("Action")
+            if isinstance(stmt_actions, str):
+                all_actions.add(stmt_actions)
+            elif isinstance(stmt_actions, list):
+                all_actions.update(stmt_actions)
+        assert "bedrock-mantle:CreateInference" in all_actions, (
+            "bedrock-mantle:CreateInference missing from session policy — "
+            "bedrock_mantle/* requests will 403 on OIDC auth"
+        )
+
+    def test_mantle_statement_allows(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "MantleLiteLLM")
+        assert stmt["Effect"] == "Allow"
+        assert stmt["Resource"] == "*"
+
+    def test_mantle_statement_carries_secure_transport_condition(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "MantleLiteLLM")
+        cond = stmt.get("Condition") or {}
+        assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
+            "MantleLiteLLM must require aws:SecureTransport=true "
+            "to keep parity with the bedrock statement"
+        )
+
+    def test_mantle_statement_not_wildcard(self):
+        """Keep the ceiling tight — don't grant bedrock-mantle:* ."""
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "MantleLiteLLM")
+        actions = stmt["Action"]
+        if isinstance(actions, str):
+            actions = [actions]
+        assert "bedrock-mantle:*" not in actions, (
+            "session policy must not grant bedrock-mantle:* — "
+            "the ceiling should match the documented action set"
+        )
+
+
 def _make_jwt(payload: dict) -> str:
     def _segment(data: dict) -> str:
         return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()

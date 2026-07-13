@@ -877,6 +877,15 @@ class BaseAWSLLM:
                     "Resource": "*",
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},
                 },
+                {
+                    "Sid": "MantleLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock-mantle:CreateInference",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
             ],
         }
         assume_role_params = {
