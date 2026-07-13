@@ -13,16 +13,22 @@ from litellm.proxy._experimental.mcp_server.faults.types import UpstreamOAuthFau
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
 
 
-def _gateway_credentials_description(code: str) -> str:
+def _gateway_rejected_description(code: str) -> str:
     if code == "invalid_target":
         return (
-            "the upstream authorization server rejected the token request (invalid_target); "
+            "the upstream authorization server rejected the request (invalid_target); "
             "it may require RFC 8707 resource indicators, which the gateway does not send yet"
         )
     return (
         f"the upstream authorization server rejected the gateway's configured client credentials "
         f"({code}); verify the MCP server's client_id and client_secret"
     )
+
+
+def _upstream_reported_status_and_description(code: str) -> tuple[int, str]:
+    if code == "temporarily_unavailable":
+        return 503, "the upstream authorization server is temporarily unavailable; retry shortly"
+    return 502, "the upstream authorization server reported an internal error"
 
 
 def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
@@ -39,13 +45,20 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
             }
             status_code = 401 if fault.code == "invalid_client" else 400
             return JSONResponse(status_code=status_code, content=content, headers=TOKEN_NO_CACHE_HEADERS)
-        case "gateway_credentials_rejected":
+        case "gateway_rejected":
             return JSONResponse(
                 status_code=502,
                 content={
                     "error": "server_error",
-                    "error_description": _gateway_credentials_description(fault.code),
+                    "error_description": _gateway_rejected_description(fault.code),
                 },
+                headers=TOKEN_NO_CACHE_HEADERS,
+            )
+        case "upstream_reported_fault":
+            status_code, description = _upstream_reported_status_and_description(fault.code)
+            return JSONResponse(
+                status_code=status_code,
+                content={"error": fault.code, "error_description": description},
                 headers=TOKEN_NO_CACHE_HEADERS,
             )
         case "upstream_protocol_fault":
@@ -66,8 +79,10 @@ def dcr_fault_detail(fault: UpstreamOAuthFault) -> tuple[int, str]:
         case "caller_rejected":
             detail = f"{fault.code}: {fault.description}" if fault.description else fault.code
             return 400, detail
-        case "gateway_credentials_rejected":
-            return 502, _gateway_credentials_description(fault.code)
+        case "gateway_rejected":
+            return 502, _gateway_rejected_description(fault.code)
+        case "upstream_reported_fault":
+            return _upstream_reported_status_and_description(fault.code)
         case "upstream_protocol_fault":
             return 502, fault.note
         case _:

@@ -9,8 +9,9 @@ from litellm.proxy._experimental.mcp_server.faults.classify import (
 )
 from litellm.proxy._experimental.mcp_server.faults.types import (
     CallerRejected,
-    GatewayCredentialsRejected,
+    GatewayRejected,
     UpstreamProtocolFault,
+    UpstreamReportedFault,
 )
 
 
@@ -38,7 +39,7 @@ def test_credential_code_with_gateway_stored_credentials_indicts_gateway():
         credential_source="gateway_stored",
         log_context="srv",
     )
-    assert isinstance(fault, GatewayCredentialsRejected)
+    assert isinstance(fault, GatewayRejected)
     assert fault.code == "invalid_client"
 
 
@@ -106,3 +107,41 @@ def test_dcr_rejection_without_code_is_protocol_fault():
     fault = classify_upstream_dcr_rejection(_response(500, text_body="<html>trace</html>"), log_context="srv")
     assert isinstance(fault, UpstreamProtocolFault)
     assert fault.note == "upstream registration failed with HTTP 500"
+
+
+def test_upstream_self_blame_codes_stay_upstream_faults():
+    fault = classify_upstream_token_rejection(
+        _response(400, json_body={"error": "server_error", "error_description": "boom"}),
+        credential_source="caller_supplied",
+        log_context="srv",
+    )
+    assert isinstance(fault, UpstreamReportedFault)
+    assert fault.code == "server_error"
+
+
+def test_temporarily_unavailable_is_upstream_fault():
+    fault = classify_upstream_token_rejection(
+        _response(503, json_body={"error": "temporarily_unavailable"}),
+        credential_source="gateway_stored",
+        log_context="srv",
+    )
+    assert isinstance(fault, UpstreamReportedFault)
+    assert fault.code == "temporarily_unavailable"
+
+
+def test_invalid_target_is_gateway_fault_even_with_caller_credentials():
+    fault = classify_upstream_token_rejection(
+        _response(400, json_body={"error": "invalid_target"}),
+        credential_source="caller_supplied",
+        log_context="srv",
+    )
+    assert isinstance(fault, GatewayRejected)
+    assert fault.code == "invalid_target"
+
+
+def test_dcr_server_error_code_is_not_blamed_on_caller():
+    fault = classify_upstream_dcr_rejection(
+        _response(500, json_body={"error": "server_error"}),
+        log_context="srv",
+    )
+    assert isinstance(fault, UpstreamReportedFault)
