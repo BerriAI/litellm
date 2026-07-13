@@ -58,7 +58,7 @@ _HEADER_PRESENT_PLACEHOLDER = "[present]"
 
 def _header_value_allowed(
     header_name: str,
-    extra_allowlist: Optional[Set[str]] = None,
+    extra_allowlist: Set[str] | None = None,
 ) -> bool:
     """Return True if this header's value may be forwarded (allowlist, including globs and extra_headers)."""
     lower = header_name.lower()
@@ -74,8 +74,8 @@ def _header_value_allowed(
 
 def _sanitize_inbound_headers(
     headers: Any,
-    extra_allowlist: Optional[Set[str]] = None,
-) -> Optional[Dict[str, str]]:
+    extra_allowlist: Set[str] | None = None,
+) -> Dict[str, str] | None:
     """
     Sanitize inbound headers before passing them to a 3rd party guardrail service.
 
@@ -105,8 +105,8 @@ def _sanitize_inbound_headers(
 def _extract_inbound_headers(
     request_data: dict,
     logging_obj: Optional["LiteLLMLoggingObj"],
-    extra_allowlist: Optional[Set[str]] = None,
-) -> Optional[Dict[str, str]]:
+    extra_allowlist: Set[str] | None = None,
+) -> Dict[str, str] | None:
     """
     Extract inbound headers from available request context.
 
@@ -172,16 +172,16 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     def __init__(
         self,
-        headers: Optional[Dict[str, Any]] = None,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
+        headers: Dict[str, Any] | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        additional_provider_specific_params: Dict[str, Any] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        fail_on_error: Optional[bool] = True,
-        extra_headers: Optional[list] = None,
-        streaming_end_of_stream_only: Optional[bool] = None,
-        streaming_sampling_rate: Optional[int] = None,
-        streaming_transform_mode: Optional[Literal["block_only", "incremental_diff"]] = None,
+        fail_on_error: bool | None = True,
+        extra_headers: list | None = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
+        streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -288,7 +288,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         error: Exception,
-        http_status_code: Optional[int] = None,
+        http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix = f" http_status_code={http_status_code}" if http_status_code else ""
         verbose_proxy_logger.critical(
@@ -489,7 +489,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
 
     @staticmethod
-    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIConfigModel,
         )
