@@ -875,6 +875,8 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  ptu_flat_cost       Float    @default(0.0)
+  ptu_reservation_id  String?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -885,6 +887,7 @@ model LiteLLM_DailyTeamSpend {
   @@index([model])
   @@index([mcp_namespaced_tool_name])
   @@index([endpoint])
+  @@index([ptu_reservation_id])
 }
 
 // Track daily team spend metrics per model and key
