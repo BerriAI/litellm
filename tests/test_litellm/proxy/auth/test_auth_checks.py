@@ -254,6 +254,20 @@ def test_can_object_call_model_denials_return_forbidden(
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
 
 
+def test_should_not_match_provider_wildcard_for_prefixed_unknown_provider_model():
+    from litellm.proxy.auth.auth_checks import (
+        _model_custom_llm_provider_matches_wildcard_pattern,
+    )
+
+    assert (
+        _model_custom_llm_provider_matches_wildcard_pattern(
+            model="bedrockz/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            allowed_model_pattern="bedrock/*",
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_can_user_call_model_no_default_models_returns_forbidden():
     from litellm.proxy._types import SpecialModelNames
