@@ -1400,22 +1400,6 @@
       "count": 1
     }
   },
-  "src/components/OldTeams.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
-  "src/components/OldTeams.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
   "src/components/SCIM.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1504,6 +1488,22 @@
   "src/components/TeamSSOSettings.test.tsx": {
     "no-nested-ternary": {
       "count": 1
+    }
+  },
+  "src/components/Teams.test.tsx": {
+    "max-nested-callbacks": {
+      "count": 4
+    }
+  },
+  "src/components/Teams.tsx": {
+    "no-nested-ternary": {
+      "count": 4
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
     }
   },
   "src/components/ToolDetail.tsx": {
