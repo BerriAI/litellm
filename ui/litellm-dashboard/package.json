@@ -19,6 +19,7 @@
     "e2e:migration": "playwright test e2e_tests/tests/migration/migratedPages.spec.ts --config e2e_tests/playwright.config.ts",
     "e2e:migration:root": "playwright test --config e2e_tests/migration.serverRootPath.config.ts",
     "knip": "knip",
+    "knip:ci": "knip --exclude exports,nsExports,types,nsTypes,enumMembers,classMembers,duplicates",
     "knip:fix": "knip --fix",
     "gen:api": "node scripts/gen-api-types.mjs"
   },
