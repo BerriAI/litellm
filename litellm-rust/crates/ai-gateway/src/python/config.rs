@@ -2,8 +2,9 @@
 //!
 //! Embeds the interpreter via pyo3 and calls
 //! `litellm.proxy.read_model_list.read_model_list`, which reuses the proxy's
-//! `os.environ/` + secret-manager resolution. The GIL is taken **once at boot**
-//! (and recorded in [`crate::gil`]); the realtime hot path never touches Python.
+//! `os.environ/` + secret-manager resolution. The Python interpreter is attached
+//! once at boot (recorded in [`crate::gil`]); the realtime hot path never touches
+//! Python.
 //!
 //! Compiled only under the `python-config` feature.
 
@@ -17,7 +18,7 @@ use crate::gil;
 /// Load the router's `model_list` from `config_path` via the Python reader.
 pub fn load_router_from_config(config_path: &str) -> CoreResult<Router> {
     gil::record_acquisition();
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let model_list = py
             .import("litellm.proxy.read_model_list")
             .and_then(|module| module.getattr("read_model_list"))
