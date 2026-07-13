@@ -66,7 +66,7 @@ class WebSearchTransformation:
     @staticmethod
     def _detect_from_responses_api_response(
         response: Any,
-    ) -> Tuple[bool, List[Dict]]:
+    ) -> tuple[bool, list[dict]]:
         """Parse OpenAI Responses-API response for ``litellm_web_search`` function calls.
 
         The Responses API returns ``output`` as a list of items; tool calls
@@ -82,7 +82,7 @@ class WebSearchTransformation:
         else:
             output = getattr(response, "output", None) or []
 
-        tool_calls: List[Dict] = []
+        tool_calls: list[dict] = []
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -105,8 +105,7 @@ class WebSearchTransformation:
                     parsed_arguments = json.loads(arguments)
                 except json.JSONDecodeError:
                     verbose_logger.warning(
-                        "WebSearchInterception: Failed to parse Responses-API "
-                        f"function_call arguments: {arguments}"
+                        f"WebSearchInterception: Failed to parse Responses-API function_call arguments: {arguments}"
                     )
                     parsed_arguments = {}
             elif isinstance(arguments, dict):
@@ -125,8 +124,7 @@ class WebSearchTransformation:
                 }
             )
             verbose_logger.debug(
-                f"WebSearchInterception: Found Responses-API function_call "
-                f"name={item_name} call_id={call_id}"
+                f"WebSearchInterception: Found Responses-API function_call name={item_name} call_id={call_id}"
             )
 
         return len(tool_calls) > 0, tool_calls

@@ -7,7 +7,6 @@ server-side using litellm router's search tools.
 """
 
 import asyncio
-import json
 import math
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -35,6 +34,7 @@ from litellm.types.integrations.websearch_interception import (
 )
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    RESPONSES_AGENTIC_SURFACE,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -263,7 +263,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             call_type_str = ""
         else:
             call_type_str = getattr(call_type, "value", None) or str(call_type)
-        is_responses_api_call = call_type_str == "aresponses"
+        is_responses_api_call = call_type_str in ("aresponses", "responses")
 
         if is_responses_api_call:
             tool_predicate = is_web_search_tool_responses_api
@@ -483,6 +483,14 @@ class WebSearchInterceptionLogger(CustomLogger):
                 kwargs=kwargs,
             )
 
+        if kwargs.get("_agentic_loop_api_surface") == RESPONSES_AGENTIC_SURFACE:
+            return await self._should_run_responses_agentic_loop(
+                response=response,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+            )
+
         verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
 
@@ -677,6 +685,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 kwargs=kwargs,
             )
 
+        if kwargs.get("_agentic_loop_api_surface") == RESPONSES_AGENTIC_SURFACE:
+            return await self._build_responses_agentic_loop_plan(
+                tools=tools,
+                model=model,
+                messages=messages,
+                response=response,
+                kwargs=kwargs,
+            )
+
         tool_calls = tools["tool_calls"]
         thinking_blocks = tools.get("thinking_blocks", [])
         request_patch, structured_results = await self._build_anthropic_request_patch(
@@ -831,39 +848,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             metadata={"tool_type": "websearch", "response_format": response_format},
         )
 
-    async def async_should_run_responses_api_agentic_loop(
+    async def _should_run_responses_agentic_loop(
         self,
         response: Any,
-        model: str,
-        input: Any,
-        tools: Optional[List[Dict]],
+        tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: Dict,
-        original_stream: Optional[bool] = None,
-    ) -> Tuple[bool, Dict]:
+    ) -> tuple[bool, dict]:
         """Detect ``litellm_web_search`` ``function_call`` items in a Responses-API response."""
-        verbose_logger.debug(
-            f"WebSearchInterception: Responses-API hook called! provider={custom_llm_provider}, stream={stream}"
-        )
-
-        if (
-            self.enabled_providers is not None
-            and custom_llm_provider not in self.enabled_providers
-        ):
-            verbose_logger.debug(
-                f"WebSearchInterception: Skipping provider {custom_llm_provider} "
-                f"(not in enabled list: {self.enabled_providers})"
-            )
+        if self.enabled_providers is not None and custom_llm_provider not in self.enabled_providers:
             return False, {}
 
-        has_websearch_tool = any(
-            is_web_search_tool_responses_api(t) for t in (tools or [])
-        )
-        if not has_websearch_tool:
-            verbose_logger.debug(
-                "WebSearchInterception: No web_search tool in Responses-API request"
-            )
+        if not any(is_web_search_tool_responses_api(t) for t in (tools or [])):
             return False, {}
 
         should_intercept, tool_calls = WebSearchTransformation.transform_request(
@@ -871,244 +867,87 @@ class WebSearchInterceptionLogger(CustomLogger):
             stream=stream,
             response_format="responses",
         )
-
         if not should_intercept:
-            verbose_logger.debug(
-                "WebSearchInterception: No litellm_web_search function_call in Responses-API output"
-            )
             return False, {}
 
-        verbose_logger.debug(
-            f"WebSearchInterception: Detected {len(tool_calls)} Responses-API function_call(s), "
-            "executing agentic loop"
-        )
-        return True, {
-            "tool_calls": tool_calls,
-            "tool_type": "websearch",
-            "provider": custom_llm_provider,
-            "response_format": "responses",
-        }
+        return True, {"tool_calls": tool_calls}
 
-    async def async_run_responses_api_agentic_loop(  # noqa: PLR0915
+    async def _build_responses_agentic_loop_plan(
         self,
-        tools: Dict,
+        tools: dict,
         model: str,
-        input: Any,
+        messages: list[dict],
         response: Any,
-        response_api_optional_request_params: Dict,
-        litellm_params: Dict,
-        logging_obj: Any,
-        stream: bool,
-        kwargs: Dict,
-        original_stream: Optional[bool] = None,
-    ) -> Any:
-        """Execute searches and re-run the Responses-API call with ``function_call_output`` items."""
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        """Run searches and patch ``function_call_output`` items into the Responses-API ``input``.
+
+        The generic ``_execute_responses_agentic_plan`` re-runs the model with
+        the patched input and handles kwargs forwarding, depth/fingerprint
+        bookkeeping, provider prefixing, and provider-param propagation.
+        """
         tool_calls = tools["tool_calls"]
 
-        # Check depth + fingerprint cycle BEFORE issuing any work. Otherwise a
-        # client that drives the model into emitting ``litellm_web_search``
-        # calls past the cap still gets ``len(tool_calls)`` parallel Tavily
-        # requests per iteration before the loop aborts. Mirrors
-        # ``_check_agentic_loop_safety`` in the chat-completion path, which
-        # also runs before any rerun work.
-        depth = int(kwargs.get("_agentic_loop_depth", 0) or 0)
-        max_loops = max(int(kwargs.get("max_agentic_loops", 3) or 3), 1)
-        fingerprints = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
-        try:
-            fingerprint = json.dumps(tool_calls, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            fingerprint = str(tool_calls)
-        if fingerprint in fingerprints:
-            raise ValueError(
-                "Responses-API agentic loop detected repeated tool-call "
-                "fingerprint; aborting rerun"
-            )
-        if depth >= max_loops:
-            raise ValueError(
-                f"Responses-API agentic loop exceeded max_agentic_loops={max_loops} for model={model}"
-            )
-
-        verbose_logger.debug(
-            f"WebSearchInterception: Executing Responses-API agentic loop for {len(tool_calls)} search(es)"
-        )
-
-        # Run searches in parallel.
-        search_tasks = []
-        for tool_call in tool_calls:
-            query = (tool_call.get("input") or {}).get("query")
-            if query:
-                search_tasks.append(self._execute_search(query))
-            else:
-                search_tasks.append(self._create_empty_search_result())
+        # Forward kwargs so per-key/per-team search-tool authorization is
+        # enforced (the auth context rides in litellm_metadata on kwargs).
+        search_tasks = [
+            self._execute_search(query, kwargs=kwargs)
+            if (query := (tool_call.get("input") or {}).get("query"))
+            else self._create_empty_search_result()
+            for tool_call in tool_calls
+        ]
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        result_texts = self._search_results_to_texts(search_results)
 
-        result_texts: List[str] = []
-        for i, result in enumerate(search_results):
-            if isinstance(result, Exception):
-                verbose_logger.error(
-                    f"WebSearchInterception: Search {i} failed: {str(result)}"
-                )
-                result_texts.append(f"Search failed: {str(result)}")
-            elif isinstance(result, tuple) and len(result) == 2:
-                text_value, _ = result
-                result_texts.append(
-                    cast(str, text_value)
-                    if isinstance(text_value, str)
-                    else str(text_value)
-                )
-            else:
-                result_texts.append(str(result))
-
-        # Build follow-up ``input`` chain. Responses-API ``input`` accepts
-        # mixed message + function_call + function_call_output items. Strict
-        # providers (OpenAI-native) validate that every ``function_call_output``
-        # is preceded in the conversation by its assistant ``function_call``,
-        # and reject the follow-up otherwise. Forward the first response's
-        # full ``output`` (which already includes the function_call items
-        # alongside reasoning / text / message blocks) so the assistant turn
-        # stays intact, then append our paired ``function_call_output`` items.
-        if isinstance(input, str):
-            follow_up_input: List[Dict[str, Any]] = [
-                {"role": "user", "content": input},
-            ]
-        elif isinstance(input, list):
-            follow_up_input = list(input)
-        else:
-            follow_up_input = []
-
+        follow_up_input: list[dict[str, Any]] = list(messages)
         first_response_output = (
-            response.get("output", []) or []
-            if isinstance(response, dict)
-            else (getattr(response, "output", None) or [])
+            (response.get("output") or []) if isinstance(response, dict) else (getattr(response, "output", None) or [])
         )
         for item in first_response_output:
-            follow_up_input.append(
-                item if isinstance(item, dict) else self._dump_output_item(item)
-            )
-
+            follow_up_input.append(item if isinstance(item, dict) else self._dump_output_item(item))
         for tool_call, result_text in zip(tool_calls, result_texts):
-            call_id = tool_call.get("call_id") or tool_call.get("id") or ""
             follow_up_input.append(
                 {
                     "type": "function_call_output",
-                    "call_id": call_id,
+                    "call_id": tool_call.get("call_id") or tool_call.get("id") or "",
                     "output": result_text,
                 }
             )
 
-        # Re-run the Responses-API call. ``previous_response_id`` would be a
-        # one-line shortcut, but only works when ``store=True`` and isn't
-        # supported by all backends — rebuilding the input chain works
-        # universally and matches how the chat-completion path handles this.
-        followup_kwargs = self._prepare_followup_kwargs(kwargs)
-        # Strip Responses-API-only flags and the converted-stream marker.
-        followup_kwargs.pop("response_id", None)
-
-        followup_params = dict(response_api_optional_request_params or {})
-        followup_params.pop("stream", None)
-        followup_params["tools"] = followup_kwargs.pop(
-            "tools", followup_params.get("tools")
-        )
-
-        # Reconstruct ``provider/model`` for the follow-up call. ``model`` here
-        # is the bare backend ID (e.g. ``openai.gpt-5.5``) because the
-        # litellm.aresponses dispatcher already stripped the ``bedrock_mantle/``
-        # prefix before reaching the HTTP handler. Without the prefix,
-        # ``get_llm_provider`` raises ``LLM Provider NOT provided``.
-        custom_llm_provider = (
-            (litellm_params or {}).get("custom_llm_provider")
-            or kwargs.get("custom_llm_provider")
-            or ""
-        )
-        full_model_name = model
-        if (
-            custom_llm_provider
-            and "/" not in model
-            and not model.startswith(f"{custom_llm_provider}/")
-        ):
-            full_model_name = f"{custom_llm_provider}/{model}"
-
-        # Forward provider-specific params from the original ``litellm_params``
-        # (e.g. ``aws_region_name``, ``api_base``) so the follow-up call lands
-        # on the same backend region as the initial call. Without this, a
-        # bedrock_mantle request whose model registration sets
-        # ``aws_region_name=us-east-2`` falls back to whatever the global
-        # default points at (``BEDROCK_MANTLE_REGION`` env, otherwise
-        # us-east-1) and 404s on the follow-up.
-        _PROVIDER_PARAM_KEYS = (
-            "aws_region_name",
-            "aws_access_key_id",
-            "aws_secret_access_key",
-            "aws_session_token",
-            "aws_role_name",
-            "aws_session_name",
-            "aws_profile_name",
-            "aws_web_identity_token",
-            "aws_sts_endpoint",
-            "aws_bedrock_runtime_endpoint",
-            "api_base",
-            "api_key",
-            "api_version",
-        )
-        for k in _PROVIDER_PARAM_KEYS:
-            v = (litellm_params or {}).get(k)
-            if v is not None and k not in followup_params:
-                followup_params[k] = v
-
-        # Forward caller-context fields the proxy uses for budget / spend
-        # attribution. Without ``metadata`` / ``litellm_metadata`` / ``user``,
-        # the internal follow-up call is logged against an empty key/team and
-        # bypasses budgets configured on the original API key.
-        # ``litellm_logging_obj`` is intentionally excluded — see
-        # ``_prepare_followup_kwargs`` — so the follow-up creates its own.
-        _ATTRIBUTION_KEYS = (
-            "metadata",
-            "litellm_metadata",
-            "user",
-            "user_api_key",
-            "user_api_key_alias",
-            "user_api_key_user_id",
-            "user_api_key_team_id",
-            "user_api_key_team_alias",
-            "user_api_key_org_id",
-            "proxy_server_request",
-        )
-        for k in _ATTRIBUTION_KEYS:
-            v = (litellm_params or {}).get(k)
-            if v is not None and k not in followup_kwargs:
-                followup_kwargs[k] = v
-
-        # Loop-state propagation. ``max_agentic_loops`` must travel with the
-        # follow-up call so the cap a deployment configured up-front isn't
-        # silently reset to the default on each hop.
-        followup_kwargs["_agentic_loop_depth"] = depth + 1
-        followup_kwargs["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
-        followup_kwargs["max_agentic_loops"] = max_loops
-
-        verbose_logger.debug(
-            "WebSearchInterception: Responses-API follow-up call "
-            f"[items={len(follow_up_input)} model={full_model_name} "
-            f"depth={depth + 1}/{max_loops}]"
-        )
-
-        return await litellm.aresponses(
-            model=full_model_name,
-            input=follow_up_input,
-            **followup_params,
-            **followup_kwargs,
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(model=model, messages=follow_up_input),
+            metadata={"tool_type": "websearch", "response_format": "responses"},
         )
 
     @staticmethod
-    def _dump_output_item(item: Any) -> Dict[str, Any]:
+    def _search_results_to_texts(search_results: list[Any]) -> list[str]:
+        """Coerce gathered search results (``(text, SearchResponse)`` tuples or errors) to text."""
+        texts: list[str] = []
+        for i, result in enumerate(search_results):
+            if isinstance(result, Exception):
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed: {result}")
+                texts.append(f"Search failed: {result}")
+            elif isinstance(result, tuple) and len(result) == 2:
+                text_value = result[0]
+                texts.append(text_value if isinstance(text_value, str) else str(text_value))
+            else:
+                texts.append(str(result))
+        return texts
+
+    @staticmethod
+    def _dump_output_item(item: Any) -> dict[str, Any]:
         """Best-effort conversion of a Responses-API output item to a dict."""
+        if isinstance(item, dict):
+            return item
         if hasattr(item, "model_dump"):
-            return cast(Dict[str, Any], item.model_dump())
+            return item.model_dump()
         if hasattr(item, "dict"):
             try:
-                return cast(Dict[str, Any], item.dict())
+                return item.dict()
             except Exception:
                 pass
-        return {k: getattr(item, k) for k in dir(item) if not k.startswith("_")}
+        return dict(getattr(item, "__dict__", {}))
 
     @staticmethod
     def _resolve_max_tokens(

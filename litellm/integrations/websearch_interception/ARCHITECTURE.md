@@ -37,9 +37,29 @@ The interception system automatically detects and handles:
 | **LiteLLM Standard** | `name="litellm_web_search"` | Any | Direct name match | N/A |
 | **Anthropic Native** | `type="web_search_20250305"` | Bedrock, Claude API | Type prefix: `startswith("web_search_")` | ✅ Yes (web_search_2026, etc.) |
 | **Claude Code CLI** | `name="web_search"`, `type="web_search_20250305"` | Claude Code | Name + type check | ✅ Yes (version-agnostic) |
+| **Responses API (server-hosted)** | `type="web_search"` / `type="web_search_preview"` | Bedrock Mantle, OpenAI (Codex CLI) | `is_web_search_tool_responses_api` | ✅ Yes |
 | **Legacy** | `name="WebSearch"` | Custom | Name match | N/A (backwards compat) |
 
 **Future Compatibility**: The `startswith("web_search_")` check in `tools.py` automatically supports future Anthropic web search versions.
+
+### Surfaces
+
+Interception runs on three request surfaces, each gated by the
+`_agentic_loop_api_surface` marker so a single set of shared hooks
+(`async_should_run_agentic_loop` / `async_build_agentic_loop_plan`) can serve
+all of them:
+
+| Surface | Marker | Client API | Response parser |
+|---------|--------|-----------|-----------------|
+| **Anthropic Messages** | (unset) | `/v1/messages` | `content[].tool_use` |
+| **Chat Completions** | `chat_completions` | `/v1/chat/completions` | `choices[].tool_calls` |
+| **Responses** | `responses` | `/v1/responses` | `output[].function_call` |
+
+On the Responses surface the server-hosted `web_search` tool (rejected by
+Bedrock Mantle) is rewritten to a flat `litellm_web_search` function tool in the
+pre-call deployment hook, then the shared mechanism runs the search and re-runs
+the model with `function_call_output` items patched into `input` — see
+`_build_responses_agentic_loop_plan` and `_execute_responses_agentic_plan`.
 
 ### Claude Code CLI Integration
 
@@ -159,8 +179,8 @@ sequenceDiagram
 | **Tool Name Constant** | `constants.py` | `LITELLM_WEB_SEARCH_TOOL_NAME = "litellm_web_search"` |
 | **Tool Conversion** | `anthropic/.../ handler.py` | Converts native tools to LiteLLM standard before API call |
 | **Transformation Logic** | `transformation.py` | Detect tool_use, build tool_result messages, format search responses |
-| **Agentic Loop Hooks** | `integrations/custom_logger.py` | Base hooks: `async_should_run_agentic_loop()`, `async_run_agentic_loop()` |
-| **Hook Orchestration** | `llms/custom_httpx/llm_http_handler.py` | `_call_agentic_completion_hooks()` - calls hooks after response |
+| **Agentic Loop Hooks** | `integrations/custom_logger.py` | Base hooks: `async_should_run_agentic_loop()`, `async_run_agentic_loop()`, `async_build_agentic_loop_plan()` |
+| **Hook Orchestration** | `llms/custom_httpx/llm_http_handler.py` | `_call_agentic_completion_hooks()` - runs hooks after response; `_execute_responses_agentic_plan()` re-runs the Responses call from a plan |
 | **Router Search Tools** | `proxy/proxy_server.py` | `llm_router.search_tools` - configured search providers |
 | **Search Endpoints** | `proxy/search_endpoints/endpoints.py` | Router logic for selecting search provider |
 

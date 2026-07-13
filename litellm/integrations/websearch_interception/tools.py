@@ -82,7 +82,7 @@ def get_litellm_web_search_tool_openai() -> Dict[str, Any]:
     }
 
 
-def get_litellm_web_search_tool_responses_api() -> Dict[str, Any]:
+def get_litellm_web_search_tool_responses_api() -> dict[str, Any]:
     """
     Get the standard LiteLLM web search tool definition in OpenAI Responses API format.
 
@@ -90,31 +90,14 @@ def get_litellm_web_search_tool_responses_api() -> Dict[str, Any]:
     ``{"type": "function", "name": "...", "description": "...", "parameters": {...}}``.
 
     Used by ``WebSearchInterceptionLogger.async_pre_call_deployment_hook`` for
-    ``call_type == "aresponses"`` to convert server-hosted ``web_search`` tools
+    Responses-API call types to convert server-hosted ``web_search`` tools
     (which providers like Bedrock Mantle reject) into a function-typed tool we
     can intercept and execute server-side.
     """
-    return {
-        "type": "function",
-        "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-        "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute",
-                }
-            },
-            "required": ["query"],
-        },
-    }
+    return {"type": "function", **get_litellm_web_search_tool_openai()["function"]}
 
 
-def is_web_search_tool_responses_api(tool: Dict[str, Any]) -> bool:
+def is_web_search_tool_responses_api(tool: dict[str, Any]) -> bool:
     """
     Check if a tool is a web search tool in OpenAI Responses API shape.
 

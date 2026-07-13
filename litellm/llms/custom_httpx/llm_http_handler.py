@@ -2657,9 +2657,11 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+
+        converted_stream = litellm_params.get("_code_interpreter_interception_converted_stream") or litellm_params.get(
+            "_websearch_interception_converted_stream"
+        )
+        if converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -2667,170 +2669,8 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
             )
-        transformed_response = result
-        # Agentic-loop hook dispatch (e.g. websearch interception). Mirrors
-        # ``_call_agentic_chat_completion_hooks`` and ``_call_agentic_completion_hooks``
-        # used by the Chat Completions and Anthropic Messages paths. The hook
-        # has access to the full transformed response and can re-run the
-        # Responses-API call with ``function_call_output`` items spliced into
-        # ``input``.
-        # Stash custom_llm_provider on litellm_params so the hook can
-        # reconstruct the ``provider/model`` string for follow-up calls.
-        # GenericLiteLLMParams declares ``custom_llm_provider`` as an
-        # optional field, so the dict often holds it as None — meaning
-        # ``setdefault`` would skip the assignment. Overwrite explicitly.
-        agentic_litellm_params = dict(litellm_params)
-        if not agentic_litellm_params.get("custom_llm_provider"):
-            agentic_litellm_params["custom_llm_provider"] = custom_llm_provider
 
-        agentic_response: Optional[Any] = None
-        try:
-            agentic_response = await self._call_agentic_responses_api_hooks(
-                response=transformed_response,
-                model=model,
-                input=input,
-                response_api_optional_request_params=response_api_optional_request_params,
-                litellm_params=agentic_litellm_params,
-                logging_obj=logging_obj,
-                stream=stream,
-                custom_llm_provider=custom_llm_provider,
-            )
-        except Exception as e:
-            verbose_logger.exception(
-                f"LiteLLM.AgenticHookError: Exception in Responses-API agentic hooks: {str(e)}"
-            )
-
-        final_response = (
-            agentic_response if agentic_response is not None else transformed_response
-        )
-
-        # If a callback (e.g. websearch interception) silently converted a
-        # client-requested stream=True call to stream=False so it could
-        # consume the response, the proxy SSE layer still expects an async
-        # iterator on the way out. Wrap a completed ``ResponsesAPIResponse``
-        # in ``CachedResponsesAPIStreamingIterator`` (the same wrapper the
-        # cache hit path uses) so ``async for chunk in stream_iterator``
-        # works downstream. Mirrors the chat-completion path that sets
-        # ``model_call_details["websearch_interception_converted_stream"]``
-        # from the same flag for the same reason.
-        converted_stream = bool(
-            agentic_litellm_params.get(
-                "_websearch_interception_converted_stream", False
-            )
-        )
-        if (
-            converted_stream
-            and getattr(logging_obj, "model_call_details", None) is not None
-        ):
-            logging_obj.model_call_details[
-                "websearch_interception_converted_stream"
-            ] = True
-        if converted_stream and not isinstance(
-            final_response, BaseResponsesAPIStreamingIterator
-        ):
-            from litellm.responses.streaming_iterator import (
-                CachedResponsesAPIStreamingIterator,
-            )
-
-            return CachedResponsesAPIStreamingIterator(
-                response=final_response,
-                logging_obj=logging_obj,
-                request_data=request_context,
-                call_type=CallTypes.responses.value,
-            )
-
-        return final_response
-
-    async def _call_agentic_responses_api_hooks(
-        self,
-        response: Any,
-        model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
-        litellm_params: Dict,
-        logging_obj: "LiteLLMLoggingObj",
-        stream: bool,
-        custom_llm_provider: str,
-    ) -> Optional[Any]:
-        """Dispatch ``async_should_run_responses_api_agentic_loop`` /
-        ``async_run_responses_api_agentic_loop`` for any ``CustomLogger`` in
-        ``litellm.callbacks`` that overrides them. Returns the agentic-loop
-        response if any callback ran, else ``None``."""
-        from litellm._logging import verbose_logger
-        from litellm.integrations.custom_logger import CustomLogger
-
-        callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
-        tools = response_api_optional_request_params.get("tools", []) or []
-
-        # Surface the original (pre-conversion) stream value so custom loggers
-        # can distinguish "client requested streaming, we converted internally"
-        # from "client requested non-streaming". By the time this dispatcher
-        # runs, ``stream`` itself reflects the post-conversion value.
-        original_stream = stream or bool(
-            litellm_params.get("_websearch_interception_converted_stream", False)
-        )
-
-        # Plumb agentic-loop safety state into the hook so re-entrant calls
-        # can bound depth + detect cycles. Defaults match
-        # ``_get_agentic_loop_settings`` so the chat-completion and Responses-
-        # API paths share the same semantics.
-        loop_state = {
-            "_agentic_loop_depth": int(
-                litellm_params.get("_agentic_loop_depth", 0) or 0
-            ),
-            "max_agentic_loops": int(litellm_params.get("max_agentic_loops", 3) or 3),
-            "_agentic_loop_fingerprints": list(
-                litellm_params.get("_agentic_loop_fingerprints", []) or []
-            ),
-        }
-
-        for callback in callbacks:
-            if not isinstance(callback, CustomLogger):
-                continue
-
-            try:
-                should_run, hook_tools = (
-                    await callback.async_should_run_responses_api_agentic_loop(
-                        response=response,
-                        model=model,
-                        input=input,
-                        tools=tools,
-                        stream=stream,
-                        original_stream=original_stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=dict(loop_state),
-                    )
-                )
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in "
-                    f"async_should_run_responses_api_agentic_loop: {str(e)}"
-                )
-                continue
-
-            if not should_run:
-                continue
-
-            try:
-                return await callback.async_run_responses_api_agentic_loop(
-                    tools=hook_tools,
-                    model=model,
-                    input=input,
-                    response=response,
-                    response_api_optional_request_params=response_api_optional_request_params,
-                    litellm_params=litellm_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    original_stream=original_stream,
-                    kwargs=dict(loop_state),
-                )
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in "
-                    f"async_run_responses_api_agentic_loop: {str(e)}"
-                )
-
-        return None
+        return result
 
     async def async_delete_response_api_handler(
         self,
@@ -5183,9 +5023,19 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
+        # Reconstruct ``provider/model`` for the follow-up. ``model`` may be the
+        # bare backend id (the aresponses dispatcher strips the provider), and
+        # ``get_llm_provider`` raises without a prefix. Guard on the provider
+        # prefix specifically (not any ``/``) so a backend id that naturally
+        # contains a slash still gets qualified.
+        followup_model = patch.model or model
+        provider = kwargs.get("custom_llm_provider")
+        if provider and not followup_model.startswith(f"{provider}/"):
+            followup_model = f"{provider}/{followup_model}"
+
         try:
             response = await litellm.aresponses(
-                model=patch.model or model,
+                model=followup_model,
                 input=patch.messages,
                 **optional_params,
                 **kwargs_for_followup,
@@ -5383,6 +5233,13 @@ class BaseLLMHTTPHandler:
         from litellm._logging import verbose_logger
         from litellm.integrations.custom_logger import CustomLogger
 
+        if not self._has_agentic_completion_hook(logging_obj):
+            return None
+
+        kwargs = {
+            **kwargs,
+            "_agentic_loop_api_surface": kwargs.get("_agentic_loop_api_surface") or api_surface,
+        }
         callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)

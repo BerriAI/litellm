@@ -761,56 +761,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return AgenticLoopPlan(run_agentic_loop=False)
 
-    async def async_should_run_responses_api_agentic_loop(
-        self,
-        response: Any,
-        model: str,
-        input: Any,
-        tools: Optional[List[Dict]],
-        stream: bool,
-        custom_llm_provider: str,
-        kwargs: Dict,
-        original_stream: Optional[bool] = None,
-    ) -> Tuple[bool, Dict]:
-        """
-        Hook to determine if the Responses-API agentic loop should be executed.
-
-        ``input`` is the OpenAI Responses-API ``input`` (string or list of items),
-        not the chat-style ``messages``.
-
-        ``stream`` is the post-conversion value seen by the underlying call;
-        ``original_stream`` is the pre-conversion value the caller requested
-        (callbacks earlier in the pipeline may have rewritten ``stream`` to
-        ``False`` so they could consume the response). Use ``original_stream``
-        when behavior should depend on what the client asked for, ``stream``
-        when it should depend on what the wire actually carried.
-        """
-        return False, {}
-
-    async def async_run_responses_api_agentic_loop(
-        self,
-        tools: Dict,
-        model: str,
-        input: Any,
-        response: Any,
-        response_api_optional_request_params: Dict,
-        litellm_params: Dict,
-        logging_obj: "LiteLLMLoggingObj",
-        stream: bool,
-        kwargs: Dict,
-        original_stream: Optional[bool] = None,
-    ) -> Any:
-        """
-        Hook to execute the Responses-API agentic loop.
-
-        Implementations should run any local tool execution (e.g. web search)
-        and return a ``ResponsesAPIResponse`` matching the original request shape.
-
-        See ``async_should_run_responses_api_agentic_loop`` for the
-        ``stream`` / ``original_stream`` distinction.
-        """
-        return response
-
     # Useful helpers for custom logger classes
 
     def truncate_standard_logging_payload_content(
