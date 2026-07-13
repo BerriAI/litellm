@@ -1338,6 +1338,21 @@ def _mint_refresh_envelope_value(
     return None
 
 
+def _upstream_oauth_error(response: httpx.Response) -> str | None:
+    """The RFC 6749 5.2 ``error`` code from an upstream token-endpoint error body, or ``None`` when the
+    body is not a JSON object carrying a string ``error``. Reading the field beats substring-matching the
+    raw text, which would false-match a code that only appears inside ``error_description`` (a false
+    invalid_grant would trigger a needless authorization_code re-run)."""
+    try:
+        body = json.loads(response.text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    return error if isinstance(error, str) else None
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1479,7 +1494,7 @@ async def exchange_token_with_server(
             is_bridge
             and grant_type == "refresh_token"
             and exc.response.status_code == 400
-            and "invalid_grant" in exc.response.text
+            and _upstream_oauth_error(exc.response) == "invalid_grant"
         )
         if upstream_rejected_bridge_refresh:
             verbose_logger.info(
