@@ -386,6 +386,29 @@ class TestPassthroughOAuth:
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
 
+    def test_passthrough_custom_api_base_uses_bearer_when_configured(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="anthropic/claude-fable-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={
+                "api_base": "https://api.cloudflare.com/client/v4/accounts/test/ai",
+                "use_bearer_for_custom_base": True,
+            },
+            api_key="custom-api-key",
+            api_base=None,
+        )
+
+        assert updated_headers["authorization"] == "Bearer custom-api-key"
+        assert "x-api-key" not in updated_headers
+
 
 class TestIsAnthropicOAuthKey:
     """Tests for is_anthropic_oauth_key helper function."""
