@@ -364,6 +364,30 @@ class TestPerformRedaction:
         delta_call = redacted["choices"][1]["delta"]["tool_calls"][0]
         assert delta_call["function"]["arguments"] == "redacted-by-litellm"
 
+    def test_redacts_tool_call_arguments_in_streaming_choices(self):
+        tool_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "sensitive city"}'},
+        }
+        streaming_choice = litellm.utils.StreamingChoices(
+            delta=litellm.utils.Delta(
+                content="delta content",
+                role="assistant",
+                tool_calls=[dict(tool_call)],
+            )
+        )
+        details = {
+            "stream": True,
+            "complete_streaming_response": SimpleNamespace(choices=[streaming_choice]),
+        }
+
+        perform_redaction(details, None)
+
+        redacted_call = streaming_choice.delta.tool_calls[0]
+        assert redacted_call.function.arguments == "redacted-by-litellm"
+        assert redacted_call.function.name == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
