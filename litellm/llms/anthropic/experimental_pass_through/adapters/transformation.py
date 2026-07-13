@@ -324,6 +324,7 @@ class LiteLLMAnthropicMessagesAdapter:
         return [
             "messages",
             "metadata",
+            "stop_sequences",
             "system",
             "tool_choice",
             "tools",
@@ -903,6 +904,21 @@ class LiteLLMAnthropicMessagesAdapter:
             # metadata will be passed to litellm.acompletion(), it's a litellm_param
             new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
 
+    def _translate_stop_sequences_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic ``stop_sequences`` to OpenAI ``stop``.
+
+        Anthropic-native backends map OpenAI ``stop`` back to ``stop_sequences``,
+        while OpenAI-format providers reject the ``stop_sequences`` field, so the
+        adapter must normalize to ``stop`` rather than passing it through verbatim.
+        """
+        stop_sequences = anthropic_message_request.get("stop_sequences")
+        if stop_sequences:
+            new_kwargs["stop"] = stop_sequences
+
     def _translate_tool_choice_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -1079,6 +1095,11 @@ class LiteLLMAnthropicMessagesAdapter:
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        ## CONVERT STOP SEQUENCES
+        self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
         )

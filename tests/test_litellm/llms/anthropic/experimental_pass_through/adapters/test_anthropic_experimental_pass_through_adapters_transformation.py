@@ -3111,3 +3111,37 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_to_openai_maps_stop_sequences_to_stop():
+    """Regression for #33075: Anthropic `stop_sequences` must be translated to
+    the OpenAI `stop` param, otherwise OpenAI-format providers 400 on the
+    unknown `stop_sequences` field."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = {
+        "model": "azure_ai/gpt-4o",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop_sequences": ["\n\nHuman:", "END"],
+    }
+
+    result, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=cast(Any, request))
+
+    assert result["stop"] == ["\n\nHuman:", "END"]
+    assert "stop_sequences" not in result
+
+
+def test_translate_anthropic_to_openai_omits_stop_when_no_stop_sequences():
+    """No `stop` key should be added when the Anthropic request has no
+    `stop_sequences`."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = {
+        "model": "azure_ai/gpt-4o",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    result, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=cast(Any, request))
+
+    assert "stop" not in result
+    assert "stop_sequences" not in result
