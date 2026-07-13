@@ -71,6 +71,9 @@ DEFAULT_MIN_CHARS_TO_COMPRESS = 500
 _ORIGINALS_TTL_SECONDS = 15 * 60
 _MAX_TRACKED_CALLS = 256
 _DEFAULT_MAX_BYTES_PER_CALL = 10 * 1024 * 1024
+# Aggregate ceiling across all recovery-store entries. max_bytes_per_call only
+# bounds a single call; this caps the whole store so many calls cannot exhaust it.
+_MAX_TOTAL_STORE_BYTES = 256 * 1024 * 1024
 # The shared HTTP client defaults to a 600s read timeout; that is far too long
 # for an inline, on-request-path guardrail (a hung Compresr backend would pin
 # the request coroutine and a pooled connection for 10 minutes). Bound it so a
@@ -272,6 +275,11 @@ def _content_hash(text: str) -> str:
     # surrogatepass so a lone surrogate in untrusted content (valid via a JSON
     # \uXXXX escape) hashes instead of raising past the fail policy.
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:24]
+
+
+def _entry_bytes(originals: dict[str, str]) -> int:
+    """UTF-8 byte size of one recovery-store entry (surrogatepass, like _content_hash)."""
+    return sum(len(value.encode("utf-8", "surrogatepass")) for value in originals.values())
 
 
 def _display_hash(hash_value: str) -> str:
@@ -615,6 +623,8 @@ class CompresrGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
         self._originals_by_call_id: OrderedDict[str, tuple[dict[str, str], float]] = OrderedDict()
+        # Running byte size of the store, kept in sync to enforce the global cap cheaply.
+        self._store_total_bytes = 0
         if self.enable_retrieval:
             verbose_proxy_logger.warning(
                 "Compresr: enable_retrieval is on; the recovery store is per-process. "
@@ -659,21 +669,29 @@ class CompresrGuardrail(CustomGuardrail):
         verbose_proxy_logger.error("Compresr: %s. detail=%s", error, log_detail)
         raise HTTPException(status_code=502, detail={"error": error})
 
+    def _evict_oldest(self) -> None:
+        """Drop the front (oldest) entry and decrement the running byte total."""
+        _key, (evicted, _expiry) = self._originals_by_call_id.popitem(last=False)
+        self._store_total_bytes -= _entry_bytes(evicted)
+
     def _prune_originals(self) -> None:
         # Insertion order == expiry order (shared TTL); prune from the front.
         now = time.monotonic()
         store = self._originals_by_call_id
-        while store:
-            oldest_key = next(iter(store))
-            if store[oldest_key][1] > now:
-                break
-            del store[oldest_key]
+        while store and store[next(iter(store))][1] <= now:
+            self._evict_oldest()
         while len(store) > _MAX_TRACKED_CALLS:
-            store.popitem(last=False)
+            self._evict_oldest()
+        # Global byte budget; keep the most-recent entry so the current call's
+        # originals survive (a single call is already bounded by max_bytes_per_call).
+        while len(store) > 1 and self._store_total_bytes > _MAX_TOTAL_STORE_BYTES:
+            self._evict_oldest()
 
     def _store_originals(self, store_key: str, originals: dict[str, str]) -> None:
         existing, _ = self._originals_by_call_id.get(store_key, ({}, 0.0))
         merged = self._bound_call_bytes({**existing, **originals})
+        # Keep the running total in sync: drop the overwritten entry, add the new one.
+        self._store_total_bytes += _entry_bytes(merged) - _entry_bytes(existing)
         self._originals_by_call_id[store_key] = (
             merged,
             time.monotonic() + _ORIGINALS_TTL_SECONDS,
@@ -687,7 +705,7 @@ class CompresrGuardrail(CustomGuardrail):
         large tool outputs from growing proxy memory without bound."""
         if self.max_bytes_per_call <= 0:
             return merged
-        total = sum(len(value.encode("utf-8", "surrogatepass")) for value in merged.values())
+        total = _entry_bytes(merged)
         if total <= self.max_bytes_per_call:
             return merged
         bounded = dict(merged)

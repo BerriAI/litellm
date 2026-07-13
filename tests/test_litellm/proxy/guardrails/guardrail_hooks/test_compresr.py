@@ -1355,6 +1355,42 @@ def test_originals_store_byte_cap_survives_lone_surrogates():
     assert hashes[0] not in stored
 
 
+def test_originals_store_caps_total_bytes_across_calls(monkeypatch: pytest.MonkeyPatch):
+    # Global byte budget: many distinct call ids must not retain unbounded memory.
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.compresr.compresr._MAX_TOTAL_STORE_BYTES",
+        10_000,
+    )
+    guardrail = _make_guardrail(max_bytes_per_call=4_000)
+    for i in range(20):
+        guardrail._store_originals(f"call-{i}", {f"{i:024x}": "x" * 3_000})
+
+    total = sum(
+        len(v.encode("utf-8"))
+        for originals, _expiry in guardrail._originals_by_call_id.values()
+        for v in originals.values()
+    )
+    assert total <= 10_000
+    assert guardrail._store_total_bytes == total  # running counter stays exact
+    # Oldest calls evicted; the most-recent call's originals survive.
+    assert "call-0" not in guardrail._originals_by_call_id
+    assert "call-19" in guardrail._originals_by_call_id
+
+
+def test_originals_store_global_cap_keeps_current_when_single_call_is_large(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # One call over the global cap is still kept (only max_bytes_per_call trims it);
+    # global eviction never empties the store.
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.compresr.compresr._MAX_TOTAL_STORE_BYTES",
+        1_000,
+    )
+    guardrail = _make_guardrail(max_bytes_per_call=5_000)
+    guardrail._store_originals("solo", {f"{0:024x}": "x" * 4_000})
+    assert "solo" in guardrail._originals_by_call_id
+
+
 # ── dynamic (adaptive) compression — latte_v2 Kneedle ─────────────────
 
 
