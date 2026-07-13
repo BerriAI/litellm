@@ -2528,6 +2528,56 @@ class TestSessionAffinity:
         assert call_kwargs["value"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
+        """Regression: a pinned turn must refresh the TTL, not just the first write --
+        otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value="o1-preview")
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_affinity": True,
+                "session_affinity_ttl_seconds": 90,
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "o1-preview"
+        cache.async_set_cache.assert_called_once()
+        call_kwargs = cache.async_set_cache.call_args.kwargs
+        assert call_kwargs["value"] == "o1-preview"
+        assert call_kwargs["ttl"] == 90
+
+    @pytest.mark.asyncio
+    async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
+        """A session_id is client-supplied and unauthenticated; two different callers
+        (API keys) reusing the same session_id must not poison each other's pin."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        caller_a_kwargs = {"metadata": {"session_id": "shared-session", "user_api_key_hash": "key-a"}}
+        caller_b_kwargs = {"metadata": {"session_id": "shared-session", "user_api_key_hash": "key-b"}}
+
+        pinned_for_a = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_a_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert pinned_for_a.model == "o1-preview"
+
+        # Caller B reuses the same session_id but has a different API key; its trivial
+        # message must classify fresh, not inherit caller A's REASONING-tier pin.
+        result_for_b = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_b_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert result_for_b.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_no_session_id_falls_back_to_reclassify(self, mock_router_instance, session_affinity_config):
         cache = AsyncMock()
         mock_router_instance.cache = cache
