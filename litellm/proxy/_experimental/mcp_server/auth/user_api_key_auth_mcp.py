@@ -605,8 +605,14 @@ class MCPRequestHandler:
         caller's centralized policy gate then enforces the user's live budget and org state,
         and a SCIM-deactivated owner fails closed here exactly as the key path enforces it. No
         team is bound; a user may belong to many teams or none, so the envelope grants the
-        user's own access rather than silently selecting one team's scope. A missing user
-        fails closed with a 401 rather than admitting an unresolved identity."""
+        user's own access rather than silently selecting one team's scope.
+
+        Error handling mirrors the key path's retryable-503 contract, with one deliberate
+        difference: ``get_key_object`` raises a ``ProxyException`` for a missing key, but
+        ``get_user_object`` raises a bare ``Exception`` for a missing user (it does not surface as a
+        ``ProxyException``/``HTTPException``). So a transient DB outage still surfaces as a retryable
+        503 via ``_raise_503_if_db_unavailable``, while a missing user, or any other non-outage
+        resolution failure, fails closed as a 401 rather than propagating as an opaque 500."""
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -620,6 +626,9 @@ class MCPRequestHandler:
                 user_id_upsert=False,
             )
         except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        except Exception as e:  # noqa: BLE001  # DB outage -> retryable 503; a missing user (bare Exception) or any other resolution failure -> fail closed 401, never an opaque 500
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
         if user_object is None:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")

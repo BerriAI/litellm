@@ -5117,8 +5117,10 @@ class TestMCPDcrBridgeDelegateAdmission:
         }
 
     async def test_user_subject_envelope_missing_user_fails_closed_401(self):
-        """A user_id envelope whose user has since been deleted must fail closed: get_user_object
-        resolves None, so admission 401s instead of admitting an unresolved identity."""
+        """A user_id envelope whose user has since been deleted must fail closed with a 401, not a 500.
+        get_user_object raises a bare Exception for a missing user (it does not return None on the
+        production path), so the reload must catch it and fail closed rather than let it propagate as an
+        opaque 500. Regression for the missing-user path surfacing as a 500."""
         envelope = self._mint_bridge_envelope(user_id="ghost-user")
         scope = {
             "type": "http",
@@ -5129,13 +5131,35 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(return_value=None),
+            self._patch_user_reload(side_effect=Exception("user not found")),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
 
         assert exc_info.value.status_code == 401
+
+    async def test_user_subject_envelope_db_outage_is_retryable_503(self):
+        """A transient database outage while reloading the envelope's user is a retryable 503, not an
+        opaque 500, matching the key path's contract so an interactive DCR client retries instead of
+        treating a live identity as invalid. Regression for the user reload dropping the 503 arm."""
+        envelope = self._mint_bridge_envelope(user_id="sso-user-7")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_user_reload(side_effect=ConnectionError("auth database unreachable")),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 503
 
     async def test_user_subject_envelope_scim_deactivated_user_fails_closed_401(self):
         """SCIM-deactivating the envelope's user revokes it immediately: the reloaded user carries
@@ -5151,9 +5175,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(
-                return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})
-            ),
+            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
