@@ -2657,9 +2657,10 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+        interception_converted_stream = litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) or litellm_params.get("_websearch_interception_converted_stream")
+        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -5224,6 +5225,8 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
+        hook_kwargs = {**kwargs, "_agentic_loop_api_surface": api_surface}
+
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
@@ -5244,7 +5247,7 @@ class BaseLLMHTTPHandler:
                     tools=tools,
                     stream=stream,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs=hook_kwargs,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5270,7 +5273,7 @@ class BaseLLMHTTPHandler:
             )
 
             try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider = hook_kwargs.copy()
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                 build_plan_overridden = (
                     callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
