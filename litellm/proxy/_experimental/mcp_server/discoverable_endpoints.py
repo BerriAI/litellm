@@ -980,6 +980,50 @@ def _finish_bridge_mint(
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
 
 
+def _response_json_or_none(response: httpx.Response) -> object:
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _upstream_token_fault_response(description: str) -> JSONResponse:
+    """502 token-endpoint response for an upstream fault, in the RFC 6749 §5.2 shape the gateway's
+    token callers parse, with the §5.1 no-store headers."""
+    return JSONResponse(
+        status_code=502,
+        content={"error": "server_error", "error_description": description},
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
+
+
+def _upstream_token_error_response(response: httpx.Response) -> JSONResponse:
+    """Relay an upstream token-endpoint rejection to the client instead of letting the raw
+    ``httpx.HTTPStatusError`` escape to the global handler as an opaque 500 (the IdP's own
+    ``error_description``, e.g. Google's "client_secret is missing.", is the message the caller needs).
+    Only the RFC 6749 §5.2 fields (``error`` / ``error_description`` / ``error_uri``) are relayed,
+    each bounded, on the upstream's own 400/401 status; a rejection outside the §5.2 contract
+    (no JSON ``error`` field, or a status §5.2 does not define) maps to 502 so a broken upstream
+    is not misattributed to the caller's request."""
+    parsed = _response_json_or_none(response)
+    error_code = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(error_code, str) or not error_code:
+        detail = (response.text or response.reason_phrase or "")[:_MAX_UPSTREAM_ERROR_CHARS]
+        return _upstream_token_fault_response(f"upstream token endpoint returned HTTP {response.status_code}: {detail}")
+    fields = parsed if isinstance(parsed, dict) else {}
+    relayed = {
+        key: value[:_MAX_UPSTREAM_ERROR_CHARS]
+        for key, value in (
+            ("error", error_code),
+            ("error_description", fields.get("error_description")),
+            ("error_uri", fields.get("error_uri")),
+        )
+        if isinstance(value, str) and value
+    }
+    status_code = response.status_code if response.status_code in (400, 401) else 502
+    return JSONResponse(status_code=status_code, content=relayed, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1064,19 +1108,14 @@ async def exchange_token_with_server(
         bridge_mint_ready = prepared
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json", **client_auth.headers},
-        data=token_data,
-    )
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream token endpoint returned no response",
-        )
-
     try:
-        response.raise_for_status()
+        response = await async_client.post(
+            mcp_server.token_url,
+            headers={"Accept": "application/json", **client_auth.headers},
+            data=token_data,
+        )
+        if response is not None:
+            response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         if "invalid_target" in exc.response.text:
             verbose_logger.warning(
@@ -1085,7 +1124,12 @@ async def exchange_token_with_server(
                 "does not send yet (tracked as LIT-4339)",
                 mcp_server.server_id,
             )
-        raise
+        return _upstream_token_error_response(exc.response)
+    if response is None:
+        raise HTTPException(
+            status_code=502,
+            detail="MCP upstream token endpoint returned no response",
+        )
     token_response = response.json()
 
     # Validate token response against server-configured rules before any storage.
@@ -1135,8 +1179,12 @@ async def exchange_token_with_server(
         minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
         return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
 
+    raw_access_token = token_response.get("access_token") if isinstance(token_response, dict) else None
+    if not isinstance(raw_access_token, str) or not raw_access_token:
+        return _upstream_token_fault_response("the upstream token response has no usable access_token")
+
     result = {
-        "access_token": token_response["access_token"],
+        "access_token": raw_access_token,
         "token_type": token_response.get("token_type", "Bearer"),
     }
 
@@ -1466,11 +1514,18 @@ async def register_client_with_server(
     }
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Register)
-    response = await async_client.post(
-        mcp_server.registration_url,
-        headers=headers,
-        json=register_data,
-    )
+    try:
+        response = await async_client.post(
+            mcp_server.registration_url,
+            headers=headers,
+            json=register_data,
+        )
+        if response is not None:
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code, detail=_safe_upstream_error_detail(exc.response)
+        ) from exc
     if response is None:
         raise HTTPException(
             status_code=502,
@@ -1478,7 +1533,6 @@ async def register_client_with_server(
         )
     if bridge_relay and response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
-    response.raise_for_status()
 
     token_response = response.json()
 

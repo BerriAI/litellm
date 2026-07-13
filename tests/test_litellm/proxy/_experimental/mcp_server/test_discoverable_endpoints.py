@@ -4307,9 +4307,10 @@ async def test_register_bridge_relay_surfaces_upstream_error_not_500():
 
 
 @pytest.mark.asyncio
-async def test_register_non_bridge_upstream_error_still_raises_500():
-    """Non-bridge DCR keeps its pre-change behavior: raise_for_status propagates so the flag-off
-    contract is byte-identical; only the bridge relay arm relays the upstream status."""
+async def test_register_non_bridge_upstream_error_relays_status_not_500():
+    """A non-bridge DCR rejection must relay the upstream status and RFC 7591 error body just like
+    the bridge relay arm; a raw HTTPStatusError would escape to the global handler and surface as an
+    opaque 500 that hides the real reason from the create-flow UI."""
     import httpx
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -4338,7 +4339,7 @@ async def test_register_non_bridge_upstream_error_still_raises_500():
             return_value=False,
         ),
     ):
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(HTTPException) as exc:
             await register_client_with_server(
                 request=_bridge_mock_request(),
                 mcp_server=oauth2_server,
@@ -4347,6 +4348,9 @@ async def test_register_non_bridge_upstream_error_still_raises_500():
                 response_types=None,
                 token_endpoint_auth_method=None,
             )
+
+    assert exc.value.status_code == 400
+    assert "invalid_client_metadata" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5960,3 +5964,244 @@ async def test_token_exchange_pairs_client_secret_with_server_client_id():
     sent = mock_async_client.post.call_args.kwargs["data"]
     assert sent["client_id"] == "persisted-client"
     assert "client_secret" not in sent
+
+
+def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
+    import httpx
+
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    if json_body is not None:
+        return httpx.Response(status_code, json=json_body, request=request)
+    return httpx.Response(status_code, text=text_body, request=request)
+
+
+async def _exchange_with_upstream_response(upstream_response):
+    """Run the raw (non-bridge) authorization_code exchange against a canned upstream token-endpoint
+    response and return what the gateway would hand the client."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="gcal",
+        name="gcal",
+        server_name="gcal",
+        alias="gcal",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="web-client.apps.googleusercontent.com",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=upstream_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        return await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="web-client.apps.googleusercontent.com",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_relays_upstream_rfc6749_rejection():
+    """The IdP's own RFC 6749 §5.2 rejection is the message the caller needs (e.g. Google refusing a
+    secret-less web client); before the relay the raw HTTPStatusError escaped to the global handler
+    and every upstream rejection surfaced as an opaque 500 Internal server error."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+        )
+    )
+
+    assert response.status_code == 401
+    body = json.loads(response.body)
+    assert body == {"error": "invalid_client", "error_description": "The OAuth client was not found."}
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_relays_only_rfc6749_error_fields():
+    """Only error / error_description / error_uri cross the gateway; any other upstream body field is
+    dropped so an arbitrary rejection payload cannot ride the relay to the client."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            400,
+            json_body={
+                "error": "invalid_grant",
+                "error_description": "Code was already redeemed.",
+                "error_uri": "https://idp.example.com/errors/invalid_grant",
+                "internal_trace": "should never reach the client",
+            },
+        )
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert set(body.keys()) == {"error", "error_description", "error_uri"}
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_maps_out_of_contract_rejection_to_502():
+    """A rejection outside the §5.2 contract (no JSON error field, or a status the token-endpoint
+    contract does not define) is an upstream fault; 502 keeps it from being misread as a caller
+    mistake while the description still names the upstream status."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(503, text_body="<html>upstream maintenance</html>")
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "HTTP 503" in body["error_description"]
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_bounds_relayed_error_fields():
+    """Relayed §5.2 fields are length-bounded so a hostile or broken upstream cannot bloat the
+    gateway response."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(400, json_body={"error": "invalid_request", "error_description": "x" * 5000})
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert len(body["error_description"]) == 500
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_200_without_access_token_is_502_not_keyerror():
+    """A 200 whose body has no usable access_token used to KeyError into a 500; the raw arm now
+    answers 502 with the same wording as the bridge arm's no_upstream_token rejection."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(200, json_body={"token_type": "Bearer"})
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "access_token" in body["error_description"]
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_relays_rejection_when_http_client_raises():
+    """litellm's AsyncHTTPHandler.post raise_for_status()es internally and raises MaskedHTTPStatusError
+    at call time, so in production the rejection escapes from the post call itself rather than from the
+    explicit raise_for_status; the relay must catch it there too (proven live: a mock returning the
+    error response passed while the real proxy still 500ed)."""
+    import httpx
+
+    rejection = _upstream_token_response(
+        401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Client error '401 Unauthorized'", request=rejection.request, response=rejection)
+    )
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="gcal",
+        name="gcal",
+        server_name="gcal",
+        alias="gcal",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="web-client.apps.googleusercontent.com",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=raising_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="web-client.apps.googleusercontent.com",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+    assert response.status_code == 401
+    body = json.loads(response.body)
+    assert body["error"] == "invalid_client"
+
+
+@pytest.mark.asyncio
+async def test_register_relays_rejection_when_http_client_raises():
+    """Same live mechanism as the token exchange: the DCR rejection escapes from the post call itself,
+    so the register relay must catch it there, not only from the explicit raise_for_status."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    rejection = httpx.Response(
+        400,
+        json={"error": "invalid_client_metadata"},
+        request=httpx.Request("POST", "https://idp.example.com/register"),
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Client error '400 Bad Request'", request=rejection.request, response=rejection)
+    )
+
+    oauth2_server = _bridge_server(auth_type=MCPAuth.oauth2, dcr_bridge=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=raising_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=oauth2_server,
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "invalid_client_metadata" in str(exc.value.detail)
