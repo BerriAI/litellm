@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -19,6 +20,20 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
+from litellm.litellm_core_utils.fallback_generalizations import (
+    set_fallback_generalizations,
+)
+
+FALLBACK_GENERALIZATIONS_KEY = "fallback_generalizations"
+
+# Reserved top-level keys that are not model entries. They must be excluded
+# from the model-count integrity check so a real upstream shrink can't be masked.
+RESERVED_TOP_LEVEL_KEYS = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
+
+
+def _count_model_entries(model_cost: dict) -> int:
+    """Count actual model entries, excluding reserved meta keys."""
+    return sum(1 for key in model_cost if key not in RESERVED_TOP_LEVEL_KEYS)
 
 
 class GetModelCostMap:
@@ -36,9 +51,7 @@ class GetModelCostMap:
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
         content = json.loads(
-            files("litellm")
-            .joinpath("model_prices_and_context_window_backup.json")
-            .read_text(encoding="utf-8")
+            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
         )
         return content
 
@@ -47,7 +60,7 @@ class GetModelCostMap:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup = cls.load_local_model_cost_map()
-            cls._backup_model_count = len(backup)
+            cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
 
     @staticmethod
@@ -55,16 +68,14 @@ class GetModelCostMap:
         """Check 1: fetched map is a non-empty dict."""
         if not isinstance(fetched_map, dict):
             verbose_logger.warning(
-                "LiteLLM: Fetched model cost map is not a dict (type=%s). "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched model cost map is not a dict (type=%s). Falling back to local backup.",
                 type(fetched_map).__name__,
             )
             return False
 
         if len(fetched_map) == 0:
             verbose_logger.warning(
-                "LiteLLM: Fetched model cost map is empty. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched model cost map is empty. Falling back to local backup.",
             )
             return False
 
@@ -79,7 +90,7 @@ class GetModelCostMap:
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """Check 2: model count has not reduced significantly vs backup."""
-        fetched_count = len(fetched_map)
+        fetched_count = _count_model_entries(fetched_map)
 
         if fetched_count < min_model_count:
             verbose_logger.warning(
@@ -151,6 +162,104 @@ class GetModelCostMap:
         return response.json()
 
 
+class ModelCostMapSourceInfo:
+    """Tracks the source of the currently loaded model cost map."""
+
+    source: str = "local"  # "local" or "remote"
+    url: Optional[str] = None
+    is_env_forced: bool = False
+    fallback_reason: Optional[str] = None
+
+
+# Module-level singleton tracking the source of the current cost map
+_cost_map_source_info = ModelCostMapSourceInfo()
+
+
+def get_model_cost_map_source_info() -> dict:
+    """
+    Return metadata about where the current model cost map was loaded from.
+
+    Returns a dict with:
+    - source: "local" or "remote"
+    - url: the remote URL attempted (or None for local-only)
+    - is_env_forced: True if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason if remote failed and local was used
+    """
+    return {
+        "source": _cost_map_source_info.source,
+        "url": _cost_map_source_info.url,
+        "is_env_forced": _cost_map_source_info.is_env_forced,
+        "fallback_reason": _cost_map_source_info.fallback_reason,
+    }
+
+
+def _expand_model_aliases(model_cost: dict) -> dict:
+    """
+    Expand ``aliases`` lists in model cost entries into top-level entries.
+
+    Each alias gets a reference to the **same** dict object as the canonical
+    entry (zero memory overhead).  The ``aliases`` key is removed from the
+    entry so downstream code never sees it.
+
+    If an alias collides with an existing canonical entry the alias is
+    skipped and a warning is logged.
+    """
+    aliases_to_add: Dict[str, dict] = {}
+    keys_with_aliases: List[str] = []
+
+    for model_name, model_info in model_cost.items():
+        aliases: Optional[list] = model_info.get("aliases")
+        if aliases is None:
+            continue
+        keys_with_aliases.append(model_name)
+        if not isinstance(aliases, list):
+            verbose_logger.warning(
+                "LiteLLM model alias field for '%s' is not a list (got %s) — skipping.",
+                model_name,
+                type(aliases).__name__,
+            )
+            continue
+        if not aliases:
+            continue
+        for alias in aliases:
+            if alias in model_cost:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "already exists as a canonical entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            if alias in aliases_to_add:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "was already claimed by another entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            aliases_to_add[alias] = model_info  # same dict reference
+
+    # Remove the ``aliases`` key from entries so it doesn't pollute model info
+    for key in keys_with_aliases:
+        model_cost[key].pop("aliases", None)
+
+    model_cost.update(aliases_to_add)
+    return model_cost
+
+
+def _finalize_model_cost_map(model_cost: dict) -> dict:
+    """Extract fallback generalizations out of the raw map, then expand aliases.
+
+    The ``fallback_generalizations`` block is installed into the generalizations
+    module and removed from the map so it is never treated as a model entry.
+    """
+    raw = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
+    rules = raw.get("rules") if isinstance(raw, dict) else None
+    set_fallback_generalizations(rules)
+    return _expand_model_aliases(model_cost)
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -166,18 +275,26 @@ def get_model_cost_map(url: str) -> dict:
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.url = None
+        _cost_map_source_info.is_env_forced = True
+        _cost_map_source_info.fallback_reason = None
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
+
+    _cost_map_source_info.url = url
+    _cost_map_source_info.is_env_forced = False
 
     try:
         content = GetModelCostMap.fetch_remote_model_cost_map(url)
     except Exception as e:
         verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
-            "Falling back to local backup.",
+            "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
             url,
             str(e),
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
@@ -185,10 +302,13 @@ def get_model_cost_map(url: str) -> dict:
         backup_model_count=GetModelCostMap._get_backup_model_count(),
     ):
         verbose_logger.warning(
-            "LiteLLM: Fetched model cost map failed integrity check. "
-            "Using local backup instead. url=%s",
+            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
             url,
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
-    return content
+    _cost_map_source_info.source = "remote"
+    _cost_map_source_info.fallback_reason = None
+    return _finalize_model_cost_map(content)

@@ -30,11 +30,7 @@ class RAGQuery:
         elif isinstance(content, list) and len(content) > 0:
             # Handle list of content items, extract text from first text item
             for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "text"
-                    and "text" in item
-                ):
+                if isinstance(item, dict) and item.get("type") == "text" and "text" in item:
                     return item["text"]
 
         return None
@@ -48,16 +44,14 @@ class RAGQuery:
 
         for chunk in context_chunks:
             if isinstance(chunk, dict):
-                result_content: Optional[List[VectorStoreResultContent]] = chunk.get(
-                    "content"
-                )
+                result_content: Optional[List[VectorStoreResultContent]] = chunk.get("content")
                 if result_content:
                     for content_item in result_content:
                         content_text: Optional[str] = content_item.get("text")
                         if content_text:
                             context_content += content_text + "\n\n"
-                elif "text" in chunk: # Fallback for simple dict with text
-                     context_content += chunk["text"] + "\n\n"
+                elif "text" in chunk:  # Fallback for simple dict with text
+                    context_content += chunk["text"] + "\n\n"
             elif isinstance(chunk, str):
                 context_content += chunk + "\n\n"
 
@@ -80,9 +74,7 @@ class RAGQuery:
                 message = getattr(choice, "message", None)
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
-                    provider_fields = (
-                        getattr(message, "provider_specific_fields", None) or {}
-                    )
+                    provider_fields = getattr(message, "provider_specific_fields", None) or {}
 
                     # Add search results
                     provider_fields["search_results"] = search_results

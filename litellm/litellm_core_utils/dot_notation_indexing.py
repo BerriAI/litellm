@@ -28,9 +28,7 @@ from typing import Any, Dict, List, Optional, TypeVar, Union
 T = TypeVar("T")
 
 
-def get_nested_value(
-    data: Dict[str, Any], key_path: str, default: Optional[T] = None
-) -> Optional[T]:
+def get_nested_value(data: Dict[str, Any], key_path: str, default: Optional[T] = None) -> Optional[T]:
     """
     Retrieves a value from a nested dictionary using dot notation.
 
@@ -56,11 +54,7 @@ def get_nested_value(
         return default
 
     # Remove metadata. prefix if it exists
-    key_path = (
-        key_path.replace("metadata.", "", 1)
-        if key_path.startswith("metadata.")
-        else key_path
-    )
+    key_path = key_path.replace("metadata.", "", 1) if key_path.startswith("metadata.") else key_path
 
     # Split the key path into parts, respecting escaped dots (\.)
     # Use a temporary placeholder, split on unescaped dots, then restore
@@ -107,7 +101,7 @@ def _parse_path_segments(path: str) -> list:
 
     # Match field names OR bracket expressions
     # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern = r'[^\.\[]+|\[[^\]]*\]'
+    pattern = r"[^\.\[]+|\[[^\]]*\]"
     segments = re.findall(pattern, path)
     return segments
 

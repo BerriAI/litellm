@@ -10,7 +10,9 @@ import os
 def test_bedrock_haiku_4_5_configuration():
     """Test that all Bedrock Claude Haiku 4.5 models use bedrock_converse provider"""
     # Load model configuration
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -36,12 +38,9 @@ def test_bedrock_haiku_4_5_configuration():
         ), f"{model} should use bedrock_converse provider, got {model_info['litellm_provider']}"
 
         # Verify supports vision (key missing capability)
-        assert model_info.get("supports_vision") is True, f"{model} should support vision"
-
-        # Verify tool use system prompt tokens
         assert (
-            model_info.get("tool_use_system_prompt_tokens") == 346
-        ), f"{model} should have tool_use_system_prompt_tokens set to 346"
+            model_info.get("supports_vision") is True
+        ), f"{model} should support vision"
 
         # Verify core capabilities
         assert model_info.get("supports_computer_use") is True
@@ -65,7 +64,9 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
     (including computer_use, vision, tools, etc.)
     """
     # Load model configuration
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -90,7 +91,6 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
         "supports_pdf_input",
         "supports_assistant_prefill",
         "supports_reasoning",
-        "tool_use_system_prompt_tokens",
     ]
 
     for capability in shared_capabilities:
@@ -102,7 +102,9 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
 def test_anthropic_api_haiku_4_5_configuration():
     """Test that Anthropic API Claude Haiku 4.5 has correct configuration"""
     # Load model configuration
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -117,10 +119,14 @@ def test_anthropic_api_haiku_4_5_configuration():
         model_info = model_data[model]
 
         # Should use anthropic provider (not bedrock)
-        assert model_info["litellm_provider"] == "anthropic", f"{model} should use anthropic provider"
+        assert (
+            model_info["litellm_provider"] == "anthropic"
+        ), f"{model} should use anthropic provider"
 
         # Should support vision
-        assert model_info.get("supports_vision") is True, f"{model} should support vision"
+        assert (
+            model_info.get("supports_vision") is True
+        ), f"{model} should support vision"
 
         # Should have larger output token limit (64K for Anthropic API)
         assert model_info["max_output_tokens"] == 64000

@@ -72,12 +72,10 @@ class TestUpdateMetadataFieldsEmptyCollections:
         }
         _update_metadata_fields(updated_kv=updated_kv)
         # The fields should have been moved into metadata
-        assert "guardrails" not in updated_kv, (
-            "guardrails should be popped from top-level"
-        )
-        assert "policies" not in updated_kv, (
-            "policies should be popped from top-level"
-        )
+        assert (
+            "guardrails" not in updated_kv
+        ), "guardrails should be popped from top-level"
+        assert "policies" not in updated_kv, "policies should be popped from top-level"
         assert updated_kv["metadata"]["guardrails"] == []
         assert updated_kv["metadata"]["policies"] == []
 
@@ -102,9 +100,9 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "secret_manager_settings": {},
         }
         _update_metadata_fields(updated_kv=updated_kv)
-        assert "secret_manager_settings" not in updated_kv, (
-            "secret_manager_settings should be popped from top-level"
-        )
+        assert (
+            "secret_manager_settings" not in updated_kv
+        ), "secret_manager_settings should be popped from top-level"
         assert updated_kv["metadata"]["secret_manager_settings"] == {}
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
@@ -160,7 +158,35 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
-    def test_ui_typical_payload_does_not_trigger_premium_check(self, mock_premium_check):
+    def test_false_boolean_does_not_trigger_premium_check(self, mock_premium_check):
+        """
+        Regression #30285: /team/update sends disable_global_guardrails=False
+        (the UI's unchanged default). A falsy boolean must not trigger the
+        premium check, so non-premium users are not wrongly 403'd.
+        """
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_not_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_false_boolean_still_updates_metadata(self, mock_premium_check):
+        """A falsy boolean must still be moved into metadata so it persists."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
+        _update_metadata_fields(updated_kv=updated_kv)
+        assert "disable_global_guardrails" not in updated_kv
+        assert updated_kv["metadata"]["disable_global_guardrails"] is False
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_true_boolean_triggers_premium_check(self, mock_premium_check):
+        """Control: enabling the premium feature (True) still requires a license."""
+        updated_kv = {"team_id": "test-team", "disable_global_guardrails": True}
+        _update_metadata_fields(updated_kv=updated_kv)
+        mock_premium_check.assert_called()
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_ui_typical_payload_does_not_trigger_premium_check(
+        self, mock_premium_check
+    ):
         """
         Simulate the exact payload the UI sends when no enterprise features
         are configured.  This must NOT trigger the premium check.
@@ -231,7 +257,10 @@ class TestIsUserTeamAdmin:
                 False,
             ),
             (
-                [Member(user_id="u2", role="admin"), Member(user_id="u1", role="admin")],
+                [
+                    Member(user_id="u2", role="admin"),
+                    Member(user_id="u1", role="admin"),
+                ],
                 "u1",
                 True,
             ),
@@ -344,22 +373,14 @@ class TestTeamAdminCanInviteUser:
         target_user = LiteLLM_UserTable(user_id="target", teams=target_teams)
 
         def make_team(tid, is_admin):
-            m = (
-                [{"user_id": "admin", "role": "admin"}]
-                if is_admin
-                else []
-            )
+            m = [{"user_id": "admin", "role": "admin"}] if is_admin else []
             obj = MagicMock()
             obj.team_id = tid
             obj.model_dump = lambda: {"team_id": tid, "members_with_roles": m}
             return obj
 
-        teams = [
-            make_team(tid, tid in user_is_admin_in) for tid in admin_teams
-        ]
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=teams
-        )
+        teams = [make_team(tid, tid in user_is_admin_in) for tid in admin_teams]
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=teams)
 
         result = await _team_admin_can_invite_user(
             user_api_key_dict=mock_auth,
@@ -486,3 +507,104 @@ class TestSetObjectMetadataField:
         ):
             _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
+
+    def test_mcp_rpm_limit_is_hoisted_into_metadata(self):
+        """
+        Per-MCP-server rpm limits are stored in the metadata JSON column, not a
+        dedicated DB column. The key/team management endpoints rely on
+        LiteLLM_ManagementEndpoint_MetadataFields to move the request field into
+        metadata; this regression guards that mcp_rpm_limit is in that list and
+        round-trips through the same loop the endpoints use.
+        """
+        from litellm.proxy._types import LiteLLM_ManagementEndpoint_MetadataFields
+
+        assert "mcp_rpm_limit" in LiteLLM_ManagementEndpoint_MetadataFields
+
+        from types import SimpleNamespace
+
+        team = LiteLLM_TeamTable(team_id="t1", metadata={})
+        mcp_rpm_limit = {"github": 100}
+        data = SimpleNamespace(mcp_rpm_limit=mcp_rpm_limit)
+
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ):
+            for field in LiteLLM_ManagementEndpoint_MetadataFields:
+                if getattr(data, field, None) is not None:
+                    _set_object_metadata_field(team, field, getattr(data, field))
+
+        assert team.metadata["mcp_rpm_limit"] == mcp_rpm_limit
+
+
+class TestRequireCallerUserIdForNonAdmin:
+    """
+    Security regression: service-account keys (user_id=None) must not bypass
+    the non-admin scoping branch on analytics endpoints.
+    """
+
+    def test_returns_user_id_when_present(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        key_dict = UserAPIKeyAuth(
+            user_id="user-abc",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        assert require_caller_user_id_for_non_admin(key_dict) == "user-abc"
+
+    def test_raises_403_when_user_id_is_none(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        # Simulates a service-account key (user_id forced to None at key creation)
+        service_account_key = UserAPIKeyAuth(
+            user_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            require_caller_user_id_for_non_admin(service_account_key)
+
+        assert exc_info.value.status_code == 403
+        assert "Service-account keys" in str(exc_info.value.detail)
+
+
+class TestValidateFiniteSpend:
+    """`validate_finite_spend` rejects NaN/±inf so a non-finite spend cannot
+    bypass `spend >= max_budget` enforcement (NaN/-inf compare false)."""
+
+    def test_none_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(None) is None
+
+    def test_finite_value_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(0.0) is None
+        assert validate_finite_spend(12.5) is None
+        # Negative spend is intentionally allowed. Admins may set a negative
+        # spend counter to grant an entity extra allowance for the current
+        # budget period only (e.g. a large one-time spend grant), effectively
+        # raising their headroom without raising the recurring budget ceiling.
+        # Future changes should continue to allow negative spend counters.
+        assert validate_finite_spend(-50.0) is None
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_is_rejected(self, bad):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_finite_spend(bad)
+        assert exc_info.value.status_code == 400

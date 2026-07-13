@@ -2,33 +2,52 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
+import concurrent.futures
 import inspect
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+import json
+import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+    build_sandbox_globals,
+    compile_sandboxed,
+)
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
-from litellm.types.guardrails import (PII_ENTITY_CATEGORIES_MAP,
-                                      ApplyGuardrailRequest,
-                                      ApplyGuardrailResponse,
-                                      BaseLitellmParams,
-                                      BedrockGuardrailConfigModel, Guardrail,
-                                      GuardrailEventHooks,
-                                      GuardrailInfoResponse,
-                                      GuardrailUIAddGuardrailSettings,
-                                      LakeraV2GuardrailConfigModel,
-                                      ListGuardrailsResponse, LitellmParams,
-                                      PatchGuardrailRequest, PiiAction,
-                                      PiiEntityType,
-                                      PresidioPresidioConfigModelUserInterface,
-                                      SupportedGuardrailIntegrations,
-                                      ToolPermissionGuardrailConfigModel)
+from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.table_repositories import GuardrailsRepository
+from litellm.types.guardrails import (
+    PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
+    BaseLitellmParams,
+    BedrockGuardrailConfigModel,
+    Guardrail,
+    GuardrailEventHooks,
+    GuardrailInfoResponse,
+    GuardrailUIAddGuardrailSettings,
+    LakeraV2GuardrailConfigModel,
+    ListGuardrailsResponse,
+    LitellmParams,
+    PatchGuardrailRequest,
+    PiiAction,
+    PiiEntityType,
+    PresidioPresidioConfigModelUserInterface,
+    SupportedGuardrailIntegrations,
+    ToolPermissionGuardrailConfigModel,
+)
 
 #### GUARDRAILS ENDPOINTS ####
 
@@ -42,12 +61,20 @@ def _get_guardrails_list_response(
     """
     Helper function to get the guardrails list response
     """
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+
     guardrail_configs: List[GuardrailInfoResponse] = []
     for guardrail in guardrails_config:
+        litellm_params = guardrail.get("litellm_params") or {}
+        masked_params = _get_masked_values(
+            litellm_params,
+            unmasked_length=4,
+            number_of_asterisks=4,
+        )
         guardrail_configs.append(
             GuardrailInfoResponse(
                 guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=guardrail.get("litellm_params"),
+                litellm_params=masked_params,
                 guardrail_info=guardrail.get("guardrail_info"),
             )
         )
@@ -110,10 +137,11 @@ async def list_guardrails():
 @router.get(
     "/v2/guardrails/list",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=ListGuardrailsResponse,
 )
-async def list_guardrails_v2():
+async def list_guardrails_v2(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List the guardrails that are available in the database using GuardrailRegistry
 
@@ -147,24 +175,35 @@ async def list_guardrails_v2():
     ```
     """
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     try:
-        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(
-            prisma_client=prisma_client
-        )
+        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+
+        excluded_guardrail_ids: set = set()
+        if not is_admin:
+            caller_team_ids = await _get_user_team_ids(user_api_key_dict)
+            allowed: List[Guardrail] = []
+            for g in guardrails:
+                g_team_id = g.get("team_id")
+                if g_team_id is None or g_team_id in caller_team_ids:
+                    allowed.append(g)
+                else:
+                    gid = g.get("guardrail_id")
+                    if gid:
+                        excluded_guardrail_ids.add(gid)
+            guardrails = allowed
 
         guardrail_configs: List[GuardrailInfoResponse] = []
-        seen_guardrail_ids = set()
+        seen_guardrail_ids: set = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
-            litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get(
-                "litellm_params"
-            )
+            litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get("litellm_params")
             litellm_params_dict = (
                 litellm_params.model_dump(exclude_none=True)
                 if isinstance(litellm_params, LitellmParams)
@@ -176,9 +215,7 @@ async def list_guardrails_v2():
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict)
-                if masked_litellm_params_dict
-                else None
+                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -196,34 +233,41 @@ async def list_guardrails_v2():
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
-            # only add guardrails that are not in DB guardrail list already
-            if guardrail.get("guardrail_id") not in seen_guardrail_ids:
-                in_memory_litellm_params_raw = guardrail.get("litellm_params")
-                in_memory_litellm_params_dict = (
-                    in_memory_litellm_params_raw.model_dump(exclude_none=True)
-                    if isinstance(in_memory_litellm_params_raw, LitellmParams)
-                    else in_memory_litellm_params_raw
-                ) or {}
-                masked_in_memory_litellm_params = _get_masked_values(
-                    in_memory_litellm_params_dict,
-                    unmasked_length=4,
-                    number_of_asterisks=4,
+            gid = guardrail.get("guardrail_id")
+            if gid in seen_guardrail_ids:
+                continue
+            # Skip stale DB-backed entries — the DB row was deleted (likely by
+            # another pod) and reconciliation hasn't fired yet on this pod.
+            if gid is not None and IN_MEMORY_GUARDRAIL_HANDLER.get_source(gid) == "db":
+                continue
+            if not is_admin:
+                g_team_id = guardrail.get("team_id")
+                if g_team_id is not None and g_team_id not in caller_team_ids:
+                    continue
+            in_memory_litellm_params_raw = guardrail.get("litellm_params")
+            in_memory_litellm_params_dict = (
+                in_memory_litellm_params_raw.model_dump(exclude_none=True)
+                if isinstance(in_memory_litellm_params_raw, LitellmParams)
+                else in_memory_litellm_params_raw
+            ) or {}
+            masked_in_memory_litellm_params = _get_masked_values(
+                in_memory_litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+            masked_in_memory_litellm_params_typed = (
+                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+            )
+            guardrail_configs.append(
+                GuardrailInfoResponse(
+                    guardrail_id=guardrail.get("guardrail_id"),
+                    guardrail_name=guardrail.get("guardrail_name"),
+                    litellm_params=masked_in_memory_litellm_params_typed,
+                    guardrail_info=dict(guardrail.get("guardrail_info") or {}),
+                    guardrail_definition_location="config",
                 )
-                masked_in_memory_litellm_params_typed = (
-                    BaseLitellmParams(**masked_in_memory_litellm_params)
-                    if masked_in_memory_litellm_params
-                    else None
-                )
-                guardrail_configs.append(
-                    GuardrailInfoResponse(
-                        guardrail_id=guardrail.get("guardrail_id"),
-                        guardrail_name=guardrail.get("guardrail_name"),
-                        litellm_params=masked_in_memory_litellm_params_typed,
-                        guardrail_info=dict(guardrail.get("guardrail_info") or {}),
-                        guardrail_definition_location="config",
-                    )
-                )
-                seen_guardrail_ids.add(guardrail.get("guardrail_id"))
+            )
+            seen_guardrail_ids.add(gid)
 
         return ListGuardrailsResponse(guardrails=guardrail_configs)
     except Exception as e:
@@ -238,9 +282,11 @@ class CreateGuardrailRequest(BaseModel):
 @router.post(
     "/guardrails",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def create_guardrail(request: CreateGuardrailRequest):
+async def create_guardrail(
+    request: CreateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Create a new guardrail
 
@@ -288,27 +334,39 @@ async def create_guardrail(request: CreateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
-            guardrail=request.guardrail, prisma_client=prisma_client
-        )
+        result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(guardrail=request.guardrail, prisma_client=prisma_client)
 
         guardrail_name = result.get("guardrail_name", "Unknown")
         guardrail_id = result.get("guardrail_id", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                guardrail=cast(Guardrail, result)
-            )
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except (ValueError, TypeError) as init_error:
+            # Configuration error — roll back the DB write so the guardrail isn't orphaned
+            if prisma_client is not None:
+                try:
+                    await GuardrailsRepository(prisma_client).table.delete(where={"guardrail_id": guardrail_id})
+                except Exception as rollback_err:
+                    verbose_proxy_logger.warning(f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail configuration error: {init_error}",
             )
         except Exception as init_error:
             verbose_proxy_logger.warning(
@@ -328,9 +386,12 @@ class UpdateGuardrailRequest(BaseModel):
 @router.put(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
+async def update_guardrail(
+    guardrail_id: str,
+    request: UpdateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update an existing guardrail
 
@@ -378,9 +439,14 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -392,9 +458,7 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
         )
 
         if existing_guardrail is None:
-            raise HTTPException(
-                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
@@ -426,9 +490,11 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
 @router.delete(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_guardrail(guardrail_id: str):
+async def delete_guardrail(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete a guardrail
 
@@ -447,9 +513,14 @@ async def delete_guardrail(guardrail_id: str):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -461,9 +532,7 @@ async def delete_guardrail(guardrail_id: str):
         )
 
         if existing_guardrail is None:
-            raise HTTPException(
-                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
         result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
@@ -490,12 +559,506 @@ async def delete_guardrail(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Team guardrail registration (Generic Guardrail API spec) ---
+
+GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+
+
+class RegisterGuardrailRequest(BaseModel):
+    """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
+
+    guardrail_name: str
+    litellm_params: Dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    guardrail_info: Optional[Dict[str, Any]] = None
+    team_id: Optional[str] = None
+
+    def get_litellm_params_dict(self) -> Dict[str, Any]:
+        return dict(self.litellm_params)
+
+
+class RegisterGuardrailResponse(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
+    status: str
+    submitted_at: Optional[datetime] = None
+
+
+class GuardrailSubmissionSummary(BaseModel):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+
+
+class GuardrailSubmissionItem(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
+    status: str  # pending_review | active | rejected
+    team_id: Optional[str] = None
+    team_guardrail: bool = (
+        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
+    )
+    litellm_params: Optional[Dict[str, Any]] = None
+    guardrail_info: Optional[Dict[str, Any]] = None
+    submitted_by_user_id: Optional[str] = None
+    submitted_by_email: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ListGuardrailSubmissionsResponse(BaseModel):
+    submissions: List[GuardrailSubmissionItem]
+    summary: GuardrailSubmissionSummary
+
+
+@router.post(
+    "/guardrails/register",
+    tags=["Guardrails"],
+    response_model=RegisterGuardrailResponse,
+)
+async def register_guardrail(
+    request: RegisterGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Register a guardrail for onboarding (team submission).
+
+    Accepts a guardrail config in the
+    [Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.
+    The submission is stored with status `pending_review` until an admin approves it.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    # Resolve team_id: prefer request body, fall back to API key's team
+    team_id = request.team_id or user_api_key_dict.team_id
+    if not team_id:
+        raise HTTPException(
+            status_code=400,
+            detail="team_id is required. Provide it in the request body or use a team-scoped API key.",
+        )
+
+    # Validate team membership for non-admin users when team differs from key
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    if not is_admin and team_id != user_api_key_dict.team_id:
+        user_team_ids = await _get_user_team_ids(user_api_key_dict)
+        if team_id not in user_team_ids:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You are not a member of team {team_id!r}",
+            )
+
+    params = request.get_litellm_params_dict()
+    if params.get("guardrail") != GENERIC_GUARDRAIL_API:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only guardrails with litellm_params.guardrail={GENERIC_GUARDRAIL_API!r} are accepted for registration",
+        )
+    api_base = params.get("api_base")
+    if not api_base:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base is required for generic_guardrail_api",
+        )
+    parsed = urlparse(api_base)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must use http or https scheme",
+        )
+    if not parsed.hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must contain a valid hostname",
+        )
+    mode = params.get("mode")
+    if mode is None:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.mode is required (e.g. pre_call, post_call)",
+        )
+
+    try:
+        existing = await GuardrailsRepository(prisma_client).table.find_unique(
+            where={"guardrail_name": request.guardrail_name}
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail with name {request.guardrail_name!r} already exists",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error checking guardrail name uniqueness: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    now = datetime.now(timezone.utc)
+    litellm_params_str = safe_dumps(params)
+    guardrail_info = dict(request.guardrail_info or {})
+    guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
+    guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
+    guardrail_info["team_guardrail"] = True  # Mark as team submission for filtering/display
+    guardrail_info_str = safe_dumps(guardrail_info)
+
+    try:
+        created = await GuardrailsRepository(prisma_client).table.create(
+            data={
+                "guardrail_name": request.guardrail_name,
+                "litellm_params": litellm_params_str,
+                "guardrail_info": guardrail_info_str,
+                "status": "pending_review",
+                "team_id": team_id,
+                "submitted_at": now,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return RegisterGuardrailResponse(
+            guardrail_id=created.guardrail_id,
+            guardrail_name=created.guardrail_name,
+            status=created.status,
+            submitted_at=created.submitted_at,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Error registering guardrail: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    return None
+
+
+async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
+    """Return the list of team_ids the caller belongs to (empty list if none)."""
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if not user_api_key_dict.user_id or prisma_client is None:
+        return []
+    user_obj = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if user_obj is None or not user_obj.teams:
+        return []
+    return [t for t in user_obj.teams if t]
+
+
+def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+
+    guardrail_info = _parse_json_field(row.guardrail_info) or {}
+    team_guardrail = row.team_id is not None
+    raw_params = _parse_json_field(row.litellm_params) or {}
+    masked_params = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
+    return GuardrailSubmissionItem(
+        guardrail_id=row.guardrail_id,
+        guardrail_name=row.guardrail_name,
+        status=row.status or "active",
+        team_id=row.team_id,
+        team_guardrail=team_guardrail,
+        litellm_params=masked_params,
+        guardrail_info=guardrail_info,
+        submitted_by_user_id=guardrail_info.get("submitted_by_user_id"),
+        submitted_by_email=guardrail_info.get("submitted_by_email"),
+        submitted_at=getattr(row, "submitted_at", None),
+        reviewed_at=getattr(row, "reviewed_at", None),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get(
+    "/guardrails/submissions",
+    tags=["Guardrails"],
+    response_model=ListGuardrailSubmissionsResponse,
+)
+async def list_guardrail_submissions(
+    status: Optional[str] = None,
+    team_id: Optional[str] = None,
+    search: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List team guardrail submissions. Returns only guardrails with a team_id.
+
+    Admins see all submissions. Non-admin users see submissions for teams they are
+    a member of.
+
+    Status values: pending_review (team-registered, awaiting approval), active (approved), rejected.
+
+    Optional filters:
+    - status: pending_review | active | rejected
+    - team_id: filter by specific team (non-admins must be a member of that team)
+    - search: name/description
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    # Admin Viewer follows the read-parity rule: see all submissions like a
+    # Proxy Admin would (no writes — registration / approval still gated
+    # elsewhere by their own per-action checks).
+    is_admin = _user_has_admin_view(user_api_key_dict)
+    visible_team_ids: Optional[List[str]] = None
+    if not is_admin:
+        visible_team_ids = await _get_user_team_ids(user_api_key_dict)
+        if team_id is not None and team_id not in visible_team_ids:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You are not a member of team {team_id!r}",
+            )
+
+    try:
+        where_clause: Dict[str, Any] = {"team_id": {"not": None}}
+        if visible_team_ids is not None:
+            if not visible_team_ids:
+                # Non-admin with no team memberships: nothing visible.
+                return ListGuardrailSubmissionsResponse(
+                    submissions=[],
+                    summary=GuardrailSubmissionSummary(total=0, pending_review=0, active=0, rejected=0),
+                )
+            where_clause["team_id"] = {"in": visible_team_ids}
+
+        # Single query: fetch team guardrails visible to the caller
+        all_team_rows = await GuardrailsRepository(prisma_client).table.find_many(
+            where=where_clause,
+            order={"created_at": "desc"},
+        )
+
+        # Derive summary counts from the full result set
+        total = len(all_team_rows)
+        pending_review = sum(1 for r in all_team_rows if (r.status or "active") == "pending_review")
+        active_count = sum(1 for r in all_team_rows if (r.status or "active") == "active")
+        rejected = sum(1 for r in all_team_rows if (r.status or "active") == "rejected")
+
+        # Apply filters to get the submissions list
+        rows = all_team_rows
+        if status:
+            rows = [r for r in rows if r.status == status]
+        if team_id:
+            rows = [r for r in rows if r.team_id == team_id]
+        if search:
+            search_lower = search.lower()
+            rows = [
+                r
+                for r in rows
+                if search_lower in (r.guardrail_name or "").lower()
+                or (
+                    isinstance(r.guardrail_info, dict)
+                    and search_lower in str((r.guardrail_info or {}).get("description", "")).lower()
+                )
+                or (isinstance(r.guardrail_info, str) and search_lower in r.guardrail_info.lower())
+            ]
+
+        items = [_row_to_submission_item(r) for r in rows]
+        return ListGuardrailSubmissionsResponse(
+            submissions=items,
+            summary=GuardrailSubmissionSummary(
+                total=total,
+                pending_review=pending_review,
+                active=active_count,
+                rejected=rejected,
+            ),
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Error listing guardrail submissions: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/guardrails/submissions/{guardrail_id}",
+    tags=["Guardrails"],
+    response_model=GuardrailSubmissionItem,
+)
+async def get_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Get a single guardrail submission by id. Non-admins may only access submissions for teams they belong to."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
+    try:
+        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        if row is None:
+            raise HTTPException(status_code=404, detail="Guardrail submission not found")
+        if not is_admin:
+            visible_team_ids = await _get_user_team_ids(user_api_key_dict)
+            if row.team_id is None or row.team_id not in visible_team_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not a member of the team that owns this submission",
+                )
+        return _row_to_submission_item(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error getting guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/guardrails/submissions/{guardrail_id}/approve",
+    tags=["Guardrails"],
+)
+async def approve_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Approve a pending guardrail submission: set status to active and initialize in memory (admin only)."""
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        if row is None:
+            raise HTTPException(status_code=404, detail="Guardrail submission not found")
+        if row.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail is not pending review (status={row.status})",
+            )
+
+        now = datetime.now(timezone.utc)
+        await GuardrailsRepository(prisma_client).table.update(
+            where={"guardrail_id": guardrail_id},
+            data={"status": "active", "reviewed_at": now, "updated_at": now},
+        )
+
+        litellm_params = _parse_json_field(row.litellm_params)
+        guardrail_info = _parse_json_field(row.guardrail_info)
+        if not litellm_params:
+            raise HTTPException(
+                status_code=500,
+                detail="Guardrail litellm_params is missing or invalid",
+            )
+        guardrail_dict = {
+            "guardrail_id": row.guardrail_id,
+            "guardrail_name": row.guardrail_name,
+            "litellm_params": litellm_params,
+            "guardrail_info": guardrail_info or {},
+            "team_id": row.team_id,
+        }
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, guardrail_dict), source="db")
+            verbose_proxy_logger.info(
+                "Approved guardrail %s (ID: %s) and initialized in memory",
+                row.guardrail_name,
+                guardrail_id,
+            )
+        except Exception as init_err:
+            verbose_proxy_logger.warning(
+                "Failed to initialize approved guardrail %s in memory: %s",
+                guardrail_id,
+                init_err,
+            )
+            return {
+                "guardrail_id": guardrail_id,
+                "status": "active",
+                "message": "Guardrail approved",
+                "warning": f"Guardrail was marked active but failed to initialize in memory: {init_err}. "
+                "It will be picked up on the next sync cycle.",
+            }
+
+        return {
+            "guardrail_id": guardrail_id,
+            "status": "active",
+            "message": "Guardrail approved",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error approving guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/guardrails/submissions/{guardrail_id}/reject",
+    tags=["Guardrails"],
+)
+async def reject_guardrail_submission(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Reject a guardrail submission (admin only)."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        if row is None:
+            raise HTTPException(status_code=404, detail="Guardrail submission not found")
+        if row.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail is not pending review (status={row.status})",
+            )
+
+        now = datetime.now(timezone.utc)
+        await GuardrailsRepository(prisma_client).table.update(
+            where={"guardrail_id": guardrail_id},
+            data={"status": "rejected", "reviewed_at": now, "updated_at": now},
+        )
+        return {
+            "guardrail_id": guardrail_id,
+            "status": "rejected",
+            "message": "Guardrail rejected",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error rejecting guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.patch(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
+async def patch_guardrail(
+    guardrail_id: str,
+    request: PatchGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Partially update an existing guardrail
 
@@ -541,9 +1104,14 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -555,25 +1123,17 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         )
 
         if existing_guardrail is None:
-            raise HTTPException(
-                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
         # Create updated guardrail object
         guardrail_name = (
-            request.guardrail_name
-            if request.guardrail_name is not None
-            else existing_guardrail.get("guardrail_name")
+            request.guardrail_name if request.guardrail_name is not None else existing_guardrail.get("guardrail_name")
         )
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
-        litellm_params = LitellmParams(
-            **dict(existing_guardrail.get("litellm_params", {}))
-        )
+        litellm_params = LitellmParams(**dict(existing_guardrail.get("litellm_params", {})))
         if request.litellm_params is not None:
-            requested_litellm_params = request.litellm_params.model_dump(
-                exclude_unset=True
-            )
+            requested_litellm_params = request.litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
             litellm_params = LitellmParams(**litellm_params_dict)
@@ -664,8 +1224,7 @@ async def get_guardrail_info(guardrail_id: str):
     """
 
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
@@ -673,26 +1232,23 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (
-            GUARDRAIL_DEFINITION_LOCATION.DB
-        )
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
         if result is None:
-            result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
-                guardrail_id=guardrail_id
-            )
-            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+            in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
+            # Only return config-loaded entries here. A DB-backed entry that's
+            # missing from the DB is stale (deleted on another pod, awaiting
+            # reconciliation on this one) and must surface as 404.
+            if in_memory is not None and IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail_id) == "config":
+                result = in_memory
+                guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
-            raise HTTPException(
-                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        litellm_params: Optional[Union[LitellmParams, dict]] = result.get(
-            "litellm_params"
-        )
+        litellm_params: Optional[Union[LitellmParams, dict]] = result.get("litellm_params")
         result_litellm_params_dict = (
             litellm_params.model_dump(exclude_none=True)
             if isinstance(litellm_params, LitellmParams)
@@ -703,11 +1259,7 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = (
-            BaseLitellmParams(**masked_litellm_params_dict)
-            if masked_litellm_params_dict
-            else None
-        )
+        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
@@ -740,23 +1292,31 @@ async def get_guardrail_ui_settings():
     - Content filter settings (patterns and categories)
     """
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
-        PATTERN_CATEGORIES, get_available_content_categories,
-        get_pattern_metadata)
+        PATTERN_CATEGORIES,
+        get_available_content_categories,
+        get_pattern_metadata,
+    )
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
-    category_maps = []
-    for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append(
-            {
-                "category": category.value,
-                "entities": [entity.value for entity in entities],
-            }
-        )
+    category_maps = [
+        {
+            "category": category.value,
+            "entities": [entity.value for entity in entities],
+        }
+        for category, entities in PII_ENTITY_CATEGORIES_MAP.items()
+    ]
+
+    supported_modes_by_provider = {
+        provider: [hook.value for hook in hooks]
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if (hooks := guardrail_class.get_supported_event_hooks()) is not None
+    }
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
+        supported_modes_by_provider=supported_modes_by_provider,
         pii_entity_categories=category_maps,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
@@ -782,8 +1342,6 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    import os
-
     # Get the categories directory path
     categories_dir = os.path.join(
         os.path.dirname(__file__),
@@ -793,8 +1351,11 @@ async def get_category_yaml(category_name: str):
     )
 
     # Try to find the file with either .yaml or .json extension
-    yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
-    json_path = os.path.join(categories_dir, f"{category_name}.json")
+    try:
+        yaml_path = safe_join(categories_dir, f"{category_name}.yaml")
+        json_path = safe_join(categories_dir, f"{category_name}.json")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid category name")
 
     category_file_path = None
     file_type = None
@@ -822,9 +1383,39 @@ async def get_category_yaml(category_name: str):
             "file_type": file_type,
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading category file: {str(e)}")
+
+
+@router.get(
+    "/guardrails/ui/major_airlines",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_major_airlines():
+    """
+    Get the major airlines list from IATA (competitor intent, airline type).
+    Returns airline id, match variants (pipe-separated), and tags.
+    """
+    airlines_path = os.path.join(
+        os.path.dirname(__file__),
+        "guardrail_hooks",
+        "litellm_content_filter",
+        "competitor_intent",
+        "major_airlines.json",
+    )
+    if not os.path.exists(airlines_path):
         raise HTTPException(
-            status_code=500, detail=f"Error reading category file: {str(e)}"
+            status_code=404,
+            detail="major_airlines.json not found",
         )
+    try:
+        with open(airlines_path, "r", encoding="utf-8") as f:
+            import json
+
+            airlines = json.load(f)
+        return {"airlines": airlines}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {str(e)}") from e
 
 
 @router.post(
@@ -899,13 +1490,9 @@ async def validate_blocked_words_file(request: Dict[str, str]):
             if "action" not in word_data:
                 errors.append(f"Entry {idx}: missing 'action' field")
             elif word_data["action"] not in ["BLOCK", "MASK"]:
-                errors.append(
-                    f"Entry {idx}: action must be 'BLOCK' or 'MASK', got '{word_data['action']}'"
-                )
+                errors.append(f"Entry {idx}: action must be 'BLOCK' or 'MASK', got '{word_data['action']}'")
 
-            if "description" in word_data and not isinstance(
-                word_data["description"], str
-            ):
+            if "description" in word_data and not isinstance(word_data["description"], str):
                 errors.append(f"Entry {idx}: 'description' must be a string")
 
         if errors:
@@ -947,9 +1534,7 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
         return "dict"
 
     # Handle Literal types
-    if hasattr(field_annotation, "__origin__") and hasattr(
-        field_annotation, "__args__"
-    ):
+    if hasattr(field_annotation, "__origin__") and hasattr(field_annotation, "__args__"):
         # Check for Literal types (Python 3.8+)
         origin = field_annotation.__origin__
         if hasattr(origin, "__name__") and origin.__name__ == "Literal":
@@ -1042,8 +1627,7 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
     # Check if the annotation is still a generic TypeVar (not specialized)
     if isinstance(field_annotation, TypeVar) or (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is TypeVar
+        hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is TypeVar
     ):
         return True
 
@@ -1056,9 +1640,7 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
     # Handle Optional[T] where T is still a TypeVar
     if hasattr(field_annotation, "__args__"):
-        non_none_args = [
-            arg for arg in field_annotation.__args__ if arg is not type(None)
-        ]
+        non_none_args = [arg for arg in field_annotation.__args__ if arg is not type(None)]
         if non_none_args and isinstance(non_none_args[0], TypeVar):
             return True
 
@@ -1093,7 +1675,8 @@ def _build_field_dict(
     # Check for custom UI type override
     field_json_schema_extra = getattr(field, "json_schema_extra", {})
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        field_type = field_json_schema_extra["ui_type"].value
+        ui_type = field_json_schema_extra["ui_type"]
+        field_type = ui_type.value if hasattr(ui_type, "value") else ui_type
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
@@ -1125,10 +1708,21 @@ def _build_field_dict(
     # Add options if they exist in json_schema_extra (this takes precedence)
     if field_json_schema_extra and "options" in field_json_schema_extra:
         field_dict["options"] = field_json_schema_extra["options"]
+    elif field_type == "select":
+        # For Literal types, populate options so the UI can render a dropdown
+        literal_options = _extract_literal_values(field_annotation)
+        if literal_options:
+            field_dict["options"] = literal_options
 
     # Add default value if it exists
     if field.default is not None and field.default is not ...:
         field_dict["default_value"] = field.default
+
+    # Copy min, max, step from json_schema_extra for number/percentage inputs
+    if field_json_schema_extra:
+        for key in ("min", "max", "step", "default_value"):
+            if key in field_json_schema_extra:
+                field_dict[key] = field_json_schema_extra[key]
 
     return field_dict
 
@@ -1150,9 +1744,7 @@ def _extract_fields_recursive(
         field_annotation = field.annotation
 
         # Skip optional_params if it's not meaningfully overridden
-        if _should_skip_optional_params(
-            field_name=field_name, field_annotation=field_annotation
-        ):
+        if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
             continue
 
         # Handle Optional types and get the actual type
@@ -1174,9 +1766,7 @@ def _extract_fields_recursive(
 
         if is_basemodel_subclass:
             # Recursively get fields from the nested model
-            nested_fields = _extract_fields_recursive(
-                cast(Type[BaseModel], field_annotation), depth + 1
-            )
+            nested_fields = _extract_fields_recursive(cast(Type[BaseModel], field_annotation), depth + 1)
             fields[field_name] = {
                 "description": description,
                 "required": required,
@@ -1264,9 +1854,7 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields["ui_friendly_name"] = (
-        ToolPermissionGuardrailConfigModel.ui_friendly_name()
-    )
+    tool_permission_fields["ui_friendly_name"] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1277,8 +1865,7 @@ async def get_provider_specific_params():
     }
 
     ### get the config model for the guardrail - go through the registry and get the config model for the guardrail
-    from litellm.proxy.guardrails.guardrail_registry import \
-        guardrail_class_registry
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
     for guardrail_name, guardrail_class in guardrail_class_registry.items():
         guardrail_config_model = guardrail_class.get_config_model()
@@ -1327,10 +1914,12 @@ class TestCustomCodeGuardrailResponse(BaseModel):
 @router.post(
     "/guardrails/test_custom_code",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=TestCustomCodeGuardrailResponse,
 )
-async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
+async def test_custom_code_guardrail(
+    request: TestCustomCodeGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Test custom code guardrail logic without creating a guardrail.
 
@@ -1403,71 +1992,21 @@ async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
     }
     ```
     """
-    import concurrent.futures
-    import re
 
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import \
-        get_custom_code_primitives
-
-    # Security validation patterns
-    FORBIDDEN_PATTERNS = [
-        # Import statements
-        (r"\bimport\s+", "import statements are not allowed"),
-        (r"\bfrom\s+\w+\s+import\b", "from...import statements are not allowed"),
-        (r"__import__\s*\(", "__import__() is not allowed"),
-        # Dangerous builtins
-        (r"\bexec\s*\(", "exec() is not allowed"),
-        (r"\beval\s*\(", "eval() is not allowed"),
-        (r"\bcompile\s*\(", "compile() is not allowed"),
-        (r"\bopen\s*\(", "open() is not allowed"),
-        (r"\bgetattr\s*\(", "getattr() is not allowed"),
-        (r"\bsetattr\s*\(", "setattr() is not allowed"),
-        (r"\bdelattr\s*\(", "delattr() is not allowed"),
-        (r"\bglobals\s*\(", "globals() is not allowed"),
-        (r"\blocals\s*\(", "locals() is not allowed"),
-        (r"\bvars\s*\(", "vars() is not allowed"),
-        (r"\bdir\s*\(", "dir() is not allowed"),
-        (r"\bbreakpoint\s*\(", "breakpoint() is not allowed"),
-        (r"\binput\s*\(", "input() is not allowed"),
-        # Dangerous dunder access
-        (r"__builtins__", "__builtins__ access is not allowed"),
-        (r"__globals__", "__globals__ access is not allowed"),
-        (r"__code__", "__code__ access is not allowed"),
-        (r"__subclasses__", "__subclasses__ access is not allowed"),
-        (r"__bases__", "__bases__ access is not allowed"),
-        (r"__mro__", "__mro__ access is not allowed"),
-        (r"__class__", "__class__ access is not allowed"),
-        (r"__dict__", "__dict__ access is not allowed"),
-        (r"__getattribute__", "__getattribute__ access is not allowed"),
-        (r"__reduce__", "__reduce__ access is not allowed"),
-        (r"__reduce_ex__", "__reduce_ex__ access is not allowed"),
-        # OS/system access
-        (r"\bos\.", "os module access is not allowed"),
-        (r"\bsys\.", "sys module access is not allowed"),
-        (r"\bsubprocess\.", "subprocess module access is not allowed"),
-    ]
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to test custom code guardrails",
+        )
 
     EXECUTION_TIMEOUT_SECONDS = 5
 
     try:
-        # Step 0: Security validation - check for forbidden patterns
-        code = request.custom_code
-        for pattern, error_msg in FORBIDDEN_PATTERNS:
-            if re.search(pattern, code):
-                return TestCustomCodeGuardrailResponse(
-                    success=False,
-                    error=f"Security violation: {error_msg}",
-                    error_type="compilation",
-                )
-
-        # Step 1: Compile the custom code with restricted environment
-        exec_globals = get_custom_code_primitives().copy()
-
-        # Remove access to builtins to prevent escape
-        exec_globals["__builtins__"] = {}
+        exec_globals = build_sandbox_globals()
 
         try:
-            exec(compile(request.custom_code, "<guardrail>", "exec"), exec_globals)
+            compiled = compile_sandboxed(request.custom_code)
+            exec(compiled, exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -1560,9 +2099,87 @@ async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
         )
 
 
+def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
+    """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
+    if input_type == "request":
+        hook = getattr(active_guardrail, "event_hook", None)
+        if hook == GuardrailEventHooks.post_call or hook == "post_call":
+            return "response"
+    return "response" if input_type == "response" else "request"
+
+
+def _patch_logging_obj_for_guardrail(litellm_logging_obj: Any, request: ApplyGuardrailRequest) -> None:
+    """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
+    litellm_logging_obj.call_type = "pass_through_endpoint"
+    litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
+    litellm_logging_obj.update_messages(
+        request.messages if request.messages else [{"role": "user", "content": request.text}]
+    )
+
+
+async def _emit_guardrail_success_logs(
+    proxy_logging_obj: Any,
+    litellm_logging_obj: Any,
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    response: ApplyGuardrailResponse,
+    start_time: datetime,
+) -> ApplyGuardrailResponse:
+    """Fire proxy and LiteLLM success hooks after a successful guardrail run.
+
+    Each hook is wrapped defensively so a callback failure never prevents the
+    caller from receiving the guardrail response.  Returns the (possibly
+    hook-modified) response.
+    """
+    from litellm.litellm_core_utils.thread_pool_executor import (
+        executor as thread_pool_executor,
+    )
+
+    try:
+        modified = await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if isinstance(modified, ApplyGuardrailResponse):
+            response = modified
+    except Exception:
+        verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
+
+    # Build the logging payload after post_call_success_hook so that logged
+    # data matches what the caller actually receives if the hook modified
+    # the response.
+    response_for_logging = {"response": response.model_dump(exclude_none=True)}
+
+    if litellm_logging_obj is not None:
+        end_time = datetime.now(timezone.utc)
+        try:
+            await litellm_logging_obj.async_success_handler(
+                result=response_for_logging,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+        except Exception:
+            verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
+        try:
+            thread_pool_executor.submit(
+                litellm_logging_obj.success_handler,
+                response_for_logging,
+                start_time,
+                end_time,
+                False,
+            )
+        except Exception:
+            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
+
+    return response
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
+    fastapi_request: Request,
     request: ApplyGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -1571,13 +2188,32 @@ async def apply_guardrail(
 
     This endpoint allows testing guardrails by applying them to custom text inputs.
     """
+    import traceback
+
+    from litellm.litellm_core_utils.thread_pool_executor import (
+        executor as thread_pool_executor,
+    )
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
     from litellm.proxy.utils import handle_exception_on_proxy
 
+    data: dict = {
+        "guardrail_name": request.guardrail_name,
+        "input": [request.text],
+        "messages": request.messages or [],
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    litellm_logging_obj = None
+    start_time = datetime.now(timezone.utc)
+
     try:
-        active_guardrail: Optional[CustomGuardrail] = (
-            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-                guardrail_name=request.guardrail_name
-            )
+        active_guardrail: Optional[CustomGuardrail] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:
             raise HTTPException(
@@ -1585,15 +2221,72 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
+        request_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await request_processor.common_processing_pre_call_logic(
+            request=fastapi_request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="apply_guardrail",
+        )
+
+        if litellm_logging_obj is not None:
+            _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
+
+        request_data: dict = {"messages": request.messages} if request.messages else {}
+        _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
-            request_data={},
-            input_type="request",
+            request_data=request_data,
+            input_type=_input_type,
         )
         response_text = guardrailed_inputs.get("texts", [])
-
-        return ApplyGuardrailResponse(
-            response_text=response_text[0] if response_text else request.text
-        )
+        response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
     except Exception as e:
+        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+            try:
+                await litellm_logging_obj.async_failure_handler(
+                    exception=e,
+                    traceback_exception=traceback.format_exc(),
+                )
+            except Exception:
+                verbose_proxy_logger.exception("apply_guardrail: async_failure_handler failed")
+            try:
+                thread_pool_executor.submit(
+                    litellm_logging_obj.failure_handler,
+                    e,
+                    traceback.format_exc(),
+                )
+            except Exception:
+                verbose_proxy_logger.exception("apply_guardrail: failure_handler submit failed")
+        try:
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=data,
+            )
+            if isinstance(transformed_exception, Exception):
+                e = transformed_exception
+        except Exception:
+            verbose_proxy_logger.exception("apply_guardrail: post_call_failure_hook failed")
         raise handle_exception_on_proxy(e)
+
+    # Success logging outside except so a hook error never triggers failure handlers.
+    response = await _emit_guardrail_success_logs(
+        proxy_logging_obj=proxy_logging_obj,
+        litellm_logging_obj=litellm_logging_obj,
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=response,
+        start_time=start_time,
+    )
+    return response
+
+
+# Usage (dashboard) endpoints: overview, detail, logs
+router.include_router(guardrails_usage_router)

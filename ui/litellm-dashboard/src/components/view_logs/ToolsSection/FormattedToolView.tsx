@@ -13,15 +13,15 @@ interface FormattedToolViewProps {
 
 export function FormattedToolView({ tool }: FormattedToolViewProps) {
   // Parse parameters for table display
-  const parameterRows: ParameterRow[] = Object.entries(
-    tool.parameters?.properties || {}
-  ).map(([name, schema]: [string, any]) => ({
-    key: name,
-    name: name,
-    type: schema.type || "any",
-    description: schema.description || "-",
-    required: tool.parameters?.required?.includes(name) || false,
-  }));
+  const parameterRows: ParameterRow[] = Object.entries(tool.parameters?.properties || {}).map(
+    ([name, schema]: [string, any]) => ({
+      key: name,
+      name: name,
+      type: schema.type || "any",
+      description: schema.description || "-",
+      required: tool.parameters?.required?.includes(name) || false,
+    }),
+  );
 
   const columns = [
     {
@@ -58,7 +58,14 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       {/* Description */}
       {tool.description && (
         <div style={{ marginBottom: 16 }}>
-          <Text style={{ lineHeight: 1.6 }}>{tool.description}</Text>
+          <Text
+            style={{
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {tool.description}
+          </Text>
         </div>
       )}
 
@@ -75,13 +82,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
           >
             Parameters
           </Text>
-          <Table
-            dataSource={parameterRows}
-            columns={columns}
-            pagination={false}
-            size="small"
-            bordered
-          />
+          <Table dataSource={parameterRows} columns={columns} pagination={false} size="small" bordered />
         </div>
       )}
 

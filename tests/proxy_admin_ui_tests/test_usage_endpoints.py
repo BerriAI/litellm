@@ -87,7 +87,9 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -132,6 +134,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_view_daily_spend_ui(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -176,6 +179,7 @@ async def test_view_daily_spend_ui(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_global_spend_models(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -268,6 +272,7 @@ async def test_global_spend_models(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_global_spend_keys(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)

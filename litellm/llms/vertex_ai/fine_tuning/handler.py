@@ -38,9 +38,7 @@ class VertexFineTuningAPI(VertexLLM):
     def convert_response_created_at(self, response: ResponseTuningJob):
         try:
             create_time_str = response.get("createTime", "") or ""
-            create_time_datetime = datetime.fromisoformat(
-                create_time_str.replace("Z", "+00:00")
-            )
+            create_time_datetime = datetime.fromisoformat(create_time_str.replace("Z", "+00:00"))
             # Convert to Unix timestamp (seconds since epoch)
             created_at = int(create_time_datetime.timestamp())
 
@@ -65,16 +63,12 @@ class VertexFineTuningAPI(VertexLLM):
         )
 
         if create_fine_tuning_job_data.validation_file:
-            supervised_tuning_spec["validation_dataset"] = (
-                create_fine_tuning_job_data.validation_file
-            )
+            supervised_tuning_spec["validation_dataset"] = create_fine_tuning_job_data.validation_file
 
-        _vertex_hyperparameters = (
-            self._transform_openai_hyperparameters_to_vertex_hyperparameters(
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
-                kwargs=kwargs,
-                original_hyperparameters=original_hyperparameters,
-            )
+        _vertex_hyperparameters = self._transform_openai_hyperparameters_to_vertex_hyperparameters(
+            create_fine_tuning_job_data=create_fine_tuning_job_data,
+            kwargs=kwargs,
+            original_hyperparameters=original_hyperparameters,
         )
 
         if _vertex_hyperparameters and len(_vertex_hyperparameters) > 0:
@@ -98,9 +92,7 @@ class VertexFineTuningAPI(VertexLLM):
         _vertex_hyperparameters = FineTuneHyperparameters()
         if _oai_hyperparameters:
             if _oai_hyperparameters.n_epochs:
-                _vertex_hyperparameters["epoch_count"] = int(
-                    _oai_hyperparameters.n_epochs
-                )
+                _vertex_hyperparameters["epoch_count"] = int(_oai_hyperparameters.n_epochs)
             if _oai_hyperparameters.learning_rate_multiplier:
                 _vertex_hyperparameters["learning_rate_multiplier"] = float(
                     _oai_hyperparameters.learning_rate_multiplier
@@ -112,12 +104,8 @@ class VertexFineTuningAPI(VertexLLM):
 
         return _vertex_hyperparameters
 
-    def convert_vertex_response_to_open_ai_response(
-        self, response: ResponseTuningJob
-    ) -> LiteLLMFineTuningJob:
-        status: Literal[
-            "validating_files", "queued", "running", "succeeded", "failed", "cancelled"
-        ] = "queued"
+    def convert_vertex_response_to_open_ai_response(self, response: ResponseTuningJob) -> LiteLLMFineTuningJob:
+        status: Literal["validating_files", "queued", "running", "succeeded", "failed", "cancelled"] = "queued"
         if response["state"] == "JOB_STATE_PENDING":
             status = "queued"
         if response["state"] == "JOB_STATE_SUCCEEDED":
@@ -131,9 +119,7 @@ class VertexFineTuningAPI(VertexLLM):
 
         created_at = self.convert_response_created_at(response)
 
-        _supervisedTuningSpec: ResponseSupervisedTuningSpec = (
-            response.get("supervisedTuningSpec", None) or {}
-        )
+        _supervisedTuningSpec: ResponseSupervisedTuningSpec = response.get("supervisedTuningSpec", None) or {}
         training_uri: str = _supervisedTuningSpec.get("trainingDatasetUri", "") or ""
         return LiteLLMFineTuningJob(
             id=response.get("name", "") or "",
@@ -141,10 +127,7 @@ class VertexFineTuningAPI(VertexLLM):
             fine_tuned_model=response.get("tunedModelDisplayName", ""),
             finished_at=None,
             hyperparameters=self._translate_vertex_response_hyperparameters(
-                vertex_hyper_parameters=_supervisedTuningSpec.get(
-                    "hyperParameters", FineTuneHyperparameters()
-                )
-                or {}
+                vertex_hyper_parameters=_supervisedTuningSpec.get("hyperParameters", FineTuneHyperparameters()) or {}
             ),
             model=response.get("baseModel", "") or "",
             object="fine_tuning.job",
@@ -184,9 +167,7 @@ class VertexFineTuningAPI(VertexLLM):
                 json.dumps(request_data, indent=4),
             )
             if self.async_handler is None:
-                raise ValueError(
-                    "VertexAI Fine Tuning - async_handler is not initialized"
-                )
+                raise ValueError("VertexAI Fine Tuning - async_handler is not initialized")
             response = await self.async_handler.post(
                 headers=headers,
                 url=fine_tuning_url,
@@ -198,18 +179,14 @@ class VertexFineTuningAPI(VertexLLM):
                     f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
                 )
 
-            verbose_logger.debug(
-                "got response from creating fine tuning job: %s", response.json()
-            )
+            verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
 
             vertex_response = ResponseTuningJob(  # type: ignore
                 **response.json(),
             )
 
             verbose_logger.debug("vertex_response %s", vertex_response)
-            open_ai_response = self.convert_vertex_response_to_open_ai_response(
-                vertex_response
-            )
+            open_ai_response = self.convert_vertex_response_to_open_ai_response(vertex_response)
             return open_ai_response
 
         except Exception as e:
@@ -230,9 +207,7 @@ class VertexFineTuningAPI(VertexLLM):
         kwargs: Optional[dict] = None,
         original_hyperparameters: Optional[dict] = {},
     ) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
-        verbose_logger.debug(
-            "creating fine tuning job, args= %s", create_fine_tuning_job_data
-        )
+        verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -288,17 +263,13 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        verbose_logger.debug(
-            "got response from creating fine tuning job: %s", response.json()
-        )
+        verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
         vertex_response = ResponseTuningJob(  # type: ignore
             **response.json(),
         )
 
         verbose_logger.debug("vertex_response %s", vertex_response)
-        open_ai_response = self.convert_vertex_response_to_open_ai_response(
-            vertex_response
-        )
+        open_ai_response = self.convert_vertex_response_to_open_ai_response(vertex_response)
         return open_ai_response
 
     async def pass_through_vertex_ai_POST_request(
@@ -332,7 +303,7 @@ class VertexFineTuningAPI(VertexLLM):
         }
 
         base_url = get_vertex_base_url(vertex_location)
-        
+
         url = None
         if request_route == "/tuningJobs":
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"

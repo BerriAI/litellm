@@ -8,7 +8,10 @@ Usage:
     Set POSTHOG_MOCK=true in environment variables or config to enable mock mode.
 """
 
-from litellm.integrations.mock_client_factory import MockClientConfig, create_mock_client_factory
+from litellm.integrations.mock_client_factory import (
+    MockClientConfig,
+    create_mock_client_factory,
+)
 
 # Create mock client using factory
 _config = MockClientConfig(

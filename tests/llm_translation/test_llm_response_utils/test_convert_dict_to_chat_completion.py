@@ -864,7 +864,7 @@ def test_convert_to_model_response_object_with_thinking_content():
         "response_object": {
             "id": "chatcmpl-8cc87354-70f3-4a14-b71b-332e965d98d2",
             "created": 1741057687,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "object": "chat.completion",
             "system_fingerprint": None,
             "choices": [
@@ -962,7 +962,9 @@ def test_convert_to_model_response_object_with_empty_error_object():
     assert isinstance(result, ModelResponse)
     assert result.model == "minimax-m2.1"
     assert len(result.choices) == 1
-    assert result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+    assert (
+        result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+    )
 
 
 def test_convert_to_model_response_object_with_real_error():
@@ -1037,6 +1039,199 @@ def test_convert_to_model_response_object_with_empty_dict_error():
     assert result.choices[0].message.content == "Hello!"
 
 
+def test_convert_to_model_response_object_preserves_provider_specific_fields_from_proxy():
+    """
+    Test that provider_specific_fields (e.g. Anthropic citations) are preserved
+    when the response already contains them (e.g. from a proxy passthrough).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    citations = [
+        [
+            {
+                "type": "web_search_result_location",
+                "cited_text": "The Sony WH-1000XM5 remains one of the best...",
+                "url": "https://example.com/headphones-review",
+                "title": "Best Headphones 2025",
+                "supported_text": "Based on current reviews...",
+            }
+        ],
+    ]
+    web_search_results = [
+        {
+            "url": "https://example.com/headphones-review",
+            "title": "Best Headphones 2025",
+            "snippet": "The Sony WH-1000XM5 remains one of the best...",
+        }
+    ]
+
+    response_object = {
+        "id": "chatcmpl-proxy-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "anthropic/claude-opus-4-5-20251101",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones.",
+                    "tool_calls": [
+                        {
+                            "id": "call_ws_123",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query": "best headphones 2025"}',
+                            },
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "citations": citations,
+                        "web_search_results": web_search_results,
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 20,
+            "total_tokens": 70,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "chatcmpl-proxy-123"
+
+    choice = result.choices[0]
+    assert (
+        choice.message.content
+        == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
+    )
+    assert choice.message.provider_specific_fields is not None
+    assert "citations" in choice.message.provider_specific_fields
+    assert choice.message.provider_specific_fields["citations"] == citations
+    assert "web_search_results" in choice.message.provider_specific_fields
+    assert (
+        choice.message.provider_specific_fields["web_search_results"]
+        == web_search_results
+    )
+
+
+def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():
+    """
+    Test that provider_specific_fields from the response are merged with
+    any extra non-standard keys present in the message dict.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    response_object = {
+        "id": "chatcmpl-merge-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "some-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "provider_specific_fields": {
+                        "citations": [{"url": "https://example.com"}],
+                    },
+                    "custom_extra_field": "extra_value",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    assert psf is not None
+    # Both the existing provider_specific_fields and the extra key should be present
+    assert "citations" in psf
+    assert psf["citations"] == [{"url": "https://example.com"}]
+    assert "custom_extra_field" in psf
+    assert psf["custom_extra_field"] == "extra_value"
+
+
+def test_convert_to_model_response_object_no_provider_specific_fields_still_works():
+    """
+    Test that responses without provider_specific_fields continue to work as before.
+
+    Ensures the fix for https://github.com/BerriAI/litellm/issues/21153
+    doesn't break normal responses.
+    """
+    response_object = {
+        "id": "chatcmpl-normal-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "refusal": None,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    # refusal is not a Message model field, so it should be in provider_specific_fields
+    assert psf is not None
+    assert "refusal" in psf
+
+
 def test_convert_to_model_response_object_with_error_code_only():
     """
     Test that errors with only a code (no message) are still treated as real errors.
@@ -1059,3 +1254,1241 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_model_prefix_preservation():
+    """
+    Test that when model_response_object has a prefix like 'openai/gpt-4'
+    and the response contains a different model name, the prefix is preserved.
+    """
+    response_object = {
+        "id": "chatcmpl-prefix-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="openai/gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "openai/gpt-4o"
+
+
+def test_model_without_prefix():
+    """
+    Test that when model_response_object has no prefix (e.g. 'gpt-4'),
+    the original model is kept (provider response model is ignored).
+    """
+    response_object = {
+        "id": "chatcmpl-no-prefix",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "gpt-4o-2024-08-06",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "gpt-4"
+
+
+def test_extra_response_fields_preserved():
+    """
+    Test that extra response fields (e.g. service_tier) are preserved
+    on the returned ModelResponse object.
+    """
+    response_object = {
+        "id": "chatcmpl-extra-fields",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+        "service_tier": "default",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.service_tier == "default"
+
+
+def test_hidden_params_and_response_headers_set():
+    """
+    Test that _hidden_params and _response_headers are correctly set
+    on the returned ModelResponse.
+    """
+    response_object = {
+        "id": "chatcmpl-headers",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    response_headers = {"x-request-id": "req_abc123"}
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params={"custom_key": "custom_value"},
+        _response_headers=response_headers,
+    )
+
+    assert result._hidden_params is not None
+    assert result._hidden_params["custom_key"] == "custom_value"
+    assert "additional_headers" in result._hidden_params
+    assert result._response_headers == response_headers
+
+
+def test_response_ms_computed():
+    """
+    Test that _response_ms is computed correctly from start_time and end_time.
+    """
+    response_object = {
+        "id": "chatcmpl-timing",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    start = datetime(2024, 1, 1, 12, 0, 0)
+    end = start + timedelta(milliseconds=250)
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=start,
+        end_time=end,
+    )
+
+    assert result._response_ms == pytest.approx(250.0)
+
+
+def test_error_message_includes_function_args():
+    """
+    Test that when an exception occurs, the error message includes
+    the function arguments for debugging (deferred locals() - Opt 2).
+    """
+    # Pass a response_object whose choices survive the missing-choices guard
+    # but raise inside the conversion loop (the choice lacks a "message" key),
+    # so the generic debugging handler builds the received_args message.
+    response_object = {
+        "choices": [{"index": 0}],
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    error_msg = str(exc_info.value)
+    assert "received_args=" in error_msg
+    assert "response_object" in error_msg
+    assert "response_type" in error_msg
+
+
+@pytest.mark.parametrize("falsy_id", [None, ""])
+def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(falsy_id):
+    """Test that a falsy id in response_object preserves the auto-generated id."""
+    mr = ModelResponse()
+    original_id = mr.id
+    response_object = {
+        "id": falsy_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "test-model",
+    }
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert result.id == original_id
+    assert result.id.startswith("chatcmpl-")
+
+
+def test_convert_to_model_response_object_default_usage_overwritten():
+    """
+    Regression test: convert_to_model_response_object must properly set Usage
+    on a ModelResponse that only has the default Usage from ModelResponse.__init__()
+    (i.e. no extra litellm.Usage() set via setattr beforehand).
+
+    This validates the optimization of removing the redundant
+    `setattr(model_response, "usage", litellm.Usage())` in completion().
+    """
+    mr = ModelResponse()
+    # usage is not set by default (optimization: avoid constructing throwaway Usage)
+    assert not hasattr(mr, "usage")
+
+    response_object = {
+        "id": "chatcmpl-usage-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 7,
+            "total_tokens": 22,
+        },
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 15
+    assert result.usage.completion_tokens == 7
+    assert result.usage.total_tokens == 22
+
+
+def test_convert_to_model_response_object_with_null_top_logprobs():
+    """
+    Test that convert_to_model_response_object handles null top_logprobs
+    without raising a Pydantic validation error.
+
+    Some providers return null for top_logprobs when logprobs=true but
+    top_logprobs is unset/0. The OpenAI spec requires top_logprobs to be
+    an array, so litellm should normalize null to [].
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    response_object = {
+        "id": "chatcmpl-a21e454401074fd8814736d84dcbb1e4",
+        "object": "chat.completion",
+        "created": 1771632698,
+        "model": "my-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Silent light above.",
+                },
+                "finish_reason": "stop",
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "Sil",
+                            "bytes": [83, 105, 108],
+                            "logprob": -2.1518118381500244,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": "ent",
+                            "bytes": [101, 110, 116],
+                            "logprob": -0.13957086205482483,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": " light",
+                            "bytes": [32, 108, 105, 103, 104, 116],
+                            "logprob": -1.3923776149749756,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": " above",
+                            "bytes": [32, 97, 98, 111, 118, 101],
+                            "logprob": -1.137486219406128,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": ".",
+                            "bytes": [46],
+                            "logprob": -0.1709611415863037,
+                            "top_logprobs": None,
+                        },
+                    ],
+                    "refusal": None,
+                },
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 73,
+            "completion_tokens": 5,
+            "total_tokens": 78,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert len(result.choices) == 1
+
+    choice = result.choices[0]
+    assert choice.logprobs is not None
+    assert len(choice.logprobs.content) == 5
+
+    # Verify all null top_logprobs were normalized to empty lists
+    for token_logprob in choice.logprobs.content:
+        assert token_logprob.top_logprobs == []
+        assert isinstance(token_logprob.top_logprobs, list)
+
+
+class TestMissingChoicesGuard:
+    """
+    Tests for the defense-in-depth guard that raises APIError when a provider
+    returns a response with no 'choices' field.
+
+    See: https://github.com/BerriAI/litellm/issues/29391
+    """
+
+    def test_convert_to_model_response_object_no_choices_raises_api_error(self):
+        """Missing choices in non-streaming path raises APIError, not IndexError."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
+        """Empty choices list raises APIError, same as missing/null choices.
+
+        Provider-specific repair (e.g. github_copilot synthesizing choices for
+        Anthropic-native responses) happens before this guard, in the provider
+        config; the core utility keeps treating empty choices as an error.
+        """
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_model_response_object_null_choices_raises_api_error(self):
+        """choices=None raises APIError."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "choices": None,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_streaming_response_no_choices_raises_api_error(self):
+        """Missing choices in streaming cache-hit path raises APIError."""
+        from litellm.exceptions import APIError
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response,
+        )
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            # convert_to_streaming_response is a generator, must consume it
+            list(convert_to_streaming_response(response_object=response_object))
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(
+        self,
+    ):
+        """Missing choices via stream=True path raises APIError when generator is consumed."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            list(
+                convert_to_model_response_object(
+                    response_object=response_object,
+                    model_response_object=ModelResponse(),
+                    stream=True,
+                )
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_streaming_response_async_no_choices_raises_api_error(self):
+        """Missing choices in async streaming path raises APIError."""
+        import asyncio
+
+        from litellm.exceptions import APIError
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        async def consume():
+            chunks = []
+            async for chunk in convert_to_streaming_response_async(
+                response_object=response_object
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        with pytest.raises(APIError) as exc_info:
+            asyncio.run(consume())
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_error_message_includes_response_keys(self):
+        """The error message should include the keys present in the response for debugging."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            "copilot_usage": {"total_nano_aiu": 9500000},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "copilot_usage" in exc_info.value.message
+
+
+class TestNormalizeImagesForMessage:
+    def test_none_returns_none(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _normalize_images_for_message,
+        )
+
+        assert _normalize_images_for_message(None) is None
+
+    def test_empty_list_returns_empty(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _normalize_images_for_message,
+        )
+
+        assert _normalize_images_for_message([]) == []
+
+    def test_adds_index_when_missing(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _normalize_images_for_message,
+        )
+
+        images = [{"url": "http://a.png"}, {"url": "http://b.png"}]
+        result = _normalize_images_for_message(images)
+        assert result[0]["index"] == 0
+        assert result[1]["index"] == 1
+        assert result[0]["url"] == "http://a.png"
+
+    def test_preserves_existing_index(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _normalize_images_for_message,
+        )
+
+        images = [{"url": "http://a.png", "index": 5}]
+        result = _normalize_images_for_message(images)
+        assert result[0]["index"] == 5
+
+
+class TestSafeConvertCreatedField:
+    def test_none_returns_current_time(self):
+        import time
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _safe_convert_created_field,
+        )
+
+        result = _safe_convert_created_field(None)
+        assert abs(result - int(time.time())) <= 1
+
+    def test_int_passthrough(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _safe_convert_created_field,
+        )
+
+        assert _safe_convert_created_field(1700000000) == 1700000000
+
+    def test_float_truncated(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _safe_convert_created_field,
+        )
+
+        assert _safe_convert_created_field(1700000000.999) == 1700000000
+
+    def test_string_converted(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _safe_convert_created_field,
+        )
+
+        assert _safe_convert_created_field("1700000000.5") == 1700000000
+
+    def test_invalid_string_returns_current_time(self):
+        import time
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _safe_convert_created_field,
+        )
+
+        result = _safe_convert_created_field("not-a-number")
+        assert abs(result - int(time.time())) <= 1
+
+
+class TestConvertToStreamingResponse:
+    def test_none_raises(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response,
+        )
+
+        with pytest.raises(Exception, match="Error in response object format"):
+            list(convert_to_streaming_response(response_object=None))
+
+    def test_happy_path_basic(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response,
+        )
+
+        response_object = {
+            "id": "chatcmpl-123",
+            "model": "gpt-4",
+            "created": 1700000000,
+            "system_fingerprint": "fp_abc",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Hello!", "role": "assistant"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+
+        chunks = list(convert_to_streaming_response(response_object=response_object))
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk.id == "chatcmpl-123"
+        assert chunk.model == "gpt-4"
+        assert chunk.created == 1700000000
+        assert chunk.system_fingerprint == "fp_abc"
+        assert chunk.choices[0].delta.content == "Hello!"
+        assert chunk.choices[0].delta.role == "assistant"
+        assert chunk.choices[0].finish_reason == "stop"
+        assert chunk.usage.prompt_tokens == 5
+        assert chunk.usage.completion_tokens == 2
+
+    def test_finish_details_fallback(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response,
+        )
+
+        response_object = {
+            "choices": [
+                {
+                    "finish_reason": None,
+                    "finish_details": "length",
+                    "message": {"content": "Hi", "role": "assistant"},
+                }
+            ],
+        }
+
+        chunks = list(convert_to_streaming_response(response_object=response_object))
+        assert chunks[0].choices[0].finish_reason == "length"
+
+    def test_tool_calls_in_streaming(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+        import asyncio
+
+        response_object = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "content": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "NYC"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        async def run():
+            chunks = []
+            async for chunk in convert_to_streaming_response_async(
+                response_object=response_object
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        chunks = asyncio.run(run())
+        assert len(chunks) == 1
+        assert chunks[0].choices[0].delta.tool_calls[0].id == "call_1"
+        assert chunks[0].choices[0].delta.tool_calls[0].function.name == "get_weather"
+
+
+class TestConvertToStreamingResponseAsync:
+    def test_none_raises(self):
+        import asyncio
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        async def run():
+            async for _ in convert_to_streaming_response_async(response_object=None):
+                pass
+
+        with pytest.raises(Exception, match="Error in response object format"):
+            asyncio.run(run())
+
+    def test_happy_path(self):
+        import asyncio
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        response_object = {
+            "id": "msg_async_1",
+            "model": "claude-3",
+            "created": 1700000000,
+            "system_fingerprint": "fp_xyz",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Hi there", "role": "assistant"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 2,
+                "total_tokens": 5,
+            },
+        }
+
+        async def run():
+            chunks = []
+            async for chunk in convert_to_streaming_response_async(
+                response_object=response_object
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        chunks = asyncio.run(run())
+        # Cached replay is sliced into word-shaped chunks to preserve
+        # streaming cadence; joining the slices reconstructs the content.
+        assert len(chunks) == 2
+        assert all(c.id == "msg_async_1" for c in chunks)
+        assert all(c.model == "claude-3" for c in chunks)
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
+        assert chunks[0].choices[0].finish_reason is None
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].usage.prompt_tokens == 3
+
+
+class TestHandleInvalidParallelToolCalls:
+    def test_none_input(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _handle_invalid_parallel_tool_calls,
+        )
+
+        assert _handle_invalid_parallel_tool_calls(None) is None
+
+    def test_normal_tool_calls_unchanged(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _handle_invalid_parallel_tool_calls,
+        )
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(name="get_weather", arguments='{"city": "NYC"}'),
+            )
+        ]
+        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        assert len(result) == 1
+        assert result[0].function.name == "get_weather"
+
+    def test_multi_tool_use_parallel_expanded(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _handle_invalid_parallel_tool_calls,
+        )
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(
+                    name="multi_tool_use.parallel",
+                    arguments=json.dumps(
+                        {
+                            "tool_uses": [
+                                {
+                                    "recipient_name": "functions.get_weather",
+                                    "parameters": {"city": "NYC"},
+                                },
+                                {
+                                    "recipient_name": "functions.get_time",
+                                    "parameters": {"tz": "EST"},
+                                },
+                            ]
+                        }
+                    ),
+                ),
+            )
+        ]
+        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        assert len(result) == 2
+        assert result[0].function.name == "get_weather"
+        assert result[0].id == "call_1_0"
+        assert json.loads(result[0].function.arguments) == {"city": "NYC"}
+        assert result[1].function.name == "get_time"
+        assert result[1].id == "call_1_1"
+
+    def test_invalid_json_returns_original(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _handle_invalid_parallel_tool_calls,
+        )
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(name="some_func", arguments="not valid json{{{"),
+            )
+        ]
+        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        assert len(result) == 1
+        assert result[0].id == "call_1"
+
+
+class TestShouldConvertToolCallToJsonMode:
+    def test_returns_true_when_conditions_met(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _should_convert_tool_call_to_json_mode,
+        )
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+        tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
+        assert (
+            _should_convert_tool_call_to_json_mode(
+                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
+            )
+            is True
+        )
+
+    def test_returns_false_when_flag_off(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _should_convert_tool_call_to_json_mode,
+        )
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+        tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
+        assert (
+            _should_convert_tool_call_to_json_mode(
+                tool_calls=tool_calls, convert_tool_call_to_json_mode=False
+            )
+            is False
+        )
+
+    def test_returns_false_when_wrong_tool_name(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _should_convert_tool_call_to_json_mode,
+        )
+
+        tool_calls = [{"function": {"name": "some_other_tool"}}]
+        assert (
+            _should_convert_tool_call_to_json_mode(
+                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
+            )
+            is False
+        )
+
+    def test_returns_false_when_multiple_tool_calls(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _should_convert_tool_call_to_json_mode,
+        )
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+        tool_calls = [
+            {"function": {"name": RESPONSE_FORMAT_TOOL_NAME}},
+            {"function": {"name": "other"}},
+        ]
+        assert (
+            _should_convert_tool_call_to_json_mode(
+                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
+            )
+            is False
+        )
+
+    def test_returns_false_when_none(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _should_convert_tool_call_to_json_mode,
+        )
+
+        assert (
+            _should_convert_tool_call_to_json_mode(
+                tool_calls=None, convert_tool_call_to_json_mode=True
+            )
+            is False
+        )
+
+
+class TestConvertToolCallToJsonMode:
+    def test_converts_when_should(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_tool_call_to_json_mode as convert_fn,
+        )
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(
+                    name=RESPONSE_FORMAT_TOOL_NAME,
+                    arguments='{"key": "value"}',
+                ),
+            )
+        ]
+        message, finish_reason = convert_fn(
+            tool_calls=tool_calls, convert_tool_call_to_json_mode=True
+        )
+        assert message is not None
+        assert message.content == '{"key": "value"}'
+        assert finish_reason == "stop"
+
+    def test_no_conversion_when_flag_false(self):
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_tool_call_to_json_mode as convert_fn,
+        )
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(
+                    name=RESPONSE_FORMAT_TOOL_NAME,
+                    arguments='{"key": "value"}',
+                ),
+            )
+        ]
+        message, finish_reason = convert_fn(
+            tool_calls=tool_calls, convert_tool_call_to_json_mode=False
+        )
+        assert message is None
+        assert finish_reason is None
+
+
+class TestConvertToModelResponseObjectEmbedding:
+    def test_basic_embedding_response(self):
+        from litellm.types.utils import EmbeddingResponse
+
+        response_object = {
+            "model": "text-embedding-ada-002",
+            "object": "list",
+            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 0,
+                "total_tokens": 5,
+            },
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=EmbeddingResponse(),
+            response_type="embedding",
+        )
+        assert result.model == "text-embedding-ada-002"
+        assert result.object == "list"
+        assert result.data == [{"embedding": [0.1, 0.2, 0.3], "index": 0}]
+        assert result.usage.prompt_tokens == 5
+
+
+class TestConvertToModelResponseObjectAudioTranscription:
+    def test_basic_transcription(self):
+        from litellm.types.utils import TranscriptionResponse
+
+        response_object = {
+            "text": "Hello world",
+            "language": "en",
+            "duration": 1.5,
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+        )
+        assert result.text == "Hello world"
+        assert result.language == "en"
+        assert result.duration == 1.5
+
+    def test_transcription_with_duration_usage(self):
+        from litellm.types.utils import TranscriptionResponse
+
+        response_object = {
+            "text": "Hello",
+            "usage": {"type": "duration", "seconds": 3.0},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+        )
+        assert result.text == "Hello"
+        assert result.usage.seconds == 3.0
+
+    def test_transcription_with_token_usage(self):
+        from litellm.types.utils import TranscriptionResponse
+
+        response_object = {
+            "text": "Hi",
+            "usage": {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_token_details": {"audio_tokens": 4, "text_tokens": 6},
+            },
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+        )
+        assert result.text == "Hi"
+        assert result.usage.input_tokens == 10
+        assert result.usage.output_tokens == 5
+        assert result.usage.input_token_details.audio_tokens == 4
+
+
+class TestConvertToModelResponseObjectRerank:
+    def test_basic_rerank(self):
+        from litellm.types.utils import RerankResponse
+
+        response_object = {
+            "id": "rerank-123",
+            "meta": {"model": "rerank-v1"},
+            "results": [{"index": 0, "relevance_score": 0.9}],
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=None,
+            response_type="rerank",
+        )
+        assert result.id == "rerank-123"
+        assert result.results[0]["relevance_score"] == 0.9
+
+
+class TestConvertToModelResponseObjectCompletion:
+    def test_tool_calls_finish_reason_override(self):
+        response_object = {
+            "id": "chatcmpl-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "NYC"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_multiple_choices(self):
+        response_object = {
+            "id": "chatcmpl-2",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Answer A", "role": "assistant"},
+                },
+                {
+                    "finish_reason": "stop",
+                    "index": 1,
+                    "message": {"content": "Answer B", "role": "assistant"},
+                },
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        assert len(result.choices) == 2
+        assert result.choices[0].message.content == "Answer A"
+        assert result.choices[1].message.content == "Answer B"
+        assert result.choices[1].index == 1
+
+    def test_json_mode_conversion(self):
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+        response_object = {
+            "id": "chatcmpl-3",
+            "model": "gpt-3.5-turbo",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": RESPONSE_FORMAT_TOOL_NAME,
+                                    "arguments": '{"result": 42}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+            convert_tool_call_to_json_mode=True,
+        )
+        assert result.choices[0].message.content == '{"result": 42}'
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_reasoning_content_extracted(self):
+        response_object = {
+            "id": "chatcmpl-4",
+            "model": "o1",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "The answer is 4.",
+                        "role": "assistant",
+                        "reasoning_content": "2+2=4",
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        assert result.choices[0].message.content == "The answer is 4."
+        assert result.choices[0].message.reasoning_content == "2+2=4"
+
+    def test_reasoning_content_not_mirrored_into_provider_specific_fields(self):
+        """Mirroring reasoning_content into provider_specific_fields made
+        cache-replayed messages diverge from live Anthropic messages, which
+        only set it top-level, breaking cache key stability (issue #27337)."""
+        response_object = {
+            "id": "chatcmpl-5",
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "The answer is 4.",
+                        "role": "assistant",
+                        "reasoning_content": "2+2=4",
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "2+2=4",
+                                "signature": "sig",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
+        message = result.choices[0].message
+        assert message.reasoning_content == "2+2=4"
+        assert "reasoning_content" not in (message.provider_specific_fields or {})
+
+    def test_response_none_raises(self):
+        with pytest.raises(Exception):
+            convert_to_model_response_object(
+                response_object=None,
+                model_response_object=ModelResponse(),
+            )
+
+    def test_model_response_none_raises(self):
+        with pytest.raises(Exception):
+            convert_to_model_response_object(
+                response_object={
+                    "choices": [
+                        {
+                            "message": {"content": "hi", "role": "assistant"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+                model_response_object=None,
+            )

@@ -293,10 +293,10 @@ Two-Step File Upload Types
 class TwoStepFileUploadRequest(TypedDict):
     """
     Request structure for two-step file upload process.
-    
+
     Step 1: Initial request to get upload URL
     Step 2: Upload file content to the upload URL
-    
+
     Used by providers like Manus and Google Cloud Storage.
     """
 
@@ -309,7 +309,7 @@ class TwoStepFileUploadRequest(TypedDict):
 class TwoStepFileUploadConfig(TypedDict, total=False):
     """
     Configuration for two-step file upload process.
-    
+
     Properties:
         initial_request: Request to create file record and get upload URL
         upload_request: Request to upload actual file content
@@ -321,3 +321,20 @@ class TwoStepFileUploadConfig(TypedDict, total=False):
     upload_request: Required[TwoStepFileUploadRequest]
     upload_url_location: Required[Literal["headers", "body"]]
     upload_url_key: str
+
+
+class StreamingMediaUploadConfig(TypedDict, total=False):
+    """Drives a memory-bounded single-request upload (GCS simple/media upload).
+
+    The handler stages ``body_stream`` to a temp file off the event loop (so peak
+    memory stays bounded), then PUTs/POSTs it in one request with a known
+    Content-Length. Unlike a resumable chunked upload this incurs no per-chunk
+    round-trips, so a multi-GB upload finishes in one continuous transfer instead
+    of hundreds of sequential PUTs that overrun client/LB timeouts.
+
+    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
+    avoid importing the llms layer into types.
+    """
+
+    body_stream: Required[Any]
+    content_type: str

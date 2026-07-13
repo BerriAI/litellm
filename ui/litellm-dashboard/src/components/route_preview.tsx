@@ -1,6 +1,8 @@
 import React from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
+import { Card, Typography } from "antd";
 import { RightOutlined, InfoCircleOutlined } from "@ant-design/icons";
+
+const { Title, Text } = Typography;
 import { getProxyBaseUrl } from "./networking";
 
 interface RoutePreviewProps {
@@ -23,8 +25,12 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
 
   return (
     <Card className="p-5">
-      <Title className="text-lg font-semibold text-gray-900 mb-2">Route Preview</Title>
-      <Subtitle className="text-gray-600 mb-5">How your requests will be routed</Subtitle>
+      <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">
+        Route Preview
+      </Title>
+      <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>
+        How your requests will be routed
+      </Text>
 
       <div className="space-y-5">
         {/* Basic routing */}
@@ -91,11 +97,11 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
         {!includeSubpath && (
           <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
             <div className="flex items-start">
-              <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
+              <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 shrink-0" />
               <div className="text-sm text-blue-700">
                 <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling - Include Subpaths
                 - above - this allows subroutes like{" "}
-                <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be
+                <code className="bg-blue-100 px-1 py-0.5 rounded-sm font-mono text-xs">/api/v1/models</code> to be
                 forwarded automatically.
               </div>
             </div>

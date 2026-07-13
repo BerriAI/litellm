@@ -29,6 +29,7 @@ def _server(**overrides) -> MCPServer:
         client_id="cid",
         client_secret="csec",
         token_url="https://auth.example.com/token",
+        oauth2_flow="client_credentials",
     )
     defaults.update(overrides)
     return MCPServer(**defaults)
@@ -74,18 +75,51 @@ async def test_token_cached_across_calls():
     mock_client = AsyncMock()
     mock_client.post.return_value = _token_response("cached-tok")
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
-        cache,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
+            cache,
+        ),
     ):
         t1 = await resolve_mcp_auth(server)
         t2 = await resolve_mcp_auth(server)
 
     assert t1 == t2 == "cached-tok"
     assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_m2m_token_not_shared_across_server_ids_with_identical_config():
+    """Two servers with byte-identical client_credentials config but different server_ids must not
+    share a cached M2M token: the cache is keyed by server_id, so a new server entry (even one
+    recreated with the same URL and credentials) mints its own token instead of inheriting the
+    sibling's. Guards against the cache key ever collapsing to the URL or the client config."""
+    cache = MCPOAuth2TokenCache()
+    server_a = _server(server_id="srv-a")
+    server_b = _server(server_id="srv-b")
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = [_token_response("tok-for-a"), _token_response("tok-for-b")]
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
+            cache,
+        ),
+    ):
+        token_a = await resolve_mcp_auth(server_a)
+        token_b = await resolve_mcp_auth(server_b)
+
+    assert token_a == "tok-for-a"
+    assert token_b == "tok-for-b"
+    assert mock_client.post.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -103,6 +137,7 @@ async def test_falls_back_to_static_token():
         client_id=None,
         client_secret=None,
         token_url=None,
+        oauth2_flow=None,
         authentication_token="static-tok-xyz",
     )
     result = await resolve_mcp_auth(server)
@@ -115,7 +150,12 @@ def test_needs_user_oauth_token_property():
     assert _server().needs_user_oauth_token is False
 
     # OAuth2 without credentials → needs per-user token
-    assert _server(client_id=None, client_secret=None, token_url=None).needs_user_oauth_token is True
+    assert (
+        _server(
+            client_id=None, client_secret=None, token_url=None, oauth2_flow=None
+        ).needs_user_oauth_token
+        is True
+    )
 
     # Non-OAuth2 → never needs user OAuth token
     assert _server(auth_type=MCPAuth.bearer_token).needs_user_oauth_token is False
@@ -128,15 +168,20 @@ async def test_http_error_raises_value_error():
     mock_response = MagicMock()
     mock_response.status_code = 401
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Unauthorized", request=MagicMock(), response=mock_response,
+        "Unauthorized",
+        request=MagicMock(),
+        response=mock_response,
     )
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ), pytest.raises(ValueError, match="failed with status 401"):
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="failed with status 401"),
+    ):
         await resolve_mcp_auth(server)
 
 
@@ -150,8 +195,35 @@ async def test_non_dict_response_raises_value_error():
     mock_client = AsyncMock()
     mock_client.post.return_value = resp
 
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="non-object JSON"),
+    ):
+        await resolve_mcp_auth(server)
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_uses_client_secret_basic_when_configured():
+    """LIT-4091: a client_credentials server with token_endpoint_auth_method=client_secret_basic
+    authenticates via HTTP Basic and keeps the secret out of the form body."""
+    import base64
+
+    server = _server(server_id="srv-basic", token_endpoint_auth_method="client_secret_basic")
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _token_response("m2m-basic")
+
     with patch(
         "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
         return_value=mock_client,
-    ), pytest.raises(ValueError, match="non-object JSON"):
-        await resolve_mcp_auth(server)
+    ):
+        result = await resolve_mcp_auth(server)
+
+    assert result == "m2m-basic"
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Basic " + base64.b64encode(b"cid:csec").decode()
+    assert "client_secret" not in kwargs["data"]
+    assert "client_id" not in kwargs["data"]
+    assert kwargs["data"]["grant_type"] == "client_credentials"

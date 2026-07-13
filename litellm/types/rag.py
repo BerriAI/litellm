@@ -175,7 +175,10 @@ class S3VectorsVectorStoreOptions(TypedDict, total=False):
 
 # Union type for vector store options
 RAGIngestVectorStoreOptions = Union[
-    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions, S3VectorsVectorStoreOptions
+    OpenAIVectorStoreOptions,
+    BedrockVectorStoreOptions,
+    VertexAIVectorStoreOptions,
+    S3VectorsVectorStoreOptions,
 ]
 
 
@@ -213,6 +216,7 @@ class RAGIngestOptions(TypedDict, total=False):
     embedding: Optional[RAGIngestEmbeddingOptions]  # Embedding model config
     vector_store: RAGIngestVectorStoreOptions  # OpenAI or Bedrock config
 
+
 class RAGIngestResponse(TypedDict, total=False):
     """Response from RAG ingest API."""
 
@@ -221,7 +225,6 @@ class RAGIngestResponse(TypedDict, total=False):
     vector_store_id: str  # The vector store ID (created or existing)
     file_id: Optional[str]  # The file ID in the vector store
     error: Optional[str]  # Error message if status is "failed"
-
 
 
 class RAGIngestRequest(BaseModel):
@@ -268,4 +271,3 @@ class RAGQueryResponse(ModelResponse):
     """Response from RAG query API."""
 
     pass
-

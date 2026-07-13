@@ -1,9 +1,9 @@
+import { AreaChart, BarChart, CustomLegend, CustomTooltip } from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
-import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
+import { Card, Grid, Text, Title } from "@tremor/react";
 import { Collapse } from "antd";
 import React from "react";
-import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
@@ -73,9 +73,7 @@ const ModelSection = ({
         </Card>
       )}
 
-      {metrics.top_models && metrics.top_models.length > 0 && (
-        <KeyModelUsageView topModels={metrics.top_models} />
-      )}
+      {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
       {/* Spend per day - Full width card */}
       <Card className="mt-4">
@@ -297,6 +295,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
+              yAxisWidth={80}
             />
           </Card>
           <Card>
@@ -313,9 +312,10 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               index="date"
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
               colors={["emerald", "red"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
+              yAxisWidth={80}
             />
           </Card>
         </Grid>
@@ -362,7 +362,7 @@ export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
-  key: "models" | "api_keys" | "mcp_servers",
+  key: "models" | "api_keys" | "mcp_servers" | "entities",
   teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
@@ -371,7 +371,12 @@ export const processActivityData = (
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
-          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams) : model,
+          label:
+            key === "api_keys"
+              ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams)
+              : key === "entities"
+                ? (modelData as any).metadata?.agent_name || (modelData as any).metadata?.team_alias || model
+                : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,
@@ -484,8 +489,7 @@ export const processActivityData = (
       });
 
       // Sort by spend
-      modelMetrics[apiKeyHash].top_models = Object.values(modelBreakdown)
-        .sort((a, b) => b.spend - a.spend);
+      modelMetrics[apiKeyHash].top_models = Object.values(modelBreakdown).sort((a, b) => b.spend - a.spend);
     });
   }
 

@@ -196,7 +196,7 @@ vi.mock("lucide-react", async () => {
 });
 
 // Heavy children -> async factories & local React
-vi.mock("../organisms/regenerate_key_modal", async () => {
+vi.mock("../organisms/RegenerateKeyModal", async () => {
   const React = await import("react");
   function RegenerateKeyModal() {
     return null;
@@ -248,6 +248,33 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
     setTeams: vi.fn(),
   })),
 }));
+
+// Mock useProjects hook
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+// Mock useUISettings hook
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
+}));
+
+// Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
+vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
+  useResetKeySpend: vi.fn().mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// useQueryClient also needs a provider; the delete-path invalidation is covered in key_info_view.test.tsx
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  };
+});
 
 // KeyEditView mock: triggers onSubmit with our injected form values
 vi.mock("./key_edit_view", async () => {
@@ -324,9 +351,29 @@ beforeEach(() => {
 });
 
 // ---- Tests ----
-describe("KeyInfoView handleKeyUpdate premium guard", () => {
-  it("removes guardrails & prompts for non-premium users and prevents metadata.guardrails", async () => {
-    renderView(false); // premiumUser = false
+describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
+  it("should remove guardrails & prompts for non-premium key owner without write access role", async () => {
+    const keyDataWithOwner = { ...baseKeyData, user_id: "user_1" };
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "viewer",
+      premiumUser: false,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={keyDataWithOwner as any}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
 
     fireEvent.click(screen.getByText("Settings"));
     fireEvent.click(screen.getByText("Edit Settings"));
@@ -334,7 +381,7 @@ describe("KeyInfoView handleKeyUpdate premium guard", () => {
       token: "tok_123",
       guardrails: ["gr-1", "gr-2"],
       prompts: ["fast", "safe"],
-      metadata: {}, // object form (not JSON string)
+      metadata: {},
     };
 
     fireEvent.click(screen.getByText("Mock Submit"));
@@ -350,7 +397,31 @@ describe("KeyInfoView handleKeyUpdate premium guard", () => {
     expect(sentPayload.key).toBe("tok_123");
   });
 
-  it("preserves guardrails & prompts for premium users and includes metadata.guardrails", async () => {
+  it("should preserve guardrails & prompts for non-premium users with write access role (e.g. Admin)", async () => {
+    renderView(false); // premiumUser = false, userRole = "Admin"
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      guardrails: ["gr-1"],
+      prompts: ["fast"],
+      metadata: {},
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+
+    expect(sentPayload.guardrails).toEqual(["gr-1"]);
+    expect(sentPayload.prompts).toEqual(["fast"]);
+    expect(sentPayload.metadata?.guardrails).toEqual(["gr-1"]);
+    expect(sentPayload.key).toBe("tok_123");
+  });
+
+  it("should preserve guardrails & prompts for premium users and includes metadata.guardrails", async () => {
     renderView(true); // premiumUser = true
 
     fireEvent.click(screen.getByText("Settings"));

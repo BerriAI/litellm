@@ -16,6 +16,10 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.policy_engine import (
     AttachmentImpactResponse,
     PolicyAttachmentCreateRequest,
@@ -76,8 +80,10 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
 
 async def _fetch_all_teams(prisma_client: object) -> list:
     """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
-    return await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
+    return await TeamRepository(prisma_client).table.find_many(  # type: ignore
+        where={},
+        order={"created_at": "desc"},
+        take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
 
 
@@ -91,9 +97,7 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
     unnamed_count = 0
     for key in keys:
         key_alias = key.key_alias or ""
-        key_tags = _get_tags_from_metadata(
-            key.metadata, getattr(key, "metadata_json", None)
-        )
+        key_tags = _get_tags_from_metadata(key.metadata, getattr(key, "metadata_json", None))
         if key_tags and any(
             RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in key_tags
@@ -147,8 +151,7 @@ async def _find_affected_by_team_patterns(
     for team in all_teams:
         team_alias = team.team_alias or ""
         if team_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat)
-            for pat in team_patterns
+            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat) for pat in team_patterns
         ):
             if team_alias not in existing_teams:
                 new_teams.append(team_alias)
@@ -157,9 +160,10 @@ async def _find_affected_by_team_patterns(
     new_keys: list = []
     unnamed_keys_count = 0
     if matched_team_ids:
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+        keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
             where={"team_id": {"in": matched_team_ids}},
-            order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
+            order={"created_at": "desc"},
+            take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
         )
         for key in keys:
             key_alias = key.key_alias or ""
@@ -172,22 +176,20 @@ async def _find_affected_by_team_patterns(
     return new_teams, new_keys, unnamed_keys_count
 
 
-async def _find_affected_keys_by_alias(
-    prisma_client: object, key_patterns: list, existing_keys: list
-) -> list:
+async def _find_affected_keys_by_alias(prisma_client: object, key_patterns: list, existing_keys: list) -> list:
     """Find keys whose alias matches the given patterns."""
 
     affected: list = []
 
-    keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+    keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
         where=_build_alias_where("key_alias", key_patterns),
-        order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
+        order={"created_at": "desc"},
+        take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
     for key in keys:
         key_alias = key.key_alias or ""
         if key_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat)
-            for pat in key_patterns
+            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat) for pat in key_patterns
         ):
             if key_alias not in existing_keys:
                 affected.append(key_alias)
@@ -252,9 +254,7 @@ async def resolve_policies_for_context(
         )
 
         # Get matching policies with reasons
-        match_results = get_attachment_registry().get_attached_policies_with_reasons(
-            context=context
-        )
+        match_results = get_attachment_registry().get_attached_policies_with_reasons(context=context)
 
         if not match_results:
             return PolicyResolveResponse(
@@ -363,20 +363,25 @@ async def estimate_attachment_impact(
 
         # Tag-based impact
         if tag_patterns:
-            keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
-                where={}, order={"created_at": "desc"},
+            keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+                where={},
+                order={"created_at": "desc"},
                 take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
             )
             affected_keys, unnamed_keys = _filter_keys_by_tags(keys, tag_patterns)
             affected_teams, unnamed_teams = _filter_teams_by_tags(
-                all_teams, tag_patterns,
+                all_teams,
+                tag_patterns,
             )
 
         # Team-based impact (alias matching + keys belonging to those teams)
         if team_patterns:
             new_teams, new_keys, new_unnamed = await _find_affected_by_team_patterns(
-                prisma_client, all_teams, team_patterns,
-                affected_teams, affected_keys,
+                prisma_client,
+                all_teams,
+                team_patterns,
+                affected_teams,
+                affected_keys,
             )
             affected_teams.extend(new_teams)
             affected_keys.extend(new_keys)
@@ -386,7 +391,9 @@ async def estimate_attachment_impact(
         key_patterns = request.keys or []
         if key_patterns:
             new_keys = await _find_affected_keys_by_alias(
-                prisma_client, key_patterns, affected_keys,
+                prisma_client,
+                key_patterns,
+                affected_keys,
             )
             affected_keys.extend(new_keys)
 

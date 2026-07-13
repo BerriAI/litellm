@@ -268,6 +268,9 @@ async def delete_model(session, model_id="123", key="sk-1234"):
         return await response.json()
 
 
+@pytest.mark.skip(
+    reason="Requires live proxy + OPENAI_API_KEY. Deterministic mock version in tests/test_litellm/proxy/management_endpoints/test_model_management_endpoints.py::TestAddAndDeleteModelLifecycle"
+)
 @pytest.mark.asyncio
 async def test_add_and_delete_models():
     """
@@ -489,23 +492,20 @@ async def test_model_group_info_e2e():
         models = await get_models(session=session, key="sk-1234")
         print(models)
 
-        expected_models = [
-            "anthropic/claude-3-5-haiku-20241022",
-            "anthropic/claude-3-opus-20240229",
-        ]
-
         model_group_info = await get_model_group_info(session=session, key="sk-1234")
         print(model_group_info)
 
-        has_anthropic_claude_3_5_haiku = False
-        has_anthropic_claude_3_opus = False
+        # Check that the endpoint returns data and contains the wildcard
+        # anthropic model group from the proxy config
+        has_anthropic_wildcard = False
         for model in model_group_info["data"]:
-            if model["model_group"] == "anthropic/claude-3-5-haiku-20241022":
-                has_anthropic_claude_3_5_haiku = True
-            if model["model_group"] == "anthropic/claude-3-opus-20240229":
-                has_anthropic_claude_3_opus = True
+            if model["model_group"] == "anthropic/*":
+                has_anthropic_wildcard = True
 
-        assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus
+        assert has_anthropic_wildcard, (
+            f"Expected 'anthropic/*' in model groups, got: "
+            f"{[m['model_group'] for m in model_group_info['data']]}"
+        )
 
 
 @pytest.mark.asyncio

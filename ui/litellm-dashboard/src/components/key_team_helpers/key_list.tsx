@@ -13,8 +13,13 @@ export interface Team {
   organization_id: string;
   created_at: string;
   keys: KeyResponse[];
+  keys_count?: number;
   members_with_roles: Member[];
   spend: number;
+  access_group_ids?: string[];
+  access_group_models?: string[];
+  access_group_mcp_server_ids?: string[];
+  access_group_agent_ids?: string[];
 }
 
 export interface KeyResponse {
@@ -30,6 +35,7 @@ export interface KeyResponse {
   config: Record<string, unknown>;
   user_id: string;
   team_id: string | null;
+  project_id: string | null;
   max_parallel_requests: number;
   metadata: Record<string, unknown>;
   tpm_limit: number;
@@ -46,8 +52,11 @@ export interface KeyResponse {
   blocked: boolean;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
+  org_id?: string | null;
   created_at: string;
+  created_by?: string;
   updated_at: string;
+  last_active: string | null;
   team_spend: number;
   team_alias: string;
   team_tpm_limit: number;
@@ -88,6 +97,8 @@ export interface KeyResponse {
     agent_access_groups?: string[];
   };
   access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
+  budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
   last_rotation_at?: string;
@@ -96,6 +107,12 @@ export interface KeyResponse {
   user?: {
     user_id: string;
     user_email: string;
+    user_alias: string | null;
+  };
+  created_by_user?: {
+    user_id: string;
+    user_email: string;
+    user_alias: string | null;
   };
 }
 
@@ -149,9 +166,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -172,7 +187,6 @@ const useKeyList = ({
         null,
         expand.join(","),
       );
-      console.log("data", data);
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -184,16 +198,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

@@ -8,7 +8,9 @@ import aiohttp.http_exceptions
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../..")
+)  # Adds the parent directory to the system path
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
@@ -61,7 +63,13 @@ class MockAiohttpResponse:
     ):
         self.status = status
         self.headers = headers or {}
-        self.content = MockContent(content_chunks, exception_to_raise, exception_at_chunk)
+        self.closed = False
+        self.content = MockContent(
+            content_chunks, exception_to_raise, exception_at_chunk
+        )
+
+    def close(self):
+        self.closed = True
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -108,7 +116,9 @@ async def test_transfer_encoding_error_no_httpx_read_error():
     )
 
     # Wrap it in ClientPayloadError as aiohttp does
-    client_payload_error = aiohttp.ClientPayloadError("Response payload is not completed")
+    client_payload_error = aiohttp.ClientPayloadError(
+        "Response payload is not completed"
+    )
     client_payload_error.__cause__ = transfer_error
 
     mock_response = MockAiohttpResponse(
@@ -135,7 +145,9 @@ async def test_transfer_encoding_error_no_httpx_read_error():
 async def test_client_payload_error_graceful_handling():
     """Test that ClientPayloadError is handled gracefully without stacktrace"""
     # Create a ClientPayloadError directly
-    client_error = aiohttp.client_exceptions.ClientPayloadError("Response payload is not completed")
+    client_error = aiohttp.client_exceptions.ClientPayloadError(
+        "Response payload is not completed"
+    )
 
     mock_response = MockAiohttpResponse(
         content_chunks=[b"data1", b"data2", b"data3"],
@@ -209,7 +221,9 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", proxy_url)
     monkeypatch.setenv("https_proxy", proxy_url)
     monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
-    monkeypatch.setattr("urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url})
+    monkeypatch.setattr(
+        "urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url}
+    )
     monkeypatch.setattr("urllib.request.proxy_bypass", lambda host: False)
 
     captured = {}
@@ -250,6 +264,61 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     await transport.handle_async_request(request)
 
     assert captured["proxy"] == proxy_url
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_empty_body_sends_no_data():
+    """
+    A bodyless request (e.g. DELETE /responses/{id}) must reach aiohttp with
+    data=None. Passing the empty `b""` httpx content makes aiohttp attach a
+    `Content-Type: application/octet-stream` header, which providers like
+    OpenAI reject with `unsupported_content_type`.
+    """
+    captured = {}
+
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            captured["data"] = kwargs.get("data")
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+
+    empty_request = httpx.Request("DELETE", "http://example.com/responses/resp_123")
+    await transport.handle_async_request(empty_request)
+    assert captured["data"] is None
+
+    body_request = httpx.Request(
+        "POST", "http://example.com/responses", json={"input": "ping"}
+    )
+    await transport.handle_async_request(body_request)
+    assert captured["data"] == body_request.content
+    assert captured["data"]
 
 
 @pytest.mark.asyncio
@@ -428,12 +497,12 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         # but each chunk arrives quickly
         response = web.StreamResponse()
         await response.prepare(request)
-        
+
         # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
         for i in range(5):
             await asyncio.sleep(0.05)  # Less than sock_read timeout
             await response.write(f"chunk{i}\n".encode())
-        
+
         await response.write_eof()
         return response
 
@@ -468,12 +537,12 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         # This should succeed without timing out
         response = await transport.handle_async_request(request)
         assert response.status_code == 200
-        
+
         # Read the streaming response
         chunks = []
         async for chunk in response.aiter_bytes():
             chunks.append(chunk)
-        
+
         # Verify we got all chunks
         full_response = b"".join(chunks).decode()
         assert "chunk0" in full_response
@@ -510,7 +579,9 @@ async def test_handle_closed_session_before_request():
         return _make_mock_session(closed=counts["sessions"] == 1)
 
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com")
+    )
 
     assert counts["sessions"] == 2  # Created 2 sessions: closed one, then open one
     assert response.status_code == 200
@@ -539,8 +610,71 @@ async def test_handle_session_closed_during_request():
         return MockSession()
 
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com")
+    )
 
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_error():
+    """
+    Regression test for #30192: when body iteration ends with an error, the
+    underlying aiohttp response must be closed so its connector slot is
+    released. Leaked slots exhaust the pool and every later request times
+    out (408) until the proxy restarts, even after the backend recovers.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2"],
+        exception_to_raise=aiohttp.ServerTimeoutError("read timeout"),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(httpx.TimeoutException):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_cancellation():
+    """
+    Regression test for #30192: a task cancelled mid-stream (e.g. the caller
+    disconnects during a traffic spike) must not leak its aiohttp connection.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+        exception_to_raise=asyncio.CancelledError(),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_generator_exit():
+    """
+    Regression test for #30192: when the consumer stops iterating early and the
+    stream generator is closed (GeneratorExit), the underlying aiohttp response
+    must still be closed so its connector slot is released.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    iterator = stream.__aiter__()
+    assert await iterator.__anext__() == b"chunk1"
+    await iterator.aclose()
+
+    assert mock_response.closed is True

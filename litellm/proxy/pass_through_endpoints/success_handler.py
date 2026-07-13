@@ -11,7 +11,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import StandardPassThroughResponseObject
-from litellm.utils import executor as thread_pool_executor
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -22,6 +21,9 @@ from .llm_provider_handlers.assembly_passthrough_logging_handler import (
 from .llm_provider_handlers.cohere_passthrough_logging_handler import (
     CoherePassthroughLoggingHandler,
 )
+from .llm_provider_handlers.cursor_passthrough_logging_handler import (
+    CursorPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
@@ -30,6 +32,18 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 )
 
 cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
+
+
+def _safe_response_text(httpx_response: httpx.Response) -> str:
+    """
+    Streamed passthrough responses are relayed to the client without being read
+    into memory, so accessing .text on them raises ResponseNotRead. Their body is
+    intentionally uninspected; log an empty string instead of failing the row.
+    """
+    try:
+        return httpx_response.text
+    except httpx.ResponseNotRead:
+        return ""
 
 
 class PassThroughEndpointLogging:
@@ -43,6 +57,8 @@ class PassThroughEndpointLogging:
             "search",
             "batchPredictionJobs",
             "predictLongRunning",
+            "embedContent",
+            "batchEmbedContents",
         ]
 
         # Anthropic
@@ -50,15 +66,25 @@ class PassThroughEndpointLogging:
 
         # Cohere
         self.TRACKED_COHERE_ROUTES = ["/v2/chat", "/v1/embed"]
-        self.assemblyai_passthrough_logging_handler = (
-            AssemblyAIPassthroughLoggingHandler()
-        )
+        self.assemblyai_passthrough_logging_handler = AssemblyAIPassthroughLoggingHandler()
 
         # Langfuse
         self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
         # Gemini
-        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent", "predictLongRunning"]
+        self.TRACKED_GEMINI_ROUTES = [
+            "generateContent",
+            "streamGenerateContent",
+            "predictLongRunning",
+        ]
+
+        # Cursor Cloud Agents
+        self.TRACKED_CURSOR_ROUTES = [
+            "/v0/agents",
+            "/v0/me",
+            "/v0/models",
+            "/v0/repositories",
+        ]
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
@@ -77,27 +103,20 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         **kwargs,
     ):
-        """Helper function to handle both sync and async logging operations"""
-        # Submit to thread pool for sync logging
-        thread_pool_executor.submit(
-            logging_obj.success_handler,
-            standard_logging_response_object,
-            start_time,
-            end_time,
-            cache_hit,
-            **kwargs,
-        )
-
-        # Handle async logging
-        await logging_obj.async_success_handler(
-            result=(
-                json.dumps(result)
-                if isinstance(result, dict)
-                else standard_logging_response_object
-            ),
+        """Log pass-through success via the shared async dispatch path."""
+        # Always reached from pass_through_async_success_handler, which runs in
+        # an async context. call_type is "pass_through_endpoint" here, so the
+        # passthrough guard in dispatch_success_handlers already forces the
+        # async handler to run; pass prefer_async_handlers explicitly to match
+        # the streaming sibling (_route_streaming_logging_to_handler) and keep
+        # async-only loggers (e.g. the proxy spend logger) firing regardless of
+        # how the call-type classification evolves.
+        await logging_obj.dispatch_success_handlers(
+            result=(json.dumps(result) if isinstance(result, dict) else standard_logging_response_object),
             start_time=start_time,
             end_time=end_time,
             cache_hit=False,
+            prefer_async_handlers=True,
             **kwargs,
         )
 
@@ -122,41 +141,33 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[Any] = None
 
         if self.is_gemini_route(url_route, custom_llm_provider):
-            gemini_passthrough_logging_handler_result = (
-                GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
-                    httpx_response=httpx_response,
-                    response_body=response_body or {},
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    request_body=request_body,
-                    **kwargs,
-                )
+            gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body or {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                gemini_passthrough_logging_handler_result["result"]
-            )
+            standard_logging_response_object = gemini_passthrough_logging_handler_result["result"]
             kwargs = gemini_passthrough_logging_handler_result["kwargs"]
         elif self.is_vertex_route(url_route):
-            vertex_passthrough_logging_handler_result = (
-                VertexPassthroughLoggingHandler.vertex_passthrough_handler(
-                    httpx_response=httpx_response,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    request_body=request_body,
-                    **kwargs,
-                )
+            vertex_passthrough_logging_handler_result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                vertex_passthrough_logging_handler_result["result"]
-            )
+            standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif self.is_anthropic_route(url_route):
             anthropic_passthrough_logging_handler_result = (
@@ -174,55 +185,58 @@ class PassThroughEndpointLogging:
                 )
             )
 
-            standard_logging_response_object = (
-                anthropic_passthrough_logging_handler_result["result"]
-            )
+            standard_logging_response_object = anthropic_passthrough_logging_handler_result["result"]
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif self.is_cohere_route(url_route):
-            cohere_passthrough_logging_handler_result = (
-                cohere_passthrough_logging_handler.cohere_passthrough_handler(
-                    httpx_response=httpx_response,
-                    response_body=response_body or {},
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    request_body=request_body,
-                    **kwargs,
-                )
+            cohere_passthrough_logging_handler_result = cohere_passthrough_logging_handler.cohere_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body or {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                cohere_passthrough_logging_handler_result["result"]
-            )
+            standard_logging_response_object = cohere_passthrough_logging_handler_result["result"]
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(
-            url_route
-        ):
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
             from .llm_provider_handlers.openai_passthrough_logging_handler import (
                 OpenAIPassthroughLoggingHandler,
             )
 
-            openai_passthrough_logging_handler_result = (
-                OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
-                    httpx_response=httpx_response,
-                    response_body=response_body or {},
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    request_body=request_body,
-                    **kwargs,
-                )
+            openai_passthrough_logging_handler_result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body or {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                openai_passthrough_logging_handler_result["result"]
-            )
+            standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
 
+        elif self.is_cursor_route(url_route, custom_llm_provider):
+            cursor_passthrough_logging_handler_result = CursorPassthroughLoggingHandler.cursor_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body or {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = cursor_passthrough_logging_handler_result["result"]
+            kwargs = cursor_passthrough_logging_handler_result["kwargs"]
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
@@ -231,27 +245,21 @@ class PassThroughEndpointLogging:
             vertex_ai_live_handler = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: list[dict[str, Any]] = (
-                response_body if isinstance(response_body, list) else []
-            )
+            websocket_messages: list[dict[str, Any]] = response_body if isinstance(response_body, list) else []
 
-            vertex_ai_live_handler_result = (
-                vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
-                    websocket_messages=websocket_messages,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    start_time=start_time,
-                    end_time=end_time,
-                    request_body=request_body,
-                    **kwargs,
-                )
+            vertex_ai_live_handler_result = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
+                websocket_messages=websocket_messages,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+                end_time=end_time,
+                request_body=request_body,
+                **kwargs,
             )
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        return_dict["standard_logging_response_object"] = (
-            standard_logging_response_object
-        )
+        return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
         return return_dict
@@ -271,19 +279,10 @@ class PassThroughEndpointLogging:
         custom_llm_provider: Optional[str] = None,
         **kwargs,
     ):
-        standard_logging_response_object: Optional[
-            PassThroughEndpointLoggingResultValues
-        ] = None
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
+        logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_assemblyai_route(url_route):
-            if (
-                AssemblyAIPassthroughLoggingHandler._should_log_request(
-                    httpx_response.request.method
-                )
-                is not True
-            ):
+            if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
@@ -301,30 +300,26 @@ class PassThroughEndpointLogging:
             # Don't log langfuse pass-through requests
             return
         else:
-            normalized_llm_passthrough_logging_payload = (
-                self.normalize_llm_passthrough_logging_payload(
-                    httpx_response=httpx_response,
-                    response_body=response_body,
-                    request_body=request_body,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
+            normalized_llm_passthrough_logging_payload = self.normalize_llm_passthrough_logging_payload(
+                httpx_response=httpx_response,
+                response_body=response_body,
+                request_body=request_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                normalized_llm_passthrough_logging_payload[
-                    "standard_logging_response_object"
-                ]
-            )
+            standard_logging_response_object = normalized_llm_passthrough_logging_payload[
+                "standard_logging_response_object"
+            ]
             kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
-                response=httpx_response.text
+                response=_safe_response_text(httpx_response)
             )
 
         kwargs = self._set_cost_per_request(
@@ -385,19 +380,36 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_cursor_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
+        """Check if the URL route is a Cursor Cloud Agents API route."""
+        if custom_llm_provider == "cursor":
+            return True
+        parsed_url = urlparse(url_route)
+        if parsed_url.hostname and "api.cursor.com" in parsed_url.hostname:
+            return True
+        for route in self.TRACKED_CURSOR_ROUTES:
+            if route in url_route:
+                path = parsed_url.path if parsed_url.scheme else url_route
+                if path.startswith("/v0/"):
+                    return custom_llm_provider == "cursor"
+        return False
+
     def is_openai_route(self, url_route: str):
-        """Check if the URL route is an OpenAI API route."""
+        """Check if the URL route is an OpenAI API route.
+
+        Uses the URL-aware helper so that non-OpenAI Azure Cognitive Services
+        (Speech, Vision, Language, ...) sharing the `*.cognitiveservices.azure.com`
+        / `*.openai.azure.com` domains are not misclassified as OpenAI routes.
+        """
         if not url_route:
             return False
-        parsed_url = urlparse(url_route)
-        return parsed_url.hostname and (
-            "api.openai.com" in parsed_url.hostname
-            or "openai.azure.com" in parsed_url.hostname
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            _is_openai_compatible_url,
         )
 
-    def is_gemini_route(
-        self, url_route: str, custom_llm_provider: Optional[str] = None
-    ):
+        return _is_openai_compatible_url(url_route)
+
+    def is_gemini_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
         """Check if the URL route is a Gemini API route."""
         for route in self.TRACKED_GEMINI_ROUTES:
             if route in url_route and custom_llm_provider == "gemini":
@@ -405,17 +417,25 @@ class PassThroughEndpointLogging:
         return False
 
     def _is_supported_openai_endpoint(self, url_route: str) -> bool:
-        """Check if the OpenAI endpoint is supported by the passthrough logging handler."""
+        """Check if the OpenAI endpoint is supported by the passthrough logging handler.
+
+        The Responses API route is included because
+        `openai_passthrough_handler` has a dedicated `elif is_responses:`
+        branch that knows how to extract usage + cost from the
+        Responses-API on-the-wire shape. Without including it here, the
+        outer dispatch filters Responses calls out before reaching the
+        handler — the inner branch is then unreachable and Responses
+        calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
+        """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
 
         return (
             OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
-                url_route
-            )
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
         )
 
     def _set_cost_per_request(
@@ -434,11 +454,7 @@ class PassThroughEndpointLogging:
         # Check if cost per request is set
         #########################################################
         if passthrough_logging_payload.get("cost_per_request") is not None:
-            kwargs["response_cost"] = passthrough_logging_payload.get(
-                "cost_per_request"
-            )
-            logging_obj.model_call_details["response_cost"] = (
-                passthrough_logging_payload.get("cost_per_request")
-            )
+            kwargs["response_cost"] = passthrough_logging_payload.get("cost_per_request")
+            logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")
 
         return kwargs

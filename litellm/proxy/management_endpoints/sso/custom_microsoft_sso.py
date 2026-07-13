@@ -7,7 +7,7 @@ variables.
 
 Environment Variables:
 - MICROSOFT_AUTHORIZATION_ENDPOINT: Custom authorization endpoint URL
-- MICROSOFT_TOKEN_ENDPOINT: Custom token endpoint URL  
+- MICROSOFT_TOKEN_ENDPOINT: Custom token endpoint URL
 - MICROSOFT_USERINFO_ENDPOINT: Custom userinfo endpoint URL
 
 If these are not set, the default Microsoft endpoints are used.
@@ -56,24 +56,16 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         Override to support custom endpoints via environment variables.
         Falls back to default Microsoft endpoints if not set.
         """
-        custom_authorization_endpoint = os.getenv(
-            "MICROSOFT_AUTHORIZATION_ENDPOINT", None
-        )
+        custom_authorization_endpoint = os.getenv("MICROSOFT_AUTHORIZATION_ENDPOINT", None)
         custom_token_endpoint = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
         custom_userinfo_endpoint = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
 
         # Use custom endpoints if set, otherwise use defaults
         authorization_endpoint = (
-            custom_authorization_endpoint
-            or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
+            custom_authorization_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
         )
-        token_endpoint = (
-            custom_token_endpoint
-            or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
-        )
-        userinfo_endpoint = (
-            custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
-        )
+        token_endpoint = custom_token_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
+        userinfo_endpoint = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(
@@ -88,4 +80,3 @@ class CustomMicrosoftSSO(MicrosoftSSO):
             token_endpoint=token_endpoint,
             userinfo_endpoint=userinfo_endpoint,
         )
-

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Literal
 
-from litellm.proxy._types import CallInfo
+from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
 class BaseBudgetAlertType(ABC):
@@ -31,6 +31,8 @@ class SoftBudgetAlert(BaseBudgetAlertType):
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
+        if user_info.event_group == Litellm_EntityType.TEAM:
+            return user_info.team_id or "default_id"
         return user_info.token or "default_id"
 
 
@@ -74,6 +76,14 @@ class ProjectedLimitExceededAlert(BaseBudgetAlertType):
         return user_info.token or "default_id"
 
 
+class ProjectBudgetAlert(BaseBudgetAlertType):
+    def get_event_message(self) -> str:
+        return "Project Budget: "
+
+    def get_id(self, user_info: CallInfo) -> str:
+        return user_info.token or "default_id"
+
+
 def get_budget_alert_type(
     type: Literal[
         "token_budget",
@@ -84,6 +94,7 @@ def get_budget_alert_type(
         "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
+        "project_budget",
     ],
 ) -> BaseBudgetAlertType:
     """Factory function to get the appropriate budget alert type class"""
@@ -97,6 +108,7 @@ def get_budget_alert_type(
         "organization_budget": OrganizationBudgetAlert(),
         "token_budget": TokenBudgetAlert(),
         "projected_limit_exceeded": ProjectedLimitExceededAlert(),
+        "project_budget": ProjectBudgetAlert(),
     }
 
     if type in alert_types:

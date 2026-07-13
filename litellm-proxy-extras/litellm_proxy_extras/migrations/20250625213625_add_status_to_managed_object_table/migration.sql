@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_ManagedObjectTable" ADD COLUMN     "status" TEXT;
+ALTER TABLE "LiteLLM_ManagedObjectTable" ADD COLUMN IF NOT EXISTS "status" TEXT;
 

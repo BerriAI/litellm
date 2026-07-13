@@ -78,9 +78,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
+            non_default_params["max_tokens"] = non_default_params.pop("max_completion_tokens")
         return super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -128,9 +126,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise VertexAIError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
+                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -151,12 +147,12 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     """
     Vertex AI Llama models may not include role in streaming chunk deltas.
     This handler ensures the first chunk always has role="assistant".
-    
+
     When Vertex AI returns a single chunk with both role and finish_reason (empty response),
     this handler splits it into two chunks:
     1. First chunk: role="assistant", content="", finish_reason=None
     2. Second chunk: role=None, content=None, finish_reason="stop"
-    
+
     This matches OpenAI's streaming format where the first chunk has role and
     the final chunk has finish_reason but no role.
     """
@@ -171,7 +167,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
         if not self.sent_role and result.choices:
             delta = result.choices[0].delta
             finish_reason = result.choices[0].finish_reason
-            
+
             # If this is both the first chunk AND the final chunk (has finish_reason),
             # we need to split it into two chunks to match OpenAI format
             if finish_reason is not None:
@@ -190,7 +186,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
                     ],
                 )
                 # Modify current chunk to be the first chunk with role but no finish_reason
-                result.choices[0].finish_reason = None
+                result.choices[0].finish_reason = None  # type: ignore[assignment]
                 delta.role = "assistant"
                 # Ensure content is empty string for first chunk, not None
                 if delta.content is None:

@@ -7,6 +7,10 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+)
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 
 
@@ -135,9 +139,14 @@ def test_hosted_vllm_supports_thinking():
     )
     assert "thinking" in supported_params
 
-    # Test thinking with low budget_tokens -> "minimal" (for < 2000)
+    # Test thinking below the low threshold -> "minimal"
     optional_params = config.map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET - 1,
+            }
+        },
         optional_params={},
         model="hosted_vllm/GLM-4.6-FP8",
         drop_params=False,
@@ -147,7 +156,12 @@ def test_hosted_vllm_supports_thinking():
 
     # Test thinking with high budget_tokens -> "high"
     optional_params = config.map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            }
+        },
         optional_params={},
         model="hosted_vllm/GLM-4.6-FP8",
         drop_params=False,
@@ -157,7 +171,10 @@ def test_hosted_vllm_supports_thinking():
     # Test that existing reasoning_effort is not overwritten
     optional_params = config.map_openai_params(
         non_default_params={
-            "thinking": {"type": "enabled", "budget_tokens": 15000},
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            },
             "reasoning_effort": "low",
         },
         optional_params={},
@@ -165,3 +182,257 @@ def test_hosted_vllm_supports_thinking():
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "low"
+
+
+def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+    """
+    Test that thinking_blocks on assistant messages are removed and content
+    stays a string for vLLM compatibility.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": "Hello",
+        },
+        {
+            "role": "assistant",
+            "content": "Here is my answer.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me reason about this...",
+                    "signature": "abc123",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "Follow up question",
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert isinstance(assistant_msg["content"], str)
+    assert assistant_msg["content"] == "Here is my answer."
+    assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_thinking_blocks_with_list_content():
+    """
+    Test thinking_blocks are removed and assistant content list is converted
+    to a string.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Response text"}],
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 reasoning",
+                    "signature": "sig1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2 reasoning",
+                    "signature": "sig2",
+                },
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    assert isinstance(assistant_msg["content"], str)
+    assert assistant_msg["content"] == "Response text"
+    assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_assistant_structured_content_is_preserved():
+    config = HostedVLLMChatConfig()
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/image.png"},
+    }
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Here is the image"}, image_block],
+        },
+    ]
+
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_msg = transformed["messages"][0]
+    assert assistant_msg["content"] == [
+        {"type": "text", "text": "Here is the image"},
+        image_block,
+    ]
+
+
+def test_hosted_vllm_assistant_tool_use_content_becomes_tool_calls():
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "Boston"},
+                }
+            ],
+        },
+    ]
+
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_msg = transformed["messages"][0]
+    assert assistant_msg["content"] == ""
+    assert assistant_msg["tool_calls"] == [
+        {
+            "id": "toolu_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"city": "Boston"}),
+            },
+        }
+    ]
+
+
+def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls():
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "Boston"},
+                }
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": json.dumps({"city": "Boston"}),
+                    },
+                }
+            ],
+        },
+    ]
+
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_msg = transformed["messages"][0]
+    assert assistant_msg["content"] == ""
+    assert assistant_msg["tool_calls"] == [
+        {
+            "id": "toolu_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"city": "Boston"}),
+            },
+        }
+    ]
+
+
+def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
+    config = HostedVLLMChatConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "apply_patch",
+                        "description": "Apply text patch",
+                        "format": {
+                            "type": "grammar",
+                            "grammar": {"syntax": "lark", "definition": "start: /.*/"},
+                        },
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["name"] == "apply_patch"
+    assert tools[0]["function"]["description"] == "Apply text patch"
+    assert tools[0]["function"]["parameters"]["type"] == "object"
+    assert "input" in tools[0]["function"]["parameters"]["properties"]
+
+
+def test_hosted_vllm_custom_tools_use_top_level_input_schema():
+    config = HostedVLLMChatConfig()
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "search",
+                    "description": "Search docs",
+                    "input_schema": input_schema,
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "search"
+    assert tools[0]["function"]["description"] == "Search docs"
+    assert tools[0]["function"]["parameters"] == input_schema

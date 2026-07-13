@@ -41,11 +41,11 @@ else:
 class BaseInteractionsAPIConfig(ABC):
     """
     Base configuration class for Google Interactions API implementations.
-    
+
     Per OpenAPI spec, the Interactions API supports two types of interactions:
     - Model interactions (with model parameter)
     - Agent interactions (with agent parameter)
-    
+
     Implementations should override the abstract methods to provide
     provider-specific transformations for requests and responses.
     """
@@ -86,12 +86,7 @@ class BaseInteractionsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, 
-        headers: dict, 
-        model: str, 
-        litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate and prepare environment settings including headers.
         """
@@ -108,16 +103,16 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> str:
         """
         Get the complete URL for the interaction request.
-        
+
         Per OpenAPI spec: POST /{api_version}/interactions
-        
+
         Args:
             api_base: Base URL for the API
             model: The model name (for model interactions)
             agent: The agent name (for agent interactions)
             litellm_params: LiteLLM parameters
             stream: Whether this is a streaming request
-            
+
         Returns:
             The complete URL for the request
         """
@@ -137,11 +132,11 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> Dict:
         """
         Transform the input request into the provider's expected format.
-        
+
         Per OpenAPI spec, the request body should be either:
         - CreateModelInteractionParams (with model)
         - CreateAgentInteractionParams (with agent)
-        
+
         Args:
             model: The model name (for model interactions)
             agent: The agent name (for agent interactions)
@@ -149,7 +144,7 @@ class BaseInteractionsAPIConfig(ABC):
             optional_params: Optional parameters for the request
             litellm_params: LiteLLM-specific parameters
             headers: Request headers
-            
+
         Returns:
             The transformed request body as a dictionary
         """
@@ -164,7 +159,7 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> InteractionsAPIResponse:
         """
         Transform the raw HTTP response into an InteractionsAPIResponse.
-        
+
         Per OpenAPI spec, the response is an Interaction object.
         """
         pass
@@ -178,7 +173,7 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> InteractionsAPIStreamingResponse:
         """
         Transform a parsed streaming response chunk into an InteractionsAPIStreamingResponse.
-        
+
         Per OpenAPI spec, streaming uses SSE with various event types.
         """
         pass
@@ -186,7 +181,7 @@ class BaseInteractionsAPIConfig(ABC):
     # =========================================================
     # GET INTERACTION TRANSFORMATION
     # =========================================================
-    
+
     @abstractmethod
     def transform_get_interaction_request(
         self,
@@ -197,9 +192,9 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the get interaction request into URL and query params.
-        
+
         Per OpenAPI spec: GET /{api_version}/interactions/{interaction_id}
-        
+
         Returns:
             Tuple of (URL, query_params)
         """
@@ -219,7 +214,7 @@ class BaseInteractionsAPIConfig(ABC):
     # =========================================================
     # DELETE INTERACTION TRANSFORMATION
     # =========================================================
-    
+
     @abstractmethod
     def transform_delete_interaction_request(
         self,
@@ -230,9 +225,9 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the delete interaction request into URL and body.
-        
+
         Per OpenAPI spec: DELETE /{api_version}/interactions/{interaction_id}
-        
+
         Returns:
             Tuple of (URL, request_body)
         """
@@ -253,7 +248,7 @@ class BaseInteractionsAPIConfig(ABC):
     # =========================================================
     # CANCEL INTERACTION TRANSFORMATION
     # =========================================================
-    
+
     @abstractmethod
     def transform_cancel_interaction_request(
         self,
@@ -264,7 +259,7 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the cancel interaction request into URL and body.
-        
+
         Returns:
             Tuple of (URL, request_body)
         """
@@ -307,7 +302,7 @@ class BaseInteractionsAPIConfig(ABC):
     ) -> bool:
         """
         Returns True if litellm should fake a stream for the given model.
-        
+
         Override in subclasses if the provider doesn't support native streaming.
         """
         return False

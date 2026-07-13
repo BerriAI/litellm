@@ -20,13 +20,27 @@ T = TypeVar("T")
 
 
 class AsyncCacheProtocol(Protocol):
-    """Protocol for cache backends used by EventDrivenCacheCoordinator."""
+    """Protocol for cache backends used by EventDrivenCacheCoordinator.
 
-    async def async_get_cache(self, key: str, **kwargs: Any) -> Any:
-        ...
+    Matches ``DualCache`` / ``UserApiKeyCache`` call shapes (explicit optional params
+    before ``**kwargs``), not only ``(key, **kwargs)``, so overloads validate.
+    """
 
-    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> Any:
-        ...
+    async def async_get_cache(
+        self,
+        key: str,
+        parent_otel_span: Any = None,
+        local_only: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    async def async_set_cache(
+        self,
+        key: str,
+        value: Any,
+        local_only: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
 
 
 class EventDrivenCacheCoordinator:
@@ -38,6 +52,9 @@ class EventDrivenCacheCoordinator:
     - Other requests: wait for the signal, then read from cache.
 
     Create one instance per resource (e.g. one for global spend, one for feature flags).
+
+    Args:
+        log_prefix: Prefix for debug log messages.
     """
 
     def __init__(self, log_prefix: str = "[CACHE]"):
@@ -46,17 +63,13 @@ class EventDrivenCacheCoordinator:
         self._query_in_progress = False
         self._log_prefix = log_prefix
 
-    async def _get_cached(
-        self, cache_key: str, cache: AsyncCacheProtocol
-    ) -> Optional[Any]:
+    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol) -> Optional[Any]:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
     def _log_cache_hit(self, value: T) -> None:
         if self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Cache hit, value: %s", self._log_prefix, value
-            )
+            verbose_proxy_logger.debug("%s Cache hit, value: %s", self._log_prefix, value)
 
     def _log_cache_miss(self) -> None:
         if self._log_prefix:
@@ -69,9 +82,7 @@ class EventDrivenCacheCoordinator:
         async with self._lock:
             if self._query_in_progress and self._event is not None:
                 if self._log_prefix:
-                    verbose_proxy_logger.debug(
-                        "%s Load in flight, waiting for signal", self._log_prefix
-                    )
+                    verbose_proxy_logger.debug("%s Load in flight, waiting for signal", self._log_prefix)
                 return self._event
             self._query_in_progress = True
             self._event = asyncio.Event()
@@ -91,9 +102,7 @@ class EventDrivenCacheCoordinator:
         """Wait for loader to finish, then read from cache."""
         await event.wait()
         if self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Signal received, reading from cache", self._log_prefix
-            )
+            verbose_proxy_logger.debug("%s Signal received, reading from cache", self._log_prefix)
         value: Optional[T] = await cache.async_get_cache(key=cache_key)
         if value is not None and self._log_prefix:
             verbose_proxy_logger.debug(
@@ -102,9 +111,7 @@ class EventDrivenCacheCoordinator:
                 value,
             )
         elif value is None and self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Signal received but cache still empty", self._log_prefix
-            )
+            verbose_proxy_logger.debug("%s Signal received but cache still empty", self._log_prefix)
         return value
 
     async def _load_and_cache(
@@ -148,9 +155,7 @@ class EventDrivenCacheCoordinator:
             self._query_in_progress = False
             if self._event is not None:
                 if self._log_prefix:
-                    verbose_proxy_logger.debug(
-                        "%s Signaling all waiting requests", self._log_prefix
-                    )
+                    verbose_proxy_logger.debug("%s Signaling all waiting requests", self._log_prefix)
                 self._event.set()
                 self._event = None
 
@@ -181,9 +186,7 @@ class EventDrivenCacheCoordinator:
         event_to_wait = await self._claim_role()
 
         if event_to_wait is not None:
-            return await self._wait_for_signal_and_get(
-                event_to_wait, cache_key, cache
-            )
+            return await self._wait_for_signal_and_get(event_to_wait, cache_key, cache)
 
         try:
             result = await self._load_and_cache(cache_key, cache, load_fn)

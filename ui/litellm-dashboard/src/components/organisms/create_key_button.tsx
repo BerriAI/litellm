@@ -1,17 +1,21 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -20,15 +24,25 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
-import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
+import OrganizationDropdown from "../common_components/OrganizationDropdown";
+import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
+import {
+  excludeProxyWideSentinel,
+  getModelDisplayName,
+  hasAllModelsSentinel,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
+  getAgentsList,
   getGuardrailsList,
   getPoliciesList,
   getPossibleUserRoles,
@@ -39,17 +53,31 @@ import {
   proxyBaseUrl,
   userFilterUICall,
 } from "../networking";
+import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
+/**
+ * Interface for pre-filling the create key form from URL parameters
+ */
+export interface CreateKeyPrefillData {
+  owned_by?: "you" | "service_account" | "another_user";
+  team_id?: string;
+  key_alias?: string;
+  models?: string[];
+  key_type?: "default" | "llm_api" | "management";
+}
+
 interface CreateKeyProps {
   team: Team | null;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 interface User {
@@ -67,8 +95,6 @@ interface UserOption {
 const getPredefinedTags = (data: any[] | null) => {
   let allTags = [];
 
-  console.log("data:", JSON.stringify(data));
-
   if (data) {
     for (let key of data) {
       if (key["metadata"] && key["metadata"]["tags"]) {
@@ -83,7 +109,6 @@ const getPredefinedTags = (data: any[] | null) => {
     label: tag,
   }));
 
-  console.log("uniqueTags:", uniqueTags);
   return uniqueTags;
 };
 
@@ -101,7 +126,6 @@ export const fetchTeamModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole, true, teamID, true);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       return available_model_names;
     }
     return [];
@@ -125,7 +149,6 @@ export const fetchUserModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       setUserModels(available_model_names);
     }
   } catch (error) {
@@ -140,8 +163,16 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
+  const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const { data: tagsData } = useTags();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
+  const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -150,12 +181,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
-  const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+  const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
@@ -168,7 +202,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
+  const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
+  const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
+  const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedModels: string[] = Form.useWatch("models", form) ?? [];
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -180,6 +221,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
+    setSelectedOrganizationId(null);
+    setSelectedProjectId(null);
+    setBudgetLimits([]);
+    setTagRateLimits([]);
+    setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   const handleCancel = () => {
@@ -195,6 +243,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
+    setSelectedOrganizationId(null);
+    setSelectedProjectId(null);
+    setBudgetLimits([]);
+    setTagRateLimits([]);
+    setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   useEffect(() => {
@@ -202,6 +257,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
+    if (accessToken) {
+      getAgentsList(accessToken)
+        .then((res) => setAgentsList(res?.agents || []))
+        .catch(() => setAgentsList([]));
+    }
+  }, [accessToken]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -261,6 +324,55 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     fetchPossibleRoles();
   }, [accessToken]);
 
+  // Auto-open modal and prefill form from URL params (deep link).
+  // Guarded by write access so we don't open for read-only users.
+  useEffect(() => {
+    if (autoOpenCreate && !hasPrefilled && teams && userRole && rolesWithWriteAccess.includes(userRole)) {
+      // Open the modal
+      setIsModalVisible(true);
+      setHasPrefilled(true);
+
+      // Apply prefill data if provided
+      if (prefillData) {
+        // Set key owner (owned_by) - validate that "another_user" is only allowed for Admin
+        if (prefillData.owned_by) {
+          if (prefillData.owned_by === "another_user" && userRole !== "Admin") {
+            // Ignore invalid owned_by for non-admin users, fall back to default
+            setKeyOwner("you");
+          } else {
+            setKeyOwner(prefillData.owned_by);
+          }
+        }
+
+        // Set team - find the team by ID and set it (only if team exists in user's teams)
+        if (prefillData.team_id) {
+          const selectedTeam = teams?.find((t) => t.team_id === prefillData.team_id) || null;
+          if (selectedTeam) {
+            setSelectedCreateKeyTeam(selectedTeam);
+            form.setFieldsValue({ team_id: prefillData.team_id });
+          }
+          // Silently ignore invalid team_id - don't prefill with a team user doesn't have access to
+        }
+
+        // Set key alias
+        if (prefillData.key_alias) {
+          form.setFieldsValue({ key_alias: prefillData.key_alias });
+        }
+
+        // Defer model selection until we load the allowed model list.
+        if (prefillData.models && prefillData.models.length > 0) {
+          setPendingPrefillModels(prefillData.models);
+        }
+
+        // Set key type
+        if (prefillData.key_type) {
+          setKeyType(prefillData.key_type);
+          form.setFieldsValue({ key_type: prefillData.key_type });
+        }
+      }
+    }
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
+
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
@@ -283,6 +395,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
       if (keyOwner === "you") {
         formValues.user_id = userID;
+      } else if (keyOwner === "agent") {
+        if (!selectedAgentId) {
+          NotificationsManager.fromBackend("Please select an agent");
+          return;
+        }
+        formValues.agent_id = selectedAgentId;
       }
 
       // Handle metadata for all key types
@@ -329,6 +447,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
       // Update the formValues with the final metadata
       formValues.metadata = JSON.stringify(metadata);
+
+      // disable_global_guardrails is premium-gated server-side; only send it when enabled
+      // so non-premium key creation isn't blocked by that gate.
+      if (!formValues.disable_global_guardrails) {
+        delete formValues.disable_global_guardrails;
+      }
 
       // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
@@ -415,14 +539,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         }
       }
 
+      // Add multi-window budget limits (filter out incomplete entries)
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
+      if (validWindows.length > 0) {
+        formValues.budget_limits = validWindows;
+      }
+
+      // Add per-tag rate limits (only when at least one row is configured)
+      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      if (Object.keys(tag_rpm_limit).length > 0) {
+        formValues.tag_rpm_limit = tag_rpm_limit;
+      }
+
+      if (Object.keys(budgetFallbacks).length > 0) {
+        formValues.budget_fallbacks = budgetFallbacks;
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
       } else {
         response = await keyCreateCall(accessToken, userID, formValues);
       }
-
-      console.log("key create Response:", response);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
@@ -436,9 +576,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       setSoftBudget(response["soft_budget"]);
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
+      setBudgetLimits([]);
+      setTagRateLimits([]);
+      setBudgetFallbacks({});
+      setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.log("error in create key:", error);
       const simplifiedError = simplifyKeyGenerateError(error);
       NotificationsManager.fromBackend(simplifiedError);
     }
@@ -448,15 +591,64 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
+  // Fetch available models when team or auth changes.
+  // Note: Model prefill from URL params is handled by the useEffect below, which
+  // watches for pendingPrefillModels + modelsToPick to both be populated.
   useEffect(() => {
+    if (selectedProjectId) {
+      // When a project is selected, use the project's models
+      const project = projects?.find((p) => p.project_id === selectedProjectId);
+      const projectModels = project?.models ?? [];
+      setModelsToPick(projectModels);
+      form.setFieldValue("models", []);
+      return;
+    }
     if (userID && userRole && accessToken) {
       fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
-        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
+        const allModels = excludeProxyWideSentinel(
+          Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models])),
+        );
         setModelsToPick(allModels);
       });
     }
-    form.setFieldValue("models", []);
-  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
+    // Only clear models if we don't have pending prefill models
+    if (!pendingPrefillModels) {
+      form.setFieldValue("models", []);
+    }
+    // Clear MCP server selection when team changes (available servers may differ)
+    form.setFieldValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
+
+  // Apply deferred model prefill once the available model list arrives.
+  // This handles timing where prefill data arrives before or after models are fetched.
+  useEffect(() => {
+    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
+      return;
+    }
+    if (!modelsToPick || modelsToPick.length === 0) {
+      return;
+    }
+
+    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
+    if (validModels.length > 0) {
+      form.setFieldsValue({ models: validModels });
+    }
+    setPendingPrefillModels(null);
+  }, [pendingPrefillModels, modelsToPick, form]);
+
+  // Sync team when project is selected but teams loaded later (race condition)
+  useEffect(() => {
+    if (!selectedProjectId || !teams) return;
+    const project = projects?.find((p) => p.project_id === selectedProjectId);
+    if (!project?.team_id) return;
+    // If team is already set correctly, skip
+    if (selectedCreateKeyTeam?.team_id === project.team_id) return;
+    const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
+    if (projectTeam) {
+      setSelectedCreateKeyTeam(projectTeam);
+      form.setFieldValue("team_id", projectTeam.team_id);
+    }
+  }, [teams, selectedProjectId, projects]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -515,7 +707,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   return (
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
-        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)} data-testid="create-key-button">
           + Create New Key
         </Button>
       )}
@@ -539,6 +731,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
                 {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
+                <Radio value="agent">
+                  Agent <Tag color="purple">New</Tag>
+                </Radio>
               </Radio.Group>
             </Form.Item>
 
@@ -583,6 +778,58 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 </div>
               </Form.Item>
             )}
+            {keyOwner === "agent" && (
+              <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                <div className="mb-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    Select Agent <span className="text-red-500">*</span>
+                  </span>
+                </div>
+                <Select
+                  showSearch
+                  placeholder="Select an agent"
+                  style={{ width: "100%" }}
+                  value={selectedAgentId}
+                  onChange={(value) => setSelectedAgentId(value)}
+                  filterOption={(input, option) =>
+                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={agentsList.map((a) => ({
+                    label: a.agent_name || a.agent_id,
+                    value: a.agent_id,
+                  }))}
+                />
+                <div className="text-xs text-gray-500 mt-2">
+                  This key will be used by the selected agent to make requests to LiteLLM
+                </div>
+              </div>
+            )}
+            <Form.Item
+              label={
+                <span>
+                  Organization{" "}
+                  <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+              name="organization_id"
+              className="mt-4"
+            >
+              <OrganizationDropdown
+                organizations={organizations}
+                loading={isOrganizationsLoading}
+                disabled={userRole !== "Admin"}
+                onChange={(orgId) => {
+                  setSelectedOrganizationId(orgId || null);
+                  // Clear team and project when org changes
+                  setSelectedCreateKeyTeam(null);
+                  setSelectedProjectId(null);
+                  form.setFieldValue("team_id", undefined);
+                  form.setFieldValue("project_id", undefined);
+                }}
+              />
+            </Form.Item>
             <Form.Item
               label={
                 <span>
@@ -604,13 +851,52 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown
-                teams={teams}
-                onChange={(teamId) => {
-                  const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-                  setSelectedCreateKeyTeam(selectedTeam);
+                disabled={selectedProjectId !== null}
+                organizationId={selectedOrganizationId}
+                onTeamSelect={(team) => {
+                  setSelectedCreateKeyTeam(team);
+                  setSelectedProjectId(null);
+                  form.setFieldValue("project_id", undefined);
+                  // Auto-populate org from team for non-admin users
+                  if (team?.organization_id) {
+                    setSelectedOrganizationId(team.organization_id);
+                    form.setFieldValue("organization_id", team.organization_id);
+                  } else if (!team) {
+                    setSelectedOrganizationId(null);
+                    form.setFieldValue("organization_id", undefined);
+                  }
                 }}
               />
             </Form.Item>
+            {enableProjectsUI && (
+              <Form.Item
+                label={
+                  <span>
+                    Project{" "}
+                    <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="project_id"
+                className="mt-4"
+              >
+                <ProjectDropdown
+                  projects={projects}
+                  teamId={selectedCreateKeyTeam?.team_id}
+                  loading={isProjectsLoading || !teams}
+                  onChange={(projectId) => {
+                    if (!projectId) {
+                      setSelectedProjectId(null);
+                      setSelectedCreateKeyTeam(null);
+                      form.setFieldValue("team_id", undefined);
+                      return;
+                    }
+                    setSelectedProjectId(projectId);
+                  }}
+                />
+              </Form.Item>
+            )}
           </div>
 
           {/* Show message when team selection is required */}
@@ -658,21 +944,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
                 name="models"
-                rules={
-                  keyType === "management" || keyType === "read_only"
-                    ? []
-                    : [{ required: true, message: "Please select a model" }]
-                }
+                rules={[]}
                 help={
                   keyType === "management" || keyType === "read_only"
                     ? "Models field is disabled for this key type"
-                    : "required"
+                    : "optional - leave empty to allow access to all models"
                 }
                 className="mt-4"
               >
@@ -684,14 +966,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   onChange={(values) => {
                     if (values.includes("all-team-models")) {
                       form.setFieldsValue({ models: ["all-team-models"] });
+                    } else if (values.includes("all-proxy-models")) {
+                      form.setFieldsValue({ models: ["all-proxy-models"] });
                     }
                   }}
                 >
-                  <Option key="all-team-models" value="all-team-models">
-                    All Team Models
-                  </Option>
+                  {!selectedProjectId && selectedCreateKeyTeam && (
+                    <Option key="all-team-models" value="all-team-models">
+                      All Team Models
+                    </Option>
+                  )}
+                  {!selectedProjectId && !selectedCreateKeyTeam && (
+                    <Option key="all-proxy-models" value="all-proxy-models">
+                      All Proxy Models
+                    </Option>
+                  )}
                   {modelsToPick.map((model: string) => (
-                    <Option key={model} value={model}>
+                    <Option key={model} value={model} disabled={hasAllModelsSentinel(selectedModels)}>
                       {getModelDisplayName(model)}
                     </Option>
                   ))}
@@ -724,28 +1015,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     }
                   }}
                 >
-                  <Option value="default" label="Default">
+                  <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Default</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
-                      </div>
-                    </div>
-                  </Option>
-                  <Option value="llm_api" label="LLM API">
-                    <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>LLM API</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
-                      </div>
+                      <Typography.Text strong>AI APIs</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        Can call only AI API routes (chat/completions, embeddings, etc.)
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                   <Option value="management" label="Management">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Management</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      <Typography.Text strong>Management</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         Can call only management routes (user/team/key management)
-                      </div>
+                      </Typography.Paragraph>
+                    </div>
+                  </Option>
+                  <Option value="default" label="Full Access">
+                    <div style={{ padding: "4px 0" }}>
+                      <Typography.Text strong>Full Access</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        Can call all routes (AI APIs, Management, and read-only)
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                 </Select>
@@ -801,6 +1092,37 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Budget Windows{" "}
+                        <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Budget Fallbacks{" "}
+                        <Tooltip title="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <BudgetFallbacksEditor
+                      key={budgetFallbacksKey}
+                      value={budgetFallbacks}
+                      onChange={setBudgetFallbacks}
+                      availableModels={modelsToPick}
+                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"
@@ -867,6 +1189,34 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     showDetailedDescriptions={true}
                   />
                   <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Per-Tag Rate Limits{" "}
+                        <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Throttle on budget exceeded{" "}
+                        <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="throttle_on_budget_exceeded"
+                    valuePropName="checked"
+                  >
+                    <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
                     label={
                       <span>
                         Guardrails{" "}
@@ -885,7 +1235,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     name="guardrails"
                     className="mt-4"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Select existing guardrails or enter new ones"
                         : "Premium feature - Upgrade to set guardrails by key"
                     }
@@ -893,9 +1243,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      disabled={!premiumUser}
+                      disabled={!canEditGuardrails}
                       placeholder={
-                        !premiumUser
+                        !canEditGuardrails
                           ? "Premium feature - Upgrade to set guardrails by key"
                           : "Select or enter guardrails"
                       }
@@ -922,12 +1272,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     valuePropName="checked"
                     help={
-                      premiumUser
+                      canEditGuardrails
                         ? "Bypass global guardrails for this key"
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                    <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -958,9 +1308,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       style={{ width: "100%" }}
                       disabled={!premiumUser}
                       placeholder={
-                        !premiumUser
-                          ? "Premium feature - Upgrade to set policies by key"
-                          : "Select or enter policies"
+                        !premiumUser ? "Premium feature - Upgrade to set policies by key" : "Select or enter policies"
                       }
                       options={policiesList.map((name) => ({ value: name, label: name }))}
                     />
@@ -1012,9 +1360,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     help="Select access groups to assign to this key"
                   >
-                    <AccessGroupSelector
-                      placeholder="Select access groups (optional)"
-                    />
+                    <AccessGroupSelector placeholder="Select access groups (optional)" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -1103,9 +1449,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      placeholder="Enter tags"
+                      placeholder="Select or enter tags"
                       tokenSeparators={[","]}
-                      options={predefinedTags}
+                      options={tagOptions}
                     />
                   </Form.Item>
                   <Accordion className="mt-4 mb-4">
@@ -1129,7 +1475,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
                           value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                           accessToken={accessToken}
+                          teamId={selectedCreateKeyTeam?.team_id ?? null}
                           placeholder="Select MCP servers or access groups (optional)"
+                          allowNoMcpServers
                         />
                       </Form.Item>
 
@@ -1149,7 +1497,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           <div className="mt-6">
                             <MCPToolPermissions
                               accessToken={accessToken}
-                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              selectedServers={(
+                                form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []
+                              ).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
                               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
                               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                             />
@@ -1250,7 +1600,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           accessToken={accessToken || ""}
                           value={routerSettings || undefined}
                           onChange={setRouterSettings}
-                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                          modelData={
+                            userModels.length > 0
+                              ? { data: userModels.map((model) => ({ model_name: model })) }
+                              : undefined
+                          }
                         />
                       </div>
                     </AccordionBody>
@@ -1330,6 +1684,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         excludedFields={[
                           "key_alias",
                           "team_id",
+                          "organization_id",
                           "models",
                           "duration",
                           "metadata",
@@ -1339,6 +1694,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           "budget_duration",
                           "tpm_limit",
                           "rpm_limit",
+                          ...(disableCustomApiKeys ? ["key"] : []),
                         ]}
                       />
                     </AccordionBody>
@@ -1381,34 +1737,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
-              <p>
-                Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-                <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
-                you will need to generate a new one.
-              </p>
-            </Col>
-            <Col numColSpan={1}>
               {apiKey != null ? (
-                <div>
-                  <Text className="mt-3">Virtual Key:</Text>
-                  <div
-                    style={{
-                      background: "#f8f8f8",
-                      padding: "10px",
-                      borderRadius: "5px",
-                      marginBottom: "10px",
-                    }}
-                  >
-                    <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>{apiKey}</pre>
-                  </div>
-
-                  <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy Virtual Key</Button>
-                  </CopyToClipboard>
-                  {/* <Button className="mt-3" onClick={sendSlackAlert}>
-                    Test Key
-                </Button> */}
-                </div>
+                <CreatedKeyDisplay apiKey={apiKey} />
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}

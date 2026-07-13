@@ -27,10 +27,7 @@ else:
 
 
 class BaseVectorStoreConfig:
-
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 
     def map_openai_params(
@@ -42,9 +39,7 @@ class BaseVectorStoreConfig:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -60,8 +55,8 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-
         pass
 
     async def atransform_search_vector_store_request(
@@ -72,6 +67,7 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -86,6 +82,7 @@ class BaseVectorStoreConfig:
             api_base=api_base,
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
+            extra_body=extra_body,
         )
 
     @abstractmethod
@@ -103,15 +100,11 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         return {}
 
     @abstractmethod

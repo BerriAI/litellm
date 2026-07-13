@@ -30,6 +30,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Optional[TokenCountResponse]:
         """
         Count tokens using Anthropic's CountTokens API.
@@ -66,6 +68,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                tools=tools,
+                system=system,
             )
 
             if result is not None:
@@ -77,9 +81,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except AnthropicError as e:
-            verbose_logger.warning(
-                f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}"
-            )
+            verbose_logger.warning(f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

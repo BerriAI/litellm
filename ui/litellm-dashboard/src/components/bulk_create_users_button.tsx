@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Button as TremorButton, Text } from "@tremor/react";
-import { Modal, Table, Upload, Typography } from "antd";
+import { Text } from "@tremor/react";
+import { Button, Modal, Table, Upload, Typography } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -349,14 +349,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           cleanUser.metadata = user.metadata.trim();
         }
 
-        console.log("Sending user data:", cleanUser);
         const response = await userCreateCall(accessToken, null, cleanUser);
-        console.log("Full response:", response);
 
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
           anySuccessful = true;
-          console.log("Success case triggered");
           const user_id = response.data?.user_id || response.user_id;
 
           // Create invitation link for the user
@@ -364,17 +361,17 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
+              const invitationUrl = new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
                   i === index
                     ? {
-                      ...u,
-                      status: "success",
-                      key: response.key || response.user_id,
-                      invitation_link: invitationUrl,
-                    }
+                        ...u,
+                        status: "success",
+                        key: response.key || response.user_id,
+                        invitation_link: invitationUrl,
+                      }
                     : u,
                 ),
               );
@@ -386,11 +383,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 current.map((u, i) =>
                   i === index
                     ? {
-                      ...u,
-                      status: "success",
-                      key: response.key || response.user_id,
-                      invitation_link: invitationUrl,
-                    }
+                        ...u,
+                        status: "success",
+                        key: response.key || response.user_id,
+                        invitation_link: invitationUrl,
+                      }
                     : u,
                 ),
               );
@@ -401,19 +398,17 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               current.map((u, i) =>
                 i === index
                   ? {
-                    ...u,
-                    status: "success",
-                    key: response.key || response.user_id,
-                    error: "User created but failed to generate invitation link",
-                  }
+                      ...u,
+                      status: "success",
+                      key: response.key || response.user_id,
+                      error: "User created but failed to generate invitation link",
+                    }
                   : u,
               ),
             );
           }
         } else {
-          console.log("Error case triggered");
           const errorMessage = response?.error || "Failed to create user";
-          console.log("Error message:", errorMessage);
           setParsedData((current) =>
             current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
           );
@@ -540,9 +535,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
   return (
     <>
-      <TremorButton className="mb-0" onClick={() => setIsModalVisible(true)}>
+      <Button type="primary" className="mb-0" onClick={() => setIsModalVisible(true)}>
         + Bulk Invite Users
-      </TremorButton>
+      </Button>
 
       <Modal
         title="Bulk Invite Users"
@@ -576,14 +571,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   <h4 className="font-medium mb-2">Template Column Names</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">user_email</p>
                         <p className="text-sm text-gray-600">User&apos;s email address (required)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">user_role</p>
                         <p className="text-sm text-gray-600">
@@ -593,7 +588,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">teams</p>
                         <p className="text-sm text-gray-600">
@@ -602,14 +597,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">max_budget</p>
                         <p className="text-sm text-gray-600">Maximum budget as a number (e.g., &quot;100&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">budget_duration</p>
                         <p className="text-sm text-gray-600">
@@ -618,7 +613,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">models</p>
                         <p className="text-sm text-gray-600">
@@ -629,9 +624,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   </div>
                 </div>
 
-                <TremorButton onClick={downloadTemplate} size="lg" className="w-full md:w-auto">
-                  <DownloadOutlined className="mr-2" /> Download CSV Template
-                </TremorButton>
+                <Button type="primary" size="large" className="w-full md:w-auto" icon={<DownloadOutlined />}>
+                  Download CSV Template
+                </Button>
               </div>
 
               <div className="flex items-center mb-4">
@@ -662,14 +657,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           </Typography.Text>
                         </div>
                       </div>
-                      <TremorButton
-                        size="xs"
-                        variant="secondary"
+                      <Button
+                        size="small"
                         onClick={removeSelectedFile}
                         className="flex items-center"
+                        icon={<DeleteOutlined />}
                       >
-                        <DeleteOutlined className="mr-1" /> Remove
-                      </TremorButton>
+                        Remove
+                      </Button>
                     </div>
 
                     {fileError ? (
@@ -694,7 +689,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <UploadOutlined className="text-3xl text-gray-400 mb-2" />
                       <p className="mb-1">Drag and drop your CSV file here</p>
                       <p className="text-sm text-gray-500 mb-3">or</p>
-                      <TremorButton size="sm">Browse files</TremorButton>
+                      <Button size="small">Browse files</Button>
                       <p className="text-xs text-gray-500 mt-4">Only CSV files (.csv) are supported</p>
                     </div>
                   </Upload>
@@ -760,11 +755,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     {parsedData.some((user) => user.status === "success" || user.status === "failed") ? (
                       <div className="flex items-center">
                         <Text className="text-lg font-medium mr-3">Creation Summary</Text>
-                        <Text className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded mr-2">
+                        <Text className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded-sm mr-2">
                           {parsedData.filter((d) => d.status === "success").length} Successful
                         </Text>
                         {parsedData.some((d) => d.status === "failed") && (
-                          <Text className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded">
+                          <Text className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded-sm">
                             {parsedData.filter((d) => d.status === "failed").length} Failed
                           </Text>
                         )}
@@ -772,7 +767,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     ) : (
                       <div className="flex items-center">
                         <Text className="text-lg font-medium mr-3">User Preview</Text>
-                        <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                        <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-sm">
                           {parsedData.filter((d) => d.isValid).length} of {parsedData.length} users valid
                         </Text>
                       </div>
@@ -781,21 +776,21 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
                   {!parsedData.some((user) => user.status === "success" || user.status === "failed") && (
                     <div className="flex space-x-3">
-                      <TremorButton
+                      <Button
                         onClick={() => {
                           setParsedData([]);
                           setParseError(null);
                         }}
-                        variant="secondary"
                       >
                         Back
-                      </TremorButton>
-                      <TremorButton
+                      </Button>
+                      <Button
+                        type="primary"
                         onClick={handleBulkCreate}
                         disabled={parsedData.filter((d) => d.isValid).length === 0 || isProcessing}
                       >
                         {isProcessing ? "Creating..." : `Create ${parsedData.filter((d) => d.isValid).length} Users`}
-                      </TremorButton>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -829,40 +824,39 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
                 {!parsedData.some((user) => user.status === "success" || user.status === "failed") && (
                   <div className="flex justify-end mt-4">
-                    <TremorButton
+                    <Button
                       onClick={() => {
                         setParsedData([]);
                         setParseError(null);
                       }}
-                      variant="secondary"
                       className="mr-3"
                     >
                       Back
-                    </TremorButton>
-                    <TremorButton
+                    </Button>
+                    <Button
+                      type="primary"
                       onClick={handleBulkCreate}
                       disabled={parsedData.filter((d) => d.isValid).length === 0 || isProcessing}
                     >
                       {isProcessing ? "Creating..." : `Create ${parsedData.filter((d) => d.isValid).length} Users`}
-                    </TremorButton>
+                    </Button>
                   </div>
                 )}
 
                 {parsedData.some((user) => user.status === "success" || user.status === "failed") && (
                   <div className="flex justify-end mt-4">
-                    <TremorButton
+                    <Button
                       onClick={() => {
                         setParsedData([]);
                         setParseError(null);
                       }}
-                      variant="secondary"
                       className="mr-3"
                     >
                       Start New Bulk Import
-                    </TremorButton>
-                    <TremorButton onClick={downloadResults} variant="primary" className="flex items-center">
-                      <DownloadOutlined className="mr-2" /> Download User Credentials
-                    </TremorButton>
+                    </Button>
+                    <Button type="primary" onClick={downloadResults} icon={<DownloadOutlined />}>
+                      Download User Credentials
+                    </Button>
                   </div>
                 )}
               </div>

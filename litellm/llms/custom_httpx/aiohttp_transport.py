@@ -112,6 +112,16 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
                 raise
+        finally:
+            # Release the aiohttp connection when iteration ends for any
+            # reason (read timeout, cancellation from a client disconnect,
+            # GeneratorExit). Without this, abnormally terminated streams
+            # permanently hold a slot in the TCPConnector pool; once the
+            # pool is exhausted every request to that host times out (408)
+            # until the proxy is restarted, even after the backend recovers.
+            # On a fully-read response the connection was already released
+            # at EOF and close() is a no-op.
+            self._aiohttp_response.close()
 
     async def aclose(self) -> None:
         with map_aiohttp_exceptions():
@@ -246,7 +256,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         from yarl import URL as YarlURL
 
         try:
-            data = request.content
+            # Coerce an empty body to None so aiohttp does not attach a
+            # `Content-Type: application/octet-stream` header for bodyless
+            # requests (e.g. DELETE /responses/{id}), which upstream APIs reject.
+            data = request.content or None
         except httpx.RequestNotRead:
             data = request.stream  # type: ignore
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
@@ -330,7 +343,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            content=AiohttpResponseStream(response),
+            stream=AiohttpResponseStream(response),
             request=request,
         )
 

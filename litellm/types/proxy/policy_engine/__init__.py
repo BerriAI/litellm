@@ -45,6 +45,10 @@ from litellm.types.proxy.policy_engine.resolver_types import (
     PolicySummaryItem,
     PolicyTestResponse,
     PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest,
+    PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest,
     ResolvedPolicy,
 )
 from litellm.types.proxy.policy_engine.validation_types import (
@@ -98,4 +102,9 @@ __all__ = [
     "PolicyResolveResponse",
     "PolicyMatchDetail",
     "AttachmentImpactResponse",
+    # Policy versioning
+    "PolicyVersionCreateRequest",
+    "PolicyVersionStatusUpdateRequest",
+    "PolicyVersionListResponse",
+    "PolicyVersionCompareResponse",
 ]

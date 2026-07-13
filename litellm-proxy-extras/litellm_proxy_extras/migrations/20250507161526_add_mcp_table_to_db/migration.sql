@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_MCPServerTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_MCPServerTable" (
     "server_id" TEXT NOT NULL,
     "alias" TEXT,
     "description" TEXT,

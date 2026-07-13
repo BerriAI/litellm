@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
-from .base_secret_manager import BaseSecretManager
+from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -44,24 +44,16 @@ class HashicorpSecretManager(BaseSecretManager):
 
         self._verify_required_credentials_exist()
 
-        litellm.secret_manager_client = self
-        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
-        _refresh_interval = os.environ.get(
-            "HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL
-        )
-        _refresh_interval = (
-            int(_refresh_interval)
-            if _refresh_interval
-            else SECRET_MANAGER_REFRESH_INTERVAL
-        )
-        self.cache = InMemoryCache(
-            default_ttl=_refresh_interval
-        )  # store in memory for 1 day
-
         if premium_user is not True:
             raise ValueError(
                 f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
+
+        litellm.secret_manager_client = self
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        _refresh_interval = os.environ.get("HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL)
+        _refresh_interval = int(_refresh_interval) if _refresh_interval else SECRET_MANAGER_REFRESH_INTERVAL
+        self.cache = InMemoryCache(default_ttl=_refresh_interval)  # store in memory for 1 day
 
     def _verify_required_credentials_exist(self) -> None:
         """
@@ -70,13 +62,16 @@ class HashicorpSecretManager(BaseSecretManager):
         Raises:
             ValueError: If no valid authentication credentials are provided
         """
-        if not self.vault_token and not (
-            self.approle_role_id and self.approle_secret_id
-        ):
+        has_token = bool(self.vault_token)
+        has_approle = bool(self.approle_role_id and self.approle_secret_id)
+        has_tls_cert = bool(self.tls_cert_path and self.tls_key_path)
+
+        if not has_token and not has_approle and not has_tls_cert:
             raise ValueError(
                 "Missing Vault authentication credentials. Please set either:\n"
                 "  - HCP_VAULT_TOKEN for token-based auth, or\n"
-                "  - HCP_VAULT_APPROLE_ROLE_ID and HCP_VAULT_APPROLE_SECRET_ID for AppRole auth"
+                "  - HCP_VAULT_APPROLE_ROLE_ID and HCP_VAULT_APPROLE_SECRET_ID for AppRole auth, or\n"
+                "  - HCP_VAULT_CLIENT_CERT and HCP_VAULT_CLIENT_KEY for TLS certificate auth"
             )
 
     def _auth_via_approle(self) -> str:
@@ -144,9 +139,7 @@ class HashicorpSecretManager(BaseSecretManager):
             )
 
             # Cache the token with its lease duration
-            self.cache.set_cache(
-                key="hcp_vault_approle_token", value=token, ttl=_lease_duration
-            )
+            self.cache.set_cache(key="hcp_vault_approle_token", value=token, ttl=_lease_duration)
             return token
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via AppRole: {e}")
@@ -201,9 +194,7 @@ class HashicorpSecretManager(BaseSecretManager):
             token = resp.json()["auth"]["client_token"]
             _lease_duration = resp.json()["auth"]["lease_duration"]
             verbose_logger.debug("Successfully obtained Vault token via TLS cert auth.")
-            self.cache.set_cache(
-                key="hcp_vault_token", value=token, ttl=_lease_duration
-            )
+            self.cache.set_cache(key="hcp_vault_token", value=token, ttl=_lease_duration)
             return token
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via TLS cert: {e}")
@@ -229,12 +220,9 @@ class HashicorpSecretManager(BaseSecretManager):
         - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
-        resolved_namespace = self._sanitize_path_component(
-            namespace if namespace is not None else self.vault_namespace
-        )
-        resolved_mount = self._sanitize_path_component(
-            mount_name if mount_name is not None else self.vault_mount_name
-        )
+        raise_if_unsafe_secret_name(secret_name)
+        resolved_namespace = self._sanitize_path_component(namespace if namespace is not None else self.vault_namespace)
+        resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:
             resolved_mount = "secret"
         resolved_path_prefix = self._sanitize_path_component(
@@ -258,18 +246,14 @@ class HashicorpSecretManager(BaseSecretManager):
             return None
         return value_str
 
-    def _sanitize_path_component(
-        self, value: Optional[Union[str, int]]
-    ) -> Optional[str]:
+    def _sanitize_path_component(self, value: Optional[Union[str, int]]) -> Optional[str]:
         sanitized_value = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(
-        self, optional_params: Optional[dict]
-    ) -> Dict[str, Any]:
+    def _extract_secret_manager_settings(self, optional_params: Optional[dict]) -> Dict[str, Any]:
         if not isinstance(optional_params, dict):
             return {}
 
@@ -278,9 +262,7 @@ class HashicorpSecretManager(BaseSecretManager):
         allowed_keys = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(
-        self, secret_name: str, optional_params: Optional[dict]
-    ) -> Dict[str, Any]:
+    def _build_secret_target(self, secret_name: str, optional_params: Optional[dict]) -> Dict[str, Any]:
         settings = self._extract_secret_manager_settings(optional_params)
 
         namespace = settings.get("namespace", self.vault_namespace)
@@ -478,7 +460,10 @@ class HashicorpSecretManager(BaseSecretManager):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
                     verbose_logger.exception(f"Current secret {current_secret_name} not found")
-                    return {"status": "error", "message": f"Current secret {current_secret_name} not found"}
+                    return {
+                        "status": "error",
+                        "message": f"Current secret {current_secret_name} not found",
+                    }
                 verbose_logger.exception(
                     f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -488,7 +473,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 }
             except Exception as e:
                 verbose_logger.exception(f"Error checking current secret existence: {e}")
-                return {"status": "error", "message": f"Error checking current secret: {e}"}
+                return {
+                    "status": "error",
+                    "message": f"Error checking current secret: {e}",
+                }
 
             # Create new secret with new name and value
             # Use _build_secret_target to handle optional_params
@@ -527,7 +515,10 @@ class HashicorpSecretManager(BaseSecretManager):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
                     verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
-                    return {"status": "error", "message": f"Failed to verify new secret {new_secret_name}"}
+                    return {
+                        "status": "error",
+                        "message": f"Failed to verify new secret {new_secret_name}",
+                    }
                 verbose_logger.exception(
                     f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -537,7 +528,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 }
             except Exception as e:
                 verbose_logger.exception(f"Error verifying new secret: {e}")
-                return {"status": "error", "message": f"Error verifying new secret: {e}"}
+                return {
+                    "status": "error",
+                    "message": f"Error verifying new secret: {e}",
+                }
 
             # If everything is successful, delete the old secret
             # Only delete if the names are different (same name means we're just updating the value)
@@ -597,9 +591,7 @@ class HashicorpSecretManager(BaseSecretManager):
 
         try:
             target = self._build_secret_target(secret_name, optional_params)
-            response = await async_client.delete(
-                url=target["url"], headers=self._get_request_headers()
-            )
+            response = await async_client.delete(url=target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
             # Clear the cache for this secret
@@ -615,9 +607,7 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(
-        self, json_resp: Optional[dict]
-    ) -> Optional[str]:
+    def _get_secret_value_from_json_response(self, json_resp: Optional[dict]) -> Optional[str]:
         """
         Get the secret value from the JSON response
 

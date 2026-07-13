@@ -113,7 +113,7 @@ class BaseLLMRerankTest(ABC):
             assert response.results is not None
 
             assert response._hidden_params["response_cost"] is not None
-            
+
             # Check expected cost
             expected_cost = self.get_expected_cost()
             if expected_cost is not None:

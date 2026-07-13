@@ -1,11 +1,8 @@
 "use client";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
-import { Typography } from "antd";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
-import Onboarding from "../app/onboarding/page";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import {
@@ -14,9 +11,9 @@ import {
   keyInfoCall,
   modelAvailableCall,
   Organization,
-  userInfoCall,
+  userGetInfoV2,
 } from "./networking";
-import CreateKey from "./organisms/create_key_button";
+import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
@@ -35,12 +32,6 @@ export type UserInfo = {
   spend: number;
 };
 
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie);
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
-
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
@@ -52,9 +43,10 @@ interface UserDashboardProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: (keys: KeyResponse[]) => void;
   premiumUser: boolean;
-  organizations: Organization[] | null;
   addKey: (data: any) => void;
   createClicked: boolean;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 type TeamInterface = {
@@ -74,40 +66,41 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setTeams,
   setKeys,
   premiumUser,
-  organizations,
   addKey,
   createClicked,
+  autoOpenCreate,
+  prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
-  // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams()!;
-
   const token = getCookie("token");
-
-  const invitation_id = searchParams.get("invitation_id");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
+
+  // Clear session storage on page unload so next load fetches fresh data.
+  // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+  // They are only cleared on logout
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const token = sessionStorage.getItem("token");
       sessionStorage.clear();
-      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-      // They are only cleared on logout
-    });
-  }
+      if (token) {
+        sessionStorage.setItem("token", token);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
       return "Undefined Role";
     }
-    console.log(`Received user role: ${userRole}`);
     switch (userRole.toLowerCase()) {
       case "app_owner":
         return "App Owner";
@@ -137,67 +130,43 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       const decoded = jwtDecode(token) as { [key: string]: any };
       if (decoded) {
         // cast decoded to dictionary
-        console.log("Decoded token:", decoded);
 
-        console.log("Decoded key:", decoded.key);
         // set accessToken
         setAccessToken(decoded.key);
 
         // check if userRole is defined
         if (decoded.user_role) {
           const formattedUserRole = formatUserRole(decoded.user_role);
-          console.log("Decoded user_role:", formattedUserRole);
           setUserRole(formattedUserRole);
         } else {
-          console.log("User role not defined");
         }
 
         if (decoded.user_email) {
           setUserEmail(decoded.user_email);
         } else {
-          console.log(`User Email is not set ${decoded}`);
         }
       }
     }
-    if (userID && accessToken && userRole && !keys && !userSpendData) {
+    if (userID && accessToken && userRole && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
       } else {
-        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`);
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
-            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
+            const response = await userGetInfoV2(accessToken, userID);
 
-            setUserSpendData(response["user_info"]);
-            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`);
+            setUserSpendData(response);
 
-            // set keys for admin and users
-            if (!response?.teams[0].keys) {
-              setKeys(response["keys"]);
-            } else {
-              setKeys(
-                response["keys"].concat(
-                  response.teams
-                    .filter((team: any) => userRole === "Admin" || team.user_id === userID)
-                    .flatMap((team: any) => team.keys),
-                ),
-              );
-            }
-
-            sessionStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
-            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response["user_info"]));
+            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response));
 
             const model_available = await modelAvailableCall(accessToken, userID, userRole);
             // loop through model_info["data"] and create an array of element.model_name
             let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-            console.log("available_model_names:", available_model_names);
             setUserModels(available_model_names);
-
-            console.log("userModels:", userModels);
 
             sessionStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
           } catch (error: any) {
@@ -212,7 +181,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
       }
     }
-  }, [userID, token, accessToken, keys, userRole]);
+  }, [userID, token, accessToken, userRole]);
 
   useEffect(() => {
     // check key health - if it's invalid, redirect to login
@@ -220,7 +189,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       const fetchKeyInfo = async () => {
         try {
           const keyInfo = await keyInfoCall(accessToken, [accessToken]);
-          console.log("keyInfo: ", keyInfo);
         } catch (error: any) {
           if (error.message.includes("Invalid proxy server token passed")) {
             gotoLogin();
@@ -232,11 +200,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }, [accessToken]);
 
   useEffect(() => {
-    console.log(
-      `currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`,
-    );
     if (accessToken) {
-      console.log(`fetching teams`);
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     }
   }, [currentOrg]);
@@ -245,13 +209,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     // This code will run every time selectedTeam changes
     if (keys !== null && selectedTeam !== null && selectedTeam !== undefined && selectedTeam.team_id !== null) {
       let sum = 0;
-      console.log(`keys: ${JSON.stringify(keys)}`);
       for (const key of keys) {
         if (selectedTeam.hasOwnProperty("team_id") && key.team_id !== null && key.team_id === selectedTeam.team_id) {
           sum += key.spend;
         }
       }
-      console.log(`sum: ${sum}`);
       setTeamSpend(sum);
     } else if (keys !== null) {
       // sum the keys which don't have team-id set (default team)
@@ -263,21 +225,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [selectedTeam]);
 
-  if (invitation_id != null) {
-    return <Onboarding></Onboarding>;
-  }
-
   function gotoLogin() {
     // Clear token cookies using the utility function
     clearTokenCookies();
 
     const baseUrl = getProxyBaseUrl();
 
-    console.log("proxyBaseUrl:", baseUrl);
-
     const url = baseUrl ? `${baseUrl}/sso/key/generate` : `/sso/key/generate`;
 
-    console.log("Full URL:", url);
     window.location.href = url;
 
     return null;
@@ -285,7 +240,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   if (token == null) {
     // user is not logged in as yet
-    console.log("All cookies before redirect:", document.cookie);
 
     // Clear token cookies using the utility function
     gotoLogin();
@@ -294,13 +248,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     // Check if token is expired
     try {
       const decoded = jwtDecode(token) as { [key: string]: any };
-      console.log("Decoded token:", decoded);
       const expTime = decoded.exp;
       const currentTime = Math.floor(Date.now() / 1000);
 
       if (expTime && currentTime >= expTime) {
-        console.log("Token expired, redirecting to login");
-
         gotoLogin();
 
         return null;
@@ -328,30 +279,27 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     setUserRole("App Owner");
   }
 
-  if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to create keys</Paragraph>
-      </div>
-    );
-  }
+  // Admin Viewer can view keys read-only — gate "Create Key" but render the
+  // virtual-keys table the same as for Proxy Admin (read parity). Every
+  // other role keeps its existing ability to create keys.
+  const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
-  console.log("inside user dashboard, selected team", selectedTeam);
-  console.log("All cookies after redirect:", document.cookie);
   return (
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            team={selectedTeam as Team | null}
-            teams={teams as Team[]}
-            data={keys}
-            addKey={addKey}
-          />
-          <VirtualKeysTable teams={teams} organizations={organizations} />
+          {canCreateKey && (
+            <CreateKey
+              key={selectedTeam ? selectedTeam.team_id : null}
+              team={selectedTeam as Team | null}
+              teams={teams as Team[]}
+              data={keys}
+              addKey={addKey}
+              autoOpenCreate={autoOpenCreate}
+              prefillData={prefillData}
+            />
+          )}
+          <VirtualKeysTable />
         </Col>
       </Grid>
     </div>

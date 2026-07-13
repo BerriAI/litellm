@@ -2,20 +2,28 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0"  # Run every Sundays at midnight
+    - cron: "0 0 * * 0" # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   auto_update_price_and_context_window:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Install Dependencies
-        run: |
-          pip install aiohttp
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
       - name: Update JSON Data
         run: |
-          python ".github/workflows/auto_update_price_and_context_window_file.py"
+          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
       - name: Create Pull Request
         run: |
           git add model_prices_and_context_window.json 

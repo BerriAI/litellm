@@ -1,4 +1,15 @@
 # conftest.py
+#
+# xdist-compatible test isolation for local_testing tests.
+# Pattern matches tests/test_litellm/conftest.py:
+#   - Function-scoped fixture saves/restores litellm globals (no reload)
+#   - Module-scoped fixture reloads only in single-process mode
+#
+# IMPORTANT: True defaults are captured at conftest import time (before any
+# test module can pollute them via module-level assignments like
+# `litellm.num_retries = 3`).  The function-scoped fixture resets globals to
+# these true defaults before every test, preventing cross-test contamination
+# under xdist where module reload is skipped.
 
 import importlib
 import os
@@ -11,63 +22,251 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-import asyncio
+# ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
+# (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
+# and can include pricing entries that ``main`` has not yet picked up (e.g.
+# Mistral now returns ``ministral-8b-2512`` from ``mistral-tiny`` and the entry
+# was added on this branch).  Backfill any entries that are missing from the
+# remote-fetched map so cost-calculator lookups in tests succeed against the
+# cassette state the branch is being tested with.
+from litellm.litellm_core_utils.get_model_cost_map import (
+    RESERVED_TOP_LEVEL_KEYS,
+    GetModelCostMap,
+)
 
-@pytest.fixture(scope="session")
-def event_loop():
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
+    if _k in RESERVED_TOP_LEVEL_KEYS:
+        continue
+    litellm.model_cost.setdefault(_k, _v)
+
+from tests._vcr_conftest_common import (  # noqa: E402,F401
+    VerboseReporterState,
+    _pin_multipart_boundary,
+    apply_vcr_auto_marker_to_items,
+    emit_cassette_cache_session_banner,
+    emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
+    install_live_call_probe,
+    record_vcr_outcome,
+    register_persister_if_enabled,
+    reset_vcr_diag_dir,
+    vcr_config_dict,
+)
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
 
 
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+# Per-item respx detection (``apply_vcr_auto_marker_to_items``) auto-skips
+# tests whose ``@pytest.mark.respx`` marker or ``respx_mock`` fixture
+# would conflict with vcrpy's transport patch. We no longer maintain a
+# file-level ``_RESPX_CONFLICTING_FILES`` list here — the previous
+# entries (``test_router.py``) had only a stale ``from respx import
+# MockRouter`` import with no actual respx wiring, so file-level
+# blacklisting was masking valid cache opportunities.
+
+# Files where VCR replay breaks the test:
+# - ``test_router_caching.py``: asserts upstream returns a *new* id per call,
+#   which a deterministic cassette replay violates.
+_VCR_INCOMPATIBLE_FILES = frozenset(
+    {
+        "test_router_caching.py",
+        # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
+        "test_fake_openai_endpoint.py",
+    }
+)
+
+# Individual tests (vs. whole files above) that VCR replay can't model:
+# - ``test_router_text_completion_client``: a concurrency test that fires 300
+#   identical requests to verify the async OpenAI client is *reused* across
+#   calls (per its own comment, it "fails when we create a new Async OpenAI
+#   client per request"). vcrpy patches the HTTP transport, so replay never
+#   opens real connections and cannot exercise the client pool the test exists
+#   to validate. Recording instead stores ~300 near-identical episodes, which
+#   blows past MAX_EPISODES_PER_CASSETTE (50) so the cassette is refused on
+#   every run (MISS:OVERFLOW). The endpoint is a free mock, so the live calls
+#   carry no real provider cost.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "test_router.py::test_router_text_completion_client",
+)
+
+
+_verbose_state = VerboseReporterState()
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return vcr_config_dict()
+
+
+def pytest_recording_configure(config, vcr):
+    register_persister_if_enabled(vcr)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+def pytest_configure(config):
+    _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
+
+
+def pytest_runtest_logreport(report):
+    _verbose_state.maybe_emit_verdict(report)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    emit_cassette_cache_session_banner(terminalreporter)
+    emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)
+
+
+# ---------------------------------------------------------------------------
+# Capture TRUE defaults at conftest import time.  This runs before any test
+# module's top-level code (e.g. `litellm.num_retries = 3`) executes, so
+# the values here are guaranteed to be the real package defaults.
+# ---------------------------------------------------------------------------
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(
+        litellm, "enable_azure_ad_token_refresh", None
+    ),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
 
 
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
+def isolate_litellm_state():
     """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
     """
-    curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+    # ---- Save current callback state (for teardown restore) ----
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
 
-    import litellm
-    from litellm import Router
-    import asyncio
+    # Save list-type globals
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
 
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    # Save scalar globals
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
 
+    # ---- Reset to true defaults before the test ----
+    # Flush HTTP client cache
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
-    importlib.reload(litellm)
+    # Clear callbacks and rules
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
 
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
+    # Reset scalar globals to true defaults (prevents contamination from
+    # module-level code like `litellm.num_retries = 3` in test files)
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
 
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-
-    import asyncio
-
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
-    # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
-    asyncio.set_event_loop(None)  # Remove the reference to the loop
+    # ---- Teardown: restore saved state ----
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    sys.path.insert(0, os.path.abspath("../.."))
+
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
+    yield
 
 
 def pytest_collection_modifyitems(config, items):
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_files=_VCR_INCOMPATIBLE_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
+
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name

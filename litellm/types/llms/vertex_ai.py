@@ -6,14 +6,28 @@ from typing_extensions import (
     TypedDict,
 )
 
+from litellm.types.llms.openai import EmbeddingInput
 
-class FunctionResponse(TypedDict):
-    name: str
+# Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
+GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
+
+
+class FunctionResponse(TypedDict, total=False):
+    # `id` correlates this response with the originating `functionCall` part.
+    # Supported on Google AI Studio Gemini 3.5+; Vertex AI rejects this field.
+    id: str
+    name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
-class FunctionCall(TypedDict):
-    name: str
+class FunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
     args: Optional[dict]
 
 
@@ -27,6 +41,11 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+
+
 class PartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
@@ -38,8 +57,11 @@ class PartType(TypedDict, total=False):
     media_resolution: Literal["low", "medium", "high"]
 
 
-class HttpxFunctionCall(TypedDict):
-    name: str
+class HttpxFunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
     args: dict
 
 
@@ -58,12 +80,26 @@ class HttpxBlobType(TypedDict, total=False):
     data: str
 
 
+class HttpxServerSideToolCall(TypedDict, total=False):
+    toolType: str
+    id: str
+    args: dict
+
+
+class HttpxServerSideToolResponse(TypedDict, total=False):
+    toolType: str
+    id: str
+    response: Union[str, dict]
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inlineData: HttpxBlobType
     fileData: FileDataType
     functionCall: HttpxFunctionCall
     functionResponse: FunctionResponse
+    toolCall: HttpxServerSideToolCall
+    toolResponse: HttpxServerSideToolResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
@@ -146,9 +182,7 @@ HarmBlockThreshold = Literal[
 ]
 HarmBlockMethod = Literal["HARM_BLOCK_METHOD_UNSPECIFIED", "SEVERITY", "PROBABILITY"]
 
-HarmProbability = Literal[
-    "HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-]
+HarmProbability = Literal["HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"]
 
 HarmSeverity = Literal[
     "HARM_SEVERITY_UNSPECIFIED",
@@ -194,6 +228,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
@@ -208,17 +243,20 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    mediaResolution: str
     speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
     """Enum for Vertex AI tool field names."""
+
     GOOGLE_SEARCH = "googleSearch"
     GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
     ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
@@ -240,8 +278,9 @@ class Tools(TypedDict, total=False):
     retrieval: Retrieval
 
 
-class ToolConfig(TypedDict):
+class ToolConfig(TypedDict, total=False):
     functionCallingConfig: FunctionCallingConfig
+    includeServerSideToolInvocations: bool
 
 
 class TTL(TypedDict, total=False):
@@ -304,6 +343,7 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
+    serviceTier: str
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -493,8 +533,9 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict):
-    instances: List[Instance]
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: Required[List[Instance]]
+    parameters: dict
 
 
 class VideoEmbedding(TypedDict):
@@ -556,11 +597,22 @@ class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
 
 
+class GeminiEmbedContentRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class GeminiEmbedContentResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
 # Vertex AI Batch Prediction
 
 
 class GcsSource(TypedDict):
-    uris: str
+    uris: List[str]
 
 
 class InputConfig(TypedDict):
@@ -700,3 +752,12 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+
+VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)

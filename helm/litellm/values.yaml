@@ -1,0 +1,266 @@
+# LiteLLM helm chart values
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+# Optional Ingress wiring the three component Services behind a single L7
+# entrypoint. Required when serving the static UI bundle over the network.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""        # optional; if set, becomes the rule's host
+  tls: []
+
+# Per-component ServiceAccounts for gateway, backend, and ui.
+#
+# Each section mirrors the old shared serviceAccount shape. Set `create:
+# true` to have the chart provision the SA (useful for EKS Pod Identity /
+# GKE Workload Identity annotations). Set `name` to bind an existing SA.
+# When both are unset the component pod runs with the namespace `default` SA.
+#
+# The UI SA deliberately defaults to `automount: false` — the static nginx
+# container does not need the K8s API and should not carry a projected
+# ServiceAccount token that a compromised container could use to call the
+# cloud-provider metadata service or the K8s API.
+serviceAccounts:
+  gateway:
+    create: false
+    automount: true
+    annotations: {}
+    name: ""
+  backend:
+    create: false
+    automount: true
+    annotations: {}
+    name: ""
+  ui:
+    create: false
+    automount: false
+    annotations: {}
+    name: ""
+
+# Pre-install / pre-upgrade Helm hook that runs `prisma migrate deploy`
+# against the writer database, creating the LiteLLM schema (tables that
+# gateway + backend assume exist at startup: LiteLLM_Config,
+# LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...). Disable if your
+# pipeline runs migrations out-of-band.
+#
+# Uses a dedicated `litellm-migrations` image (prisma CLI + the migration
+# files from `litellm-proxy-extras`) instead of the backend image, so the
+# Job doesn't drag in the rest of the proxy and doesn't run `prisma
+# generate` — the migration engine doesn't need the generated client.
+migrationJob:
+  enabled: true
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 120
+  resources: {}
+  image:
+    repository: ghcr.io/berriai/litellm-migrations
+    tag: ""              # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # Extra env appended to the migration container. The migration entrypoint
+  # uses the v2 resolver by default (no diff-and-force recovery — avoids the
+  # schema thrashing seen during rolling deploys). To opt back into the v1
+  # resolver, append `- name: USE_V2_MIGRATION_RESOLVER` / `value: "false"`.
+  extraEnv: []
+
+# Required: a master key used by gateway + backend to mint/verify proxy tokens.
+# Must reference an existing Secret.
+masterKey:
+  secretName: litellm-master-key-secret              # name of a Secret containing the master key
+  secretKey: master-key
+
+# External Postgres connection. 
+database:
+  writer:
+    host: ""
+    port: 5432
+    dbname: ""
+    schema: ""
+    useIAMAuth: false
+    passwordSecret:
+      name: litellm-writer-secret
+      usernameKey: username
+      passwordKey: password
+
+  # Optional read-replica routing. When `reader.host` is set, the proxy routes
+  # reads (find_*, count, group_by, query_raw/_first) to this endpoint while
+  # writes stay on the writer. Leave `reader.host` empty to disable.
+  reader:
+    host: ""
+    port: 5432
+    dbname: ""
+    schema: ""
+    useIAMAuth: false
+    passwordSecret:
+      name: litellm-reader-secret
+      usernameKey: username
+      passwordKey: password
+
+# Optional Redis. Leave host empty to disable.
+#
+# This is the proxy's coordination store: cross-pod tpm/rpm rate limits, spend
+# tracking, and the pod lock manager. The chart emits REDIS_HOST / REDIS_PORT /
+# REDIS_PASSWORD, which the proxy picks up through its coordination Redis env
+# fallback. Response caching is separate and off unless you enable it in
+# `proxy_config.litellm_settings.cache`.
+#
+# For full control, define `general_settings.coordination_redis` in
+# `proxy_config` (host/port/password/username/url/ssl/startup_nodes/
+# sentinel_nodes/sentinel_password/service_name, each accepting os.environ/VAR
+# refs). An explicit block overrides these env vars.
+#
+# Set `cluster: true` for Redis Cluster mode (e.g. AWS ElastiCache Cluster,
+# self-hosted Redis Cluster). The chart emits REDIS_CLUSTER_NODES from
+# `host` / `port` as the single seed; the cluster client discovers the
+# remaining nodes from CLUSTER SLOTS at startup.
+redis:
+  cluster: false
+  host: ""
+  port: 6379
+  passwordSecret:
+    name: "" # Leave empty for auth-less Redis
+    passwordKey: password
+
+# ---------- gateway (LLM data plane) ----------
+gateway:
+  enabled: true
+  logLevel: INFO
+  # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
+  # consumed by the gateway image entrypoint. Default is 1.
+  numWorkers: 1
+  extraEnv: [] # Add extra environment variables to the gateway
+  envConfigMaps: [] # Add extra environment variables to the gateway from config maps
+  envSecrets: [] # Add extra environment variables to the gateway from secrets
+  # Additional volumes on the gateway Deployment (e.g. a ConfigMap holding
+  # custom callback / SSO handler code, mounted next to the proxy config).
+  volumes: []
+  # Additional volumeMounts on the gateway container.
+  volumeMounts: []
+  config:
+    create: true
+    proxy_config: {}
+  image:
+    repository: ghcr.io/berriai/litellm-gateway
+    tag: ""              # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 4000
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  livenessProbe:
+    httpGet: { path: /health/liveliness, port: http }
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readinessProbe:
+    httpGet: { path: /health/readiness, port: http }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------- backend (UI / management API) ----------
+backend:
+  enabled: true
+  logLevel: INFO
+  extraEnv: []
+  envConfigMaps: []
+  envSecrets: []
+  # Additional volumes on the backend Deployment.
+  volumes: []
+  # Additional volumeMounts on the backend container.
+  volumeMounts: []
+  image:
+    repository: ghcr.io/berriai/litellm-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 4001
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  livenessProbe:
+    httpGet: { path: /health/liveliness, port: http }
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readinessProbe:
+    httpGet: { path: /health/readiness, port: http }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------- ui (Next.js static dashboard) ----------
+ui:
+  enabled: true
+  logLevel: INFO
+  extraEnv: []
+  envConfigMaps: []
+  envSecrets: []
+  # Additional volumes on the ui Deployment.
+  volumes: []
+  # Additional volumeMounts on the ui container.
+  volumeMounts: []
+  image:
+    repository: ghcr.io/berriai/litellm-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  # The dashboard expects to know where to reach the backend API. Set this to
+  # the externally-routable URL (typically the ingress host + /api or similar).
+  backendUrl: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 500Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  livenessProbe:
+    httpGet: { path: /, port: http }
+    initialDelaySeconds: 5
+    periodSeconds: 20
+  readinessProbe:
+    httpGet: { path: /, port: http }
+    initialDelaySeconds: 2
+    periodSeconds: 10
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

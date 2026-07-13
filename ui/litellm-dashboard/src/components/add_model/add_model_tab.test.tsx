@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -175,7 +175,7 @@ describe("Add Model Tab", () => {
     );
 
     expect(await screen.findByRole("tab", { name: "Add Model" })).toBeInTheDocument();
-  }, 10000); // This test is flaky, adding a timeout until we find a better solution
+  });
 
   it("should display both Add Model and Add Auto Router tabs", async () => {
     const props = createTestProps();
@@ -269,7 +269,7 @@ describe("Add Model Tab", () => {
       },
       { timeout: 10000 },
     );
-  }, 15000); // 15 second timeout to allow waitFor to complete
+  });
 
   it("should show team selection when team-only switch is enabled", async () => {
     const props = createTestProps();
@@ -299,8 +299,11 @@ describe("Add Model Tab", () => {
     // Wait for component to load
     await screen.findByText("Provider");
 
-    // Find the team-BYOK switch by its role
-    const teamSwitch = screen.getByRole("switch");
+    // Scope to the Team-BYOK Model Form.Item: the Add Auto Router tab, mounted alongside
+    // this one, also renders a "Semantic keyword matching" switch, so a bare
+    // getByRole("switch") would match more than one element.
+    const teamByokFormItem = screen.getByText("Team-BYOK Model").closest(".ant-form-item") as HTMLElement;
+    const teamSwitch = within(teamByokFormItem).getByRole("switch");
     expect(teamSwitch).toBeInTheDocument();
 
     // Initially, team selection should not be visible

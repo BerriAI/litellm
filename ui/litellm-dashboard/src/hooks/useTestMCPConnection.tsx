@@ -1,11 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
-import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
   server_name?: string;
   url?: string;
+  spec_path?: string;
   transport?: string;
   auth_type?: string;
   authorization_url?: string;
@@ -32,6 +33,7 @@ interface UseTestMCPConnectionReturn {
   tools: any[];
   isLoadingTools: boolean;
   toolsError: string | null;
+  toolsErrorStatus: number | null;
   toolsErrorStackTrace: string | null;
   hasShownSuccessMessage: boolean;
   canFetchTools: boolean;
@@ -48,35 +50,45 @@ export const useTestMCPConnection = ({
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
+  const [toolsErrorStatus, setToolsErrorStatus] = useState<number | null>(null);
   const [toolsErrorStackTrace, setToolsErrorStackTrace] = useState<string | null>(null);
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
-    && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
-  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
-  const canFetchTools = !!(
-    formValues.url &&
-    formValues.transport &&
-    formValues.auth_type &&
-    accessToken &&
-    (!requiresOAuthToken || oauthAccessToken)
-  );
+  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2 && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
+  const isBrowserHeldTokenMode = isClientForwardedTokenMode(formValues.auth_type);
+  const requiresOAuthToken = (formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth) || isBrowserHeldTokenMode;
+  const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
+  const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
+
+  // For OpenAPI: tools are derived from the spec itself — no auth needed to load them.
+  // For other transports: auth_type is required, and OAuth interactive flows need a token.
+  const canFetchTools = isOpenAPITransport
+    ? !!(hasEndpoint && accessToken)
+    : !!(
+        hasEndpoint &&
+        formValues.transport &&
+        formValues.auth_type &&
+        accessToken &&
+        (!requiresOAuthToken || oauthAccessToken)
+      );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
-    if (!accessToken || !formValues.url) {
+    if (!accessToken || (!formValues.url && !formValues.spec_path)) {
       return;
     }
 
-    if (requiresOAuthToken && !oauthAccessToken) {
+    // For OpenAPI transport, tools are derived from the spec — no OAuth token needed.
+    if (requiresOAuthToken && !oauthAccessToken && !isOpenAPITransport) {
       return;
     }
 
     setIsLoadingTools(true);
     setToolsError(null);
+    setToolsErrorStatus(null);
 
     try {
       // Prepare the MCP server config from form values
@@ -89,47 +101,47 @@ export const useTestMCPConnection = ({
             acc[header] = entry?.value != null ? String(entry.value) : "";
             return acc;
           }, {})
-        : !Array.isArray(formValues.static_headers) && formValues.static_headers && typeof formValues.static_headers === "object"
-          ? Object.entries(formValues.static_headers).reduce(
-              (acc: Record<string, string>, [header, value]) => {
-                if (!header) {
-                  return acc;
-                }
-                acc[header] = value != null ? String(value) : "";
+        : !Array.isArray(formValues.static_headers) &&
+            formValues.static_headers &&
+            typeof formValues.static_headers === "object"
+          ? Object.entries(formValues.static_headers).reduce((acc: Record<string, string>, [header, value]) => {
+              if (!header) {
                 return acc;
-              },
-              {},
-            )
-          : {} as Record<string, string>;
+              }
+              acc[header] = value != null ? String(value) : "";
+              return acc;
+            }, {})
+          : ({} as Record<string, string>);
 
       const credentials =
         formValues.credentials && typeof formValues.credentials === "object"
-          ? Object.entries(formValues.credentials).reduce(
-              (acc: Record<string, any>, [key, value]) => {
-                if (value === undefined || value === null || value === "") {
-                  return acc;
-                }
-                if (key === "scopes") {
-                  if (Array.isArray(value)) {
-                    const normalizedScopes = value.filter((scope) => scope != null && scope !== "");
-                    if (normalizedScopes.length > 0) {
-                      acc[key] = normalizedScopes;
-                    }
-                  }
-                } else {
-                  acc[key] = value;
-                }
+          ? Object.entries(formValues.credentials).reduce((acc: Record<string, any>, [key, value]) => {
+              if (value === undefined || value === null || value === "") {
                 return acc;
-              },
-              {},
-            )
+              }
+              if (key === "scopes") {
+                if (Array.isArray(value)) {
+                  const normalizedScopes = value.filter((scope) => scope != null && scope !== "");
+                  if (normalizedScopes.length > 0) {
+                    acc[key] = normalizedScopes;
+                  }
+                }
+              } else {
+                acc[key] = value;
+              }
+              return acc;
+            }, {})
           : undefined;
+
+      // For OpenAPI transport, map to "http" for backend compatibility
+      const effectiveTransport = formValues.transport === TRANSPORT.OPENAPI ? "http" : formValues.transport;
 
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
         url: formValues.url,
-        transport: formValues.transport,
+        spec_path: formValues.spec_path,
+        transport: effectiveTransport,
         auth_type: formValues.auth_type,
         authorization_url: formValues.authorization_url,
         token_url: formValues.token_url,
@@ -147,6 +159,7 @@ export const useTestMCPConnection = ({
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
         setToolsError(null);
+        setToolsErrorStatus(null);
         setToolsErrorStackTrace(null);
         if (toolsResponse.tools.length > 0 && !hasShownSuccessMessage) {
           setHasShownSuccessMessage(true);
@@ -154,13 +167,15 @@ export const useTestMCPConnection = ({
       } else {
         const errorMessage = toolsResponse.message || "Failed to retrieve tools list";
         setToolsError(errorMessage);
-        setToolsErrorStackTrace(toolsResponse.stack_trace || null);
+        setToolsErrorStatus(typeof toolsResponse.status === "number" ? toolsResponse.status : null);
+        setToolsErrorStackTrace(toolsResponse.status === 403 ? null : toolsResponse.stack_trace || null);
         setTools([]);
         setHasShownSuccessMessage(false);
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setToolsError(error instanceof Error ? error.message : String(error));
+      setToolsErrorStatus(null);
       setToolsErrorStackTrace(null);
       setTools([]);
       setHasShownSuccessMessage(false);
@@ -169,12 +184,13 @@ export const useTestMCPConnection = ({
     }
   };
 
-  const clearTools = () => {
+  const clearTools = useCallback(() => {
     setTools([]);
     setToolsError(null);
+    setToolsErrorStatus(null);
     setToolsErrorStackTrace(null);
     setHasShownSuccessMessage(false);
-  };
+  }, []);
 
   // Auto-fetch tools when form values change and required fields are available
   useEffect(() => {
@@ -190,6 +206,7 @@ export const useTestMCPConnection = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     formValues.url,
+    formValues.spec_path,
     formValues.transport,
     formValues.auth_type,
     accessToken,
@@ -204,6 +221,7 @@ export const useTestMCPConnection = ({
     tools,
     isLoadingTools,
     toolsError,
+    toolsErrorStatus,
     toolsErrorStackTrace,
     hasShownSuccessMessage,
     canFetchTools,

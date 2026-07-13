@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Literal, Required, TypedDict
+from typing_extensions import Literal, NotRequired, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -38,7 +38,9 @@ class AnthropicOutputSchema(TypedDict, total=False):
 
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
-    effort: Literal["high", "medium", "low"]
+
+    effort: Literal["high", "medium", "low", "xhigh", "max"]
+    format: AnthropicOutputSchema
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -109,12 +111,14 @@ class AnthropicMemoryTool(TypedDict, total=False):
 
 class AnthropicToolSearchToolRegex(TypedDict, total=False):
     """Tool search tool using regex patterns for tool discovery."""
+
     type: Required[Literal["tool_search_tool_regex_20251119"]]
     name: Required[str]
 
 
 class AnthropicToolSearchToolBM25(TypedDict, total=False):
     """Tool search tool using BM25 algorithm for tool discovery."""
+
     type: Required[Literal["tool_search_tool_bm25_20251119"]]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -123,19 +127,35 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     input_examples: Optional[List[Dict[str, Any]]]
 
 
+ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
+
+
+class AnthropicAdvisorTool(TypedDict, total=False):
+    """Advisor tool — pairs a fast executor model with a high-intelligence advisor model."""
+
+    type: Required[Literal["advisor_20260301"]]
+    name: Required[Literal["advisor"]]
+    model: Required[str]
+    max_uses: Optional[int]
+    caching: Optional[dict]
+
+
 class ToolReference(TypedDict, total=False):
     """Reference to a tool that should be expanded from deferred tools."""
+
     type: Required[Literal["tool_reference"]]
     tool_name: Required[str]
 
 
 class DirectToolCaller(TypedDict, total=False):
     """Indicates a tool was called directly by Claude."""
+
     type: Required[Literal["direct"]]
 
 
 class CodeExecutionToolCaller(TypedDict, total=False):
     """Indicates a tool was called programmatically from code execution."""
+
     type: Required[Literal["code_execution_20250825"]]
     tool_id: Required[str]  # ID of the code execution tool that made the call
 
@@ -145,6 +165,7 @@ ToolCaller = Union[DirectToolCaller, CodeExecutionToolCaller]
 
 class AnthropicContainer(TypedDict, total=False):
     """Container metadata for code execution."""
+
     id: Required[str]
     expires_at: Optional[str]  # ISO 8601 timestamp
 
@@ -158,6 +179,7 @@ AllAnthropicToolsValues = Union[
     AnthropicMemoryTool,
     AnthropicToolSearchToolRegex,
     AnthropicToolSearchToolBM25,
+    AnthropicAdvisorTool,
 ]
 
 
@@ -309,7 +331,11 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     content: Union[
         str,
         Iterable[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ],
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -339,9 +365,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-AllAnthropicMessageValues = Union[
-    AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
-]
+AllAnthropicMessageValues = Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
@@ -363,6 +387,8 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
     speed: Optional[str]  # Fast mode support for Opus models
     output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
+    cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
+    reasoning_effort: Optional[str]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -465,9 +491,7 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[
-    ToolUseBlock, TextBlock, ChatCompletionThinkingBlock
-]
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock, ChatCompletionThinkingBlock]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -483,6 +507,41 @@ class UsageDelta(TypedDict, total=False):
     cache_read_input_tokens: int
 
 
+class AppliedEdit(TypedDict, total=False):
+    """One applied context_management edit (Anthropic response shape)."""
+
+    type: str
+    cleared_input_tokens: int
+    cleared_tool_uses: int
+    cleared_thinking_turns: int
+    # compact_20260112 fields
+    summary_input_tokens: int
+    summary_output_tokens: int
+    error: str
+    warnings: List[str]
+
+
+class ContextManagementResponse(TypedDict, total=False):
+    """Response ``context_management`` with ``applied_edits``."""
+
+    applied_edits: List[AppliedEdit]
+
+
+class CompactionBlock(TypedDict, total=False):
+    """Synthesized ``compaction`` content block (compact_20260112)."""
+
+    type: Required[Literal["compaction"]]
+    content: Optional[str]
+
+
+class UsageIteration(TypedDict, total=False):
+    """One sampling iteration's token usage (compact_20260112)."""
+
+    type: Required[Literal["compaction", "message"]]
+    input_tokens: int
+    output_tokens: int
+
+
 class MessageBlockDelta(TypedDict):
     """
     Anthropic
@@ -492,6 +551,7 @@ class MessageBlockDelta(TypedDict):
     type: Literal["message_delta"]
     delta: MessageDelta
     usage: UsageDelta
+    context_management: NotRequired[ContextManagementResponse]
 
 
 class MessageChunk(TypedDict, total=False):
@@ -542,7 +602,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     input: dict
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    model_config = ConfigDict(extra="allow") # Allow provider_specific_fields
+    model_config = ConfigDict(extra="allow")  # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
@@ -557,6 +617,8 @@ class AnthropicResponseContentBlockRedactedThinking(BaseModel):
 
 
 class AnthropicResponseUsageBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input_tokens: int
     output_tokens: int
 
@@ -627,12 +689,14 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     CODE_EXECUTION = "code_execution"
     WEB_FETCH = "web_fetch"
     MEMORY = "memory"
+    TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
+
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
@@ -640,6 +704,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
+    ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

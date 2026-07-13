@@ -24,12 +24,29 @@ from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
-def _make_mock_session_iterator(json_response):
+def _make_mock_session_iterator(
+    json_response, status=200, content_type="application/json", text_response=""
+):
     """Create a mock _get_session_iterator that yields a session returning json_response."""
 
     @asynccontextmanager
     async def mock_iterator():
         class MockResponse:
+            def __init__(self):
+                self.status = status
+                self.content_type = content_type
+                self.headers = {"Content-Type": content_type}
+
+            async def text(self):
+                if text_response:
+                    return text_response
+                import json
+
+                try:
+                    return json.dumps(json_response)
+                except Exception:
+                    return str(json_response)
+
             async def json(self):
                 return json_response
 
@@ -41,6 +58,7 @@ def _make_mock_session_iterator(json_response):
 
         class MockSession:
             def post(self, *args, **kwargs):
+                self.last_kwargs = kwargs
                 return MockResponse()
 
             async def __aenter__(self):
@@ -564,6 +582,50 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
     assert "[EMAIL]" in content_items[1]["text"]
 
     print("✓ Logging hook multiple content items test passed")
+
+
+@pytest.mark.asyncio
+async def test_logging_only_does_not_mask_pre_call_request(
+    mock_user_api_key, mock_cache
+):
+    """
+    A guardrail configured with `logging_only` must only mask PII for logs/traces,
+    never for the request sent to the model. `async_pre_call_hook` should leave the
+    request untouched so the model receives (and replies based on) the real input.
+
+    Regression test for the case where the pre-call hook masked the live request,
+    causing the model's response to contain anonymization tokens (e.g. <PERSON>)
+    instead of the real output.
+    """
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={PiiEntityType.PHONE_NUMBER: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    original_text = "My phone is 555-123-4567"
+    test_data = {
+        "messages": [{"role": "user", "content": original_text}],
+        "model": "gpt-4",
+    }
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # The live request must be unchanged: PII reaches the model intact.
+    assert result["messages"][0]["content"] == original_text
+    assert "[PHONE]" not in result["messages"][0]["content"]
+
+    print("✓ logging_only leaves the pre-call request unmasked")
 
 
 @pytest.mark.asyncio
@@ -1360,3 +1422,1430 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     assert not bg_session.closed, "Background session should remain open for reuse"
 
     print("✓ Session iterator thread safety test passed")
+
+
+from litellm.types.utils import ModelResponseStream
+
+
+@pytest.mark.asyncio
+async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
+    """
+    Regression test: async_post_call_streaming_iterator_hook should
+    gracefully handle raw bytes in the stream instead of crashing with
+    'bytes' object has no attribute 'id'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "redacted"},
+    )
+
+    async def mock_stream():
+        yield b'data: {"id":"chatcmpl-1"}\n\n'  # raw bytes
+        yield ModelResponseStream(
+            id="chatcmpl-1",
+            choices=[],
+            created=1,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+        )  # proper chunk
+
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        chunks.append(chunk)
+
+    # Should not crash, should produce at least one valid chunk
+    assert len(chunks) >= 1
+
+
+def test_entity_deny_list_filters_detections():
+    """
+    Verify presidio_entities_deny_list removes matching entity types.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_entities_deny_list=["US_DRIVER_LICENSE"],
+    )
+
+    results = [
+        {"entity_type": "US_DRIVER_LICENSE", "start": 0, "end": 2, "score": 0.6},
+        {"entity_type": "CREDIT_CARD", "start": 10, "end": 26, "score": 0.95},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(results)
+
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == "CREDIT_CARD"
+
+
+def test_deny_list_and_score_threshold_combined():
+    """
+    Verify deny list + score threshold work together correctly.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_entities_deny_list=["US_DRIVER_LICENSE"],
+        presidio_score_thresholds={"ALL": 0.8},
+    )
+
+    results = [
+        {"entity_type": "US_DRIVER_LICENSE", "start": 0, "end": 2, "score": 0.95},
+        {"entity_type": "CREDIT_CARD", "start": 10, "end": 26, "score": 0.6},
+        {"entity_type": "EMAIL_ADDRESS", "start": 30, "end": 50, "score": 0.9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(results)
+
+    # US_DRIVER_LICENSE excluded by deny list (even though score > 0.8)
+    # CREDIT_CARD excluded by score threshold (0.6 < 0.8)
+    # EMAIL_ADDRESS passes both filters
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == "EMAIL_ADDRESS"
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_non_json_content_type_fail_closed():
+    """
+    Test that analyze_text raises GuardrailRaisedException when Presidio health
+    endpoint returns text/html and fail-closed is enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={"PERSON": PiiAction.BLOCK},
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html; charset=utf-8",
+        text_response="Presidio Analyzer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.analyze_text(
+                text="Hello world",
+                presidio_config=None,
+                request_data={},
+            )
+        assert "expected application/json Content-Type" in str(exc_info.value)
+        assert "text/html" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_non_json_content_type_fail_open():
+    """
+    Test that analyze_text returns empty list when Presidio returns text/html
+    and fail-closed is NOT enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html; charset=utf-8",
+        text_response="Presidio Analyzer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        results = await guardrail.analyze_text(
+            text="Hello world",
+            presidio_config=None,
+            request_data={},
+        )
+        assert results == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_http_error_status():
+    """
+    Test that analyze_text handles 5xx HTTP errors properly.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={"PERSON": PiiAction.BLOCK},
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=500,
+        content_type="text/plain",
+        text_response="Internal Server Error",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.analyze_text(
+                text="Hello world",
+                presidio_config=None,
+                request_data={},
+            )
+        assert "HTTP 500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_non_json_content_type():
+    """
+    Test that anonymize_text raises Exception for non-JSON responses.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html",
+        text_response="Presidio Anonymizer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(
+            Exception, match="Presidio anonymizer returned non-JSON Content-Type"
+        ):
+            await guardrail.anonymize_text(
+                text="Hello world",
+                analyze_results=[{"start": 0, "end": 5, "entity_type": "PERSON"}],
+                output_parse_pii=False,
+                masked_entity_count={},
+            )
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_http_error_status():
+    """
+    Test that anonymize_text raises Exception on HTTP error.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=502,
+        content_type="text/plain",
+        text_response="Bad Gateway",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(Exception, match="Presidio anonymizer returned HTTP 502"):
+            await guardrail.anonymize_text(
+                text="Hello world",
+                analyze_results=[{"start": 0, "end": 5, "entity_type": "PERSON"}],
+                output_parse_pii=False,
+                masked_entity_count={},
+            )
+
+
+@pytest.mark.asyncio
+async def test_pii_tokens_stored_in_metadata_not_top_level(presidio_guardrail):
+    """
+    Regression test: pii_tokens must be stored in data['metadata']['pii_tokens'],
+    NOT in data['pii_tokens']. Storing at the top level leaks the field to LLM
+    providers like Anthropic, which reject unknown fields with
+    'pii_tokens: Extra inputs are not permitted'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        pii_entities_config={
+            PiiEntityType.PERSON: PiiAction.MASK,
+            PiiEntityType.PHONE_NUMBER: PiiAction.MASK,
+        },
+    )
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    mock_cache = DualCache()
+
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "My name is John and my phone is 555-123-4567"}
+        ],
+        "model": "claude-haiku-4-5-20251001",
+        "metadata": {},
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        # Simulate PII masking with token storage (mimics real anonymize_text behavior)
+        if request_data is not None and output_parse_pii:
+            if "metadata" not in request_data:
+                request_data["metadata"] = {}
+            if "pii_tokens" not in request_data["metadata"]:
+                request_data["metadata"]["pii_tokens"] = {}
+            pii_tokens = request_data["metadata"]["pii_tokens"]
+            seq = len(pii_tokens) + 1
+            token = f"<PERSON_{seq}>"
+            pii_tokens[token] = "John"
+            text = text.replace("John", token)
+        return text
+
+    guardrail.check_pii = mock_check_pii
+
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # pii_tokens must NOT be at the top level of data (would leak to providers)
+    assert "pii_tokens" not in result, (
+        "pii_tokens must not be a top-level key in request data — "
+        "it would leak to LLM providers and cause 'Extra inputs are not permitted' errors"
+    )
+
+    # pii_tokens must be inside metadata (safe from provider leakage)
+    assert "metadata" in result
+    assert "pii_tokens" in result["metadata"]
+    assert len(result["metadata"]["pii_tokens"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_pii_tokens_in_metadata_used_for_unmasking():
+    """
+    Regression test: _process_response_for_pii must read pii_tokens from
+    data['metadata']['pii_tokens'] and correctly unmask the response.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    token_key = "<PERSON_1>"
+    request_data = {
+        "model": "claude-haiku-4-5-20251001",
+        "metadata": {"pii_tokens": {token_key: "John"}},
+    }
+
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=f"Hello {token_key}, how can I help you?",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data=request_data,
+        mode="unmask",
+    )
+
+    assert response.choices[0].message.content == "Hello John, how can I help you?"
+
+
+@pytest.mark.parametrize(
+    "initial_hook",
+    ["pre_call", "during_call", "pre_mcp_call"],
+)
+def test_event_hook_auto_expansion_for_all_string_hooks(initial_hook):
+    """
+    Regression test: when output_parse_pii is True, the guardrail must add
+    'post_call' to event_hook regardless of the initial string hook value,
+    not just when it's 'pre_call'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        event_hook=initial_hook,
+    )
+    assert isinstance(guardrail.event_hook, list)
+    assert initial_hook in guardrail.event_hook
+    assert "post_call" in guardrail.event_hook
+
+
+def test_event_hook_no_expansion_when_already_post_call():
+    """post_call alone should stay as-is — no expansion needed."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        event_hook="post_call",
+    )
+    # Should remain a string "post_call", not expanded to a list
+    assert guardrail.event_hook == "post_call"
+
+
+@pytest.mark.asyncio
+async def test_metadata_none_does_not_crash():
+    """
+    Regression test: if metadata is explicitly None in request_data,
+    the guardrail must not crash with TypeError on the write or read path.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    token_key = "<PERSON_1>"
+    # metadata explicitly None — must not crash
+    request_data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": None,
+    }
+
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=f"Hello {token_key}, how can I help you?",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    # Should not raise TypeError
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data=request_data,
+        mode="unmask",
+    )
+
+    # No pii_tokens to unmask, so content stays as-is
+    assert (
+        response.choices[0].message.content == f"Hello {token_key}, how can I help you?"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests for sequential-numbered token unmasking in _unmask_pii_text
+# ---------------------------------------------------------------------------
+
+
+def test_unmask_exact_match_with_sequential_tokens():
+    """
+    Normal unmasking: LLM echoes numbered tokens verbatim → original PII restored.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PERSON_1>": "John Smith",
+        "<PHONE_NUMBER_1>": "555-123-4567",
+    }
+    text = "Hello <PERSON_1>, your number is <PHONE_NUMBER_1>."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    assert result == "Hello John Smith, your number is 555-123-4567."
+
+
+def test_unmask_multiple_same_entity_type():
+    """
+    Two phone numbers get distinct numbered tokens and unmask correctly.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PHONE_NUMBER_1>": "555-111-0000",
+        "<PHONE_NUMBER_2>": "555-222-0000",
+    }
+    text = "Call <PHONE_NUMBER_1> or <PHONE_NUMBER_2>."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    assert result == "Call 555-111-0000 or 555-222-0000."
+
+
+def test_unmask_graceful_degradation():
+    """
+    If the LLM doesn't echo the token back, the numbered label stays
+    in the output — clean and readable, not garbage hex.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    pii_tokens = {
+        "<PERSON_1>": "John",
+    }
+    # LLM paraphrased instead of echoing the token
+    text = "I see you provided a name."
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    # No change — no garbage, just clean text
+    assert result == text
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: Position bug — reverse sort + original text coordinates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_multiple_items_position_correctness():
+    """
+    Regression test: when multiple PII items exist, coordinates reference the
+    ORIGINAL text. Processing in reverse order prevents coordinate drift.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    # "Call John at 555-123-4567"
+    #   "John" at [5:9], "555-123-4567" at [13:25]
+    anonymizer_response = {
+        "text": "Call <PERSON> at <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 5,
+                "end": 9,
+                "entity_type": "PERSON",
+                "text": "<PERSON>",
+                "operator": "replace",
+            },
+            {
+                "start": 13,
+                "end": 25,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace",
+            },
+        ],
+    }
+
+    mock_iterator = _make_mock_session_iterator(anonymizer_response)
+
+    request_data = {"metadata": {}}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        result = await guardrail.anonymize_text(
+            text="Call John at 555-123-4567",
+            analyze_results=[
+                {"start": 5, "end": 9, "entity_type": "PERSON", "score": 0.9},
+                {"start": 13, "end": 25, "entity_type": "PHONE_NUMBER", "score": 0.95},
+            ],
+            output_parse_pii=True,
+            masked_entity_count={},
+            request_data=request_data,
+        )
+
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+
+    # Verify tokens captured the correct ORIGINAL text values
+    person_token = [k for k in pii_tokens if "PERSON" in k][0]
+    phone_token = [k for k in pii_tokens if "PHONE" in k][0]
+    assert pii_tokens[person_token] == "John"
+    assert pii_tokens[phone_token] == "555-123-4567"
+
+    # Verify both PII values are masked in the result
+    assert "John" not in result
+    assert "555-123-4567" not in result
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: Anthropic native dict response handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anthropic_native_response_unmasking():
+    """
+    Anthropic native dict responses (type='message') should be unmasked
+    when output_parse_pii is enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    request_data = {
+        "model": "claude-3-haiku",
+        "metadata": {
+            "pii_tokens": {
+                "<PERSON_1>": "John Smith",
+                "<PHONE_NUMBER_1>": "555-123-4567",
+            }
+        },
+    }
+
+    anthropic_response = {
+        "type": "message",
+        "id": "msg_123",
+        "model": "claude-3-haiku",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Hello <PERSON_1>, your number is <PHONE_NUMBER_1>.",
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+
+    result = await guardrail.async_post_call_success_hook(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key,
+        response=anthropic_response,
+    )
+
+    assert result["content"][0]["text"] == (
+        "Hello John Smith, your number is 555-123-4567."
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_native_response_masking():
+    """
+    Anthropic native dict responses should be masked when
+    apply_to_output is enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("John Smith", "[PERSON]").replace("555-123-4567", "[PHONE]")
+
+    guardrail.check_pii = mock_check_pii
+
+    anthropic_response = {
+        "type": "message",
+        "id": "msg_123",
+        "model": "claude-3-haiku",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello John Smith, call 555-123-4567."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+
+    result = await guardrail.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=mock_user_api_key,
+        response=anthropic_response,
+    )
+
+    assert "[PERSON]" in result["content"][0]["text"]
+    assert "[PHONE]" in result["content"][0]["text"]
+    assert "John Smith" not in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_native_response_non_text_blocks_untouched():
+    """
+    Non-text blocks (tool_use, thinking) in Anthropic responses
+    should be left untouched during unmasking.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    request_data = {
+        "model": "claude-3-haiku",
+        "metadata": {"pii_tokens": {"<PERSON_1>": "John"}},
+    }
+
+    anthropic_response = {
+        "type": "message",
+        "id": "msg_123",
+        "content": [
+            {"type": "text", "text": "Hello <PERSON_1>"},
+            {
+                "type": "tool_use",
+                "id": "call_1",
+                "name": "search",
+                "input": {"q": "test"},
+            },
+        ],
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+
+    result = await guardrail.async_post_call_success_hook(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key,
+        response=anthropic_response,
+    )
+
+    assert result["content"][0]["text"] == "Hello John"
+    assert result["content"][1]["type"] == "tool_use"
+    assert result["content"][1]["name"] == "search"
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: Anthropic native SSE streaming — bytes passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_bytes_chunks_are_yielded_not_discarded():
+    """
+    Regression test: bytes chunks (Anthropic native SSE) should be yielded
+    through the streaming hook, not silently discarded.
+    """
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    byte_chunk = b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n'
+
+    async def mock_stream():
+        yield byte_chunk
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        chunks.append(chunk)
+
+    assert any(
+        isinstance(c, bytes) for c in chunks
+    ), "bytes chunks must not be discarded"
+    assert byte_chunk in chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_unmask_path_bytes_passthrough():
+    """
+    Bytes chunks in the unmasking path should also pass through.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    byte_chunk = b'data: {"type":"content_block_delta"}\n\n'
+    request_data = {
+        "metadata": {"pii_tokens": {"<PERSON_1>": "John"}},
+    }
+
+    async def mock_stream():
+        yield byte_chunk
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data=request_data,
+    ):
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert chunks[0] == byte_chunk
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_unknown_events_passthrough():
+    """
+    Regression test: /v1/responses-style event objects (neither bytes nor
+    ModelResponseStream) must be preserved in order and not dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    events = [
+        FakeResponsesEvent("response.created"),
+        FakeResponsesEvent("response.output_text.delta"),
+        FakeResponsesEvent("response.completed"),
+    ]
+
+    async def mock_stream():
+        for event in events:
+            yield event
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Preserve exact objects and ordering so clients receive full event lifecycle.
+    assert received == events
+    assert [e.type for e in received] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
+    """
+    Regression test for mixed stream shape:
+    a buffered ModelResponseStream chunk followed by unknown responses-style
+    events should be preserved, and masking skip should be visible via warnings.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    received = []
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
+    ) as mock_logger:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            received.append(chunk)
+
+        # Preserve original ordering across mixed stream types.
+        assert received == [model_chunk, response_completed]
+
+        # Two warnings are expected:
+        # 1) mixed stream detected + unmasked flush
+        # 2) passthrough mode skipped output masking
+        assert mock_logger.warning.call_count == 2
+        warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
+        assert any("mixed stream detected" in msg for msg in warning_messages)
+        assert any("unknown event objects" in msg for msg in warning_messages)
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: apply_guardrail unmask path for input_type="response"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_unmask_on_response():
+    """
+    When input_type is 'response' and pii_tokens exist, apply_guardrail
+    should unmask text instead of masking it.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+        mock_testing=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "metadata": {
+            "pii_tokens": {
+                "<PERSON_1>": "John Smith",
+                "<PHONE_NUMBER_1>": "555-123-4567",
+            }
+        },
+    }
+
+    inputs = {
+        "texts": [
+            "Hello <PERSON_1>, your number is <PHONE_NUMBER_1>.",
+        ]
+    }
+
+    result = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=request_data,
+        input_type="response",
+    )
+
+    assert result["texts"][0] == "Hello John Smith, your number is 555-123-4567."
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_on_request():
+    """
+    When input_type is 'request', apply_guardrail should mask as before.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+        mock_testing=True,
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("John Smith", "<PERSON>")
+
+    guardrail.check_pii = mock_check_pii
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["Hello John Smith"]},
+        request_data={"model": "gpt-4o", "metadata": {}},
+        input_type="request",
+    )
+
+    assert "<PERSON>" in result["texts"][0]
+    assert "John Smith" not in result["texts"][0]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_bytes_only_logs_warning():
+    """
+    Regression test: when apply_to_output=True and the stream contains only
+    bytes chunks (Anthropic native SSE), output masking is skipped.
+    A warning must be logged so operators are aware.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    byte_chunks = [
+        b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
+        b'data: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+
+    collected = []
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
+    ) as mock_logger:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+        # All bytes should be yielded through
+        assert len(collected) == len(byte_chunks)
+        for original, received in zip(byte_chunks, collected):
+            assert original == received
+
+        # Warning must be logged about skipped masking
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        assert "Output PII masking was skipped" in warning_msg
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_events_passthrough(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and pii_tokens exist, /v1/responses
+    streaming events must pass through instead of being dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    response_events = [
+        {"type": "response.created", "response": {"id": "resp_1"}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "status": "completed"},
+        },
+    ]
+
+    async def mock_stream():
+        for event in response_events:
+            yield event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == response_events
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
+    mock_user_api_key,
+):
+    """
+    When output_parse_pii=True, a /v1/responses ``response.completed`` event
+    (a Pydantic ResponseCompletedEvent, as produced in production) must have its
+    output text unmasked in-place before being forwarded to the client.
+    """
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    completed_event = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[
+                GenericResponseOutputItem(
+                    type="message",
+                    id="msg_1",
+                    status="completed",
+                    role="assistant",
+                    content=[
+                        OutputText(
+                            type="output_text",
+                            text="Reach me at <EMAIL_ADDRESS_1> today.",
+                            annotations=[],
+                        )
+                    ],
+                )
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    async def mock_stream():
+        yield completed_event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [completed_event]
+    assert (
+        collected[0].response.output[0].content[0].text
+        == "Reach me at john@example.com today."
+    )
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and a stream mixes buffered
+    ModelResponseStream chunks with a /v1/responses event, the buffered chat
+    chunks must still be forwarded (in order) instead of being dropped at the
+    saw_non_chat_chunk early return.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-unmask-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [model_chunk, response_completed]
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_uses_correct_positions_no_parse_pii():
+    """
+    Regression test for anonymizer offset bug (fixes #24160).
+
+    The Presidio anonymizer returns items with start/end positions that
+    reference the *anonymized output* text, not the original input text.
+    When output_parse_pii is False, anonymize_text must return
+    redacted_text["text"] directly instead of manually splicing the
+    original text using those positions, which produces garbled output
+    with remnants of original PII data.
+    """
+    original_text = (
+        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
+    )
+    # Positions as returned by the analyzer (reference original text)
+    analyze_results = [
+        {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
+        {"end": 21, "entity_type": "PERSON", "score": 0.85, "start": 11},
+        {"end": 71, "entity_type": "PHONE_NUMBER", "score": 0.75, "start": 59},
+    ]
+    # Anonymizer response — positions reference the *anonymized* text
+    anonymizer_response = {
+        "text": "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 56,
+                "end": 70,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace",
+            },
+            {
+                "start": 33,
+                "end": 48,
+                "entity_type": "EMAIL_ADDRESS",
+                "text": "<EMAIL_ADDRESS>",
+                "operator": "replace",
+            },
+            {
+                "start": 11,
+                "end": 19,
+                "entity_type": "PERSON",
+                "text": "<PERSON>",
+                "operator": "replace",
+            },
+        ],
+    }
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=anonymizer_response,
+    )
+
+    masked_entity_count = {}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        result = await guardrail.anonymize_text(
+            text=original_text,
+            analyze_results=analyze_results,
+            output_parse_pii=False,
+            masked_entity_count=masked_entity_count,
+        )
+
+    expected = "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>"
+    assert (
+        result == expected
+    ), f"anonymize_text produced garbled output with PII remnants.\nExpected: {expected!r}\nGot:      {result!r}"
+    assert masked_entity_count == {
+        "PERSON": 1,
+        "EMAIL_ADDRESS": 1,
+        "PHONE_NUMBER": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_uses_correct_positions_with_parse_pii():
+    """
+    Regression test for anonymizer offset bug with output_parse_pii=True
+    (fixes #24160).
+
+    When output_parse_pii is True, anonymize_text must use positions from
+    analyze_results (which reference the original text) to build numbered
+    tokens and the pii_tokens mapping, not positions from anonymizer items
+    (which reference the anonymized output text).
+    """
+    original_text = (
+        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
+    )
+    analyze_results = [
+        {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
+        {"end": 21, "entity_type": "PERSON", "score": 0.85, "start": 11},
+        {"end": 71, "entity_type": "PHONE_NUMBER", "score": 0.75, "start": 59},
+    ]
+    anonymizer_response = {
+        "text": "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 56,
+                "end": 70,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace",
+            },
+            {
+                "start": 33,
+                "end": 48,
+                "entity_type": "EMAIL_ADDRESS",
+                "text": "<EMAIL_ADDRESS>",
+                "operator": "replace",
+            },
+            {
+                "start": 11,
+                "end": 19,
+                "entity_type": "PERSON",
+                "text": "<PERSON>",
+                "operator": "replace",
+            },
+        ],
+    }
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+        output_parse_pii=True,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=anonymizer_response,
+    )
+
+    masked_entity_count = {}
+    request_data = {"metadata": {}}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        result = await guardrail.anonymize_text(
+            text=original_text,
+            analyze_results=analyze_results,
+            output_parse_pii=True,
+            masked_entity_count=masked_entity_count,
+            request_data=request_data,
+        )
+
+    # Result must not contain any remnants of original PII
+    assert "John" not in result
+    assert "john@example.com" not in result
+    assert "555-867-5309" not in result
+
+    # pii_tokens must map numbered tokens back to correct original values
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    token_values = set(pii_tokens.values())
+    assert "John Smith" in token_values
+    assert "john@example.com" in token_values
+    assert "555-867-5309" in token_values
+
+    # Tokens must be numbered in left-to-right order of appearance:
+    # PERSON (pos 11) → _1, EMAIL_ADDRESS (pos 35) → _2, PHONE_NUMBER (pos 59) → _3
+    assert pii_tokens.get("<PERSON_1>") == "John Smith"
+    assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
+    assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
+
+
+def test_unmask_sse_bytes_chunk_replaces_text_delta():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello <PERSON_1>, how are you?"},
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].strip())
+    assert parsed["delta"]["text"] == "Hello Bobby, how are you?"
+
+
+def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+
+    # message_start event — no delta
+    event = {"type": "message_start", "message": {"id": "msg_01", "role": "assistant"}}
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    assert result == chunk
+
+    # input_json_delta — should not be touched
+    event2 = {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": '{"name": "<PERSON_1>"}'},
+    }
+    chunk2 = ("data: " + json.dumps(event2) + "\n\n").encode("utf-8")
+    result2 = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk2, pii_tokens)
+    assert result2 == chunk2
+
+
+def test_unmask_sse_bytes_chunk_handles_malformed_json():
+    chunk = b"data: {not valid json}\n\n"
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        chunk, {"<PERSON_1>": "Bobby"}
+    )
+    assert result == chunk
+
+
+def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
+    chunk = b"\xff\xfe invalid utf-8"
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        chunk, {"<PERSON_1>": "Bobby"}
+    )
+    assert result == chunk
+
+
+def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "José"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello <PERSON_1>!"},
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+
+    decoded = result.decode("utf-8")
+    assert "Jos\\u" not in decoded
+    parsed = json.loads(decoded.split("data: ", 1)[1].strip())
+    assert parsed["delta"]["text"] == "Hello José!"
+
+
+def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hi <PERSON_1>!"},
+    }
+    crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        crlf_chunk, pii_tokens
+    )
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
+    assert parsed["delta"]["text"] == "Hi Bobby!"
+    assert "data: [DONE]" in decoded
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
+    import json
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+
+    def _make_sse_chunk(text: str) -> bytes:
+        event = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }
+        return ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    async def mock_stream():
+        yield _make_sse_chunk("Hello <PERSON_1>!")
+        yield _make_sse_chunk(" How can I help?")
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert len(chunks) == 2
+    first = chunks[0].decode("utf-8")
+    first_event = json.loads(first.split("data: ", 1)[1].strip())
+    assert first_event["delta"]["text"] == "Hello Bobby!"
+
+    second = chunks[1].decode("utf-8")
+    second_event = json.loads(second.split("data: ", 1)[1].strip())
+    assert second_event["delta"]["text"] == " How can I help?"
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key):
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    raw_chunk = b"data: {}\n\n"
+    request_data: dict = {"metadata": {}}
+
+    async def mock_stream():
+        yield raw_chunk
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert chunks == [raw_chunk]

@@ -22,6 +22,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -66,12 +67,15 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
-
-_response_stream_shape_cache = None
-bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
-    max_size_in_memory=50, default_ttl=600
+from ..common_utils import (
+    BedrockError,
+    ModelResponseIterator,
+    build_bedrock_stream_error,
+    get_bedrock_response_stream_shape,
+    get_bedrock_tool_name,
 )
+
+bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(max_size_in_memory=50, default_ttl=600)
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
     AmazonBedrockOpenAIConfig,
@@ -156,9 +160,7 @@ class AmazonCohereChatConfig:
             "tool_choice",
         ]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -192,17 +194,17 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                ),
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -217,9 +219,7 @@ async def make_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
+            model_response: ModelResponse = litellm.AmazonConverseConfig()._transform_response(
                 model=model,
                 response=response,
                 model_response=litellm.ModelResponse(),
@@ -231,31 +231,23 @@ async def make_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )  # type: ignore
-            completion_stream: Any = MockResponseIterator(
-                model_response=model_response, json_mode=json_mode
-            )
+            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=False,
                 json_mode=json_mode,
             )
-            completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size)
-            )
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=False,
             )
-            completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size)
-            )
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
         else:
-            decoder = AWSEventStreamDecoder(model=model)
-            completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size)
-            )
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
 
         # LOGGING
         logging_obj.post_call(
@@ -287,16 +279,16 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
             client = _get_httpx_client(
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                )
             )
 
         response = client.post(
@@ -311,9 +303,7 @@ def make_sync_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
+            model_response: ModelResponse = litellm.AmazonConverseConfig()._transform_response(
                 model=model,
                 response=response,
                 model_response=litellm.ModelResponse(),
@@ -325,31 +315,23 @@ def make_sync_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )  # type: ignore
-            completion_stream: Any = MockResponseIterator(
-                model_response=model_response, json_mode=json_mode
-            )
+            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=True,
                 json_mode=json_mode,
             )
-            completion_stream = decoder.iter_bytes(
-                response.iter_bytes(chunk_size=stream_chunk_size)
-            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
-            completion_stream = decoder.iter_bytes(
-                response.iter_bytes(chunk_size=stream_chunk_size)
-            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         else:
-            decoder = AWSEventStreamDecoder(model=model)
-            completion_stream = decoder.iter_bytes(
-                response.iter_bytes(chunk_size=stream_chunk_size)
-            )
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
         # LOGGING
         logging_obj.post_call(
@@ -406,17 +388,15 @@ class BedrockLLM(BaseAWSLLM):
 
         # Claude 3+ indicators (all use Messages API)
         messages_api_indicators = [
-            "claude-3",      # Claude 3.x models
-            "claude-opus-4", # Claude Opus 4
-            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-3",  # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4
+            "claude-sonnet-4",  # Claude Sonnet 4
             "claude-haiku-4",  # Claude Haiku 4
         ]
 
         return any(indicator in model_lower for indicator in messages_api_indicators)
 
-    def convert_messages_to_prompt(
-        self, model, messages, provider, custom_prompt_dict
-    ) -> Tuple[str, Optional[list]]:
+    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> Tuple[str, Optional[list]]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: Optional[list] = None
@@ -426,26 +406,18 @@ class BedrockLLM(BaseAWSLLM):
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get(
-                    "initial_prompt_value", ""
-                ),
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
             return prompt, None
         ## ELSE
         if provider == "anthropic" or provider == "amazon":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "mistral":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "meta" or provider == "llama":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "openai":
             # OpenAI uses messages directly, no prompt conversion needed
             # Return empty prompt as it won't be used
@@ -464,7 +436,7 @@ class BedrockLLM(BaseAWSLLM):
                     prompt += f"{message['content']}"
         return prompt, chat_history  # type: ignore
 
-    def process_response(  # noqa: PLR0915
+    def process_response(
         self,
         model: str,
         response: httpx.Response,
@@ -512,20 +484,12 @@ class BedrockLLM(BaseAWSLLM):
                     if "tools" in optional_params:
                         _is_function_call = True
                         for tool in optional_params["tools"]:
-                            json_schemas[tool["function"]["name"]] = tool[
-                                "function"
-                            ].get("parameters", None)
+                            json_schemas[tool["function"]["name"]] = tool["function"].get("parameters", None)
                     outputText = completion_response.get("content")[0].get("text", None)
-                    if outputText is not None and contains_tag(
-                        "invoke", outputText
-                    ):  # OUTPUT PARSE FUNCTION CALL
+                    if outputText is not None and contains_tag("invoke", outputText):  # OUTPUT PARSE FUNCTION CALL
                         function_name = extract_between_tags("tool_name", outputText)[0]
-                        function_arguments_str = extract_between_tags(
-                            "invoke", outputText
-                        )[0].strip()
-                        function_arguments_str = (
-                            f"<invoke>{function_arguments_str}</invoke>"
-                        )
+                        function_arguments_str = extract_between_tags("invoke", outputText)[0].strip()
+                        function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
                         function_arguments = parse_xml_params(
                             function_arguments_str,
                             json_schema=json_schemas.get(
@@ -546,19 +510,13 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
-                    if (
-                        _is_function_call is True
-                        and stream is not None
-                        and stream is True
-                    ):
-                        print_verbose(
-                            "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
                         )
+                    if _is_function_call is True and stream is not None and stream is True:
+                        print_verbose("INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK")
                         # return an iterator
-                        streaming_model_response = ModelResponse(stream=True)
+                        streaming_model_response = ModelResponseStream()
                         streaming_model_response.choices[0].finish_reason = getattr(
                             model_response.choices[0], "finish_reason", "stop"
                         )
@@ -566,35 +524,23 @@ class BedrockLLM(BaseAWSLLM):
                         streaming_choice = litellm.utils.StreamingChoices()
                         streaming_choice.index = model_response.choices[0].index
                         _tool_calls = []
-                        print_verbose(
-                            f"type of model_response.choices[0]: {type(model_response.choices[0])}"
-                        )
-                        print_verbose(
-                            f"type of streaming_choice: {type(streaming_choice)}"
-                        )
+                        print_verbose(f"type of model_response.choices[0]: {type(model_response.choices[0])}")
+                        print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
                         if isinstance(model_response.choices[0], litellm.Choices):
                             if getattr(
                                 model_response.choices[0].message, "tool_calls", None
-                            ) is not None and isinstance(
-                                model_response.choices[0].message.tool_calls, list
-                            ):
-                                for tool_call in model_response.choices[
-                                    0
-                                ].message.tool_calls:
+                            ) is not None and isinstance(model_response.choices[0].message.tool_calls, list):
+                                for tool_call in model_response.choices[0].message.tool_calls:
                                     _tool_call = {**tool_call.dict(), "index": 0}
                                     _tool_calls.append(_tool_call)
                             delta_obj = Delta(
-                                content=getattr(
-                                    model_response.choices[0].message, "content", None
-                                ),
+                                content=getattr(model_response.choices[0].message, "content", None),
                                 role=model_response.choices[0].message.role,
                                 tool_calls=_tool_calls,
                             )
                             streaming_choice.delta = delta_obj
                             streaming_model_response.choices = [streaming_choice]
-                            completion_stream = ModelResponseIterator(
-                                model_response=streaming_model_response
-                            )
+                            completion_stream = ModelResponseIterator(model_response=streaming_model_response)
                             print_verbose(
                                 "Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
                             )
@@ -618,21 +564,14 @@ class BedrockLLM(BaseAWSLLM):
                 else:
                     outputText = completion_response["completion"]
 
-                    model_response.choices[0].finish_reason = completion_response[
-                        "stop_reason"
-                    ]
+                    model_response.choices[0].finish_reason = completion_response["stop_reason"]
             elif provider == "ai21":
-                outputText = (
-                    completion_response.get("completions")[0].get("data").get("text")
-                )
+                outputText = completion_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama":
                 outputText = completion_response["generation"]
             elif provider == "openai":
                 # OpenAI imported models use OpenAI Chat Completions format
-                if (
-                    "choices" in completion_response
-                    and len(completion_response["choices"]) > 0
-                ):
+                if "choices" in completion_response and len(completion_response["choices"]) > 0:
                     choice = completion_response["choices"][0]
                     if "message" in choice:
                         outputText = choice["message"].get("content")
@@ -641,9 +580,7 @@ class BedrockLLM(BaseAWSLLM):
 
                     # Set finish reason
                     if "finish_reason" in choice:
-                        model_response.choices[0].finish_reason = map_finish_reason(
-                            choice["finish_reason"]
-                        )
+                        model_response.choices[0].finish_reason = map_finish_reason(choice["finish_reason"])
 
                     # Set usage if available
                     if "usage" in completion_response:
@@ -656,16 +593,12 @@ class BedrockLLM(BaseAWSLLM):
                         setattr(model_response, "usage", _usage)
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
-                model_response.choices[0].finish_reason = completion_response[
-                    "outputs"
-                ][0]["stop_reason"]
+                model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
-                message="Error processing={}, Received error={}".format(
-                    response.text, str(e)
-                ),
+                message="Error processing={}, Received error={}".format(response.text, str(e)),
                 status_code=422,
             )
 
@@ -688,14 +621,12 @@ class BedrockLLM(BaseAWSLLM):
                 raise Exception()
         except Exception as e:
             raise BedrockError(
-                message="Error parsing received text={}.\nError-{}".format(
-                    outputText, str(e)
-                ),
+                message="Error parsing received text={}.\nError-{}".format(outputText, str(e)),
                 status_code=response.status_code,
             )
 
         if stream and provider == "ai21":
-            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response = ModelResponseStream()
             streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
                 0
             ].finish_reason
@@ -718,20 +649,11 @@ class BedrockLLM(BaseAWSLLM):
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         # Skip if usage was already set (e.g., from JSON response for OpenAI provider)
-        if (
-            not hasattr(model_response, "usage")
-            or getattr(model_response, "usage", None) is None
-        ):
-            bedrock_input_tokens = response.headers.get(
-                "x-amzn-bedrock-input-token-count", None
-            )
-            bedrock_output_tokens = response.headers.get(
-                "x-amzn-bedrock-output-token-count", None
-            )
+        if not hasattr(model_response, "usage") or getattr(model_response, "usage", None) is None:
+            bedrock_input_tokens = response.headers.get("x-amzn-bedrock-input-token-count", None)
+            bedrock_output_tokens = response.headers.get("x-amzn-bedrock-output-token-count", None)
 
-            prompt_tokens = int(
-                bedrock_input_tokens or litellm.token_counter(messages=messages)
-            )
+            prompt_tokens = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
             completion_tokens = int(
                 bedrock_output_tokens
@@ -756,7 +678,7 @@ class BedrockLLM(BaseAWSLLM):
 
         return model_response
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
@@ -781,7 +703,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -811,15 +733,11 @@ class BedrockLLM(BaseAWSLLM):
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
+            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
                 aws_region_name = litellm_aws_region_name
 
             standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
+            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
                 aws_region_name = standard_aws_region_name
 
             if aws_region_name is None:
@@ -847,16 +765,36 @@ class BedrockLLM(BaseAWSLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = (
-                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            )
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
-        prompt, chat_history = self.convert_messages_to_prompt(
-            model, messages, provider, custom_prompt_dict
-        )
+        if acompletion and provider == "anthropic" and self.is_claude_messages_api_model(model):
+            if isinstance(client, HTTPHandler):
+                client = None
+            return self._async_anthropic_messages_completion(
+                model=model,
+                messages=messages,
+                endpoint_url=endpoint_url,
+                proxy_endpoint_url=proxy_endpoint_url,
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )  # type: ignore[return-value]
+
+        prompt, chat_history = self.convert_messages_to_prompt(model, messages, provider, custom_prompt_dict)
         inference_params = copy.deepcopy(optional_params)
         json_schemas: dict = {}
         if provider == "cohere":
@@ -881,9 +819,7 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if self.is_claude_messages_api_model(model):
@@ -896,13 +832,9 @@ class BedrockLLM(BaseAWSLLM):
                         system_prompt_idx.append(idx)
                 if len(system_prompt_idx) > 0:
                     inference_params["system"] = "\n".join(system_messages)
-                    messages = [
-                        i for j, i in enumerate(messages) if j not in system_prompt_idx
-                    ]
+                    messages = [i for j, i in enumerate(messages) if j not in system_prompt_idx]
                 # Format rest of message according to anthropic guidelines
-                messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
-                )  # type: ignore
+                messages = prompt_factory(model=model, messages=messages, custom_llm_provider="anthropic_xml")  # type: ignore
                 ## LOAD CONFIG
                 config = litellm.AmazonAnthropicClaudeConfig.get_config()
                 for k, v in config.items():
@@ -914,15 +846,10 @@ class BedrockLLM(BaseAWSLLM):
                 if "tools" in inference_params:
                     _is_function_call = True
                     for tool in inference_params["tools"]:
-                        json_schemas[tool["function"]["name"]] = tool["function"].get(
-                            "parameters", None
-                        )
-                    tool_calling_system_prompt = construct_tool_use_system_prompt(
-                        tools=inference_params["tools"]
-                    )
+                        json_schemas[tool["function"]["name"]] = tool["function"].get("parameters", None)
+                    tool_calling_system_prompt = construct_tool_use_system_prompt(tools=inference_params["tools"])
                     inference_params["system"] = (
-                        inference_params.get("system", "\n")
-                        + tool_calling_system_prompt
+                        inference_params.get("system", "\n") + tool_calling_system_prompt
                     )  # add the anthropic tool calling prompt to the system prompt
                     inference_params.pop("tools")
                 data = json.dumps({"messages": messages, **inference_params})
@@ -986,9 +913,7 @@ class BedrockLLM(BaseAWSLLM):
             supported_params = openai_config.get_supported_openai_params(model=model)
 
             # Filter to only supported OpenAI params
-            filtered_params = {
-                k: v for k, v in inference_params.items() if k in supported_params
-            }
+            filtered_params = {k: v for k, v in inference_params.items() if k in supported_params}
 
             # OpenAI uses messages format, not prompt
             data = json.dumps({"messages": messages, **filtered_params})
@@ -1094,15 +1019,11 @@ class BedrockLLM(BaseAWSLLM):
             )
 
             if response.status_code != 200:
-                raise BedrockError(
-                    status_code=response.status_code, message=str(response.read())
-                )
+                raise BedrockError(status_code=response.status_code, message=str(response.read()))
 
             decoder = AWSEventStreamDecoder(model=model)
 
-            completion_stream = decoder.iter_bytes(
-                response.iter_bytes(chunk_size=stream_chunk_size)
-            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=model,
@@ -1145,6 +1066,95 @@ class BedrockLLM(BaseAWSLLM):
             messages=messages,
             print_verbose=print_verbose,
             encoding=encoding,
+        )
+
+    async def _async_anthropic_messages_completion(
+        self,
+        model: str,
+        messages: list,
+        endpoint_url: str,
+        proxy_endpoint_url: str,
+        credentials,
+        aws_region_name: str,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj: Logging,
+        optional_params: dict,
+        stream,
+        litellm_params=None,
+        logger_fn=None,
+        extra_headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        stream_chunk_size: Optional[int] = None,
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        transformed_request = await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params or {},
+            headers=extra_headers or {},
+        )
+        data = json.dumps(transformed_request)
+
+        headers = {"Content-Type": "application/json"}
+        if extra_headers is not None:
+            headers = {"Content-Type": "application/json", **extra_headers}
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=data,
+            headers=headers,
+        )
+
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
+
+        if stream is True:
+            return await self.async_streaming(
+                model=model,
+                messages=messages,
+                data=data,
+                api_base=proxy_endpoint_url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=True,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=prepped.headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )
+        return await self.async_completion(
+            model=model,
+            messages=messages,
+            data=data,
+            api_base=proxy_endpoint_url,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            stream=stream,  # type: ignore
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=prepped.headers,
+            timeout=timeout,
+            client=client,
         )
 
     async def async_completion(
@@ -1222,7 +1232,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
@@ -1267,22 +1277,8 @@ class BedrockLLM(BaseAWSLLM):
         return None
 
 
-def get_response_stream_shape():
-    global _response_stream_shape_cache
-    if _response_stream_shape_cache is None:
-        from botocore.loaders import Loader
-        from botocore.model import ServiceModel
-
-        loader = Loader()
-        bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-        bedrock_service_model = ServiceModel(bedrock_service_dict)
-        _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
-
-    return _response_stream_shape_cache
-
-
 class AWSEventStreamDecoder:
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, json_mode: Optional[bool] = False) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
@@ -1290,6 +1286,8 @@ class AWSEventStreamDecoder:
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
+        self.json_mode = json_mode
+        self._current_tool_name: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1322,19 +1320,13 @@ class AWSEventStreamDecoder:
 
     def translate_thinking_blocks(
         self, thinking_block: BedrockConverseReasoningContentBlockDelta
-    ) -> Optional[
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ]:
+    ) -> Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]:
         """
         Translate the thinking blocks to a string
         """
 
-        thinking_blocks_list: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ] = []
-        _thinking_block: Optional[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ] = None
+        thinking_blocks_list: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] = []
+        _thinking_block: Optional[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] = None
 
         if "text" in thinking_block:
             _thinking_block = ChatCompletionThinkingBlock(type="thinking")
@@ -1368,32 +1360,27 @@ class AWSEventStreamDecoder:
     ) -> Tuple[
         Optional[ChatCompletionToolCallChunk],
         dict,
-        Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ],
+        Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]],
     ]:
         """Handle 'start' event in converse chunk parsing."""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields: dict = {}
-        thinking_blocks: Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ] = None
+        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
 
         self.content_blocks = []  # reset
         if start_obj is not None:
             if "toolUse" in start_obj and start_obj["toolUse"] is not None:
                 ## check tool name was formatted by litellm
                 _response_tool_name = start_obj["toolUse"]["name"]
-                response_tool_name = get_bedrock_tool_name(
-                    response_tool_name=_response_tool_name
-                )
-                self.tool_calls_index = (
-                    0 if self.tool_calls_index is None else self.tool_calls_index + 1
-                )
+                response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
+                self._current_tool_name = response_tool_name
+
+                # When json_mode is True, suppress the internal json_tool_call
+                # and convert its content to text in delta events instead
+                if self.json_mode is True and response_tool_name == RESPONSE_FORMAT_TOOL_NAME:
+                    return tool_use, provider_specific_fields, thinking_blocks
+
+                self.tool_calls_index = 0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 tool_use = {
                     "id": start_obj["toolUse"]["toolUseId"],
                     "type": "function",
@@ -1404,12 +1391,9 @@ class AWSEventStreamDecoder:
                     "index": self.tool_calls_index,
                 }
             elif (
-                "reasoningContent" in start_obj
-                and start_obj["reasoningContent"] is not None
+                "reasoningContent" in start_obj and start_obj["reasoningContent"] is not None
             ):  # redacted thinking can be in start object
-                thinking_blocks = self.translate_thinking_blocks(
-                    start_obj["reasoningContent"]
-                )
+                thinking_blocks = self.translate_thinking_blocks(start_obj["reasoningContent"])
                 provider_specific_fields = {
                     "reasoningContent": start_obj["reasoningContent"],
                 }
@@ -1424,58 +1408,41 @@ class AWSEventStreamDecoder:
         Optional[ChatCompletionToolCallChunk],
         dict,
         Optional[str],
-        Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ],
+        Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]],
     ]:
         """Handle 'delta' event in converse chunk parsing."""
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields: dict = {}
         reasoning_content: Optional[str] = None
-        thinking_blocks: Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ] = None
+        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
 
         self.content_blocks.append(delta_obj)
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": delta_obj["toolUse"]["input"],
-                },
-                "index": (
-                    self.tool_calls_index
-                    if self.tool_calls_index is not None
-                    else index
-                ),
-            }
+            # When json_mode is True and this is the internal json_tool_call,
+            # convert tool input to text content instead of tool call arguments
+            if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
+                text = delta_obj["toolUse"]["input"]
+            else:
+                tool_use = {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": delta_obj["toolUse"]["input"],
+                    },
+                    "index": (self.tool_calls_index if self.tool_calls_index is not None else index),
+                }
         elif "reasoningContent" in delta_obj:
             provider_specific_fields = {
                 "reasoningContent": delta_obj["reasoningContent"],
             }
-            reasoning_content = self.extract_reasoning_content_str(
-                delta_obj["reasoningContent"]
-            )
-            thinking_blocks = self.translate_thinking_blocks(
-                delta_obj["reasoningContent"]
-            )
-            if (
-                thinking_blocks
-                and len(thinking_blocks) > 0
-                and reasoning_content is None
-            ):
-                reasoning_content = (
-                    ""  # set to non-empty string to ensure consistency with Anthropic
-                )
+            reasoning_content = self.extract_reasoning_content_str(delta_obj["reasoningContent"])
+            thinking_blocks = self.translate_thinking_blocks(delta_obj["reasoningContent"])
+            if thinking_blocks and len(thinking_blocks) > 0 and reasoning_content is None:
+                reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
         elif "citationsContent" in delta_obj:
             # Handle Nova grounding citations in streaming responses
             provider_specific_fields = {
@@ -1489,11 +1456,17 @@ class AWSEventStreamDecoder:
             thinking_blocks,
         )
 
-    def _handle_converse_stop_event(
-        self, index: int
-    ) -> Optional[ChatCompletionToolCallChunk]:
+    def _handle_converse_stop_event(self, index: int) -> Optional[ChatCompletionToolCallChunk]:
         """Handle stop/contentBlockIndex event in converse chunk parsing."""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
+
+        # If the ending block was the internal json_tool_call, skip emitting
+        # the empty-args tool chunk and reset tracking state
+        if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
+            self._current_tool_name = None
+            return tool_use
+
+        self._current_tool_name = None
         is_empty = self.check_empty_tool_call_args()
         if is_empty:
             tool_use = {
@@ -1503,11 +1476,7 @@ class AWSEventStreamDecoder:
                     "name": None,
                     "arguments": "{}",
                 },
-                "index": (
-                    self.tool_calls_index
-                    if self.tool_calls_index is not None
-                    else index
-                ),
+                "index": (self.tool_calls_index if self.tool_calls_index is not None else index),
             }
         return tool_use
 
@@ -1524,13 +1493,9 @@ class AWSEventStreamDecoder:
             usage: Optional[Usage] = None
             provider_specific_fields: dict = {}
             reasoning_content: Optional[str] = None
-            thinking_blocks: Optional[
-                List[
-                    Union[
-                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                    ]
-                ]
-            ] = None
+            thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = (
+                None
+            )
 
             content_block_index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -1549,9 +1514,7 @@ class AWSEventStreamDecoder:
                     reasoning_content,
                     thinking_blocks,
                 ) = self._handle_converse_delta_event(delta_obj, content_block_index)
-            elif (
-                "contentBlockIndex" in chunk_data
-            ):  # stop block, no 'start' or 'delta' object
+            elif "contentBlockIndex" in chunk_data:  # stop block, no 'start' or 'delta' object
                 tool_use = self._handle_converse_stop_event(content_block_index)
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
@@ -1571,11 +1534,7 @@ class AWSEventStreamDecoder:
                             content=text,
                             role="assistant",
                             tool_calls=[tool_use] if tool_use else None,
-                            provider_specific_fields=(
-                                provider_specific_fields
-                                if provider_specific_fields
-                                else None
-                            ),
+                            provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=thinking_blocks,
                             reasoning_content=reasoning_content,
                         ),
@@ -1591,9 +1550,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
 
-    def _chunk_parser(
-        self, chunk_data: dict
-    ) -> Union[GChunk, ModelResponseStream, dict]:
+    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -1601,7 +1558,7 @@ class AWSEventStreamDecoder:
             text = chunk_data["outputText"]
         # ai21 mapping
         elif "ai21" in self.model:  # fake ai21 streaming
-            text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
+            text = chunk_data["completions"][0]["data"]["text"]
             is_finished = True
             finish_reason = "stop"
         ######## /bedrock/converse mappings ###############
@@ -1619,10 +1576,7 @@ class AWSEventStreamDecoder:
             return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
-            if (
-                len(chunk_data["outputs"]) == 1
-                and chunk_data["outputs"][0].get("text", None) is not None
-            ):
+            if len(chunk_data["outputs"]) == 1 and chunk_data["outputs"][0].get("text", None) is not None:
                 text = chunk_data["outputs"][0]["text"]
             stop_reason = chunk_data.get("stop_reason", None)
             if stop_reason is not None:
@@ -1651,9 +1605,7 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
-    def iter_bytes(
-        self, iterator: Iterator[bytes]
-    ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1683,27 +1635,20 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
-        response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
-
-        if response_dict["status_code"] != 200:
-            decoded_body = response_dict["body"].decode()
-            if isinstance(decoded_body, dict):
-                error_message = decoded_body.get("message")
-            elif isinstance(decoded_body, str):
-                error_message = decoded_body
-            else:
-                error_message = ""
-            exception_status = response_dict["headers"].get(":exception-type")
-            error_message = exception_status + " " + error_message
+        response_stream_shape = get_bedrock_response_stream_shape()
+        if response_stream_shape is None:
             raise BedrockError(
-                status_code=response_dict["status_code"],
+                status_code=500,
                 message=(
-                    json.dumps(error_message)
-                    if isinstance(error_message, dict)
-                    else error_message
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
                 ),
             )
+        response_dict = event.to_response_dict()
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
+
+        if response_dict["status_code"] != 200:
+            raise build_bedrock_stream_error(response_dict, response_stream_shape)
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
@@ -1756,9 +1701,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(
-        self, chunk_data: dict
-    ) -> Union[GChunk, ModelResponseStream, dict]:
+    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
@@ -1792,9 +1735,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         if self.json_mode is True and tool_calls is not None:
-            message = litellm.AnthropicConfig()._convert_tool_response_to_message(
-                tool_calls=tool_calls
-            )
+            message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -1830,9 +1771,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                 text=text,
                 tool_use=tool_use,
                 is_finished=True,
-                finish_reason=map_finish_reason(
-                    finish_reason=chunk_data.choices[0].finish_reason or ""
-                ),
+                finish_reason=map_finish_reason(finish_reason=chunk_data.choices[0].finish_reason or ""),
                 usage=ChatCompletionUsageBlock(
                     prompt_tokens=chunk_usage.prompt_tokens,
                     completion_tokens=chunk_usage.completion_tokens,

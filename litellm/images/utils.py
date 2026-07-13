@@ -39,11 +39,7 @@ class ImageEditRequestUtils:
             for param in additional_drop_params:
                 filtered_optional_params.pop(param, None)
 
-        unsupported_params = [
-            param
-            for param in filtered_optional_params
-            if param not in supported_params
-        ]
+        unsupported_params = [param for param in filtered_optional_params if param not in supported_params]
 
         if unsupported_params:
             if should_drop:
@@ -56,9 +52,7 @@ class ImageEditRequestUtils:
                 )
 
         mapped_params = image_edit_provider_config.map_openai_params(
-            image_edit_optional_params=cast(
-                ImageEditOptionalRequestParams, filtered_optional_params
-            ),
+            image_edit_optional_params=cast(ImageEditOptionalRequestParams, filtered_optional_params),
             model=model,
             drop_params=should_drop,
         )
@@ -79,9 +73,7 @@ class ImageEditRequestUtils:
             ImageEditOptionalRequestParams instance with only the valid parameters
         """
         valid_keys = get_type_hints(ImageEditOptionalRequestParams).keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
     @staticmethod
@@ -101,9 +93,7 @@ class ImageEditRequestUtils:
                 # Save current position
                 current_pos = image_data.tell()
                 image_data.seek(0)
-                bytes_data = image_data.read(
-                    100
-                )  # First 100 bytes are enough for detection
+                bytes_data = image_data.read(100)  # First 100 bytes are enough for detection
                 # Restore position
                 image_data.seek(current_pos)
             elif isinstance(image_data, BufferedReader):

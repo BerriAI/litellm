@@ -15,6 +15,9 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+    BedrockAmazonNovaCanvasImageEditConfig,
+)
 from litellm.llms.bedrock.image_edit.stability_transformation import (
     BedrockStabilityImageEditConfig,
 )
@@ -55,8 +58,13 @@ class BedrockImageEdit(BaseAWSLLM):
     def get_config_class(cls, model: str | None):
         if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
             return BedrockStabilityImageEditConfig
-        else:
-            raise ValueError(f"Unsupported model for bedrock image edit: {model}")
+        if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+            return BedrockAmazonNovaCanvasImageEditConfig
+        raise ValueError(
+            f"Unsupported Bedrock image-edit model: {model!r}. "
+            "Use a stability.* image-edit model id or add supports_nova_canvas_image_edit "
+            "in model_prices for this id."
+        )
 
     def image_edit(
         self,
@@ -92,17 +100,17 @@ class BedrockImageEdit(BaseAWSLLM):
                 logging_obj=logging_obj,
                 prompt=prompt,
                 model_response=model_response,
-                client=(
-                    client
-                    if client is not None and isinstance(client, AsyncHTTPHandler)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -140,7 +148,11 @@ class BedrockImageEdit(BaseAWSLLM):
         )
 
         try:
-            response = await async_client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = await async_client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -186,9 +198,7 @@ class BedrockImageEdit(BaseAWSLLM):
         Returns:
             BedrockImageEditPreparedRequest: The prepared request object
         """
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider = self.get_bedrock_invoke_provider(model)
@@ -307,4 +317,3 @@ class BedrockImageEdit(BaseAWSLLM):
         )
 
         return model_response
-

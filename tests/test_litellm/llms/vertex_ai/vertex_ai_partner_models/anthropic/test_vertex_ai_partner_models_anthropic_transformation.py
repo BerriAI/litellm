@@ -86,6 +86,7 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {"edits": [{"type": "compact_20260112"}]},
         "max_tokens": 100,
@@ -97,16 +98,20 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     # Verify context_management is included
     assert "context_management" in result
     assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
 
-    # Verify compact beta header is in anthropic_beta field
+    # Verify compact beta header is in anthropic_beta body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
+
+    # Verify compact beta header is also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_context_management_mixed_edits():
@@ -114,6 +119,7 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {
             "edits": [
@@ -130,13 +136,18 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
-    # Verify both beta headers are present
+    # Verify both beta headers are present in body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
     assert "context-management-2025-06-27" in result["anthropic_beta"]
+
+    # Verify both beta headers are also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
+    assert "context-management-2025-06-27" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_structured_output_header_not_added():
@@ -192,12 +203,15 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
 def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
     """
     Test fix for issue #18625: Claude Sonnet 4.5 on VertexAI should use tool-based
-    structured outputs instead of output_format parameter.
+    structured outputs when ``response_format`` is supplied via the OpenAI-compat
+    interface (``map_openai_params``).
 
     This test verifies that:
-    1. Claude Sonnet 4.5 uses tool-based structured outputs on VertexAI
-    2. output_format parameter is removed from the final request
-    3. The fix prevents "Extra inputs are not permitted" error
+    1. Claude Sonnet 4.5 uses tool-based structured outputs when ``response_format``
+       is given to the OpenAI-compat path (the path that triggered #18625).
+    2. ``output_format`` is forwarded to Vertex AI when present — Vertex now
+       accepts the field; the prior blanket-strip behavior was the silent drop
+       of Anthropic Structured Outputs that this PR fixes.
     """
     config = VertexAIAnthropicConfig()
 
@@ -283,11 +297,15 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
             headers={},
         )
 
-        # Verify that output_format was removed (fixes the "Extra inputs are not permitted" error)
+        # output_format is now forwarded to Vertex (Vertex parity has shifted —
+        # it accepts the field and uses it to enforce the JSON schema). The
+        # prior behavior silently stripped it, hiding Structured Outputs from
+        # callers who explicitly requested them.
+        assert "output_format" in final_data
+        assert final_data["output_format"]["type"] == "json_schema"
         assert (
-            "output_format" not in final_data
-        ), "output_format should be removed for VertexAI"
-        assert "model" not in final_data, "model should be removed for VertexAI"
+            "model" not in final_data
+        ), "model is still stripped (Vertex routes by URL)"
         assert "tools" in final_data, "tools should still be present"
         assert "tool_choice" in final_data, "tool_choice should still be present"
 
@@ -331,16 +349,17 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_propagation():
-    """Test that anthropic-beta values from extra_headers are propagated to the
-    anthropic_beta request body field for Vertex AI requests.
+    """Test that anthropic-beta values from extra_headers are propagated to both
+    the anthropic_beta request body field and the anthropic-beta HTTP header
+    for Vertex AI requests.
 
-    Vertex AI requires beta flags in the request body (anthropic_beta array),
-    not as HTTP headers. This mirrors the Bedrock handler's behavior of
-    extracting user-specified beta headers.
+    Vertex AI rawPredict requires beta flags as HTTP headers. The body field
+    anthropic_beta alone is insufficient for features like context_management.
     """
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -354,12 +373,16 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" in result
     assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
     assert "extra_headers" not in result
+
+    # Verify HTTP header is also set
+    assert "anthropic-beta" in headers
+    assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_merged_with_auto_betas():
@@ -421,6 +444,7 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -431,11 +455,12 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" not in result
     assert "extra_headers" not in result
+    assert "anthropic-beta" not in headers
 
 
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
@@ -471,3 +496,239 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     assert (
         "anthropic-beta" not in headers2
     ), "Header should be removed if no supported values remain"
+
+
+def test_vertex_ai_anthropic_output_config_effort_only_forwarded():
+    """Vertex AI Claude 4.6/4.7 accept ``output_config.effort`` on rawPredict."""
+    config = VertexAIAnthropicConfig()
+
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+    headers: dict = {}
+
+    optional_params = {
+        "max_tokens": 1024,
+        "output_config": {"effort": "high"},
+    }
+
+    result = config.transform_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert result["output_config"] == {"effort": "high"}
+    assert result["max_tokens"] == 1024
+    assert "messages" in result
+
+
+def test_vertex_ai_anthropic_output_config_format_passes_through():
+    """
+    ``output_config`` containing structured-output ``format`` is FORWARDED to
+    Vertex AI Claude — Vertex now accepts it and uses it for JSON Schema
+    enforcement. Previously the entire field was being silently stripped, so
+    Anthropic Structured Outputs never engaged on Vertex even when callers
+    requested it.
+    """
+    config = VertexAIAnthropicConfig()
+    messages = [{"role": "user", "content": "Return a person object."}]
+
+    output_config = {
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+            },
+        }
+    }
+    optional_params = {"max_tokens": 1024, "output_config": output_config}
+
+    result = config.transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"] == output_config
+
+
+def test_vertex_ai_anthropic_output_config_format_plus_effort_preserved():
+    """Both ``format`` and ``effort`` ride along on Vertex Claude 4.6/4.7."""
+    config = VertexAIAnthropicConfig()
+    messages = [{"role": "user", "content": "Return a person object."}]
+
+    output_config = {
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+        "effort": "high",
+    }
+    optional_params = {"max_tokens": 1024, "output_config": output_config}
+
+    result = config.transform_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "high"
+    assert result["output_config"]["format"] == output_config["format"]
+
+
+def test_vertex_ai_anthropic_output_config_non_dict_dropped():
+    """Defensive: if ``output_config`` is somehow not a dict, drop it rather
+    than forwarding malformed data downstream."""
+    config = VertexAIAnthropicConfig()
+    messages = [{"role": "user", "content": "hi"}]
+    optional_params = {"max_tokens": 64, "output_config": "not-a-dict"}
+
+    result = config.transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_config" not in result
+
+
+def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
+    """Both ``output_format`` and ``output_config.effort`` are forwarded on Vertex 4.6/4.7."""
+    config = VertexAIAnthropicConfig()
+    messages = [{"role": "user", "content": "Extract structured data"}]
+
+    output_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "data",
+            "schema": {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+            },
+        },
+    }
+
+    optional_params = {
+        "max_tokens": 2048,
+        "output_format": output_format,
+        "output_config": {"effort": "high"},
+    }
+
+    test_data = {
+        "model": "claude-opus-4-6",
+        "messages": messages,
+        "max_tokens": 2048,
+        "output_format": output_format,
+        "output_config": {"effort": "high"},
+    }
+
+    original_transform = config.__class__.__bases__[0].transform_request
+
+    def mock_transform_request(
+        self, model, messages, optional_params, litellm_params, headers
+    ):
+        return test_data.copy()
+
+    config.__class__.__bases__[0].transform_request = mock_transform_request
+
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # output_format flows through unchanged — Vertex AI Claude accepts it.
+        assert result["output_format"] == output_format
+        # output_config.effort now flows through (Vertex accepts it on 4.6/4.7).
+        assert result["output_config"] == {"effort": "high"}
+        assert result["max_tokens"] == 2048
+        assert "model" not in result, "model is still stripped (Vertex routes by URL)"
+    finally:
+        config.__class__.__bases__[0].transform_request = original_transform
+
+
+def test_sanitize_vertex_anthropic_output_params_unit():
+    """Direct unit coverage for the helper itself (used by both Vertex
+    Anthropic transformation paths). Mirrors the integration assertions
+    above without going through the full ``transform_request`` stack."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.output_params_utils import (
+        sanitize_vertex_anthropic_output_params,
+    )
+
+    supported = "claude-opus-4-6"
+
+    # No-op when output_config absent.
+    data: dict = {"max_tokens": 8}
+    sanitize_vertex_anthropic_output_params(data, supported)
+    assert data == {"max_tokens": 8}
+
+    # Effort-only on a supporting model → preserved (Vertex 4.6/4.7 accept it).
+    data = {"output_config": {"effort": "high"}}
+    sanitize_vertex_anthropic_output_params(data, supported)
+    assert data["output_config"] == {"effort": "high"}
+
+    # Format-only → preserved unchanged.
+    fmt = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
+    data = {"output_config": dict(fmt)}
+    sanitize_vertex_anthropic_output_params(data, supported)
+    assert data["output_config"] == fmt
+
+    # Mixed on a supporting model → both effort and format kept.
+    data = {"output_config": {"format": fmt["format"], "effort": "high"}}
+    sanitize_vertex_anthropic_output_params(data, supported)
+    assert data["output_config"] == {"format": fmt["format"], "effort": "high"}
+
+    # Non-dict → dropped defensively.
+    data = {"output_config": "garbage"}
+    sanitize_vertex_anthropic_output_params(data, supported)
+    assert "output_config" not in data
+
+
+def test_sanitize_strips_effort_for_haiku_45():
+    """Regression: Haiku 4.5 on Vertex does not support ``output_config.effort``
+    and 400s with ``Extra inputs are not permitted``. Claude Code injects
+    ``effort`` into every Messages payload, so the helper must strip it for
+    models that don't advertise output_config support while leaving it intact
+    for Opus/Sonnet 4.6+."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.output_params_utils import (
+        sanitize_vertex_anthropic_output_params,
+    )
+
+    haiku = "claude-haiku-4-5@20251001"
+
+    # Effort-only → output_config removed entirely (no empty dict on the wire).
+    data: dict = {"output_config": {"effort": "high"}, "max_tokens": 8}
+    sanitize_vertex_anthropic_output_params(data, haiku)
+    assert "output_config" not in data
+    assert data["max_tokens"] == 8
+
+    # Mixed → effort stripped, format preserved.
+    fmt = {"type": "json_schema", "schema": {"type": "object"}}
+    data = {"output_config": {"effort": "high", "format": fmt}}
+    sanitize_vertex_anthropic_output_params(data, haiku)
+    assert data["output_config"] == {"format": fmt}
+
+    # Same payload on a supporting model keeps effort untouched.
+    data = {"output_config": {"effort": "high"}}
+    sanitize_vertex_anthropic_output_params(data, "vertex_ai/claude-opus-4-6")
+    assert data["output_config"] == {"effort": "high"}

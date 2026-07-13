@@ -156,7 +156,9 @@ async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
+    monkeypatch,
+):
     """
     Non-admin with no explicit organization_ids should default to orgs they are ORG_ADMIN of.
     """
@@ -220,7 +222,9 @@ async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(
+    monkeypatch,
+):
     """
     Non-admin requesting an org they aren't ORG_ADMIN for should raise 403.
     """
@@ -268,6 +272,7 @@ async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises
             user_api_key_dict=auth,
         )
     assert exc.value.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_organization_update_object_permissions_no_existing_permission(
@@ -416,7 +421,7 @@ async def test_organization_update_object_permissions_missing_permission_record(
 async def test_list_organization_filter_by_org_id(monkeypatch):
     """
     Test filtering organizations by org_id query parameter.
-    
+
     This test verifies that when org_id is provided, only the organization
     with that exact organization_id is returned.
     """
@@ -429,7 +434,7 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock organization data
     mock_org1 = SimpleNamespace(
         organization_id="org-123",
@@ -439,26 +444,26 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
             "organization_alias": "Test Org 1",
         },
     )
-    
+
     # Mock find_many to return filtered results
     mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
         return_value=[mock_org1]
     )
-    
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+
+    result = await list_organization(
+        org_id="org-123", org_alias=None, user_api_key_dict=auth
     )
-    
-    result = await list_organization(org_id="org-123", org_alias=None, user_api_key_dict=auth)
 
     # Verify the correct organization was returned
     assert len(result) == 1
     assert result[0].organization_id == "org-123"
     assert result[0].organization_alias == "Test Org 1"
-    
+
     # Verify find_many was called with correct where conditions
     mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
     call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
@@ -474,7 +479,7 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
 async def test_list_organization_filter_by_org_alias(monkeypatch):
     """
     Test filtering organizations by org_alias query parameter with case-insensitive partial matching.
-    
+
     This test verifies that when org_alias is provided, organizations with matching
     organization_alias (case-insensitive partial match) are returned.
     """
@@ -487,7 +492,7 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock organization data
     mock_org1 = SimpleNamespace(
         organization_id="org-123",
@@ -505,25 +510,25 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
             "organization_alias": "Another Test Org",
         },
     )
-    
+
     # Mock find_many to return filtered results
     mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
         return_value=[mock_org1, mock_org2]
     )
-    
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin with org_alias filter
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+
+    result = await list_organization(
+        org_id=None, org_alias="test", user_api_key_dict=auth
     )
-    
-    result = await list_organization(org_id=None, org_alias="test", user_api_key_dict=auth)
 
     # Verify organizations with "test" in alias were returned
     assert len(result) == 2
     assert all("test" in org.organization_alias.lower() for org in result)
-    
+
     # Verify find_many was called with correct where conditions (case-insensitive contains)
     mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
     call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
@@ -535,3 +540,158 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
         "members": True,
         "teams": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_organization_info_includes_user_email(monkeypatch):
+    """
+    Test that GET /organization/info returns user_email in members list.
+    """
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+    from datetime import datetime
+
+    # Simulate a membership row with a nested user object that has user_email
+    raw_membership = {
+        "user_id": "user_abc",
+        "organization_id": "org_xyz",
+        "user_role": "org_admin",
+        "spend": 0.0,
+        "budget_id": None,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "user": {"user_email": "alice@example.com"},
+        "litellm_budget_table": None,
+    }
+
+    membership = LiteLLM_OrganizationMembershipTable(**raw_membership)
+    assert membership.user_email == "alice@example.com"
+
+
+# Regression tests for IDOR fixes on org-scoped endpoints. Sibling cluster
+# to GHSA-xxv2-fprq-9x93 (team callback IDOR): the same shape of "any
+# authenticated key holder reaches an endpoint that takes an
+# organization_id from the request body without an access guard." The
+# fix routes ``update_organization``, ``organization_member_add``,
+# ``organization_member_update``, and ``organization_member_delete``
+# through the existing ``_verify_org_access`` helper.
+
+
+@pytest.fixture
+def unauthorized_caller():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="random_authenticated_user",
+        api_key="sk-random",
+    )
+
+
+@pytest.fixture
+def patched_org_prisma():
+    """Mock prisma so that find_unique returns a victim org and
+    get_user_object reports the caller has no org membership — so
+    _verify_org_access raises 403."""
+    victim_row = MagicMock()
+    victim_row.organization_id = "org-victim"
+    victim_row.metadata = {}
+    victim_row.model_dump.return_value = {"organization_id": "org-victim"}
+
+    caller_user = MagicMock()
+    caller_user.organization_memberships = []  # no admin role anywhere
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.organization_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=caller_user,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+    ):
+        mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
+            return_value=victim_row
+        )
+        yield mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_organization_member_add_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    # ``organization_member_add`` catches HTTPException in its
+    # catch-all and re-wraps as ProxyException with the original status
+    # code preserved.
+    from litellm.proxy._types import (
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyException,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_add,
+    )
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    data = OrganizationMemberAddRequest(
+        organization_id="org-victim",
+        member=OrgMember(role="internal_user", user_id="attacker-user"),
+    )
+
+    with pytest.raises((HTTPException, ProxyException)) as exc:
+        await organization_member_add(
+            data=data,
+            http_request=Mock(spec=Request),
+            user_api_key_dict=unauthorized_caller,
+        )
+    code = getattr(exc.value, "status_code", None) or getattr(exc.value, "code", None)
+    assert int(code) == 403
+
+
+@pytest.mark.asyncio
+async def test_organization_member_update_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    from litellm.proxy._types import OrganizationMemberUpdateRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_update,
+    )
+
+    data = OrganizationMemberUpdateRequest(
+        organization_id="org-victim",
+        user_id="some-other-user",
+        role="org_admin",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await organization_member_update(
+            data=data,
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    from litellm.proxy._types import OrganizationMemberDeleteRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_delete,
+    )
+
+    data = OrganizationMemberDeleteRequest(
+        organization_id="org-victim",
+        user_id="some-other-user",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await organization_member_delete(
+            data=data,
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403

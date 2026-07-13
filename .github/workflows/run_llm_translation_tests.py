@@ -325,7 +325,7 @@ def run_tests(test_path: str = "tests/llm_translation/",
     
     # Run pytest
     cmd = [
-        "poetry", "run", "pytest", test_path,
+        "uv", "run", "--no-sync", "pytest", test_path,
         f"--junitxml={junit_xml}",
         "-v",
         "--tb=short",
@@ -335,7 +335,7 @@ def run_tests(test_path: str = "tests/llm_translation/",
     
     # Add timeout if pytest-timeout is installed
     try:
-        subprocess.run(["poetry", "run", "python", "-c", "import pytest_timeout"], 
+        subprocess.run(["uv", "run", "--no-sync", "python", "-c", "import pytest_timeout"], 
                       capture_output=True, check=True)
         cmd.extend(["--timeout=300"])
     except:

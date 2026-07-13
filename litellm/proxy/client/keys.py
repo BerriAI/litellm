@@ -2,6 +2,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import requests
 
+from litellm.litellm_core_utils.secret_redaction import redact_string
+
 from .exceptions import UnauthorizedError
 
 
@@ -257,7 +259,7 @@ class KeysManagementClient:
         url = f"{self._base_url}/key/update"
 
         data: Dict[str, Any] = {"key": key}
-        
+
         if key_alias is not None:
             data["key_alias"] = key_alias
         if user_id is not None:
@@ -282,7 +284,6 @@ class KeysManagementClient:
             return response.json()
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
-
 
     def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
         """
@@ -311,6 +312,7 @@ class KeysManagementClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
+            redacted_message = redact_string(str(e))
             if e.response.status_code == 401:
-                raise UnauthorizedError(e)
-            raise
+                raise UnauthorizedError(e) from None
+            raise requests.exceptions.HTTPError(redacted_message, response=e.response) from None

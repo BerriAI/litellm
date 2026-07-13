@@ -43,20 +43,20 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     # Voice name mappings from OpenAI voices to Polly voices
     VOICE_MAPPINGS = {
-        "alloy": "Joanna",      # US English female
-        "echo": "Matthew",      # US English male
-        "fable": "Amy",         # British English female
-        "onyx": "Brian",        # British English male
-        "nova": "Ivy",          # US English female (child)
-        "shimmer": "Kendra",    # US English female
+        "alloy": "Joanna",  # US English female
+        "echo": "Matthew",  # US English male
+        "fable": "Amy",  # British English female
+        "onyx": "Brian",  # British English male
+        "nova": "Ivy",  # US English female (child)
+        "shimmer": "Kendra",  # US English female
     }
 
     # Response format mappings from OpenAI to Polly
     FORMAT_MAPPINGS = {
         "mp3": "mp3",
         "opus": "ogg_vorbis",
-        "aac": "mp3",           # Polly doesn't support AAC, use MP3
-        "flac": "mp3",          # Polly doesn't support FLAC, use MP3
+        "aac": "mp3",  # Polly doesn't support AAC, use MP3
+        "flac": "mp3",  # Polly doesn't support FLAC, use MP3
         "wav": "pcm",
         "pcm": "pcm",
     }
@@ -388,4 +388,3 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         return HttpxBinaryResponseContent(raw_response)
-

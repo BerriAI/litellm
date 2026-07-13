@@ -3,12 +3,12 @@ from typing import Any, Dict
 
 class CBFRecord(Dict[str, Any]):
     """CloudZero Billing Format (CBF) record structure.
-    
-    This class represents a CBF record that is created from LiteLLM usage data 
-    for CloudZero integration. Since CBF field names contain forward slashes 
-    (e.g., 'time/usage_start', 'cost/cost'), we use a Dict base class rather 
+
+    This class represents a CBF record that is created from LiteLLM usage data
+    for CloudZero integration. Since CBF field names contain forward slashes
+    (e.g., 'time/usage_start', 'cost/cost'), we use a Dict base class rather
     than TypedDict to accommodate the special characters in field names.
-    
+
     Expected CBF fields (per LIT-1907):
     - time/usage_start: ISO-formatted UTC datetime (Optional[str])
     - cost/cost: Billed cost (float)
@@ -28,8 +28,9 @@ class CBFRecord(Dict[str, Any]):
     - resource/tag:user_alias: User alias if available (Optional[str])
     - resource/tag:{key}: Various resource tags for dimensions and metrics (Optional[str])
     """
+
     pass
 
 
 # Type alias for better readability in function signatures
-CBFRecordDict = Dict[str, Any] 
+CBFRecordDict = Dict[str, Any]

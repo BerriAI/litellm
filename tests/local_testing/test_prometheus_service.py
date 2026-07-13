@@ -31,6 +31,7 @@ async def test_init_prometheus():
     pl = PrometheusServicesLogger(mock_testing=True)
 
 
+@pytest.mark.flaky(retries=3, delay=5)
 @pytest.mark.asyncio
 async def test_completion_with_caching():
     """

@@ -1,4 +1,5 @@
 import enum
+import re
 from typing import Any, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
@@ -73,12 +74,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(
-                **(litellm_params if isinstance(litellm_params, dict) else {})
-            )
-            headers = BaseAzureLLM._base_validate_azure_environment(
-                headers=headers, litellm_params=litellm_params_obj
-            )
+            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
@@ -262,30 +259,45 @@ class AzureAIStudioConfig(OpenAIConfig):
         should_drop_params = litellm_params.get("drop_params") or litellm.drop_params
         error_text = e.response.text
 
-        if should_drop_params and "Extra inputs are not permitted" in error_text:
+        if "Extra inputs are not permitted" in error_text:
+            if should_drop_params or self._error_has_tool_level_extra_fields(error_text):
+                return True
+        if "unknown field: parameter index is not a valid field" in error_text:
             return True
-        elif "unknown field: parameter index is not a valid field" in error_text:  # remove index from tool calls
-            return True
-        elif (
-            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in error_text
-        ):  # remove extra-parameters from tool calls
+        if AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in error_text:
             return True
         return super().should_retry_llm_api_inside_llm_translation_on_http_error(e=e, litellm_params=litellm_params)
+
+    def _error_has_tool_level_extra_fields(self, error_text: str) -> bool:
+        return bool(re.search(r"tools\[\d+\]\.", error_text))
 
     @property
     def max_retry_on_unprocessable_entity_error(self) -> int:
         return 2
 
     def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+        error_text = e.response.text
         _messages = cast(Optional[List[AllMessageValues]], request_data.get("messages"))
-        if "unknown field: parameter index is not a valid field" in e.response.text and _messages is not None:
+        if "unknown field: parameter index is not a valid field" in error_text and _messages is not None:
             litellm.remove_index_from_tool_calls(
                 messages=_messages,
             )
-        elif AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in e.response.text:
-            request_data = self._drop_extra_params_from_request_data(request_data, e.response.text)
+        elif AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in error_text:
+            request_data = self._drop_extra_params_from_request_data(request_data, error_text)
+        if "Extra inputs are not permitted" in error_text and self._error_has_tool_level_extra_fields(error_text):
+            request_data = self._drop_tool_level_extra_fields(request_data, error_text)
         data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
+
+    def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
+        fields_to_drop = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        tools = request_data.get("tools")
+        if fields_to_drop and isinstance(tools, list):
+            for tool in tools:
+                if isinstance(tool, dict):
+                    for field in fields_to_drop:
+                        tool.pop(field, None)
+        return request_data
 
     def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
         params_to_drop = self._extract_params_to_drop_from_error_text(error_text)
@@ -300,9 +312,6 @@ class AzureAIStudioConfig(OpenAIConfig):
         Error text looks like this"
             "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.
         """
-        import re
-
-        # Extract parameters within square brackets
         match = re.search(r"\[(.*?)\]", error_text)
         if not match:
             return []

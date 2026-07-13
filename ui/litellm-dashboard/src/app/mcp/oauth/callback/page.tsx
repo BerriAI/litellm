@@ -2,8 +2,14 @@
 
 import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
-const RESULT_STORAGE_KEY = "litellm-mcp-oauth-result";
+// Written to sessionStorage so the admin hook (useMcpOAuthFlow), the user hook
+// (useUserMcpOAuthFlow), and the tools re-auth hook (useToolsOAuthFlow) can each
+// pick up the result.  Each hook reads its own namespace to avoid cross-flow collisions.
+const ADMIN_RESULT_KEY = "litellm-mcp-oauth-result";
+const USER_RESULT_KEY = "litellm-user-mcp-oauth-result";
+const TOOLS_RESULT_KEY = "litellm-tools-mcp-oauth-result";
 const RETURN_URL_STORAGE_KEY = "litellm-mcp-oauth-return-url";
 
 const resolveDefaultRedirect = () => {
@@ -32,6 +38,10 @@ const McpOAuthCallbackContent = () => {
       type: "litellm-mcp-oauth",
       code: searchParams.get("code"),
       state: searchParams.get("state"),
+      // Forward OAuth provider error params so the hook can surface the real
+      // reason (e.g. "access_denied") instead of a generic "code missing" error.
+      error: searchParams.get("error"),
+      error_description: searchParams.get("error_description"),
     };
   }, [searchParams]);
 
@@ -41,14 +51,28 @@ const McpOAuthCallbackContent = () => {
     }
 
     try {
-      window.sessionStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(payload));
+      // Write to all namespace keys so whichever hook is active can consume
+      // the result.  sessionStorage only — no localStorage.
+      const serialized = JSON.stringify(payload);
+      setSecureItem(ADMIN_RESULT_KEY, serialized);
+      setSecureItem(USER_RESULT_KEY, serialized);
+      setSecureItem(TOOLS_RESULT_KEY, serialized);
     } catch (err) {
-      console.error("Failed to persist OAuth callback payload", err);
+      // Silently ignore storage errors
     }
 
-    const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY);
-    console.info("[MCP OAuth callback] returnUrl", returnUrl);
-    const destination = returnUrl || resolveDefaultRedirect();
+    const returnUrl = getSecureItem(RETURN_URL_STORAGE_KEY);
+    let destination = resolveDefaultRedirect();
+    if (returnUrl) {
+      try {
+        const parsed = new URL(returnUrl, window.location.origin);
+        if (parsed.origin === window.location.origin) {
+          destination = parsed.href;
+        }
+      } catch {
+        // invalid URL — fall through to default
+      }
+    }
     window.location.replace(destination);
   }, [payload]);
 
@@ -56,12 +80,12 @@ const McpOAuthCallbackContent = () => {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
       <div className="max-w-lg w-full rounded-lg bg-white shadow-md p-8 text-center space-y-4">
         <h1 className="text-xl font-semibold text-slate-900">LiteLLM MCP OAuth</h1>
-          <p className="text-sm text-slate-700">
-            Authorization complete. You may close this window and return to the LiteLLM dashboard.
-          </p>
-          <p className="text-xs text-slate-500">
-            If the window does not close automatically, everything is still saved—you can close it manually.
-          </p>
+        <p className="text-sm text-slate-700">
+          Authorization complete. You may close this window and return to the LiteLLM dashboard.
+        </p>
+        <p className="text-xs text-slate-500">
+          If the window does not close automatically, everything is still saved—you can close it manually.
+        </p>
       </div>
     </div>
   );

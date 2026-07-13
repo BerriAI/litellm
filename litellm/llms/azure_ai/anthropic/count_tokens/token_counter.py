@@ -32,6 +32,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Optional[TokenCountResponse]:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
@@ -79,6 +81,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 api_key=api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
+                tools=tools,
+                system=system,
             )
 
             if result is not None:
@@ -103,9 +107,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(
-                f"Error calling Azure AI Anthropic CountTokens API: {e}"
-            )
+            verbose_logger.warning(f"Error calling Azure AI Anthropic CountTokens API: {e}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

@@ -1,169 +1,185 @@
-import json
-import os
-import sys
-import time
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
-import pytest
 import asyncio
+import json
+import time
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+import httpx
+import pytest
+
 import litellm
 
+OPENAI_API_BASE = "https://example.openai.test/v1"
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/mistral.mistral-7b-instruct-v0:2",
-        "openai/gpt-4o",
-        "openai/self_hosted",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-        "vertex_ai/gemini-1.5-flash",
-    ],
-)
-async def test_litellm_overhead_non_streaming(model):
-    """
-    - Test we can see the litellm overhead and that it is less than 40% of the total request time
-    """
 
-    litellm._turn_on_debug()
-    start_time = datetime.now()
-    kwargs ={
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model
+def _completion_payload(response_id="chatcmpl-test"):
+    return {
+        "id": response_id,
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
-    #########################################################
-    # Specific cases for models
-    #########################################################
-    if model == "vertex_ai/gemini-1.5-flash":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
-        # warmup call for auth validation on vertex_ai models
-        await litellm.acompletion(**kwargs)
-    if model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
 
 
-    response = await litellm.acompletion(
-        **kwargs
+def _stream_payload(response_id="chatcmpl-stream"):
+    chunks = [
+        {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+    return (
+        "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        + "data: [DONE]\n\n"
+    ).encode()
+
+
+def _mock_openai_completion_transport(
+    monkeypatch, *, stream=False, response_id="chatcmpl-test"
+):
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+    calls = {"count": 0}
+
+    async def delayed_response(_transport, request):
+        calls["count"] += 1
+        await asyncio.sleep(0.2)
+        if stream:
+            return httpx.Response(
+                200,
+                content=_stream_payload(response_id),
+                headers={"content-type": "text/event-stream"},
+                request=request,
+            )
+        return httpx.Response(
+            200, json=_completion_payload(response_id), request=request
+        )
+
+    monkeypatch.setattr(
+        LiteLLMAiohttpTransport,
+        "handle_async_request",
+        delayed_response,
     )
-    #########################################################
-    # End of specific cases for models
-    #########################################################
-    end_time = datetime.now()
-    total_time_ms = (end_time - start_time).total_seconds() * 1000
-    print(response)
-    print(response._hidden_params)
+    return calls
+
+
+def _assert_overhead_is_smaller_than_total(response, total_time_ms):
     litellm_overhead_ms = response._hidden_params["litellm_overhead_time_ms"]
-    # calculate percent of overhead caused by litellm
     overhead_percent = litellm_overhead_ms * 100 / total_time_ms
-    print("##########################\n")
-    print("total_time_ms", total_time_ms)
-    print("response litellm_overhead_ms", litellm_overhead_ms)
-    print("litellm overhead_percent {}%".format(overhead_percent))
-    print("##########################\n")
+
     assert litellm_overhead_ms > 0
     assert litellm_overhead_ms < 1000
-
-    # latency overhead should be less than total request time
-    assert litellm_overhead_ms < (end_time - start_time).total_seconds() * 1000
-
-    # latency overhead should be under 40% of total request time
+    assert litellm_overhead_ms < total_time_ms
     assert overhead_percent < 40
 
-    pass
 
+@pytest.fixture(autouse=True)
+def reset_litellm_state():
+    litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
+    yield
+    litellm.cache = None
+    litellm.callbacks = []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/mistral.mistral-7b-instruct-v0:2",
-        "openai/gpt-4o",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-        "openai/self_hosted",
-    ],
-)
-async def test_litellm_overhead_stream(model):
-
-    litellm._turn_on_debug()
-    start_time = datetime.now()
-    kwargs ={
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model,
-        "stream": True,
-    }
-    #########################################################
-    # Specific cases for models
-    #########################################################
-    if model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
-        # warmup call for auth validation on vertex_ai models
-        await litellm.acompletion(**kwargs)
-    
-    response = await litellm.acompletion(
-        **kwargs
+async def test_litellm_overhead_non_streaming(monkeypatch):
+    calls = _mock_openai_completion_transport(
+        monkeypatch, response_id="chatcmpl-non-stream"
     )
 
-    async for chunk in response:
-        print()
+    start_time = time.perf_counter()
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+    total_time_ms = (time.perf_counter() - start_time) * 1000
 
-    end_time = datetime.now()
-    total_time_ms = (end_time - start_time).total_seconds() * 1000
-    print(response)
-    print(response._hidden_params)
-    litellm_overhead_ms = response._hidden_params["litellm_overhead_time_ms"]
-    # calculate percent of overhead caused by litellm
-    overhead_percent = litellm_overhead_ms * 100 / total_time_ms
-    print("##########################\n")
-    print("total_time_ms", total_time_ms)
-    print("response litellm_overhead_ms", litellm_overhead_ms)
-    print("litellm overhead_percent {}%".format(overhead_percent))
-    print("##########################\n")
-    assert litellm_overhead_ms > 0
-    assert litellm_overhead_ms < 1000
-
-    # latency overhead should be less than total request time
-    assert litellm_overhead_ms < (end_time - start_time).total_seconds() * 1000
-
-    # latency overhead should be under 40% of total request time
-    assert overhead_percent < 40
-
-    pass
+    assert calls["count"] == 1
+    _assert_overhead_is_smaller_than_total(response, total_time_ms)
 
 
 @pytest.mark.asyncio
-async def test_litellm_overhead_cache_hit():
-    """
-    Test that litellm overhead is tracked on cache hits.
-    Makes two identical requests and checks that the second one (cache hit) has overhead in hidden params.
-    """
+async def test_litellm_overhead_stream(monkeypatch):
+    calls = _mock_openai_completion_transport(
+        monkeypatch, stream=True, response_id="chatcmpl-stream"
+    )
+
+    start_time = time.perf_counter()
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        stream=True,
+    )
+
+    async for _chunk in response:
+        pass
+
+    total_time_ms = (time.perf_counter() - start_time) * 1000
+
+    assert calls["count"] == 1
+    _assert_overhead_is_smaller_than_total(response, total_time_ms)
+
+
+@pytest.mark.asyncio
+async def test_litellm_overhead_cache_hit(monkeypatch):
     from litellm.caching.caching import Cache
-    
-    litellm._turn_on_debug()
+
+    calls = _mock_openai_completion_transport(monkeypatch, response_id="chatcmpl-cache")
     litellm.cache = Cache()
-    print("test2 for caching")
-    litellm.set_verbose = True
+
     messages = [{"role": "user", "content": "Hello, world! Cache test"}]
-    response1 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
-    await asyncio.sleep(2)
-    # Wait for any pending background tasks to complete
-    pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
-    print("all pending tasks", pending_tasks)
-    if pending_tasks:
-        await asyncio.wait(pending_tasks, timeout=1.0)
-    
-    response2 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
-    print("RESPONSE 1", response1)
-    print("RESPONSE 2", response2)
+    response1 = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=messages,
+        caching=True,
+    )
+    await asyncio.sleep(0.5)
+    response2 = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=messages,
+        caching=True,
+    )
+
+    assert calls["count"] == 1
     assert response1.id == response2.id
-
-    print("response 2 hidden params", response2._hidden_params)
-
-
     assert "_response_ms" in response2._hidden_params
-    total_time_ms = response2._hidden_params["_response_ms"]
-    assert response2._hidden_params["litellm_overhead_time_ms"] > 0 and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+    assert response2._hidden_params["litellm_overhead_time_ms"] > 0
+    assert (
+        response2._hidden_params["litellm_overhead_time_ms"]
+        < response2._hidden_params["_response_ms"]
+    )

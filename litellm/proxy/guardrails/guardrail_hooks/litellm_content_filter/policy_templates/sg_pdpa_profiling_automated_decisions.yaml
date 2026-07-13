@@ -1,0 +1,82 @@
+# Singapore PDPA + Model AI Governance Framework — Automated Profiling
+# Blocks requests to build automated scoring/profiling systems
+# for consequential decisions about Singapore residents without human oversight.
+# Reference: https://www.pdpc.gov.sg/overview-of-pdpa/the-legislation/personal-data-protection-act
+# Reference: https://www.pdpc.gov.sg/help-and-resources/2020/01/model-ai-governance-framework
+category_name: "sg_pdpa_profiling_automated_decisions"
+description: "PDPA + Model AI Governance Framework — Blocks automated profiling and decision-making systems for consequential decisions about Singapore residents without human oversight"
+default_action: "BLOCK"
+
+identifier_words:
+  # Singapore resident identifiers
+  - "Singapore resident"
+  - "Singaporean"
+  - "SG citizen"
+  - "PR holder"
+  - "EP holder"
+  - "Singapore employee"
+
+  # Government programs/entities
+  - "HDB applicant"
+  - "HDB buyer"
+  - "CPF member"
+  - "MediShield"
+  - "MediSave"
+  - "BTO applicant"
+
+additional_block_words:
+  # Scoring & assessment
+  - "credit score"
+  - "risk score"
+  - "risk profile"
+  - "loan eligibility"
+  - "employment score"
+  - "hiring score"
+  - "trustworthiness score"
+
+  # Automated decisions
+  - "automated reject"
+  - "automated denial"
+  - "auto reject"
+  - "auto deny"
+  - "blacklist"
+  - "flag automatically"
+  - "no human review"
+  - "fully automated decision"
+  - "without human oversight"
+
+  # Consequential actions
+  - "deny housing"
+  - "deny loan"
+  - "deny employment"
+  - "terminate automatically"
+  - "exclude automatically"
+
+always_block_keywords:
+  - keyword: "automated denial Singapore resident"
+    severity: "high"
+  - keyword: "blacklist Singaporean without review"
+    severity: "high"
+  - keyword: "deny HDB application automatically"
+    severity: "high"
+  - keyword: "reject CPF claim without human"
+    severity: "high"
+  - keyword: "auto reject Singapore loan application"
+    severity: "high"
+  - keyword: "fully automated hiring decision Singapore"
+    severity: "high"
+
+exceptions:
+  - "human in the loop"
+  - "human review"
+  - "with human oversight"
+  - "appeals process"
+  - "explainability"
+  - "fairness audit"
+  - "model governance"
+  - "PDPA impact assessment"
+  - "explain"
+  - "what is"
+  - "research"
+  - "academic"
+  - "bias detection"

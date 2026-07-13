@@ -6,6 +6,7 @@ from datetime import datetime
 from logging import Formatter
 from typing import Any, Dict, Optional
 
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
@@ -15,12 +16,74 @@ if set_verbose is True:
     logging.warning(
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
+
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
+
+
+def _redact_string(value: str) -> str:
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return redact_string(value)
+
+
+def redact_secrets(value: str) -> str:
+    """Public API: redact known secret/credential patterns from an arbitrary string.
+
+    Use this for code paths that bypass the logging system — e.g. Slack/Teams
+    alerting, HTTP error response bodies, or any other string that may contain
+    secrets and will be sent to an external sink.
+
+    Not to be confused with redact_message_input_output_from_logging() in
+    litellm_core_utils/redact_messages.py, which redacts LLM prompt/response
+    content for privacy — this function redacts credential patterns (API keys,
+    PEM blocks, tokens, etc.) by shape.
+    """
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return _redact_string(value)
+
+
+class SecretRedactionFilter(logging.Filter):
+    """Scrubs known secret/credential patterns from log records."""
+
+    _formatter = logging.Formatter()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _ENABLE_SECRET_REDACTION:
+            return True
+
+        try:
+            record.msg = _redact_string(record.getMessage())
+            record.args = None
+        except Exception:
+            if isinstance(record.msg, str):
+                record.msg = _redact_string(record.msg)
+
+        # Redact exception tracebacks
+        if record.exc_info and record.exc_info[1] is not None:
+            try:
+                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
+            except Exception:
+                pass
+
+        # Redact extra fields passed via logger.debug("msg", extra={...})
+        for key, value in list(record.__dict__.items()):
+            if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
+                setattr(record, key, _redact_string(value))
+
+        return True
+
+
+_secret_filter = SecretRedactionFilter()
+
+
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
+handler.addFilter(_secret_filter)
 
 
 def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
@@ -115,8 +178,14 @@ class JsonFormatter(Formatter):
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
+        # Set component/logger only if not already supplied via extra={...}
+        if "component" not in json_record:
+            json_record["component"] = record.name
+        if "logger" not in json_record:
+            json_record["logger"] = f"{record.filename}:{record.lineno}"
+
         if record.exc_info:
-            json_record["stacktrace"] = self.formatException(record.exc_info)
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
@@ -126,6 +195,7 @@ def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler = logging.StreamHandler()
     error_handler.setFormatter(formatter)
+    error_handler.addFilter(_secret_filter)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
@@ -149,6 +219,7 @@ def _setup_json_exception_handlers(formatter):
         def async_json_exception_handler(loop, context):
             exception = context.get("exception")
             if exception:
+                exc_type = type(exception)
                 record = logging.LogRecord(
                     name="LiteLLM",
                     level=logging.ERROR,
@@ -156,7 +227,7 @@ def _setup_json_exception_handlers(formatter):
                     lineno=0,
                     msg=str(exception),
                     args=(),
-                    exc_info=None,
+                    exc_info=(exc_type, exception, exception.__traceback__),
                 )
                 error_handler.handle(record)
             else:
@@ -183,7 +254,7 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
-# Add the handler to the logger
+# Add the handler to the loggers
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
@@ -240,6 +311,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
+    handler.addFilter(_secret_filter)
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
@@ -326,6 +398,7 @@ def _turn_on_debug():
 
 
 def _disable_debugging():
+    """Disable the package, router, and proxy verbose loggers."""
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
@@ -340,7 +413,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(print_statement)  # noqa
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 

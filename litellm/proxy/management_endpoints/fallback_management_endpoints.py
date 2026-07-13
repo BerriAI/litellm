@@ -7,6 +7,7 @@ POST /fallback - Create or update fallbacks for a specific model
 GET /fallback/{model} - Get fallbacks for a specific model
 DELETE /fallback/{model} - Delete fallbacks for a specific model
 """
+
 # pyright: reportMissingImports=false
 
 import json
@@ -26,6 +27,7 @@ else:
         # fastapi is only required for proxy, not for SDK usage
         pass
 
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -94,9 +96,7 @@ async def create_fallback(
             )
 
         # Validate that all fallback models exist in the router
-        invalid_fallback_models = [
-            m for m in data.fallback_models if m not in model_names
-        ]
+        invalid_fallback_models = [m for m in data.fallback_models if m not in model_names]
         if invalid_fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -110,9 +110,7 @@ async def create_fallback(
         if data.model in data.fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"Model '{data.model}' cannot be its own fallback"
-                },
+                detail={"error": f"Model '{data.model}' cannot be its own fallback"},
             )
 
         # Check if we need to store in DB
@@ -136,9 +134,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(
-            fallback_key, []
-        )
+        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -158,16 +154,14 @@ async def create_fallback(
 
         # Save to database - convert router_settings to JSON string
         router_settings_json = json.dumps(router_settings)
-        await prisma_client.db.litellm_config.upsert(
+        await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
                 "create": {
                     "param_name": "router_settings",
                     "param_value": router_settings_json,
                 },
-                "update": {
-                    "param_value": router_settings_json
-                },
+                "update": {"param_value": router_settings_json},
             },
         )
 
@@ -228,16 +222,12 @@ async def get_fallback(
             )
 
         # Get fallbacks using the existing utility function
-        fallback_models = get_all_fallbacks(
-            model=model, llm_router=llm_router, fallback_type=fallback_type
-        )
+        fallback_models = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
 
         if not fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": f"No {fallback_type} fallbacks configured for model '{model}'"
-                },
+                detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
 
         return FallbackGetResponse(
@@ -313,9 +303,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(
-            fallback_key, []
-        )
+        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
 
         # Find and remove the fallback configuration
         fallback_found = False
@@ -329,9 +317,7 @@ async def delete_fallback(
         if not fallback_found:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": f"No {fallback_type} fallbacks configured for model '{model}'"
-                },
+                detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
 
         # Update router settings
@@ -339,25 +325,21 @@ async def delete_fallback(
 
         # Save to database - convert router_settings to JSON string
         router_settings_json = json.dumps(router_settings)
-        await prisma_client.db.litellm_config.upsert(
+        await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
                 "create": {
                     "param_name": "router_settings",
                     "param_value": router_settings_json,
                 },
-                "update": {
-                    "param_value": router_settings_json
-                },
+                "update": {"param_value": router_settings_json},
             },
         )
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, updated_fallbacks)
 
-        verbose_proxy_logger.info(
-            f"Fallback deleted: {model} (type: {fallback_type})"
-        )
+        verbose_proxy_logger.info(f"Fallback deleted: {model} (type: {fallback_type})")
 
         return FallbackDeleteResponse(
             model=model,

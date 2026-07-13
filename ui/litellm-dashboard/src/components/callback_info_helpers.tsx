@@ -7,7 +7,7 @@ interface CallbackConfig {
   description: string;
 }
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
@@ -42,6 +42,21 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       custom_callback_api_headers: "text",
     },
     description: "Custom Callback API Logging Integration",
+  },
+  {
+    id: "galileo",
+    displayName: "Galileo",
+    logo: `${asset_logos_folder}galileo.ico`,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      GALILEO_API_KEY: "password",
+      GALILEO_PROJECT_ID: "text",
+      GALILEO_LOG_STREAM_ID: "text",
+      GALILEO_BASE_URL: "text",
+      GALILEO_USERNAME: "text",
+      GALILEO_PASSWORD: "password",
+    },
+    description: "Galileo AI Observability Integration",
   },
   {
     id: "datadog",

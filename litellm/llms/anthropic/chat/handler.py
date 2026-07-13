@@ -11,7 +11,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    Optional,
     Tuple,
     Union,
     cast,
@@ -23,6 +22,9 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_headers_manager import (
+    update_request_with_filtered_beta,
+)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
@@ -45,6 +47,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
+from litellm.types.responses.main import (
+    OutputCodeInterpreterCall,
+    build_code_interpreter_log_outputs,
+)
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
@@ -58,10 +64,7 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
-from .transformation import AnthropicConfig
+from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -69,23 +72,29 @@ if TYPE_CHECKING:
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: AsyncHTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
-    speed: Optional[str] = None,
+    speed: str | None = None,
+    tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
 
     try:
         response = await client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -108,6 +117,7 @@ async def make_call(
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -122,23 +132,29 @@ async def make_call(
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: HTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
-    speed: Optional[str] = None,
+    speed: str | None = None,
+    tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
 
     try:
         response = client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -165,7 +181,11 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode, speed=speed
+        streaming_response=response.iter_lines(),
+        sync_stream=True,
+        json_mode=json_mode,
+        speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -192,7 +212,7 @@ class AnthropicChatCompletion(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
-        client: Optional[AsyncHTTPHandler],
+        client: AsyncHTTPHandler | None,
         encoding,
         api_key,
         logging_obj,
@@ -220,6 +240,9 @@ class AnthropicChatCompletion(BaseLLM):
             timeout=timeout,
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
+            tool_name_reverse_map=(
+                litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY) if isinstance(litellm_params, dict) else None
+            ),
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -251,15 +274,17 @@ class AnthropicChatCompletion(BaseLLM):
         provider_config: "BaseConfig",
         logger_fn=None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
-        async_handler = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.ANTHROPIC
-        )
+        async_handler = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
 
         try:
             response = await async_handler.post(
-                api_base, headers=headers, json=data, timeout=timeout
+                api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             ## LOGGING
@@ -334,10 +359,7 @@ class AnthropicChatCompletion(BaseLLM):
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
-        )
-
-        headers = update_headers_with_filtered_beta(
-            headers=headers, provider=custom_llm_provider
+            api_base=api_base,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
@@ -345,9 +367,7 @@ class AnthropicChatCompletion(BaseLLM):
             provider=LlmProviders(custom_llm_provider),
         )
         if config is None:
-            raise ValueError(
-                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
-            )
+            raise ValueError(f"Provider config not found for model: {model} and provider: {custom_llm_provider}")
 
         data = config.transform_request(
             model=model,
@@ -355,6 +375,12 @@ class AnthropicChatCompletion(BaseLLM):
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
             headers=headers,
+        )
+
+        headers, data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=data,
+            provider=custom_llm_provider,
         )
 
         ## LOGGING
@@ -393,11 +419,7 @@ class AnthropicChatCompletion(BaseLLM):
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                    client=(
-                        client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                 )
             else:
                 return self.acompletion_function(
@@ -439,6 +461,11 @@ class AnthropicChatCompletion(BaseLLM):
                     timeout=timeout,
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
+                    tool_name_reverse_map=(
+                        litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+                        if isinstance(litellm_params, dict)
+                        else None
+                    ),
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -460,6 +487,7 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=headers,
                         data=json.dumps(data),
                         timeout=timeout,
+                        logging_obj=logging_obj,
                     )
                 except Exception as e:
                     status_code = getattr(e, "status_code", 500)
@@ -497,7 +525,12 @@ class AnthropicChatCompletion(BaseLLM):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False, speed: Optional[str] = None
+        self,
+        streaming_response,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+        speed: str | None = None,
+        tool_name_reverse_map: Dict[str, str] | None = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -505,6 +538,13 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        # rewritten-name -> caller's original. Built per-request from the
+        # forward map in AnthropicConfig._build_request_tool_name_maps; only
+        # contains entries we actually rewrote, so a tool legitimately named
+        # `foo_bar` is *not* reverse-mapped just because some other tool was
+        # rewritten to `foo_bar` in a different request. Empty/None is the
+        # common case (no '/' or other invalid chars in any tool name).
+        self.tool_name_reverse_map: Dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -520,14 +560,24 @@ class ModelResponseIterator:
 
         # Track current content block type to avoid emitting tool calls for non-tool blocks
         # See: https://github.com/BerriAI/litellm/issues/17254
-        self.current_content_block_type: Optional[str] = None
+        self.current_content_block_type: str | None = None
 
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
-        
+
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: List[Dict[str, Any]] = []
+
+        # Accumulate streamed thinking text so final usage can split reasoning
+        # tokens from regular output tokens.
+        self.reasoning_content_chunks: List[str] = []
+
+        # Track server tool use inputs and results for code_interpreter_results
+        self._server_tool_inputs: Dict[str, Any] = {}
+        self.tool_results: List[Dict[str, Any]] = []
+        self._current_server_tool_id: str | None = None
+        self._container_id: str | None = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -553,26 +603,31 @@ class ModelResponseIterator:
         return False
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        reasoning_content = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         return AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None, speed=self.speed
+            usage_object=cast(dict, anthropic_usage_chunk),
+            reasoning_content=reasoning_content,
+            speed=self.speed,
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
-        Optional[ChatCompletionToolCallChunk],
+        ChatCompletionToolCallChunk | None,
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
         Dict[str, Any],
+        str | None,
     ]:
         """
         Helper function to handle the content block delta
         """
         text = ""
-        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        tool_use: ChatCompletionToolCallChunk | None = None
         provider_specific_fields = {}
+        reasoning_content: str | None = None
         content_block = ContentBlockDelta(**chunk)  # type: ignore
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ] = []
+        thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] = []
 
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
@@ -596,44 +651,49 @@ class ModelResponseIterator:
                 )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
-        elif (
-            "thinking" in content_block["delta"]
-            or "signature" in content_block["delta"]
-        ):
-            thinking_blocks = [
-                ChatCompletionThinkingBlock(
-                    type="thinking",
-                    thinking=content_block["delta"].get("thinking") or "",
-                    signature=str(content_block["delta"].get("signature") or ""),
-                )
-            ]
-            provider_specific_fields["thinking_blocks"] = thinking_blocks
+        elif "thinking" in content_block["delta"] or "signature" in content_block["delta"]:
+            thinking_content = content_block["delta"].get("thinking")
+            if isinstance(thinking_content, str) and thinking_content:
+                self.reasoning_content_chunks.append(thinking_content)
+                reasoning_content = thinking_content
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking=thinking_content,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+            signature = content_block["delta"].get("signature")
+            if isinstance(signature, str) and signature:
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking="".join(
+                            cast(str, block["delta"].get("thinking"))
+                            for block in self.content_blocks
+                            if isinstance(block["delta"].get("thinking"), str)
+                        ),
+                        signature=signature,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
+                if reasoning_content is None:
+                    reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
             # Handle compaction delta
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"]
+                "content": content_block["delta"]["content"],
             }
 
-        return text, tool_use, thinking_blocks, provider_specific_fields
-
-    def _handle_reasoning_content(
-        self,
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ],
-    ) -> Optional[str]:
-        """
-        Handle the reasoning content
-        """
-        reasoning_content = None
-        for block in thinking_blocks:
-            thinking_content = cast(Optional[str], block.get("thinking"))
-            if reasoning_content is None:
-                reasoning_content = ""
-            if thinking_content is not None:
-                reasoning_content += thinking_content
-        return reasoning_content
+        return (
+            text,
+            tool_use,
+            thinking_blocks,
+            provider_specific_fields,
+            reasoning_content,
+        )
 
     def _handle_redacted_thinking_content(
         self,
@@ -666,23 +726,50 @@ class ModelResponseIterator:
 
         return content_block_start
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
+    def _build_code_interpreter_results(self) -> list:
+        """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
+
+        Called during streaming to produce provider-neutral code_interpreter_results
+        alongside the raw tool_results, so the Responses API layer doesn't need
+        Anthropic-specific knowledge.
+
+        Returns the full cumulative list each time (not incremental), matching
+        how web_search_results works.  stream_chunk_builder uses "last value
+        wins" for list-valued provider_specific_fields keys, so the last
+        emission must contain every result.
+        """
+        results = []
+        for tr in self.tool_results:
+            if tr.get("type") != "bash_code_execution_tool_result":
+                continue
+            call_id = tr.get("tool_use_id", "")
+            content = tr.get("content", {})
+            log_outputs = build_code_interpreter_log_outputs(content)
+            tool_input = self._server_tool_inputs.get(call_id, {})
+            code = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            results.append(
+                OutputCodeInterpreterCall(
+                    type="code_interpreter_call",
+                    id=call_id,
+                    code=code,
+                    container_id=self._container_id,
+                    status="completed",
+                    outputs=log_outputs,
+                )
+            )
+        return results
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
-            usage: Optional[Usage] = None
+            usage: Usage | None = None
             provider_specific_fields: Dict[str, Any] = {}
-            reasoning_content: Optional[str] = None
-            thinking_blocks: Optional[
-                List[
-                    Union[
-                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                    ]
-                ]
-            ] = None
+            reasoning_content: str | None = None
+            thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
             index = 0
@@ -696,11 +783,8 @@ class ModelResponseIterator:
                     tool_use,
                     thinking_blocks,
                     provider_specific_fields,
+                    reasoning_content,
                 ) = self._content_block_delta_helper(chunk=chunk)
-                if thinking_blocks:
-                    reasoning_content = self._handle_reasoning_content(
-                        thinking_blocks=thinking_blocks
-                    )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -713,8 +797,16 @@ class ModelResponseIterator:
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
-                elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
+                elif (
+                    content_block_start["content_block"]["type"] == "tool_use"
+                    or content_block_start["content_block"]["type"] == "server_tool_use"
+                ):
                     self.tool_index += 1
+                    # Reverse-map the (sanitized) tool name back to the
+                    # caller's original. No-op when the map is empty.
+                    _stream_tool_name = content_block_start["content_block"]["name"]
+                    if self.tool_name_reverse_map and _stream_tool_name in self.tool_name_reverse_map:
+                        _stream_tool_name = self.tool_name_reverse_map[_stream_tool_name]
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
@@ -722,19 +814,25 @@ class ModelResponseIterator:
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
+                            name=_stream_tool_name,
                             arguments="",
                         ),
                         index=self.tool_index,
                     )
+                    # Track server tool use inputs for code_interpreter_results.
+                    # The initial input in content_block_start is typically {}
+                    # for streaming; the full input arrives via input_json_delta
+                    # and is assembled at content_block_stop.
+                    if content_block_start["content_block"]["type"] == "server_tool_use":
+                        self._current_server_tool_id = content_block_start["content_block"]["id"]
+                        tool_input = content_block_start["content_block"].get("input", {})
+                        self._server_tool_inputs[self._current_server_tool_id] = tool_input
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
-                elif (
-                    content_block_start["content_block"]["type"] == "redacted_thinking"
-                ):
+                elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
                         provider_specific_fields,
@@ -746,49 +844,37 @@ class ModelResponseIterator:
                 elif content_block_start["content_block"]["type"] == "compaction":
                     # Handle compaction blocks
                     # The full content comes in content_block_start
-                    self.compaction_blocks.append(
-                        content_block_start["content_block"]
-                    )
-                    provider_specific_fields["compaction_blocks"] = (
-                        self.compaction_blocks
-                    )
+                    self.compaction_blocks.append(content_block_start["content_block"])
+                    provider_specific_fields["compaction_blocks"] = self.compaction_blocks
                     provider_specific_fields["compaction_start"] = {
                         "type": "compaction",
-                        "content": content_block_start["content_block"].get("content", "")
+                        "content": content_block_start["content_block"].get("content", ""),
                     }
 
                 elif content_block_start["content_block"]["type"].endswith("_tool_result"):
                     # Handle all tool result types (web_search, bash_code_execution, text_editor, etc.)
                     content_type = content_block_start["content_block"]["type"]
-                    
+
                     # Special handling for web_search_tool_result for backwards compatibility
                     if content_type == "web_search_tool_result":
                         # Capture web_search_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
-                        self.web_search_results.append(
-                            content_block_start["content_block"]
-                        )
-                        provider_specific_fields["web_search_results"] = (
-                            self.web_search_results
-                        )
+                        self.web_search_results.append(content_block_start["content_block"])
+                        provider_specific_fields["web_search_results"] = self.web_search_results
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
-                        self.web_search_results.append(
-                            content_block_start["content_block"]
-                        )
-                        provider_specific_fields["web_search_results"] = (
-                            self.web_search_results
-                        )
+                        self.web_search_results.append(content_block_start["content_block"])
+                        provider_specific_fields["web_search_results"] = self.web_search_results
                     elif content_type != "tool_search_tool_result":
                         # Handle other tool results (code execution, etc.)
                         # Skip tool_search_tool_result as it's internal metadata
-                        if not hasattr(self, "tool_results"):
-                            self.tool_results = []
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
+                        # Convert to provider-neutral code_interpreter_results
+                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
@@ -805,6 +891,21 @@ class ModelResponseIterator:
                             ),
                             index=self.tool_index,
                         )
+                    # Update server_tool_inputs with fully assembled input
+                    # from input_json_delta chunks (content_block_start has {})
+                    if self.current_content_block_type == "server_tool_use" and self._current_server_tool_id:
+                        args = ""
+                        for block in self.content_blocks:
+                            if block["delta"]["type"] == "input_json_delta":
+                                partial_json = block["delta"].get("partial_json")
+                                if isinstance(partial_json, str):
+                                    args += partial_json
+                        if args:
+                            try:
+                                self._server_tool_inputs[self._current_server_tool_id] = json.loads(args)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        self._current_server_tool_id = None
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
                 # Reset current content block type
@@ -817,6 +918,13 @@ class ModelResponseIterator:
                 finish_reason, usage, container = self._handle_message_delta(chunk)
                 if container:
                     provider_specific_fields["container"] = container
+                    # Store container_id and re-emit code_interpreter_results
+                    # so stream_chunk_builder's last-value-wins picks up the
+                    # version with container_id populated.
+                    container_id = container.get("id") if isinstance(container, dict) else None
+                    if container_id and self.tool_results:
+                        self._container_id = container_id
+                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -839,9 +947,7 @@ class ModelResponseIterator:
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
                 if "usage" in message_start_block["message"]:
-                    usage = self._handle_usage(
-                        anthropic_usage_chunk=message_start_block["message"]["usage"]
-                    )
+                    usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
@@ -862,14 +968,8 @@ class ModelResponseIterator:
                         delta=Delta(
                             content=text,
                             tool_calls=[tool_use] if tool_use is not None else None,
-                            provider_specific_fields=(
-                                provider_specific_fields
-                                if provider_specific_fields
-                                else None
-                            ),
-                            thinking_blocks=(
-                                thinking_blocks if thinking_blocks else None
-                            ),
+                            provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
+                            thinking_blocks=(thinking_blocks if thinking_blocks else None),
                             reasoning_content=reasoning_content,
                         ),
                         finish_reason=finish_reason,
@@ -885,8 +985,8 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     def _handle_json_mode_chunk(
-        self, text: str, tool_use: Optional[ChatCompletionToolCallChunk]
-    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        self, text: str, tool_use: ChatCompletionToolCallChunk | None
+    ) -> Tuple[str, ChatCompletionToolCallChunk | None]:
         """
         If JSON mode is enabled, convert the tool call to a message.
 
@@ -921,9 +1021,7 @@ class ModelResponseIterator:
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message = AnthropicConfig._convert_tool_response_to_message(
-                tool_calls=[tool_use]
-            )
+            message = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -932,7 +1030,7 @@ class ModelResponseIterator:
 
         return text, tool_use
 
-    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage], Optional[Dict[str, Any]]]:
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Usage | None, Dict[str, Any] | None]:
         """
         Handle message_delta event for finish_reason, usage, and container.
 
@@ -943,9 +1041,7 @@ class ModelResponseIterator:
             Tuple of (finish_reason, usage, container)
         """
         message_delta = MessageBlockDelta(**chunk)  # type: ignore
-        finish_reason = map_finish_reason(
-            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
-        )
+        finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
         # Override finish_reason to "stop" if we converted response_format tools
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
         if self.converted_response_format_tool:
@@ -954,9 +1050,7 @@ class ModelResponseIterator:
         container = message_delta["delta"].get("container")
         return finish_reason, usage, container
 
-    def _handle_accumulated_json_chunk(
-        self, data_str: str
-    ) -> Optional[ModelResponseStream]:
+    def _handle_accumulated_json_chunk(self, data_str: str) -> ModelResponseStream | None:
         """
         Handle partial JSON chunks by accumulating them until valid JSON is received.
 
@@ -981,7 +1075,7 @@ class ModelResponseIterator:
             # If it's not valid JSON yet, continue to the next chunk
             return None
 
-    def _parse_sse_data(self, str_line: str) -> Optional[ModelResponseStream]:
+    def _parse_sse_data(self, str_line: str) -> ModelResponseStream | None:
         """
         Parse SSE data line, handling both complete and partial JSON chunks.
 

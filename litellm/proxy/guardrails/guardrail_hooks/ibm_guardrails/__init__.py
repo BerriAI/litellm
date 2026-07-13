@@ -32,8 +32,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     score_threshold = getattr(optional_params, "score_threshold", None)
     block_on_detection = getattr(optional_params, "block_on_detection", True)
 
-
-
     is_detector_server = litellm_params.is_detector_server
     if is_detector_server is None:
         is_detector_server = True

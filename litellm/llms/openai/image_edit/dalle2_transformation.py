@@ -22,7 +22,7 @@ else:
 class DallE2ImageEditConfig(OpenAIImageEditConfig):
     """
     DALL-E-2 specific configuration for image edit API.
-    
+
     DALL-E-2 only supports editing a single image (not an array).
     Uses "image" field name instead of "image[]".
     """
@@ -40,7 +40,7 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         Transform image edit request for DALL-E-2.
 
         DALL-E-2 only accepts a single image with field name "image" (not "image[]").
-        """        
+        """
         request_params = {
             "model": model,
             **image_edit_optional_request_params,
@@ -49,26 +49,21 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
             request_params["image"] = image
         if prompt is not None:
             request_params["prompt"] = prompt
-            
+
         request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
-
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
         _image_list = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files = {
-            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
-        }
+        data_without_files = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
         files_list: List[Tuple[str, Any]] = []
 
         # Handle image parameter - DALL-E-2 only supports single image
         if _image_list is not None:
-            image_list = (
-                [_image_list] if not isinstance(_image_list, list) else _image_list
-            )
+            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
 
             # Validate only one image is provided
             if len(image_list) > 1:
@@ -94,13 +89,10 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                    _mask
-                )
+                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(_mask)
                 if isinstance(_mask, BufferedReader):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
-

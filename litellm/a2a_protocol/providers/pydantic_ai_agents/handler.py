@@ -5,7 +5,7 @@ Pydantic AI agents follow A2A protocol but don't support streaming natively.
 This handler provides fake streaming by converting non-streaming responses into streaming chunks.
 """
 
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
@@ -16,7 +16,7 @@ from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
 class PydanticAIHandler:
     """
     Handler for Pydantic AI agent requests.
-    
+
     Provides:
     - Direct non-streaming requests to Pydantic AI agents
     - Fake streaming by converting non-streaming responses into streaming chunks
@@ -26,8 +26,9 @@ class PydanticAIHandler:
     async def handle_non_streaming(
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming request to Pydantic AI agent.
@@ -37,13 +38,15 @@ class PydanticAIHandler:
             params: A2A MessageSendParams containing the message
             api_base: Base URL of the Pydantic AI agent
             timeout: Request timeout in seconds
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Returns:
             A2A SendMessageResponse dict
         """
-        verbose_logger.info(
-            f"Pydantic AI: Routing to Pydantic AI agent at {api_base}"
-        )
+        if api_base is None:
+            raise ValueError("api_base is required for Pydantic AI agents")
+        verbose_logger.info(f"Pydantic AI: Routing to Pydantic AI agent at {api_base}")
 
         # Send request directly to Pydantic AI agent
         response_data = await PydanticAITransformation.send_non_streaming_request(
@@ -51,6 +54,7 @@ class PydanticAIHandler:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
         return response_data
@@ -59,10 +63,11 @@ class PydanticAIHandler:
     async def handle_streaming(
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
         chunk_size: int = 50,
         delay_ms: int = 10,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming request to Pydantic AI agent with fake streaming.
@@ -78,13 +83,15 @@ class PydanticAIHandler:
             timeout: Request timeout in seconds
             chunk_size: Number of characters per chunk
             delay_ms: Delay between chunks in milliseconds
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Yields:
             A2A streaming response events
         """
-        verbose_logger.info(
-            f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}"
-        )
+        if api_base is None:
+            raise ValueError("api_base is required for Pydantic AI agents")
+        verbose_logger.info(f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}")
 
         # Get raw task response first (not the transformed A2A format)
         raw_response = await PydanticAITransformation.send_and_get_raw_response(
@@ -92,6 +99,7 @@ class PydanticAIHandler:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
         # Convert raw task response to fake streaming chunks
@@ -102,5 +110,3 @@ class PydanticAIHandler:
             delay_ms=delay_ms,
         ):
             yield chunk
-
-

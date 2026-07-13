@@ -29,9 +29,10 @@ else:
 class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     """
     Vertex AI Imagen Image Edit Configuration
-    
+
     Uses predict API for Imagen models on Vertex AI
     """
+
     SUPPORTED_PARAMS: List[str] = ["n", "size", "mask"]
 
     def __init__(self) -> None:
@@ -48,23 +49,19 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         drop_params: bool,
     ) -> Dict[str, Any]:
         supported_params = self.get_supported_openai_params(model)
-        filtered_params = {
-            key: value
-            for key, value in image_edit_optional_params.items()
-            if key in supported_params
-        }
+        filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
         mapped_params: Dict[str, Any] = {}
 
         # Map OpenAI parameters to Imagen format
         if "n" in filtered_params:
             mapped_params["sampleCount"] = filtered_params["n"]
-        
+
         if "size" in filtered_params:
             mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
                 filtered_params["size"]  # type: ignore[arg-type]
             )
-            
+
         if "mask" in filtered_params:
             mapped_params["mask"] = filtered_params["mask"]
 
@@ -102,10 +99,18 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        litellm_params = litellm_params or {}
+
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -122,8 +127,8 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Imagen predict API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
@@ -160,26 +165,19 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             raise ValueError("Vertex AI Imagen image edit requires a prompt.")
 
         # Correct Imagen instances format
-        instances = [
-            {
-                "prompt": prompt,
-                "referenceImages": reference_images
-            }
-        ]
+        instances = [{"prompt": prompt, "referenceImages": reference_images}]
 
         # Extract OpenAI parameters and set sensible defaults for Vertex AI-specific parameters
         sample_count = image_edit_optional_request_params.get("sampleCount", 1)
         # Use sensible defaults for Vertex AI-specific parameters (not exposed to users)
         edit_mode = "EDIT_MODE_INPAINT_INSERTION"  # Default edit mode
         base_steps = 50  # Default number of steps
-        
+
         # Imagen parameters with correct structure
         parameters = {
             "sampleCount": sample_count,
             "editMode": edit_mode,
-            "editConfig": {
-                "baseSteps": base_steps
-            }
+            "editConfig": {"baseSteps": base_steps},
         }
 
         # Set default values for Vertex AI-specific parameters (not configurable by users via OpenAI API)
@@ -188,7 +186,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         request_body: Dict[str, Any] = {
             "instances": instances,
-            "parameters": parameters
+            "parameters": parameters,
         }
 
         payload: Any = json.dumps(request_body)
@@ -231,7 +229,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         """Map OpenAI size format to Imagen aspect ratio format"""
         aspect_ratio_map = {
             "1024x1024": "1:1",
-            "1792x1024": "16:9", 
+            "1792x1024": "16:9",
             "1024x1792": "9:16",
             "1280x896": "4:3",
             "896x1280": "3:4",
@@ -239,8 +237,9 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         return aspect_ratio_map.get(size, "1:1")
 
     def _prepare_reference_images(
-        self, image: Union[FileTypes, List[FileTypes]], 
-        image_edit_optional_request_params: Dict[str, Any]
+        self,
+        image: Union[FileTypes, List[FileTypes]],
+        image_edit_optional_request_params: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """
         Prepare reference images in the correct Imagen API format
@@ -252,49 +251,43 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             images = [image]
 
         reference_images: List[Dict[str, Any]] = []
-        
+
         for idx, img in enumerate(images):
             if img is None:
                 continue
 
             image_bytes = self._read_all_bytes(img)
             base64_data = base64.b64encode(image_bytes).decode("utf-8")
-            
+
             # Create reference image structure
             reference_image = {
                 "referenceType": "REFERENCE_TYPE_RAW",
                 "referenceId": idx + 1,
-                "referenceImage": {
-                    "bytesBase64Encoded": base64_data
-                }
+                "referenceImage": {"bytesBase64Encoded": base64_data},
             }
-            
+
             reference_images.append(reference_image)
-        
+
         # Handle mask image if provided (for inpainting)
         mask_image = image_edit_optional_request_params.get("mask")
         if mask_image is not None:
             mask_bytes = self._read_all_bytes(mask_image)
             mask_base64 = base64.b64encode(mask_bytes).decode("utf-8")
-            
+
             mask_reference = {
                 "referenceType": "REFERENCE_TYPE_MASK",
                 "referenceId": len(reference_images) + 1,
-                "referenceImage": {
-                    "bytesBase64Encoded": mask_base64
-                },
+                "referenceImage": {"bytesBase64Encoded": mask_base64},
                 "maskImageConfig": {
                     "maskMode": "MASK_MODE_USER_PROVIDED",
-                    "dilation": 0.03  # Default dilation value (not configurable via OpenAI API)
-                }
+                    "dilation": 0.03,  # Default dilation value (not configurable via OpenAI API)
+                },
             }
             reference_images.append(mask_reference)
 
         return reference_images
 
-    def _read_all_bytes(
-        self, image: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
-    ) -> bytes:
+    def _read_all_bytes(self, image: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bytes:
         if depth > max_depth:
             raise ValueError(
                 f"Max recursion depth {max_depth} reached while reading image bytes for Vertex AI Imagen image edit."
@@ -341,18 +334,19 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             if stream_pos is not None:
                 image.seek(stream_pos)
             return data
-        if isinstance(image, (str, Path)):
-            path_obj = Path(image)
-            if not path_obj.exists():
-                raise ValueError(
-                    f"Mask/image path does not exist for Vertex AI Imagen image edit: {path_obj}"
-                )
-            return path_obj.read_bytes()
+        if isinstance(image, str):
+            raise ValueError(
+                "Unsupported image input: plain string values are not accepted for "
+                "Vertex AI Imagen image edit. Provide image bytes or a file-like object."
+            )
+        if isinstance(image, Path):
+            raise ValueError(
+                "Unsupported image input: filesystem paths are not accepted for "
+                "Vertex AI Imagen image edit. Provide image bytes or a file-like object."
+            )
         if hasattr(image, "read"):
             data = image.read()
             if isinstance(data, str):
                 data = data.encode("utf-8")
             return data
-        raise ValueError(
-            f"Unsupported image type for Vertex AI Imagen image edit. Got type={type(image)}"
-        )
+        raise ValueError(f"Unsupported image type for Vertex AI Imagen image edit. Got type={type(image)}")

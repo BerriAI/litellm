@@ -33,13 +33,10 @@ export const PaginatedModelSelect = ({
     wait: DEBOUNCE_MS,
   });
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteModelInfo(pageSize, debouncedSearch || undefined);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteModelInfo(
+    pageSize,
+    debouncedSearch || undefined,
+  );
 
   const options = useMemo(() => {
     if (!data?.pages) return [];
@@ -79,12 +76,14 @@ export const PaginatedModelSelect = ({
               <Text strong>Model name:</Text>
               <Text ellipsis>{modelName}</Text>
             </Space>
-            <Text ellipsis type="secondary" >
+            <Text ellipsis type="secondary">
               Model ID: {modelId}
             </Text>
           </Space>
         ) : (
-          <Text ellipsis type="secondary">Model ID: {modelId}</Text>
+          <Text ellipsis type="secondary">
+            Model ID: {modelId}
+          </Text>
         )}
       </>
     );
@@ -92,8 +91,7 @@ export const PaginatedModelSelect = ({
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    const scrollRatio =
-      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
 
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
@@ -106,8 +104,7 @@ export const PaginatedModelSelect = ({
   };
 
   const handleChange = (v: string | string[] | null) => {
-    const normalized =
-      typeof v === "string" ? v : Array.isArray(v) ? v[0] ?? "" : "";
+    const normalized = typeof v === "string" ? v : Array.isArray(v) ? v[0] ?? "" : "";
     onChange?.(normalized);
   };
 

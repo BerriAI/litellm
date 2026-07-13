@@ -1,7 +1,8 @@
 """
 Base OCR transformation configuration.
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 import httpx
 from pydantic import PrivateAttr
@@ -15,40 +16,47 @@ else:
     LiteLLMLoggingObj = Any
 
 
-# DocumentType for OCR - Mistral format document dict
+# DocumentType for OCR - providers always receive a dict with
+# type="document_url" or type="image_url" (str values only).
+# File-type inputs are preprocessed to this format in litellm/ocr/main.py.
 DocumentType = Dict[str, str]
 
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
     """Page dimensions from OCR response."""
-    dpi: Optional[int] = None
-    height: Optional[int] = None
-    width: Optional[int] = None
+
+    dpi: int | None = None
+    height: int | None = None
+    width: int | None = None
 
 
 class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
-    image_base64: Optional[str] = None
-    bbox: Optional[Dict[str, Any]] = None
-    
+
+    image_base64: str | None = None
+    bbox: Dict[str, Any] | None = None
+
     model_config = {"extra": "allow"}
 
 
 class OCRPage(LiteLLMPydanticObjectBase):
     """Single page from OCR response."""
+
     index: int
     markdown: str
-    images: Optional[List[OCRPageImage]] = None
-    dimensions: Optional[OCRPageDimensions] = None
-    
+    images: List[OCRPageImage] | None = None
+    dimensions: OCRPageDimensions | None = None
+
     model_config = {"extra": "allow"}
 
 
 class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
-    pages_processed: Optional[int] = None
-    doc_size_bytes: Optional[int] = None
-    
+
+    pages_processed: int | None = None
+    credits: float | None = None
+    doc_size_bytes: int | None = None
+
     model_config = {"extra": "allow"}
 
 
@@ -57,12 +65,16 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     Standard OCR response format.
     Standardized to Mistral OCR format - other providers should transform to this format.
     """
+
     pages: List[OCRPage]
     model: str
-    document_annotation: Optional[Any] = None
-    usage_info: Optional[OCRUsageInfo] = None
+    document_annotation: Any | None = None
+    usage_info: OCRUsageInfo | None = None
+    content: str | None = None
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
     object: str = "ocr"
-    
+
     model_config = {"extra": "allow"}
 
     # Define private attributes using PrivateAttr
@@ -71,8 +83,9 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
-    data: Optional[Union[Dict, bytes]] = None
-    files: Optional[Dict[str, Any]] = None
+
+    data: Union[Dict, bytes] | None = None
+    files: Dict[str, Any] | None = None
 
 
 class BaseOCRConfig:
@@ -91,6 +104,12 @@ class BaseOCRConfig:
         """
         return []
 
+    def get_api_key_env_var(self) -> str | None:
+        """
+        Return the provider-specific API key environment variable name, if any.
+        """
+        return None
+
     def map_ocr_params(
         self,
         non_default_params: dict,
@@ -104,9 +123,9 @@ class BaseOCRConfig:
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -117,10 +136,10 @@ class BaseOCRConfig:
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
@@ -140,13 +159,17 @@ class BaseOCRConfig:
         """
         Transform OCR request to provider-specific format.
         Override in provider-specific implementations.
-        
+
+        Note: By the time this method is called, any file-type documents have already
+        been converted to document_url/image_url format with base64 data URIs by
+        the preprocessing in litellm/ocr/main.py.
+
         Args:
             model: Model name
-            document: Document to process (Mistral format dict, or file path, bytes, etc.)
+            document: Document to process - always a dict with type="document_url" or type="image_url"
             optional_params: Optional parameters for the request
             headers: Request headers
-            
+
         Returns:
             OCRRequestData with data and files fields
         """
@@ -164,15 +187,15 @@ class BaseOCRConfig:
         Async transform OCR request to provider-specific format.
         Optional method - providers can override if they need async transformations
         (e.g., Azure AI for URL-to-base64 conversion).
-        
+
         Default implementation falls back to sync transform_ocr_request.
-        
+
         Args:
             model: Model name
             document: Document to process (Mistral format dict, or file path, bytes, etc.)
             optional_params: Optional parameters for the request
             headers: Request headers
-            
+
         Returns:
             OCRRequestData with data and files fields
         """
@@ -209,14 +232,14 @@ class BaseOCRConfig:
         Async transform provider-specific OCR response to standard format.
         Optional method - providers can override if they need async transformations
         (e.g., Azure Document Intelligence for async operation polling).
-        
+
         Default implementation falls back to sync transform_ocr_response.
-        
+
         Args:
             model: Model name
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             OCRResponse in standard format
         """
@@ -240,4 +263,3 @@ class BaseOCRConfig:
             message=error_message,
             headers=headers,
         )
-

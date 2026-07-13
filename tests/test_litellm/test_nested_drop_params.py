@@ -165,16 +165,13 @@ class TestComplexNestedPatterns:
 
         # Verify deeply nested field removed from all array elements
         assert (
-            "remove_this_field"
-            not in result["tools"][0]["some_arr"][0]["some_struct"]
+            "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
         )
         assert (
-            "remove_this_field"
-            not in result["tools"][0]["some_arr"][1]["some_struct"]
+            "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
         )
         assert (
-            "remove_this_field"
-            not in result["tools"][1]["some_arr"][0]["some_struct"]
+            "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
         )
 
         # Verify other fields preserved

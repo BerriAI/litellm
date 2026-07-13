@@ -146,33 +146,26 @@ async def init_policies(
     if validation_result.errors:
         for error in validation_result.errors:
             verbose_proxy_logger.error(
-                f"Policy validation error in '{error.policy_name}': "
-                f"[{error.error_type}] {error.message}"
+                f"Policy validation error in '{error.policy_name}': [{error.error_type}] {error.message}"
             )
 
     if validation_result.warnings:
         for warning in validation_result.warnings:
             verbose_proxy_logger.warning(
-                f"Policy validation warning in '{warning.policy_name}': "
-                f"[{warning.error_type}] {warning.message}"
+                f"Policy validation warning in '{warning.policy_name}': [{warning.error_type}] {warning.message}"
             )
 
     # Fail if there are errors and fail_on_error is True
     if not validation_result.valid and fail_on_error:
-        error_messages = [
-            f"[{e.policy_name}] {e.message}" for e in validation_result.errors
-        ]
+        error_messages = [f"[{e.policy_name}] {e.message}" for e in validation_result.errors]
         raise ValueError(
-            f"Policy validation failed with {len(validation_result.errors)} error(s):\n"
-            + "\n".join(error_messages)
+            f"Policy validation failed with {len(validation_result.errors)} error(s):\n" + "\n".join(error_messages)
         )
 
     # Load policies into registry (even with warnings)
     try:
         policy_registry.load_policies(policies_config)
-        verbose_proxy_logger.info(
-            f"Successfully loaded {len(policies_config)} policies"
-        )
+        verbose_proxy_logger.info(f"Successfully loaded {len(policies_config)} policies")
     except Exception as e:
         verbose_proxy_logger.error(f"Failed to load policies: {str(e)}")
         raise
@@ -181,9 +174,7 @@ async def init_policies(
     if policy_attachments_config:
         try:
             attachment_registry.load_attachments(policy_attachments_config)
-            verbose_proxy_logger.info(
-                f"Successfully loaded {len(policy_attachments_config)} policy attachments"
-            )
+            verbose_proxy_logger.info(f"Successfully loaded {len(policy_attachments_config)} policy attachments")
         except Exception as e:
             verbose_proxy_logger.error(f"Failed to load policy attachments: {str(e)}")
             raise
@@ -258,19 +249,21 @@ def get_policies_summary() -> Dict[str, Any]:
             "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "condition": policy.condition.model_dump() if policy and policy.condition else None,
+            "condition": (policy.condition.model_dump() if policy and policy.condition else None),
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }
 
     # Add attachment info
     for attachment in attachment_registry.get_all_attachments():
-        summary["attachments"].append({
-            "policy": attachment.policy,
-            "scope": attachment.scope,
-            "teams": attachment.teams,
-            "keys": attachment.keys,
-            "models": attachment.models,
-        })
+        summary["attachments"].append(
+            {
+                "policy": attachment.policy,
+                "scope": attachment.scope,
+                "teams": attachment.teams,
+                "keys": attachment.keys,
+                "models": attachment.models,
+            }
+        )
 
     return summary

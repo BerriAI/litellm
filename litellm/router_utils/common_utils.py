@@ -14,30 +14,33 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     Hash of the credential params, used for mapping the file id to the right model
     """
     sensitive_params = CredentialLiteLLMParams(**litellm_params)
-    return hashlib.sha256(
-        json.dumps(sensitive_params.model_dump()).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
 def add_model_file_id_mappings(
     healthy_deployments: Union[List[Dict], Dict], responses: List["OpenAIFileObject"]
 ) -> dict:
     """
-    Create a mapping of model name to file id
+    Create a mapping of model id to file id
     {
         "model_id": "file_id",
         "model_id": "file_id",
     }
+
+    `healthy_deployments` may be either a list of deployment dicts (multiple
+    matched deployments) or a single deployment dict (when the router resolved
+    a specific deployment, e.g. because the requested model matched a
+    `model_info.id`). Both shapes must be handled by extracting
+    `model_info.id` from each deployment.
     """
-    model_file_id_mapping = {}
-    if isinstance(healthy_deployments, list):
-        for deployment, response in zip(healthy_deployments, responses):
-            model_file_id_mapping[deployment.get("model_info", {}).get("id")] = (
-                response.id
-            )
-    elif isinstance(healthy_deployments, dict):
-        for model_id, file_id in healthy_deployments.items():
-            model_file_id_mapping[model_id] = file_id
+    model_file_id_mapping: Dict[str, str] = {}
+    deployments_list: List[Dict] = (
+        healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
+    )
+    for deployment, response in zip(deployments_list, responses):
+        model_id = deployment.get("model_info", {}).get("id")
+        if model_id is not None:
+            model_file_id_mapping[model_id] = response.id
     return model_file_id_mapping
 
 
@@ -55,10 +58,8 @@ def filter_team_based_models(
 
     metadata = request_kwargs.get("metadata") or {}
     litellm_metadata = request_kwargs.get("litellm_metadata") or {}
-    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
-        "user_api_key_team_id"
-    )
-    ids_to_remove = []
+    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    ids_to_remove = set()
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
     for deployment in healthy_deployments:
@@ -67,13 +68,14 @@ def filter_team_based_models(
         if model_team_id is None:
             continue
         if model_team_id != request_team_id:
-            ids_to_remove.append(deployment.get("model_info", {}).get("id"))
+            ids_to_remove.add(_model_info.get("id"))
 
     return [
         deployment
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
 
 def _deployment_supports_web_search(deployment: Dict) -> bool:
     """
@@ -112,7 +114,7 @@ def filter_web_search_deployments(
     is_web_search_request = False
     tools = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure. 
+        # These are the two websearch tools for OpenAI / Azure.
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
             is_web_search_request = True
             break
@@ -125,4 +127,3 @@ def filter_web_search_deployments(
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
-

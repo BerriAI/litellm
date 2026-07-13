@@ -3,6 +3,7 @@ import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
 import { Team } from "@/components/key_team_helpers/key_list";
+import { IdCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 
 interface HealthCheckData {
   model_name: string;
@@ -21,6 +22,18 @@ interface HealthCheckData {
   health_full_error?: string;
 }
 
+const HEALTH_STATUS_TONES: Record<string, StatusTone> = {
+  healthy: "success",
+  unhealthy: "error",
+  checking: "info",
+  none: "neutral",
+};
+
+const healthStatusBadge = (status: string): JSX.Element => {
+  const tone = HEALTH_STATUS_TONES[status];
+  return tone ? <StatusBadge tone={tone} label={status} /> : <StatusBadge tone="neutral" label="unknown" />;
+};
+
 interface HealthStatus {
   status: string;
   lastCheck: string;
@@ -35,10 +48,9 @@ export const healthCheckColumns = (
   modelHealthStatuses: { [key: string]: HealthStatus },
   selectedModelsForHealth: string[],
   allModelsSelected: boolean,
-  handleModelSelection: (modelName: string, checked: boolean) => void,
+  handleModelSelection: (modelId: string, checked: boolean) => void,
   handleSelectAll: (checked: boolean) => void,
-  runIndividualHealthCheck: (modelName: string) => void,
-  getStatusBadge: (status: string) => JSX.Element,
+  runIndividualHealthCheck: (modelId: string) => void,
   getDisplayModelName: (model: any) => string,
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
   showSuccessModal?: (modelName: string, response: any) => void,
@@ -62,24 +74,17 @@ export const healthCheckColumns = (
     sortingFn: "alphanumeric",
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
-      const isSelected = selectedModelsForHealth.includes(modelName);
+      const modelId = model.model_info?.id ?? "";
+      const isSelected = selectedModelsForHealth.includes(modelId);
 
       return (
         <div className="flex items-center gap-2">
           <Checkbox
             checked={isSelected}
-            onChange={(e) => handleModelSelection(modelName, e.target.checked)}
+            onChange={(e) => handleModelSelection(modelId, e.target.checked)}
             onClick={(e) => e.stopPropagation()}
           />
-          <Tooltip title={model.model_info.id}>
-            <div
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-              onClick={() => setSelectedModelId && setSelectedModelId(model.model_info.id)}
-            >
-              {model.model_info.id}
-            </div>
-          </Tooltip>
+          <IdCell value={model.model_info.id} onClick={setSelectedModelId} />
         </div>
       );
     },
@@ -169,17 +174,18 @@ export const healthCheckColumns = (
         );
       }
 
-      const modelName = model.model_name;
-      const hasSuccessResponse = healthStatus.status === "healthy" && modelHealthStatuses[modelName]?.successResponse;
+      const modelId = model.model_info?.id ?? "";
+      const displayName = getDisplayModelName(model) || model.model_name;
+      const hasSuccessResponse = healthStatus.status === "healthy" && modelHealthStatuses[modelId]?.successResponse;
 
       return (
         <div className="flex items-center space-x-2">
-          {getStatusBadge(healthStatus.status)}
+          {healthStatusBadge(healthStatus.status)}
           {hasSuccessResponse && showSuccessModal && (
             <Tooltip title="View response details" placement="top">
               <button
-                onClick={() => showSuccessModal(modelName, modelHealthStatuses[modelName]?.successResponse)}
-                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
+                onClick={() => showSuccessModal(displayName, modelHealthStatuses[modelId]?.successResponse)}
+                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded-sm cursor-pointer transition-colors"
               >
                 <InformationCircleIcon className="h-4 w-4" />
               </button>
@@ -195,8 +201,9 @@ export const healthCheckColumns = (
     enableSorting: false,
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
-      const healthStatus = modelHealthStatuses[modelName];
+      const modelId = model.model_info?.id ?? "";
+      const displayName = getDisplayModelName(model) || model.model_name;
+      const healthStatus = modelHealthStatuses[modelId];
 
       if (!healthStatus?.error) {
         return <Text className="text-gray-400 text-sm">No errors</Text>;
@@ -215,8 +222,8 @@ export const healthCheckColumns = (
           {showErrorModal && fullError !== cleanedError && (
             <Tooltip title="View full error details" placement="top">
               <button
-                onClick={() => showErrorModal(modelName, cleanedError, fullError)}
-                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded cursor-pointer transition-colors"
+                onClick={() => showErrorModal(displayName, cleanedError, fullError)}
+                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-sm cursor-pointer transition-colors"
               >
                 <InformationCircleIcon className="h-4 w-4" />
               </button>
@@ -294,8 +301,8 @@ export const healthCheckColumns = (
     },
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
-      const healthStatus = modelHealthStatuses[modelName];
+      const modelId = model.model_info?.id ?? "";
+      const healthStatus = modelHealthStatuses[modelId];
       const lastSuccess = healthStatus?.lastSuccess || "None";
 
       return <Text className="text-gray-600 text-sm">{lastSuccess}</Text>;
@@ -306,7 +313,7 @@ export const healthCheckColumns = (
     id: "actions",
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
+      const modelId = model.model_info?.id ?? "";
 
       const hasExistingStatus = model.health_status && model.health_status !== "none";
       const tooltipText = model.health_loading
@@ -318,6 +325,7 @@ export const healthCheckColumns = (
       return (
         <Tooltip title={tooltipText} placement="top">
           <button
+            data-testid="run-health-check-btn"
             className={`p-2 rounded-md transition-colors ${
               model.health_loading
                 ? "text-gray-400 cursor-not-allowed bg-gray-100"
@@ -325,7 +333,7 @@ export const healthCheckColumns = (
             }`}
             onClick={() => {
               if (!model.health_loading) {
-                runIndividualHealthCheck(modelName);
+                runIndividualHealthCheck(modelId);
               }
             }}
             disabled={model.health_loading}

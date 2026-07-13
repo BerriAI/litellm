@@ -110,9 +110,9 @@ def test_end_user_not_tracked_for_all_prometheus_metrics():
             team="test_team",
             team_alias="test_team_alias",
             user="test_user",
-            requested_model="gpt-4",
-            model="gpt-4",
-            litellm_model_name="gpt-4",
+            requested_model="gpt-5.5",
+            model="gpt-5.5",
+            litellm_model_name="gpt-5.5",
         )
 
         # Get all defined Prometheus metrics that include end_user in their labels
@@ -199,7 +199,7 @@ def test_future_metrics_with_end_user_are_filtered():
             hashed_api_key="test_key",
             api_key_alias="test_alias",
             team="test_team",
-            model="gpt-4",
+            model="gpt-5.5",
         )
 
         # Test the filtering
@@ -545,6 +545,9 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
     CRITICAL TEST: Validates that request counters are incremented by 1, not by token count.
     This test specifically catches the bug where litellm_proxy_total_requests_metric
     is incorrectly incremented by total_tokens instead of 1.
+
+    The metric is now ONLY incremented in async_log_success_event (for both streaming
+    and non-streaming) to prevent double-counting.
     """
     from datetime import datetime, timedelta
     from unittest.mock import MagicMock
@@ -553,7 +556,7 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
 
     # Test data with large token count that should NOT affect request counter
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -563,7 +566,7 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
             "prompt_tokens": 600,
             "completion_tokens": 399,
             "response_cost": 0.005,
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",
@@ -583,18 +586,18 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
         },
     }
 
-    # Call the success event
+    # Call the success event - should increment for both streaming and non-streaming
     await mock_prometheus_logger.async_log_success_event(
         kwargs, None, kwargs["start_time"], kwargs["end_time"]
     )
 
-    # CRITICAL ASSERTION: Request counter should not be incremented
+    # CRITICAL ASSERTION: Request counter should be incremented by 1
     total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
     assert (
-        len(total_requests_metric.inc_calls) == 0
-    ), "Request metric should not be incremented"
+        len(total_requests_metric.inc_calls) == 1
+    ), "Request metric should be incremented once in async_log_success_event"
 
-    # Call the post-call logging hook
+    # Call the post-call logging hook - should NOT increment (to prevent double-counting)
     await mock_prometheus_logger.async_post_call_success_hook(
         data={},
         user_api_key_dict=UserAPIKeyAuth(
@@ -602,16 +605,16 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
             hashed_api_key="test-hash",
             api_key_alias="test-alias",
             team="test-team",
-            model="gpt-4",
+            model="gpt-5.5",
         ),
         response=MagicMock(),
     )
 
-    # CRITICAL ASSERTION: Request counter be incremented by 1
+    # CRITICAL ASSERTION: Request counter should still be 1 (not incremented again)
     total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
     assert (
         len(total_requests_metric.inc_calls) == 1
-    ), "Request metric should not be incremented"
+    ), "Request metric should not be incremented again in async_post_call_success_hook"
 
     # Check that ALL request counter increments are by 1 (not by token count)
     for inc_value in total_requests_metric.inc_calls:
@@ -640,7 +643,7 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
 
     for i in range(num_requests):
         kwargs = {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "litellm_params": {"metadata": {}},
             "start_time": datetime.now() - timedelta(seconds=1),
             "end_time": datetime.now(),
@@ -650,7 +653,7 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
                 "prompt_tokens": tokens_per_request // 2,
                 "completion_tokens": tokens_per_request // 2,
                 "response_cost": 0.001,
-                "model_group": "gpt-3.5-turbo",
+                "model_group": "gpt-5-mini",
                 "model_id": "test-model-id",
                 "api_base": "https://api.openai.com/v1",
                 "custom_llm_provider": "openai",
@@ -684,8 +687,8 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
     expected_total_tokens = num_requests * tokens_per_request  # 3 * 500 = 1500
 
     # With the bug, total_request_increments would be 1500 instead of 3
-    assert total_request_increments == 0, (
-        f"SEMANTIC BUG: Request counter total increments = 0, "
+    assert total_request_increments == num_requests, (
+        f"SEMANTIC BUG: Request counter total increments = {total_request_increments}, "
         f"expected {num_requests}. This suggests request counters are being incremented "
         f"by token counts instead of request counts."
     )
@@ -704,7 +707,7 @@ async def test_streaming_request_counter_semantics(mock_prometheus_logger):
     from datetime import datetime, timedelta
 
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -714,7 +717,7 @@ async def test_streaming_request_counter_semantics(mock_prometheus_logger):
             "prompt_tokens": 300,
             "completion_tokens": 450,
             "response_cost": 0.003,
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",
@@ -798,7 +801,7 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
     from datetime import datetime, timedelta
 
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -808,7 +811,7 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
             "prompt_tokens": 60,
             "completion_tokens": 40,
             "response_cost": 0.0015,  # This should be used for spend metrics
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",

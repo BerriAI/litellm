@@ -5,7 +5,10 @@ import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
 import { modelHubColumns } from "@/components/model_hub_table_columns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
-import ClaudeCodeMarketplaceTab from "@/components/AIHub/ClaudeCodeMarketplaceTab";
+import { getClaudeCodePluginsList } from "@/components/networking";
+import { Plugin } from "@/components/claude_code_plugins/types";
+import SkillHubDashboard from "@/components/AIHub/SkillHubDashboard";
+import MakeSkillPublicForm from "@/components/claude_code_plugins/MakeSkillPublicForm";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import ModelFilters from "@/components/model_filters";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -19,7 +22,7 @@ import {
   modelHubPublicModelsCall,
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { CopyOutlined } from "@ant-design/icons";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";
@@ -58,6 +61,10 @@ interface ModelGroupInfo {
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+  // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
+  // cannot toggle public visibility (write).
+  const canModify = isProxyAdminRole(userRole || "");
+
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -78,6 +85,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
   const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
+  // Skill Hub state
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
+  const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
   const router = useRouter();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
 
@@ -109,12 +120,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setLoading(true);
         const _modelHubData = await modelHubCall(accessToken);
-        console.log("ModelHubData:", _modelHubData);
         setModelHubData(_modelHubData.data);
 
         getConfigFieldSetting(accessToken, "enable_public_model_hub")
           .then((data) => {
-            console.log(`data: ${JSON.stringify(data)}`);
             if (data.field_value == true) {
               setPublicPageAllowed(true);
             }
@@ -134,10 +143,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         setLoading(true);
         await getUiConfig();
         const _modelHubData = await modelHubPublicModelsCall();
-        console.log("ModelHubData:", _modelHubData);
-        console.log("First model structure:", _modelHubData[0]);
-        console.log("Model has model_group?", _modelHubData[0]?.model_group);
-        console.log("Model has providers?", _modelHubData[0]?.providers);
         setModelHubData(_modelHubData);
         setPublicPageAllowed(true);
       } catch (error) {
@@ -164,7 +169,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setAgentLoading(true);
         const response = await getAgentsList(accessToken);
-        console.log("AgentHubData:", response);
         let agents = response.agents;
         let agent_card_list = agents.map((agent: any) => ({
           agent_id: agent.agent_id,
@@ -194,7 +198,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setMcpLoading(true);
         const response = await fetchMCPServers(accessToken);
-        console.log("MCPHubData:", response);
         setMcpHubData(response);
       } catch (error) {
         console.error("There was an error fetching the MCP server data", error);
@@ -207,6 +210,25 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       fetchMcpData();
     }
   }, [publicPage, accessToken]);
+
+  // Fetch Skill Hub data — all skills for admins, enabled-only for public page
+  useEffect(() => {
+    const fetchSkillData = async () => {
+      if (!accessToken) return;
+      try {
+        setSkillLoading(true);
+        const enabledOnly = publicPage === true;
+        const response = await getClaudeCodePluginsList(accessToken, enabledOnly);
+        setSkillHubData(response.plugins);
+      } catch (error) {
+        console.error("Error fetching skill hub data", error);
+      } finally {
+        setSkillLoading(false);
+      }
+    };
+
+    fetchSkillData();
+  }, [accessToken, publicPage]);
 
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
@@ -354,9 +376,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setFilteredData(newFilteredData);
   }, []);
 
-  console.log("publicPage: ", publicPage);
-  console.log("publicPageAllowed: ", publicPageAllowed);
-
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {
     return <PublicModelHub accessToken={accessToken} />;
@@ -380,11 +399,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             </div>
             <div className="flex items-center space-x-4">
               <Text>Model Hub URL:</Text>
-              <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+              <div className="flex items-center bg-gray-200 px-2 py-1 rounded-sm">
                 <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
                 <button
                   onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                  className="p-1 hover:bg-gray-300 rounded transition-colors"
+                  className="p-1 hover:bg-gray-300 rounded-sm transition-colors"
                   title="Copy URL"
                 >
                   <Copy size={16} className="text-gray-600" />
@@ -394,7 +413,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
           </div>
 
           {/* Useful Links Management Section for Admins */}
-          {isAdminRole(userRole || "") && (
+          {canModify && (
             <div className="mt-8 mb-2">
               <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
             </div>
@@ -406,7 +425,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <Tab>Model Hub</Tab>
               <Tab>Agent Hub</Tab>
               <Tab>MCP Hub</Tab>
-              <Tab>Claude Code Plugin Marketplace</Tab>
+              <Tab>Skill Hub</Tab>
             </TabList>
 
             <TabPanels>
@@ -415,7 +434,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 {/* Model Filters and Table */}
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakePublicPage()}>Select Models to Make Public</Button>
                     </div>
@@ -444,7 +463,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakeAgentPublicPage()}>Select Agents to Make Public</Button>
                     </div>
@@ -470,7 +489,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
                     </div>
@@ -492,9 +511,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 </div>
               </TabPanel>
 
-              {/* Plugin Marketplace Tab */}
+              {/* Skill Hub Tab */}
               <TabPanel>
-                <ClaudeCodeMarketplaceTab publicPage={publicPage} />
+                {publicPage == false && canModify && (
+                  <div className="flex justify-end mb-4">
+                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>Select Skills to Make Public</Button>
+                  </div>
+                )}
+                <SkillHubDashboard
+                  skills={skillHubData}
+                  isLoading={skillLoading}
+                  isAdmin={canModify}
+                  accessToken={accessToken}
+                  publicPage={publicPage}
+                  onPublishSuccess={async () => {
+                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
+                    setSkillHubData(response.plugins);
+                  }}
+                />
               </TabPanel>
             </TabPanels>
           </TabGroup>
@@ -518,7 +552,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         <div className="pt-5 pb-5">
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
-            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
+            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded-sm">
               {`${getProxyBaseUrl()}/ui/model_hub_table`}
             </Text>
           </div>
@@ -659,7 +693,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
 client = openai.OpenAI(
     api_key="your_api_key",
-    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
+    base_url="${getProxyBaseUrl()}"  # Your LiteLLM Proxy URL
 )
 
 response = client.chat.completions.create(
@@ -772,7 +806,7 @@ print(response.choices[0].message.content)`}
                 <Text className="text-lg font-semibold mb-4">Skills</Text>
                 <div className="space-y-4">
                   {selectedAgent.skills.map((skill) => (
-                    <div key={skill.id} className="border border-gray-200 rounded p-4">
+                    <div key={skill.id} className="border border-gray-200 rounded-sm p-4">
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <Text className="font-medium text-base">{skill.name}</Text>
@@ -890,20 +924,12 @@ print(response.choices[0].message.content)`}
             <div>
               <Text className="text-lg font-semibold mb-4">Connection Details</Text>
               <div className="space-y-2">
-                <div>
-                  <Text className="font-medium">URL:</Text>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">{selectedMcpServer.url}</Text>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(selectedMcpServer.url)}
-                      className="cursor-pointer text-gray-500 hover:text-blue-500 flex-shrink-0"
-                    />
-                  </div>
-                </div>
                 {selectedMcpServer.command && (
                   <div>
                     <Text className="font-medium">Command:</Text>
-                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">{selectedMcpServer.command}</Text>
+                    <Text className="text-sm bg-gray-100 p-2 rounded-sm mt-1 font-mono">
+                      {selectedMcpServer.command}
+                    </Text>
                   </div>
                 )}
               </div>
@@ -979,7 +1005,7 @@ print(response.choices[0].message.content)`}
                 )}
               </div>
               {selectedMcpServer.health_check_error && (
-                <div className="mt-2 p-2 bg-red-50 rounded">
+                <div className="mt-2 p-2 bg-red-50 rounded-sm">
                   <Text className="font-medium text-red-700">Health Check Error:</Text>
                   <Text className="text-sm text-red-600 mt-1">{selectedMcpServer.health_check_error}</Text>
                 </div>
@@ -997,7 +1023,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }
@@ -1016,7 +1042,7 @@ async def main():
 
         # Call a tool
         response = await client.call_tool(
-            name="tool_name", 
+            name="tool_name",
             arguments={"arg": "value"}
         )
         print(f"Response: {response}")
@@ -1054,6 +1080,18 @@ if __name__ == "__main__":
         accessToken={accessToken || ""}
         mcpHubData={mcpHubData || []}
         onSuccess={handleMakeMcpPublicSuccess}
+      />
+
+      {/* Make Skill Public Form */}
+      <MakeSkillPublicForm
+        visible={isMakeSkillPublicModalVisible}
+        onClose={() => setIsMakeSkillPublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        skillsList={skillHubData}
+        onSuccess={async () => {
+          const response = await getClaudeCodePluginsList(accessToken || "", publicPage === true);
+          setSkillHubData(response.plugins);
+        }}
       />
     </div>
   );

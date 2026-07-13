@@ -1,9 +1,24 @@
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Union
 
 import httpx
 
 from litellm import verbose_logger
+
+_UNSAFE_SECRET_NAME_PATTERN = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
+
+
+def raise_if_unsafe_secret_name(secret_name: str) -> None:
+    """
+    Validate a secret name before it is used by a secret manager integration.
+
+    Rejects ".." only as a path segment (bounded by "/" or the start/end of the
+    string, e.g. "../x", "x/..", or exactly ".."), not as a plain substring, so
+    names like "release-1.0..2" are not rejected.
+    """
+    if _UNSAFE_SECRET_NAME_PATTERN.search(secret_name):
+        raise ValueError(f"Invalid secret_name {secret_name!r}")
 
 
 class BaseSecretManager(ABC):
@@ -59,7 +74,7 @@ class BaseSecretManager(ABC):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None
+        tags: Optional[Union[dict, list]] = None,
     ) -> Dict[str, Any]:
         """
         Asynchronously write a secret to the secret manager.
@@ -174,7 +189,5 @@ class BaseSecretManager(ABC):
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:
-            verbose_logger.exception(
-                "Error rotating secret in AWS Secrets Manager: %s", str(e)
-            )
+            verbose_logger.exception("Error rotating secret in AWS Secrets Manager: %s", str(e))
             raise

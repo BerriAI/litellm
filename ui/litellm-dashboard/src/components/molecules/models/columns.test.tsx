@@ -12,20 +12,32 @@ vi.mock("../../provider_info_helpers");
 vi.mock("@tremor/react", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@tremor/react")>();
-  const IconComponent = React.forwardRef<HTMLButtonElement, any>(({ icon: IconComp, onClick, className, ...props }, ref) => {
-    const ariaLabel = className?.includes("cursor-not-allowed")
-      ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
-      : "Delete model";
-    return React.createElement(
-      "button",
-      { ...props, onClick, className, ref, "aria-label": ariaLabel },
-      IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
-    );
-  });
+  const IconComponent = React.forwardRef<HTMLButtonElement, any>(
+    ({ icon: IconComp, onClick, className, ...props }, ref) => {
+      const ariaLabel = className?.includes("cursor-not-allowed")
+        ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
+        : "Delete model";
+      return React.createElement(
+        "button",
+        { ...props, onClick, className, ref, "aria-label": ariaLabel },
+        IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
+      );
+    },
+  );
   IconComponent.displayName = "Icon";
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
+  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
+  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
+  // post-teardown -> "window is not defined".
+  const Button = React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
+    React.createElement("button", { ...props, ref }, children),
+  );
+  const Tooltip = ({ children }: any) => React.createElement(React.Fragment, null, children);
   return {
     ...actual,
     Icon: IconComponent,
+    Button,
+    Tooltip,
   };
 });
 
@@ -54,13 +66,7 @@ const createMockModel = (overrides: Partial<ModelData> = {}): ModelData => ({
   ...overrides,
 });
 
-const TestTable = ({
-  data,
-  columns: cols,
-}: {
-  data: ModelData[];
-  columns: ReturnType<typeof columns>;
-}) => {
+const TestTable = ({ data, columns: cols }: { data: ModelData[]; columns: ReturnType<typeof columns> }) => {
   const table = useReactTable({
     data,
     columns: cols,
@@ -74,9 +80,7 @@ const TestTable = ({
           <TableRow key={headerGroup.id}>
             {headerGroup.headers.map((header) => (
               <TableHeaderCell key={header.id}>
-                {header.isPlaceholder
-                  ? null
-                  : flexRender(header.column.columnDef.header, header.getContext())}
+                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
               </TableHeaderCell>
             ))}
           </TableRow>
@@ -86,9 +90,7 @@ const TestTable = ({
         {table.getRowModel().rows.map((row) => (
           <TableRow key={row.id}>
             {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id}>
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </TableCell>
+              <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
             ))}
           </TableRow>
         ))}
@@ -449,6 +451,64 @@ describe("columns", () => {
     expect(costCells.length).toBeGreaterThan(0);
   });
 
+  it("should call setSelectedModelId without triggering the row click when the model ID pill is clicked", async () => {
+    const user = userEvent.setup();
+    const setSelectedModelId = vi.fn();
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      setSelectedModelId,
+      defaultProps.setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel();
+    const rowClick = vi.fn();
+    render(
+      <div onClick={rowClick}>
+        <TestTable data={[model]} columns={cols} />
+      </div>,
+    );
+
+    await user.click(screen.getByText("test-model-id"));
+    expect(setSelectedModelId).toHaveBeenCalledWith("test-model-id");
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
+  it("should call setSelectedTeamId without triggering the row click when the team ID pill is clicked", async () => {
+    const user = userEvent.setup();
+    const setSelectedTeamId = vi.fn();
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      defaultProps.setSelectedModelId,
+      setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel();
+    const rowClick = vi.fn();
+    render(
+      <div onClick={rowClick}>
+        <TestTable data={[model]} columns={cols} />
+      </div>,
+    );
+
+    await user.click(screen.getByText("test-team-id"));
+    expect(setSelectedTeamId).toHaveBeenCalledWith("test-team-id");
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
   it("should display '-' when team ID is missing", () => {
     const cols = columns(
       defaultProps.userRole,
@@ -612,18 +672,19 @@ describe("columns", () => {
 
   it("should allow Admin to delete DB models", async () => {
     const user = userEvent.setup();
-    const setSelectedModelId = vi.fn();
+    const onDeleteClick = vi.fn();
     const cols = columns(
       "Admin",
       "admin-user",
       defaultProps.premiumUser,
-      setSelectedModelId,
+      defaultProps.setSelectedModelId,
       defaultProps.setSelectedTeamId,
       defaultProps.getDisplayModelName,
       defaultProps.handleEditClick,
       defaultProps.handleRefreshClick,
       defaultProps.expandedRows,
       defaultProps.setExpandedRows,
+      onDeleteClick,
     );
 
     const model = createMockModel({
@@ -639,23 +700,24 @@ describe("columns", () => {
     expect(deleteButton).toBeInTheDocument();
 
     await user.click(deleteButton);
-    expect(setSelectedModelId).toHaveBeenCalledWith("deletable-model");
+    expect(onDeleteClick).toHaveBeenCalledWith("deletable-model");
   });
 
   it("should allow model creator to delete their own DB models", async () => {
     const user = userEvent.setup();
-    const setSelectedModelId = vi.fn();
+    const onDeleteClick = vi.fn();
     const cols = columns(
       "User",
       "model-creator",
       defaultProps.premiumUser,
-      setSelectedModelId,
+      defaultProps.setSelectedModelId,
       defaultProps.setSelectedTeamId,
       defaultProps.getDisplayModelName,
       defaultProps.handleEditClick,
       defaultProps.handleRefreshClick,
       defaultProps.expandedRows,
       defaultProps.setExpandedRows,
+      onDeleteClick,
     );
 
     const model = createMockModel({
@@ -672,9 +734,8 @@ describe("columns", () => {
     expect(deleteButton).toBeInTheDocument();
 
     await user.click(deleteButton);
-    expect(setSelectedModelId).toHaveBeenCalledWith("user-model");
+    expect(onDeleteClick).toHaveBeenCalledWith("user-model");
   });
-
 
   it("should disable delete for config models", () => {
     const cols = columns(
@@ -785,7 +846,6 @@ describe("columns", () => {
     expect(screen.getByText("group1")).toBeInTheDocument();
     expect(screen.queryByText(/\+/)).not.toBeInTheDocument();
   });
-
 
   it("should handle missing display name gracefully", () => {
     const getDisplayModelName = vi.fn(() => "");
@@ -931,5 +991,109 @@ describe("columns", () => {
 
     expect(screen.getByText("Out: $0.03")).toBeInTheDocument();
     expect(screen.queryByText(/In:/)).not.toBeInTheDocument();
+  });
+
+  describe("pause/resume toggle", () => {
+    const renderWithToggle = (
+      overrides: Partial<ReturnType<typeof createMockModel>["model_info"]> = {},
+      togglePauseHandler?: ReturnType<typeof vi.fn>,
+      userRole: string = "Admin",
+    ) => {
+      const handler = togglePauseHandler ?? vi.fn();
+      const cols = columns(
+        userRole,
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+        vi.fn(),
+        handler,
+      );
+      const model = createMockModel({
+        model_info: { ...createMockModel().model_info, ...overrides },
+      });
+      render(<TestTable data={[model]} columns={cols} />);
+      return { handler };
+    };
+
+    it("renders the toggle ON for a db_model that is not blocked", () => {
+      renderWithToggle({ db_model: true, blocked: false });
+      const toggle = screen.getByRole("switch", { name: /pause model/i });
+      expect(toggle).toBeEnabled();
+      expect(toggle).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("renders the toggle OFF for a db_model that is blocked", () => {
+      renderWithToggle({ db_model: true, blocked: true });
+      const toggle = screen.getByRole("switch", { name: /resume model/i });
+      expect(toggle).toBeEnabled();
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("calls the handler with blocked=true when an admin flips an active toggle off", async () => {
+      const handler = vi.fn();
+      renderWithToggle({ db_model: true, blocked: false }, handler);
+      await userEvent.click(screen.getByRole("switch", { name: /pause model/i }));
+      expect(handler).toHaveBeenCalledWith("test-model-id", true);
+    });
+
+    it("calls the handler with blocked=false when an admin flips a paused toggle on", async () => {
+      const handler = vi.fn();
+      renderWithToggle({ db_model: true, blocked: true }, handler);
+      await userEvent.click(screen.getByRole("switch", { name: /resume model/i }));
+      expect(handler).toHaveBeenCalledWith("test-model-id", false);
+    });
+
+    it("disables the toggle for non-admin users", () => {
+      const handler = vi.fn();
+      renderWithToggle({ db_model: true, blocked: false }, handler, "User");
+      const toggle = screen.getByRole("switch", { name: /pause model/i });
+      expect(toggle).toBeDisabled();
+    });
+
+    it("disables the toggle for config models", () => {
+      const handler = vi.fn();
+      renderWithToggle({ db_model: false, blocked: false }, handler, "Admin");
+      const toggle = screen.getByRole("switch", { name: /pause model/i });
+      expect(toggle).toBeDisabled();
+    });
+
+    it("disables the toggle while a PATCH for the same row is in-flight", () => {
+      // Regression for Greptile P1 on PR #28151 — antd's `loading` prop is
+      // visual only and does not prevent click events, so the row needs to
+      // be explicitly disabled while its PATCH is pending to avoid
+      // racing/conflicting PATCH calls on double-click.
+      const handler = vi.fn();
+      const model = createMockModel({
+        model_info: {
+          ...createMockModel().model_info,
+          db_model: true,
+          blocked: false,
+        },
+      });
+      const cols = columns(
+        "Admin",
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+        vi.fn(),
+        handler,
+        model.model_info.id, // pausingModelId matches this row
+      );
+      render(<TestTable data={[model]} columns={cols} />);
+      const toggle = screen.getByRole("switch", { name: /pause model/i });
+      expect(toggle).toBeDisabled();
+    });
   });
 });

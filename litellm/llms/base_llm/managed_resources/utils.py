@@ -7,7 +7,36 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
-from typing import List, Optional, Union, Literal
+from typing import Any, List, Literal, Optional, Union
+
+PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS = ("azure", "azure_ai")
+
+
+def resolve_passthrough_managed_id_provider(
+    custom_llm_provider: Any,
+) -> Optional[str]:
+    """Map a pass-through ``custom_llm_provider`` to the provider scope that
+    namespaces passthrough managed object IDs, or ``None`` when the route is not
+    an OpenAI/Azure pass-through and managed IDs must not apply.
+
+    Scoping is keyed on the explicit provider that the pass-through route
+    forwards (``openai``, ``azure``, ``azure_ai``), not on the upstream URL, so
+    a third-party OpenAI-compatible endpoint never triggers managed-ID minting.
+
+    ``azure`` and ``azure_ai`` deliberately collapse to one ``"azure"`` scope:
+    they expose the same Azure OpenAI files/batches surface, so an ID minted
+    while routing as one must still resolve while routing as the other.
+    Splitting them would make a managed ID minted on ``azure`` fail to resolve
+    when replayed on ``azure_ai`` and vice versa.
+    """
+    provider = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
+    if not provider:
+        return None
+    if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith((".azure", ".azure_ai")):
+        return "azure"
+    if provider == "openai" or provider.endswith(".openai"):
+        return "openai"
+    return None
 
 
 def is_base64_encoded_unified_id(
@@ -16,21 +45,21 @@ def is_base64_encoded_unified_id(
 ) -> Union[str, Literal[False]]:
     """
     Check if a resource ID is a base64 encoded unified ID.
-    
+
     Args:
         resource_id: The resource ID to check
         prefix: The expected prefix for unified IDs
-        
+
     Returns:
         Decoded string if valid unified ID, False otherwise
     """
     # Ensure resource_id is a string
     if not isinstance(resource_id, str):
         return False
-    
+
     # Add padding back if needed
     padded = resource_id + "=" * (-len(resource_id) % 4)
-    
+
     # Decode from base64
     try:
         decoded = base64.urlsafe_b64decode(padded).decode()
@@ -47,13 +76,13 @@ def extract_target_model_names_from_unified_id(
 ) -> List[str]:
     """
     Extract target model names from a unified resource ID.
-    
+
     Args:
         unified_id: The unified resource ID (decoded or encoded)
-        
+
     Returns:
         List of target model names
-        
+
     Example:
         unified_id = "litellm_proxy:vector_store;unified_id,uuid;target_model_names,gpt-4,gemini-2.0"
         returns: ["gpt-4", "gemini-2.0"]
@@ -62,18 +91,18 @@ def extract_target_model_names_from_unified_id(
         # Ensure unified_id is a string
         if not isinstance(unified_id, str):
             return []
-        
+
         # Decode if it's base64 encoded
         decoded_id = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
-        
+
         # Extract model names using regex
         match = re.search(r"target_model_names,([^;]+)", unified_id)
         if match:
             # Split on comma and strip whitespace from each model name
             return [model.strip() for model in match.group(1).split(",")]
-        
+
         return []
     except Exception:
         return []
@@ -84,13 +113,13 @@ def extract_resource_type_from_unified_id(
 ) -> Optional[str]:
     """
     Extract resource type from a unified resource ID.
-    
+
     Args:
         unified_id: The unified resource ID (decoded or encoded)
-        
+
     Returns:
         Resource type string or None
-        
+
     Example:
         unified_id = "litellm_proxy:vector_store;unified_id,uuid;..."
         returns: "vector_store"
@@ -99,17 +128,17 @@ def extract_resource_type_from_unified_id(
         # Ensure unified_id is a string
         if not isinstance(unified_id, str):
             return None
-        
+
         # Decode if it's base64 encoded
         decoded_id = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
-        
+
         # Extract resource type (comes after prefix and before first semicolon)
         match = re.search(r"litellm_proxy:([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
-        
+
         return None
     except Exception:
         return None
@@ -120,13 +149,13 @@ def extract_unified_uuid_from_unified_id(
 ) -> Optional[str]:
     """
     Extract the UUID from a unified resource ID.
-    
+
     Args:
         unified_id: The unified resource ID (decoded or encoded)
-        
+
     Returns:
         UUID string or None
-        
+
     Example:
         unified_id = "litellm_proxy:vector_store;unified_id,abc-123;..."
         returns: "abc-123"
@@ -135,17 +164,17 @@ def extract_unified_uuid_from_unified_id(
         # Ensure unified_id is a string
         if not isinstance(unified_id, str):
             return None
-        
+
         # Decode if it's base64 encoded
         decoded_id = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
-        
+
         # Extract UUID
         match = re.search(r"unified_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
-        
+
         return None
     except Exception:
         return None
@@ -156,13 +185,13 @@ def extract_model_id_from_unified_id(
 ) -> Optional[str]:
     """
     Extract model ID from a unified resource ID.
-    
+
     Args:
         unified_id: The unified resource ID (decoded or encoded)
-        
+
     Returns:
         Model ID string or None
-        
+
     Example:
         unified_id = "litellm_proxy:vector_store;...;model_id,gpt-4-model-id;..."
         returns: "gpt-4-model-id"
@@ -171,17 +200,23 @@ def extract_model_id_from_unified_id(
         # Ensure unified_id is a string
         if not isinstance(unified_id, str):
             return None
-        
+
         # Decode if it's base64 encoded
         decoded_id = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
-        
-        # Extract model ID
-        match = re.search(r"model_id,([^;]+)", unified_id)
+
+        # Extract model ID. Anchor to a field boundary (start of string or
+        # after `;`) so this regex doesn't substring-match the `model_id,`
+        # inside file_id encodings' `llm_output_file_model_id,<deployment_uuid>`
+        # field — that would feed the deployment UUID as a model candidate
+        # into the team-access check and 403 every team-BYOK file attach
+        # with `Tried to access <uuid>` (LIT-3244 patch/1.86.0 second-order
+        # finding).
+        match = re.search(r"(?:^|;)model_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
-        
+
         return None
     except Exception:
         return None
@@ -192,13 +227,13 @@ def extract_provider_resource_id_from_unified_id(
 ) -> Optional[str]:
     """
     Extract provider resource ID from a unified resource ID.
-    
+
     Args:
         unified_id: The unified resource ID (decoded or encoded)
-        
+
     Returns:
         Provider resource ID string or None
-        
+
     Example:
         unified_id = "litellm_proxy:vector_store;...;resource_id,vs_abc123;..."
         returns: "vs_abc123"
@@ -207,24 +242,24 @@ def extract_provider_resource_id_from_unified_id(
         # Ensure unified_id is a string
         if not isinstance(unified_id, str):
             return None
-        
+
         # Decode if it's base64 encoded
         decoded_id = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
-        
+
         # Extract resource ID (try multiple patterns for different resource types)
         patterns = [
             r"resource_id,([^;]+)",
             r"vector_store_id,([^;]+)",
             r"file_id,([^;]+)",
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, unified_id)
             if match:
                 return match.group(1).strip()
-        
+
         return None
     except Exception:
         return None
@@ -240,7 +275,7 @@ def generate_unified_id_string(
 ) -> str:
     """
     Generate a unified ID string (before base64 encoding).
-    
+
     Args:
         resource_type: Type of resource (e.g., "vector_store", "file")
         unified_uuid: UUID for this unified resource
@@ -248,10 +283,10 @@ def generate_unified_id_string(
         provider_resource_id: Resource ID from the provider
         model_id: Model ID from the router
         additional_fields: Additional fields to include in the ID
-        
+
     Returns:
         Unified ID string (not yet base64 encoded)
-        
+
     Example:
         generate_unified_id_string(
             resource_type="vector_store",
@@ -270,53 +305,49 @@ def generate_unified_id_string(
         f"resource_id,{provider_resource_id}",
         f"model_id,{model_id}",
     ]
-    
+
     # Add additional fields if provided
     if additional_fields:
         for key, value in additional_fields.items():
             parts.append(f"{key},{value}")
-    
+
     return ";".join(parts)
 
 
 def encode_unified_id(unified_id_string: str) -> str:
     """
     Encode a unified ID string to base64.
-    
+
     Args:
         unified_id_string: The unified ID string to encode
-        
+
     Returns:
         Base64 encoded unified ID (URL-safe, padding stripped)
     """
-    return (
-        base64.urlsafe_b64encode(unified_id_string.encode())
-        .decode()
-        .rstrip("=")
-    )
+    return base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
 
 
 def decode_unified_id(encoded_unified_id: str) -> Optional[str]:
     """
     Decode a base64 encoded unified ID.
-    
+
     Args:
         encoded_unified_id: The base64 encoded unified ID
-        
+
     Returns:
         Decoded unified ID string or None if invalid
     """
     try:
         # Add padding back if needed
         padded = encoded_unified_id + "=" * (-len(encoded_unified_id) % 4)
-        
+
         # Decode from base64
         decoded = base64.urlsafe_b64decode(padded).decode()
-        
+
         # Verify it starts with the expected prefix
         if decoded.startswith("litellm_proxy:"):
             return decoded
-        
+
         return None
     except Exception:
         return None
@@ -327,13 +358,13 @@ def parse_unified_id(
 ) -> Optional[dict]:
     """
     Parse a unified ID into its components.
-    
+
     Args:
         unified_id: The unified ID (encoded or decoded)
-        
+
     Returns:
         Dictionary with parsed components or None if invalid
-        
+
     Example:
         {
             "resource_type": "vector_store",
@@ -352,7 +383,7 @@ def parse_unified_id(
                 decoded_id = unified_id
             else:
                 return None
-        
+
         return {
             "resource_type": extract_resource_type_from_unified_id(decoded_id),
             "unified_uuid": extract_unified_uuid_from_unified_id(decoded_id),

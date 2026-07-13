@@ -1,5 +1,5 @@
 """
-Translate between Cohere's `/rerank` format and Azure AI's `/rerank` format. 
+Translate between Cohere's `/rerank` format and Azure AI's `/rerank` format.
 """
 
 from typing import Optional
@@ -20,8 +20,8 @@ class AzureAIRerankConfig(CohereRerankConfig):
     """
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -69,9 +69,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
             api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key
 
         if api_key is None:
-            raise ValueError(
-                "Azure AI API key is required. Please set 'AZURE_AI_API_KEY' or 'litellm.azure_key'"
-            )
+            raise ValueError("Azure AI API key is required. Please set 'AZURE_AI_API_KEY' or 'litellm.azure_key'")
 
         default_headers = {
             "Authorization": f"Bearer {api_key}",
@@ -107,9 +105,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        base_model = self._get_base_model(
-            rerank_response._hidden_params.get("llm_provider-azureml-model-group")
-        )
+        base_model = self._get_base_model(rerank_response._hidden_params.get("llm_provider-azureml-model-group"))
         rerank_response._hidden_params["model"] = base_model
         return rerank_response
 

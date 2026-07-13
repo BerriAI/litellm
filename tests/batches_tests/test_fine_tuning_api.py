@@ -13,13 +13,10 @@ import litellm
 
 litellm.num_retries = 0
 import asyncio
-import logging
 from typing import Optional
-import openai
 from test_openai_batches_and_files import load_vertex_ai_credentials
 
 from litellm import create_fine_tuning_job
-from litellm._logging import verbose_logger
 from litellm.llms.vertex_ai.fine_tuning.handler import (
     FineTuningJobCreate,
     VertexFineTuningAPI,
@@ -47,142 +44,8 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-@pytest.mark.asyncio
-async def test_create_fine_tune_jobs_async():
-    try:
-        custom_logger = TestCustomLogger()
-        litellm.callbacks = ["datadog", custom_logger]
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "openai_batch_completions.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_obj = await litellm.acreate_file(
-            file=open(file_path, "rb"),
-            purpose="fine-tune",
-            custom_llm_provider="openai",
-        )
-        print("Response from creating file=", file_obj)
-
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gpt-3.5-turbo-0125",
-            training_file=file_obj.id,
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
-
-        await asyncio.sleep(2)
-        _logged_standard_logging_object = custom_logger.standard_logging_object
-        assert _logged_standard_logging_object is not None
-        print(
-            "custom_logger.standard_logging_object=",
-            json.dumps(_logged_standard_logging_object, indent=4),
-        )
-        assert _logged_standard_logging_object["model"] == "gpt-3.5-turbo-0125"
-        assert _logged_standard_logging_object["id"] == create_fine_tuning_response.id
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = await litellm.alist_fine_tuning_jobs(limit=2)
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-        assert len(list(ft_jobs)) > 0
-
-        # retrieve fine tuning job
-        response = await litellm.aretrieve_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-        )
-        print("response from litellm.retrieve_fine_tuning_job=", response)
-
-        # delete file
-
-        await litellm.afile_delete(
-            file_id=file_obj.id,
-        )
-
-        # cancel ft job
-        response = await litellm.acancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            return
-        else:
-            pytest.fail(f"Error occurred: {e}")
-    pass
-
-
-@pytest.mark.asyncio
-async def test_azure_create_fine_tune_jobs_async():
-    try:
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "azure_fine_tune.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_id = "file-5e4b20ecbd724182b9964f3cd2ab7212"
-
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gpt-35-turbo-1106",
-            training_file=file_id,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-
-        # response from Example/mocked endpoint
-        assert create_fine_tuning_response.model == "davinci-002"
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = await litellm.alist_fine_tuning_jobs(
-            limit=2,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-
-        # cancel ft job
-        response = await litellm.acancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-            custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            pass
-        else:
-            pytest.fail(f"Error occurred: {e}")
-    pass
-
-
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -210,14 +73,24 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=mock_response,
-        ) as mock_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
@@ -226,11 +99,17 @@ async def test_create_vertex_fine_tune_jobs_mocked():
                 vertex_location=location,
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {"training_dataset_uri": training_file},
                 "tunedModelDisplayName": None,
@@ -259,11 +138,12 @@ async def test_create_vertex_fine_tune_jobs_mocked():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -291,14 +171,24 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=mock_response,
-        ) as mock_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
@@ -312,11 +202,17 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
                 },
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {
                     "training_dataset_uri": training_file,
@@ -352,6 +248,8 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 # Testing OpenAI -> Vertex AI param mapping
@@ -439,44 +337,24 @@ def test_convert_basic_openai_request_to_vertex_request():
     )
 
 
-@pytest.mark.asyncio()
-@pytest.mark.skip(reason="skipping - we run mock tests for vertex ai")
-async def test_create_vertex_fine_tune_jobs():
-    verbose_logger.setLevel(logging.DEBUG)
-    # load_vertex_ai_credentials()
-
-    vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
-    print("creating fine tuning job")
-    create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-        model="gemini-1.0-pro-002",
-        custom_llm_provider="vertex_ai",
-        training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
-        vertex_project="pathrise-convert-1606954137718",
-        vertex_location="us-central1",
-        vertex_credentials=vertex_credentials,
-    )
-    print("vertex ai create fine tuning response=", create_fine_tuning_response)
-
-    assert create_fine_tuning_response.id is not None
-    assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
-    assert create_fine_tuning_response.object == "fine_tuning.job"
-
-
 @pytest.mark.asyncio
 async def test_mock_openai_create_fine_tune_job():
     """Test that create_fine_tuning_job sends correct parameters to OpenAI"""
     from openai import AsyncOpenAI
     from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
 
+    custom_logger = TestCustomLogger()
+    previous_callbacks = litellm.callbacks
+    litellm.callbacks = [custom_logger]
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(client.fine_tuning.jobs, "create") as mock_create:
         mock_create.return_value = FineTuningJob(
             id="ft-123",
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini-2024-07-18",
             created_at=1677610602,
             status="validating_files",
-            fine_tuned_model="ft:gpt-3.5-turbo-0125:org:custom_suffix:id",
+            fine_tuned_model="ft:gpt-4o-mini-2024-07-18:org:custom_suffix:id",
             object="fine_tuning.job",
             hyperparameters=Hyperparameters(
                 n_epochs=3,
@@ -488,7 +366,7 @@ async def test_mock_openai_create_fine_tune_job():
         )
 
         response = await litellm.acreate_fine_tuning_job(
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini-2024-07-18",
             training_file="file-123",
             hyperparameters={"n_epochs": 3},
             suffix="custom_suffix",
@@ -499,16 +377,32 @@ async def test_mock_openai_create_fine_tune_job():
         mock_create.assert_called_once()
         request_params = mock_create.call_args.kwargs
 
-        assert request_params["model"] == "gpt-3.5-turbo-0125"
+        assert request_params["model"] == "gpt-4o-mini-2024-07-18"
         assert request_params["training_file"] == "file-123"
         assert request_params["hyperparameters"] == {"n_epochs": 3}
         assert request_params["suffix"] == "custom_suffix"
 
         # Verify the response
         assert response.id == "ft-123"
-        assert response.model == "gpt-3.5-turbo-0125"
+        assert response.model == "gpt-4o-mini-2024-07-18"
         assert response.status == "validating_files"
-        assert response.fine_tuned_model == "ft:gpt-3.5-turbo-0125:org:custom_suffix:id"
+        assert (
+            response.fine_tuned_model
+            == "ft:gpt-4o-mini-2024-07-18:org:custom_suffix:id"
+        )
+
+    try:
+        for _ in range(20):
+            if custom_logger.standard_logging_object is not None:
+                break
+            await asyncio.sleep(0.25)
+        logged = custom_logger.standard_logging_object
+        assert logged is not None
+        assert logged["model"] == "gpt-4o-mini-2024-07-18"
+        assert logged["id"] == response.id
+        assert logged["call_type"] == "acreate_fine_tuning_job"
+    finally:
+        litellm.callbacks = previous_callbacks
 
 
 @pytest.mark.asyncio
@@ -569,6 +463,66 @@ async def test_mock_openai_retrieve_fine_tune_job():
         except Exception as e:
             print("error=", e)
 
-
         # Verify the request
         mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")
+
+
+@pytest.mark.asyncio
+async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
+    """Test that Azure-specific parameters are passed through extra_body"""
+    from openai.types.fine_tuning.fine_tuning_job import (
+        Hyperparameters as OAIHyperparameters,
+    )
+    from litellm.types.utils import LiteLLMFineTuningJob
+
+    mock_response = LiteLLMFineTuningJob(
+        id="ft-azure-123",
+        model="gpt-4.1-mini-2025-04-14",
+        created_at=1677610602,
+        status="validating_files",
+        fine_tuned_model=None,
+        object="fine_tuning.job",
+        hyperparameters=OAIHyperparameters(n_epochs=3),
+        organization_id="org-123",
+        seed=42,
+        training_file="file-123",
+        result_files=[],
+    )
+
+    async def mock_async_create(*args, **kwargs):
+        return mock_response
+
+    with patch(
+        "litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job"
+    ) as mock_create:
+        mock_create.return_value = mock_async_create()
+
+        response = await litellm.acreate_fine_tuning_job(
+            model="gpt-4.1-mini-2025-04-14",
+            training_file="file-123",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            trainingType=1,
+            hyperparameters={"n_epochs": 3, "prompt_loss_weight": 0.1},
+        )
+
+        # Verify the request
+        mock_create.assert_called_once()
+        request_params = mock_create.call_args.kwargs
+
+        # Check that create_fine_tuning_job_data contains the correct structure
+        create_data = request_params["create_fine_tuning_job_data"]
+        assert create_data["model"] == "gpt-4.1-mini-2025-04-14"
+        assert create_data["training_file"] == "file-123"
+        assert create_data["hyperparameters"] == {"n_epochs": 3}
+
+        # Azure-specific parameters should be in extra_body
+        assert "extra_body" in create_data
+        assert create_data["extra_body"]["trainingType"] == 1
+        assert create_data["extra_body"]["prompt_loss_weight"] == 0.1
+
+        # Verify the response
+        assert response.id == "ft-azure-123"
+        assert response.model == "gpt-4.1-mini-2025-04-14"

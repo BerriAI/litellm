@@ -105,17 +105,17 @@ class BedrockImageGeneration(BaseAWSLLM):
                 logging_obj=logging_obj,
                 prompt=prompt,
                 model_response=model_response,
-                client=(
-                    client
-                    if client is not None and isinstance(client, AsyncHTTPHandler)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -154,7 +154,11 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
 
         try:
-            response = await async_client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
+            response = await async_client.post(
+                url=prepared_request.endpoint_url,
+                headers=prepared_request.prepped.headers,
+                data=prepared_request.body,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -180,12 +184,12 @@ class BedrockImageGeneration(BaseAWSLLM):
         headers = {}
         guardrail_identifier = optional_params.pop("guardrailIdentifier", None)
         guardrail_version = optional_params.pop("guardrailVersion", None)
-        
+
         if guardrail_identifier is not None:
             headers["x-amz-bedrock-guardrail-identifier"] = guardrail_identifier
         if guardrail_version is not None:
             headers["x-amz-bedrock-guardrail-version"] = guardrail_version
-            
+
         return headers
 
     def _prepare_request(
@@ -216,9 +220,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider = self.get_bedrock_invoke_provider(model)

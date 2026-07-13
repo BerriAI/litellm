@@ -1,0 +1,118 @@
+# EU AI Act Article 5.1(c) — Social Scoring Systems
+# Prohibits AI systems that evaluate or classify persons based on social behavior
+# or personal traits, leading to detrimental or unfavorable treatment.
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_social_scoring"
+description: "Art. 5.1(c) — Blocks social scoring, citizen rating, and trustworthiness classification systems"
+default_action: "BLOCK"
+
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+
+  # Scoring/rating actions
+  - "score"
+  - "rank"
+  - "rate"
+  - "assess"
+  - "evaluate"
+  - "classify"
+  - "profile"
+  - "grade"
+  - "categorize"
+  - "tier"
+
+  # Detection/analysis actions
+  - "recognize"
+  - "detect"
+  - "identify"
+  - "infer"
+  - "deduce"
+  - "predict"
+  - "determine"
+  - "analyze"
+  - "monitor"
+  - "track"
+
+additional_block_words:
+  # Social scoring
+  - "social behavior"
+  - "social credit"
+  - "social score"
+  - "social rating"
+  - "social ranking"
+  - "social standing"
+
+  # Citizen scoring
+  - "citizen score"
+  - "citizen rating"
+  - "citizen ranking"
+  - "citizen classification"
+  - "citizen trustworthiness"
+
+  # Trustworthiness/reputation scoring
+  - "trustworthiness"
+  - "trustworthiness score"
+  - "reputation score"
+  - "reputation rating"
+  - "behavioral score"
+  - "behavioral rating"
+  - "behavioral classification"
+  - "loyalty score"
+  - "obedience score"
+
+  # Social media scoring
+  - "social media behavior"
+  - "social media score"
+  - "online behavior score"
+  - "digital reputation score"
+  - "creditworthiness from social"
+
+  # Personality-based scoring
+  - "personality score"
+  - "character score"
+  - "moral score"
+  - "virtue score"
+
+always_block_keywords:
+  - keyword: "social credit system"
+    severity: "high"
+  - keyword: "social scoring system"
+    severity: "high"
+  - keyword: "citizen scoring"
+    severity: "high"
+  - keyword: "citizen scoring system"
+    severity: "high"
+  - keyword: "social credit score"
+    severity: "high"
+  - keyword: "government social score"
+    severity: "high"
+  - keyword: "trustworthiness scoring system"
+    severity: "high"
+  - keyword: "reputation scoring system"
+    severity: "high"
+  - keyword: "behavioral scoring system"
+    severity: "high"
+
+exceptions:
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"
+  - "audit for bias"
+  - "detect discrimination"
+  - "compliance monitoring"
+  - "ethical review"
+  - "fairness testing"
+  - "product review"
+  - "customer feedback"
+  - "credit score"
+  - "net promoter score"

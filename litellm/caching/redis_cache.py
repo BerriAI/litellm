@@ -10,19 +10,30 @@ Has 4 primary methods:
 
 import ast
 import asyncio
+import functools
 import hashlib
 import inspect
 import json
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_REDIS_MAJOR_VERSION
+from litellm.constants import (
+    DEFAULT_REDIS_MAJOR_VERSION,
+    REDIS_CIRCUIT_BREAKER_ENABLED,
+    REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+)
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
-from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.caching import (
+    RedisPipelineIncrementOperation,
+    RedisPipelineLpopOperation,
+    RedisPipelineRpushOperation,
+)
 from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
@@ -85,6 +96,100 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return "unknown"
 
 
+class RedisCircuitBreaker:
+    """
+    Tracks Redis health for a RedisCache instance.
+
+    States:
+      CLOSED    - normal, Redis is called
+      OPEN      - Redis is down, raise immediately (no network call)
+      HALF_OPEN - recovery probe: allow one request through
+
+    Transitions:
+      CLOSED    -> OPEN      after failure_threshold consecutive failures
+      OPEN      -> HALF_OPEN after recovery_timeout seconds
+      HALF_OPEN -> CLOSED    on success
+      HALF_OPEN -> OPEN      on failure (resets timer)
+    """
+
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+    def __init__(
+        self,
+        failure_threshold: int,
+        recovery_timeout: int,
+        enabled: bool = True,
+    ) -> None:
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.enabled = enabled
+        self._failure_count = 0
+        self._opened_at: Optional[float] = None
+        self._state = self.CLOSED
+
+    def is_open(self) -> bool:
+        """Returns True if Redis calls should be skipped."""
+        if not self.enabled:
+            return False
+        if self._state == self.HALF_OPEN:
+            # Probe already in flight — fast-fail all concurrent requests.
+            # Only the one call that caused the OPEN→HALF_OPEN transition
+            # (which returned False) is the designated probe.
+            return True
+        if self._state == self.OPEN:
+            if time.time() - (self._opened_at or 0) > self.recovery_timeout:
+                self._state = self.HALF_OPEN
+                return False  # this caller is the designated probe
+            return True
+        return False
+
+    def record_failure(self) -> None:
+        if not self.enabled:
+            return
+        self._failure_count += 1
+        self._opened_at = time.time()
+        if self._failure_count >= self.failure_threshold:
+            if self._state != self.OPEN:
+                verbose_logger.warning(
+                    "Redis circuit breaker OPENED after %d consecutive failures — fast-failing Redis calls for %ds",
+                    self._failure_count,
+                    self.recovery_timeout,
+                )
+            self._state = self.OPEN
+
+    def record_success(self) -> None:
+        if not self.enabled:
+            return
+        if self._state == self.HALF_OPEN:
+            verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
+        self._failure_count = 0
+        self._state = self.CLOSED
+
+
+def _redis_circuit_breaker_guard(method):  # type: ignore
+    """
+    Decorator for RedisCache async methods.
+    Checks the circuit breaker before each call; records success/failure after.
+    Does not apply to ping/disconnect/test_connection (health/teardown must always run).
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):  # type: ignore
+        if self._circuit_breaker.is_open():
+            raise Exception(f"Redis circuit breaker is open — skipping {method.__name__}")
+        try:
+            result = await method(self, *args, **kwargs)
+            self._circuit_breaker.record_success()
+            return result
+        except Exception:
+            self._circuit_breaker.record_failure()
+            raise
+
+    return wrapper
+
+
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
@@ -125,9 +230,7 @@ class RedisCache(BaseCache):
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
-        self.redis_async_client: Optional[
-            Union[async_redis_client, async_redis_cluster_client]
-        ] = None
+        self.redis_async_client: Optional[Union[async_redis_client, async_redis_cluster_client]] = None
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
@@ -146,6 +249,12 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
+        self._circuit_breaker = RedisCircuitBreaker(
+            failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+            recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
+        )
+
         self._setup_health_pings()
 
         if litellm.default_redis_ttl is not None:
@@ -160,9 +269,7 @@ class RedisCache(BaseCache):
             _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
-                verbose_logger.debug(
-                    "Ignoring async redis ping. No running event loop."
-                )
+                verbose_logger.debug("Ignoring async redis ping. No running event loop.")
             else:
                 verbose_logger.error(
                     "Error connecting to Async Redis client - {}".format(str(e)),
@@ -175,9 +282,7 @@ class RedisCache(BaseCache):
             if hasattr(self.redis_client, "ping"):
                 self.redis_client.ping()  # type: ignore
         except Exception as e:
-            verbose_logger.error(
-                "Error connecting to Sync Redis client", extra={"error": str(e)}
-            )
+            verbose_logger.error("Error connecting to Sync Redis client", extra={"error": str(e)})
             self._handle_sync_ping_error(e)
 
     def _handle_async_ping_error(self, e: Exception):
@@ -236,18 +341,12 @@ class RedisCache(BaseCache):
         cache_key = self._get_async_client_cache_key()
         cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
-            redis_async_client = cast(
-                Union[async_redis_client, async_redis_cluster_client], cached_client
-            )
+            redis_async_client = cast(Union[async_redis_client, async_redis_cluster_client], cached_client)
         else:
             # Create new connection pool and client for current event loop
             self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
-            redis_async_client = get_redis_async_client(
-                connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-            )
-            in_memory_llm_clients_cache.set_cache(
-                key=cache_key, value=redis_async_client
-            )
+            redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
+            in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client)
 
         self.redis_async_client = redis_async_client  # type: ignore
         return redis_async_client
@@ -256,6 +355,8 @@ class RedisCache(BaseCache):
         """
         Make sure each key starts with the given namespace
         """
+        if key is None:
+            return key  # type: ignore[return-value]
         if self.namespace is not None and not key.startswith(self.namespace):
             key = self.namespace + ":" + key
 
@@ -264,19 +365,19 @@ class RedisCache(BaseCache):
     def _parse_redis_major_version(self) -> int:
         """
         Parse Redis version to extract the major version number.
-        
+
         Handles multiple version formats:
         - Strings: "7.0.0", "6", "7.0.0-rc1", " 7.0.0 "
         - Floats: 7.0 (e.g., from AWS ElastiCache Valkey)
         - Integers: 7
         - Malformed: "latest", "", "Unknown" (defaults to DEFAULT_REDIS_MAJOR_VERSION)
-        
+
         Returns:
             int: The major version number (defaults to DEFAULT_REDIS_MAJOR_VERSION if unparseable)
         """
         if self.redis_version == "Unknown":
             return DEFAULT_REDIS_MAJOR_VERSION
-        
+
         try:
             version_str = str(self.redis_version).strip()
             # Handle cases where there's no dot (e.g., "7" or 7)
@@ -292,9 +393,7 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = self.get_ttl(**kwargs)
-        print_verbose(
-            f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
-        )
+        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}")
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
@@ -310,16 +409,13 @@ class RedisCache(BaseCache):
             )
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print_verbose(
-                f"litellm.caching.caching: set() - Got exception from REDIS : {str(e)}"
-            )
+            print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {str(e)}")
 
-    def increment_cache(
-        self, key, value: int, ttl: Optional[float] = None, **kwargs
-    ) -> int:
+    def increment_cache(self, key, value: int, ttl: Optional[float] = None, **kwargs) -> int:
         _redis_client = self.redis_client
         start_time = time.time()
         set_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
             result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
@@ -371,6 +467,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @_redis_circuit_breaker_guard
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
         start_time = time.time()
         try:
@@ -382,6 +479,7 @@ class RedisCache(BaseCache):
                 )
                 return []
 
+            pattern = self.check_and_fix_namespace(key=pattern)
             async for key in _redis_client.scan_iter(match=pattern + "*", count=count):  # type: ignore
                 keys.append(key)
                 if len(keys) >= count:
@@ -417,38 +515,90 @@ class RedisCache(BaseCache):
             )
             raise e
 
-    def async_register_script(self, script: str) -> Any:
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]:
         """
         Register a Lua script with Redis asynchronously.
         Works with both standalone Redis and Redis Cluster.
+
+        The returned callable namespaces every key it is invoked with, so Lua
+        scripts hit the same prefixed keys as get/set/increment. Without this,
+        scripts would operate on raw keys while the rest of the cache uses the
+        namespace, leaving rate-limit and lock keys outside the configured prefix.
+
+        Registration is deferred to call time and cached per running event loop
+        (via in_memory_llm_clients_cache, which keys its entries on the loop). A
+        registered script is bound to the connection of the loop it was created
+        on; awaiting it from another loop raises "got Future attached to a
+        different loop". Binding lazily on the calling loop gives the script the
+        same per-loop scoping init_async_client already gives the clients, so a
+        script registered once at startup is never reused across loops.
 
         Args:
             script (str): The Lua script to register
 
         Returns:
-            Any: A script object that can be called with keys and args
+            A callable ``(keys, args, client=None)`` that runs the script
+            against the calling loop's Redis client.
         """
-        try:
-            _redis_client = self.init_async_client()
-            # For standalone Redis
-            if hasattr(_redis_client, "register_script"):
-                return _redis_client.register_script(script)  # type: ignore
-            # For Redis Cluster
-            elif hasattr(_redis_client, "script_load"):
-                # Load the script and get its SHA
-                script_sha = _redis_client.script_load(script)  # type: ignore
+        # Keyed by connection params and namespace as well as the script, so
+        # two RedisCache instances pointing at different servers or using
+        # different key prefixes never share an executor; in_memory_llm_clients_cache
+        # then adds the running loop, completing the per-(client, namespace, loop)
+        # scoping.
+        script_cache_key = (
+            f"redis-registered-script-{self._get_async_client_cache_key()}-"
+            f"{self.namespace}-{hashlib.sha256(script.encode()).hexdigest()[:16]}"
+        )
 
-                # Return a callable that uses evalsha
-                async def script_callable(keys: List[str], args: List[Any]) -> Any:
-                    return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
+        async def run_script(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+            executor: Optional[Callable[..., Awaitable[Any]]] = litellm.in_memory_llm_clients_cache.get_cache(
+                key=script_cache_key
+            )
+            if executor is None:
+                executor = self._register_script_for_current_loop(script)
+                litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
+            return await executor(keys=keys, args=args, client=client)
 
-                return script_callable
-        except Exception as e:
-            verbose_logger.error(f"Error registering Redis script: {str(e)}")
-            raise e
+        return run_script
 
+    def _register_script_for_current_loop(self, script: str) -> Callable[..., Awaitable[Any]]:
+        """
+        Register the script against the current event loop's Redis client.
+
+        Kept separate from async_register_script so each loop caches its own
+        executor; see that method for why the binding must be per loop.
+        """
+        _redis_client: Any = self.init_async_client()
+        if hasattr(_redis_client, "register_script"):
+            registered_script = _redis_client.register_script(script)
+
+            async def standalone_executor(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+                namespaced_keys = tuple(self.check_and_fix_namespace(key=key) for key in keys)
+                return await registered_script(keys=namespaced_keys, args=args, client=client)
+
+            return standalone_executor
+
+        if hasattr(_redis_client, "script_load"):
+            script_sha = _redis_client.script_load(script)
+
+            async def cluster_executor(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+                namespaced_keys = tuple(self.check_and_fix_namespace(key=key) for key in keys)
+                return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
+
+            return cluster_executor
+
+        raise ValueError("Redis client does not support Lua script registration")
+
+    @_redis_circuit_breaker_guard
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
+
+        if key is None:
+            verbose_logger.debug(
+                "LiteLLM Redis Caching: async set() skipped — key is None, value=%r",
+                value,
+            )
+            return None
 
         start_time = time.time()
         try:
@@ -468,8 +618,9 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
                 str(e),
+                key,
                 value,
             )
             raise e
@@ -488,9 +639,7 @@ class RedisCache(BaseCache):
                 nx=nx,
                 ex=ttl,
             )
-            print_verbose(
-                f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
-            )
+            print_verbose(f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -539,9 +688,7 @@ class RedisCache(BaseCache):
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
-            print_verbose(
-                f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
-            )
+            print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
             json_cache_value = json.dumps(cache_value)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
@@ -556,9 +703,8 @@ class RedisCache(BaseCache):
         results = await pipe.execute()
         return results
 
-    async def async_set_cache_pipeline(
-        self, cache_list: List[Tuple[Any, Any]], ttl: Optional[float] = None, **kwargs
-    ):
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline(self, cache_list: List[Tuple[Any, Any]], ttl: Optional[float] = None, **kwargs):
         """
         Use Redis Pipelines for bulk write operations
         """
@@ -569,9 +715,7 @@ class RedisCache(BaseCache):
         _redis_client = self.init_async_client()
         start_time = time.time()
 
-        print_verbose(
-            f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}"
-        )
+        print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
         cache_value: Any = None
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
@@ -632,9 +776,8 @@ class RedisCache(BaseCache):
         except Exception:
             raise
 
-    async def async_set_cache_sadd(
-        self, key, value: List, ttl: Optional[float], **kwargs
-    ):
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float], **kwargs):
         from redis.asyncio import Redis
 
         start_time = time.time()
@@ -665,12 +808,8 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
         try:
-            await self._set_cache_sadd_helper(
-                redis_client=_redis_client, key=key, value=value, ttl=ttl
-            )
-            print_verbose(
-                f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}"
-            )
+            await self._set_cache_sadd_helper(redis_client=_redis_client, key=key, value=value, ttl=ttl)
+            print_verbose(f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -704,6 +843,7 @@ class RedisCache(BaseCache):
                 value,
             )
 
+    @_redis_circuit_breaker_guard
     async def batch_cache_write(self, key, value, **kwargs):
         print_verbose(
             f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
@@ -713,12 +853,14 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
+    @_redis_circuit_breaker_guard
     async def async_increment(
         self,
         key,
         value: float,
         ttl: Optional[int] = None,
         parent_otel_span: Optional[Span] = None,
+        refresh_ttl: bool = False,
     ) -> float:
         from redis.asyncio import Redis
 
@@ -729,11 +871,12 @@ class RedisCache(BaseCache):
         try:
             result = await _redis_client.incrbyfloat(name=key, amount=value)
             if _used_ttl is not None:
-                # check if key already has ttl, if not -> set ttl
-                current_ttl = await _redis_client.ttl(key)
-                if current_ttl == -1:
-                    # Key has no expiration
+                if refresh_ttl:
                     await _redis_client.expire(key, _used_ttl)
+                else:
+                    current_ttl = await _redis_client.ttl(key)
+                    if current_ttl == -1:
+                        await _redis_client.expire(key, _used_ttl)
 
             ## LOGGING ##
             end_time = time.time()
@@ -772,10 +915,45 @@ class RedisCache(BaseCache):
             )
             raise e
 
-    async def flush_cache_buffer(self):
-        print_verbose(
-            f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}"
+    @_redis_circuit_breaker_guard
+    async def async_set_max(
+        self,
+        key: str,
+        value: float,
+        ttl: int | None = None,
+    ) -> float | None:
+        """Atomically set ``key`` to ``value`` only when ``value`` is greater
+        than the stored value (or the key is unset), refreshing the TTL.
+
+        Monotonic by construction: it never lowers the stored value, so a repair
+        that writes an authoritative-but-slightly-stale total cannot clobber a
+        concurrent increment that has already pushed the counter higher. The
+        GET/compare/SET runs in a single Lua call, so it is also atomic across
+        racing callers and pods. Returns the resulting value.
+        """
+        _redis_client = self.init_async_client()
+        _used_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
+        lua = (
+            "local cur = redis.call('GET', KEYS[1]) "
+            "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then "
+            "redis.call('SET', KEYS[1], ARGV[1]) "
+            "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+            "return ARGV[1] end "
+            "return cur"
         )
+        result = cast(
+            "str | bytes | int | float | None",
+            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
+        )
+        if result is None:
+            return None
+        if isinstance(result, bytes):
+            result = result.decode()
+        return float(result)
+
+    async def flush_cache_buffer(self):
+        print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
         await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
         self.redis_batch_writing_buffer = []
 
@@ -788,9 +966,7 @@ class RedisCache(BaseCache):
         # cached_response is in `b{} convert it to ModelResponse
         cached_response = cached_response.decode("utf-8")  # Convert bytes to string
         try:
-            cached_response = json.loads(
-                cached_response
-            )  # Convert string to dictionary
+            cached_response = json.loads(cached_response)  # Convert string to dictionary
         except Exception:
             cached_response = ast.literal_eval(cached_response)
         return cached_response
@@ -811,15 +987,11 @@ class RedisCache(BaseCache):
                 end_time=end_time,
                 parent_otel_span=parent_otel_span,
             )
-            print_verbose(
-                f"Got Redis Cache: key: {key}, cached_response {cached_response}"
-            )
+            print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error(
-                "litellm.caching.caching: get() - Got exception from REDIS: ", e
-            )
+            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: ", e)
 
     def _run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
         """
@@ -890,9 +1062,8 @@ class RedisCache(BaseCache):
             verbose_logger.error(f"Error occurred in batch get cache - {str(e)}")
             return key_value_dict
 
-    async def async_get_cache(
-        self, key, parent_otel_span: Optional[Span] = None, **kwargs
-    ):
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -902,9 +1073,7 @@ class RedisCache(BaseCache):
         try:
             print_verbose(f"Get Async Redis Cache: key: {key}")
             cached_response = await _redis_client.get(key)
-            print_verbose(
-                f"Got Async Redis Cache: key: {key}, cached_response {cached_response}"
-            )
+            print_verbose(f"Got Async Redis Cache: key: {key}, cached_response {cached_response}")
             response = self._get_cache_logic(cached_response=cached_response)
 
             end_time = time.time()
@@ -936,10 +1105,9 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
-            print_verbose(
-                f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}"
-            )
+            print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}")
 
+    @_redis_circuit_breaker_guard
     async def async_batch_get_cache(
         self,
         key_list: Union[List[str], List[Optional[str]]],
@@ -1042,9 +1210,7 @@ class RedisCache(BaseCache):
                 error=e,
                 call_type=f"sync_ping <- {_get_call_stack_info()}",
             )
-            verbose_logger.error(
-                f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
-            )
+            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}")
             raise e
 
     async def ping(self) -> bool:
@@ -1078,14 +1244,14 @@ class RedisCache(BaseCache):
                     call_type=f"async_ping <- {_get_call_stack_info()}",
                 )
             )
-            verbose_logger.error(
-                f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}"
-            )
+            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {str(e)}")
             raise e
 
+    @_redis_circuit_breaker_guard
     async def delete_cache_keys(self, keys):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
+        keys = [self.check_and_fix_namespace(key=key) for key in keys]
         # keys is a list, unpack it so it gets passed as individual elements to delete
         await _redis_client.delete(*keys)
 
@@ -1105,14 +1271,18 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
-    
+        try:
+            self.redis_client.close()
+        except Exception as e:
+            verbose_logger.debug("Error closing sync Redis client: %s", e)
+
     async def test_connection(self) -> dict:
         """
         Test the Redis connection by creating a new client and pinging it.
-        
+
         This creates a fresh connection without using cached clients or connection pools
         to ensure the credentials are actually valid.
-        
+
         Returns:
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
@@ -1121,38 +1291,38 @@ class RedisCache(BaseCache):
 
             # Create a fresh Redis client with current settings
             redis_client = redis_async.Redis(**self.redis_kwargs)
-            
+
             # Test the connection
             ping_result = await redis_client.ping()  # type: ignore[misc]
 
             # Close the connection
             await redis_client.aclose()  # type: ignore[attr-defined]
-            
+
             if ping_result:
                 return {
                     "status": "success",
-                    "message": "Redis connection test successful"
+                    "message": "Redis connection test successful",
                 }
             else:
-                return {
-                    "status": "failed",
-                    "message": "Redis ping returned False"
-                }
+                return {"status": "failed", "message": "Redis ping returned False"}
         except Exception as e:
             verbose_logger.error(f"Redis connection test failed: {str(e)}")
             return {
                 "status": "failed",
                 "message": f"Redis connection failed: {str(e)}",
-                "error": str(e)
+                "error": str(e),
             }
 
+    @_redis_circuit_breaker_guard
     async def async_delete_cache(self, key: str):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         # keys is str
         return await _redis_client.delete(key)
 
     def delete_cache(self, key):
+        key = self.check_and_fix_namespace(key=key)
         self.redis_client.delete(key)
 
     async def _pipeline_increment_helper(
@@ -1174,11 +1344,10 @@ class RedisCache(BaseCache):
         # Execute the pipeline and return results
         results = await pipe.execute()
         # only return float values
-        verbose_logger.debug(
-            f"Increment ASYNC Redis Cache PIPELINE: results: {results}"
-        )
+        verbose_logger.debug(f"Increment ASYNC Redis Cache PIPELINE: results: {results}")
         return [r for r in results if isinstance(r, float)]
 
+    @_redis_circuit_breaker_guard
     async def async_increment_pipeline(
         self, increment_list: List[RedisPipelineIncrementOperation], **kwargs
     ) -> Optional[List[float]]:
@@ -1199,9 +1368,7 @@ class RedisCache(BaseCache):
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
 
-        print_verbose(
-            f"Increment Async Redis Cache Pipeline: increment list: {increment_list}"
-        )
+        print_verbose(f"Increment Async Redis Cache Pipeline: increment list: {increment_list}")
 
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
@@ -1242,6 +1409,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @_redis_circuit_breaker_guard
     async def async_get_ttl(self, key: str) -> Optional[int]:
         """
         Get the remaining TTL of a key in Redis
@@ -1257,6 +1425,7 @@ class RedisCache(BaseCache):
         try:
             # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `ttl`
             _redis_client: Any = self.init_async_client()
+            key = self.check_and_fix_namespace(key=key)
             ttl = await _redis_client.ttl(key)
             if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist
                 return None
@@ -1265,6 +1434,7 @@ class RedisCache(BaseCache):
             verbose_logger.debug(f"Redis TTL Error: {e}")
             return None
 
+    @_redis_circuit_breaker_guard
     async def async_rpush(
         self,
         key: str,
@@ -1284,6 +1454,7 @@ class RedisCache(BaseCache):
             int: The length of the list after the push operation
         """
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         start_time = time.time()
         try:
             response = await _redis_client.rpush(key, *values)
@@ -1311,14 +1482,81 @@ class RedisCache(BaseCache):
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
                 )
             )
+            verbose_logger.error(f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {str(e)}")
+            raise e
+
+    async def _pipeline_rpush_helper(
+        self,
+        pipe: pipeline,
+        rpush_list: List[RedisPipelineRpushOperation],
+    ) -> List[int]:
+        """Helper function for pipeline rpush operations"""
+        for rpush_op in rpush_list:
+            key = self.check_and_fix_namespace(key=rpush_op["key"])
+            pipe.rpush(key, *rpush_op["values"])
+        results = await pipe.execute()
+        # Preserve positional correspondence — raise on per-command errors
+        for r in results:
+            if isinstance(r, Exception):
+                raise r
+        return results
+
+    @_redis_circuit_breaker_guard
+    async def async_rpush_pipeline(
+        self,
+        rpush_list: List[RedisPipelineRpushOperation],
+    ) -> List[int]:
+        """
+        Use Redis Pipelines for bulk RPUSH operations
+
+        Args:
+            rpush_list: List of RedisPipelineRpushOperation dicts containing:
+                - key: str
+                - values: List[Any]
+
+        Returns:
+            List[int]: List lengths after each push
+        """
+        if len(rpush_list) == 0:
+            return []
+
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                results = await self._pipeline_rpush_helper(pipe, rpush_list)
+
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            return results
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
+                )
+            )
             verbose_logger.error(
-                f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {str(e)}"
+                "LiteLLM Redis Caching: async_rpush_pipeline() - Got exception from REDIS %s",
+                str(e),
             )
             raise e
 
-    async def handle_lpop_count_for_older_redis_versions(
-        self, pipe: pipeline, key: str, count: int
-    ) -> List[bytes]:
+    async def handle_lpop_count_for_older_redis_versions(self, pipe: pipeline, key: str, count: int) -> List[bytes]:
         result: List[bytes] = []
         for _ in range(count):
             pipe.lpop(key)
@@ -1331,6 +1569,7 @@ class RedisCache(BaseCache):
 
         return result
 
+    @_redis_circuit_breaker_guard
     async def async_lpop(
         self,
         key: str,
@@ -1339,6 +1578,7 @@ class RedisCache(BaseCache):
         **kwargs,
     ) -> Union[Any, List[Any]]:
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         start_time = time.time()
         print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
         try:
@@ -1347,9 +1587,7 @@ class RedisCache(BaseCache):
             if count is not None and major_version < 7:
                 # For Redis < 7.0, use pipeline to execute multiple LPOP commands
                 async with _redis_client.pipeline(transaction=False) as pipe:
-                    result = await self.handle_lpop_count_for_older_redis_versions(
-                        pipe, key, count
-                    )
+                    result = await self.handle_lpop_count_for_older_redis_versions(pipe, key, count)
             else:
                 # For Redis >= 7.0 or when count is None, use native LPOP with count
                 result = await _redis_client.lpop(key, count)
@@ -1371,9 +1609,7 @@ class RedisCache(BaseCache):
                     return result.decode("utf-8")
                 except Exception:
                     return result
-            elif isinstance(result, list) and all(
-                isinstance(item, bytes) for item in result
-            ):
+            elif isinstance(result, list) and all(isinstance(item, bytes) for item in result):
                 try:
                     return [item.decode("utf-8") for item in result]
                 except Exception:
@@ -1392,7 +1628,119 @@ class RedisCache(BaseCache):
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
                 )
             )
+            verbose_logger.error(f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {str(e)}")
+            raise e
+
+    async def _pipeline_lpop_helper(
+        self,
+        pipe: pipeline,
+        lpop_list: List[RedisPipelineLpopOperation],
+    ) -> List[Optional[List[str]]]:
+        """Helper function for pipeline lpop operations.
+
+        For Redis >= 7, queues one LPOP(key, count) per operation.
+        For Redis < 7, queues `count` individual LPOP(key) commands per operation.
+        """
+        major_version = self._parse_redis_major_version()
+
+        if major_version >= 7:
+            for lpop_op in lpop_list:
+                key = self.check_and_fix_namespace(key=lpop_op["key"])
+                pipe.lpop(key, lpop_op["count"])
+            raw_results = await pipe.execute()
+        else:
+            # For Redis < 7, LPOP doesn't support count param.
+            # Issue `count` individual LPOP commands per key, all in one pipeline.
+            counts: List[int] = []
+            for lpop_op in lpop_list:
+                key = self.check_and_fix_namespace(key=lpop_op["key"])
+                count = lpop_op["count"] or 1
+                counts.append(count)
+                for _ in range(count):
+                    pipe.lpop(key)
+            flat_results = await pipe.execute()
+
+            # Re-group the flat results back into per-key lists
+            raw_results = []
+            offset = 0
+            for count in counts:
+                key_results = [r for r in flat_results[offset : offset + count] if r is not None]
+                raw_results.append(key_results if key_results else None)
+                offset += count
+
+        # Raise on per-command errors (matches _pipeline_rpush_helper behavior)
+        for r in raw_results:
+            if isinstance(r, Exception):
+                raise r
+
+        # Decode bytes -> str for each result set
+        decoded_results: List[Optional[List[str]]] = []
+        for r in raw_results:
+            if r is None:
+                decoded_results.append(None)
+            elif isinstance(r, list):
+                try:
+                    decoded_results.append(
+                        [item.decode("utf-8") if isinstance(item, bytes) else item for item in r if item is not None]
+                        or None
+                    )
+                except Exception:
+                    decoded_results.append(r)  # type: ignore
+            else:
+                decoded_results.append(None)
+        return decoded_results
+
+    @_redis_circuit_breaker_guard
+    async def async_lpop_pipeline(
+        self,
+        lpop_list: List[RedisPipelineLpopOperation],
+    ) -> List[Optional[List[str]]]:
+        """
+        Use Redis Pipelines for bulk LPOP operations
+
+        Args:
+            lpop_list: List of RedisPipelineLpopOperation dicts containing:
+                - key: str
+                - count: Optional[int]
+
+        Returns:
+            List[Optional[List[str]]]: Decoded results per key, None if key was empty
+        """
+        if len(lpop_list) == 0:
+            return []
+
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                results = await self._pipeline_lpop_helper(pipe, lpop_list)
+
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            return results
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
+                )
+            )
             verbose_logger.error(
-                f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {str(e)}"
+                "LiteLLM Redis Caching: async_lpop_pipeline() - Got exception from REDIS %s",
+                str(e),
             )
             raise e

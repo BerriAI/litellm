@@ -28,9 +28,10 @@ else:
 class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     """
     Vertex AI Gemini Image Edit Configuration
-    
+
     Uses generateContent API for Gemini models on Vertex AI
     """
+
     SUPPORTED_PARAMS: List[str] = ["size"]
 
     def __init__(self) -> None:
@@ -47,11 +48,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         drop_params: bool,
     ) -> Dict[str, Any]:
         supported_params = self.get_supported_openai_params(model)
-        filtered_params = {
-            key: value
-            for key, value in image_edit_optional_params.items()
-            if key in supported_params
-        }
+        filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
         mapped_params: Dict[str, Any] = {}
 
@@ -99,13 +96,13 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> dict:
         headers = headers or {}
         litellm_params = litellm_params or {}
-        
+
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
         _api_base = litellm_params.get("api_base") or api_base
         if _api_base is not None:
             return headers
-        
+
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
         vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
@@ -167,23 +164,18 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             parts.append({"text": prompt})
 
         # Correct format for Vertex AI Gemini image editing
-        contents = {
-            "role": "USER",
-            "parts": parts
-        }
+        contents = {"role": "USER", "parts": parts}
 
         request_body: Dict[str, Any] = {"contents": contents}
 
         # Generation config with proper structure for image editing
-        generation_config: Dict[str, Any] = {
-            "response_modalities": ["IMAGE"]
-        }
+        generation_config: Dict[str, Any] = {"response_modalities": ["IMAGE"]}
 
         # Add image-specific configuration
         image_config: Dict[str, Any] = {}
         if "aspectRatio" in image_edit_optional_request_params:
             image_config["aspect_ratio"] = image_edit_optional_request_params["aspectRatio"]
-        
+
         if image_config:
             generation_config["image_config"] = image_config
 
@@ -239,9 +231,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _prepare_inline_image_parts(
-        self, image: Union[FileTypes, List[FileTypes]]
-    ) -> List[Dict[str, Any]]:
+    def _prepare_inline_image_parts(self, image: Union[FileTypes, List[FileTypes]]) -> List[Dict[str, Any]]:
         images: List[FileTypes]
         if isinstance(image, list):
             images = image

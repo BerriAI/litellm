@@ -3,6 +3,7 @@ Test suite for MCP server custom fields functionality.
 
 Tests that mcp_info can accept arbitrary custom fields in addition to predefined ones.
 """
+
 import pytest
 import sys
 import os
@@ -10,9 +11,7 @@ from unittest.mock import Mock, patch
 from typing import Dict, Any
 
 # Add the path to find the modules
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adjust the path as needed
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adjust the path as needed
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.mcp import MCPAuth
@@ -40,8 +39,8 @@ class TestMCPCustomFields:
                     "custom_field_2": {"nested": "value"},
                     "custom_field_3": ["list", "values"],
                     "priority": 10,
-                    "tags": ["production", "api"]
-                }
+                    "tags": ["production", "api"],
+                },
             }
         }
 
@@ -119,7 +118,7 @@ class TestMCPCustomFields:
             "test_server": {
                 "url": "http://localhost:3000",
                 "transport": "http",
-                "mcp_info": {}
+                "mcp_info": {},
             }
         }
 
@@ -143,7 +142,7 @@ class TestMCPCustomFields:
             "test_server": {
                 "url": "http://localhost:3000",
                 "transport": "http",
-                "description": "Server description"
+                "description": "Server description",
             }
         }
 
@@ -169,9 +168,7 @@ class TestMCPCustomFields:
                 "url": "http://localhost:3000",
                 "transport": "http",
                 "description": "Config level description",
-                "mcp_info": {
-                    "custom_field": "custom_value"
-                }
+                "mcp_info": {"custom_field": "custom_value"},
             }
         }
 
@@ -197,8 +194,8 @@ class TestMCPCustomFields:
                 "description": "Config level description",
                 "mcp_info": {
                     "description": "MCP info description",
-                    "custom_field": "custom_value"
-                }
+                    "custom_field": "custom_value",
+                },
             }
         }
 

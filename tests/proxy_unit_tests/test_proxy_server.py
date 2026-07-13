@@ -32,7 +32,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 
@@ -119,7 +119,7 @@ def fake_env_vars(monkeypatch):
     # Set some fake environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
     monkeypatch.setenv("OPENAI_API_BASE", "http://fake-openai-api-base")
-    monkeypatch.setenv("AZURE_API_BASE", "http://fake-azure-api-base")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "http://fake-azure-api-base")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
     monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")
     monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -178,7 +178,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
 def test_chat_completion_malformed_messages_returns_400(client_no_auth):
     """
     Test that malformed messages (strings instead of dicts) return 400 instead of 500.
-    
+
     This test verifies that when a client sends messages as raw strings instead of
     {role, content} objects, LiteLLM returns a 400 invalid_request_error instead
     of a 500 Internal Server Error.
@@ -188,33 +188,41 @@ def test_chat_completion_malformed_messages_returns_400(client_no_auth):
         # Test data with malformed messages (string instead of dict)
         test_data = {
             "model": "gpt-3.5-turbo",
-            "messages": ["hi how are you"],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
+            "messages": [
+                "hi how are you"
+            ],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
         }
 
         print("testing proxy server with malformed messages")
-        response = client_no_auth.post("/v1/chat/completions", json=test_data, headers=headers)
-        
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=headers
+        )
+
         print(f"response status: {response.status_code}")
         print(f"response text: {response.text}")
-        
+
         # Should return 400, not 500
-        assert response.status_code == 400, f"Expected 400, got {response.status_code}. Response: {response.text}"
-        
+        assert (
+            response.status_code == 400
+        ), f"Expected 400, got {response.status_code}. Response: {response.text}"
+
         # Verify error format
         result = response.json()
         assert "error" in result, "Response should contain 'error' key"
         error = result["error"]
-        
+
         # Verify error type and message
-        assert error.get("type") == "invalid_request_error" or error.get("type") is None, \
-            f"Expected invalid_request_error or None, got {error.get('type')}"
-        assert error.get("code") == "400" or error.get("code") == 400, \
-            f"Expected code 400, got {error.get('code')}"
-        
+        assert (
+            error.get("type") == "invalid_request_error" or error.get("type") is None
+        ), f"Expected invalid_request_error or None, got {error.get('type')}"
+        assert (
+            error.get("code") == "400" or error.get("code") == 400
+        ), f"Expected code 400, got {error.get('code')}"
+
         # Error message should indicate invalid request format
         error_message = error.get("message", "")
         assert len(error_message) > 0, "Error message should not be empty"
-        
+
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -332,6 +340,85 @@ def test_chat_completion_forward_headers(
         print(f"Received response: {result}")
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
+@pytest.mark.parametrize("forward_llm_auth_headers", [True, False])
+@mock_patch_acompletion()
+def test_chat_completion_forward_llm_provider_auth_headers(
+    mock_acompletion, client_no_auth, forward_llm_auth_headers
+):
+    """
+    Test that LLM provider auth headers (x-api-key, x-goog-api-key) are forwarded
+    when forward_llm_provider_auth_headers=True.
+
+    This allows clients to send their own LLM provider API keys through the proxy.
+    """
+    try:
+        # Configure general settings
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        gs["forward_client_headers_to_llm_api"] = True
+        gs["forward_llm_provider_auth_headers"] = forward_llm_auth_headers
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
+
+        # Test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hello"},
+            ],
+            "max_tokens": 10,
+        }
+
+        # Headers including LLM provider auth
+        request_headers = {
+            "Authorization": "Bearer sk-proxy-auth-123",  # Proxy auth (should be stripped)
+            "x-api-key": "sk-ant-api03-test-anthropic-key",  # Anthropic API key
+            "x-goog-api-key": "google-api-key-123",  # Google API key
+            "X-Custom-Header": "custom-value",  # Custom header (should be forwarded)
+        }
+
+        # Make request
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=request_headers
+        )
+
+        assert response.status_code == 200
+
+        # Check forwarded headers
+        forwarded_headers = mock_acompletion.call_args.kwargs.get("headers", {})
+
+        if forward_llm_auth_headers:
+            # LLM provider auth headers should be forwarded
+            assert "x-api-key" in forwarded_headers
+            assert forwarded_headers["x-api-key"] == "sk-ant-api03-test-anthropic-key"
+            assert "x-goog-api-key" in forwarded_headers
+            assert forwarded_headers["x-goog-api-key"] == "google-api-key-123"
+        else:
+            # LLM provider auth headers should be stripped
+            assert "x-api-key" not in forwarded_headers
+            assert "x-goog-api-key" not in forwarded_headers
+
+        # Custom headers should always be forwarded (when forward_client_headers_to_llm_api=True)
+        assert "x-custom-header" in forwarded_headers
+        assert forwarded_headers["x-custom-header"] == "custom-value"
+
+        # Proxy Authorization should never be forwarded
+        assert "authorization" not in forwarded_headers
+
+        print(
+            f"✓ Test passed with forward_llm_provider_auth_headers={forward_llm_auth_headers}"
+        )
+        print(f"  Forwarded headers: {list(forwarded_headers.keys())}")
+
+    except Exception as e:
+        pytest.fail(
+            f"Test failed with forward_llm_auth_headers={forward_llm_auth_headers}: {str(e)}"
+        )
+    finally:
+        # Clean up
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        gs.pop("forward_llm_provider_auth_headers", None)
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
 
 
 @mock_patch_acompletion()
@@ -601,18 +688,22 @@ def test_embedding(mock_aembedding, client_no_auth):
         async def _post_call_success_side_effect(**kwargs):
             return kwargs["response"]
 
-        with patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "pre_call_hook",
-            new=AsyncMock(side_effect=_pre_call_hook_side_effect),
-        ) as mock_pre_call_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "during_call_hook",
-            new=AsyncMock(return_value=None),
-        ) as mock_during_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "post_call_success_hook",
-            new=AsyncMock(side_effect=_post_call_success_side_effect),
+        with (
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "pre_call_hook",
+                new=AsyncMock(side_effect=_pre_call_hook_side_effect),
+            ) as mock_pre_call_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "during_call_hook",
+                new=AsyncMock(return_value=None),
+            ) as mock_during_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "post_call_success_hook",
+                new=AsyncMock(side_effect=_post_call_success_side_effect),
+            ),
         ):
             response = client_no_auth.post("/v1/embeddings", json=test_data)
 
@@ -713,6 +804,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             "prompt": "A cute baby sea otter",
             "n": 1,
             "size": "1024x1024",
+            "imageConfig": {"aspectRatio": "9:16", "imageSize": "1K"},
         }
 
         response = client_no_auth.post("/v1/images/generations", json=test_data)
@@ -722,6 +814,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             prompt="A cute baby sea otter",
             n=1,
             size="1024x1024",
+            imageConfig={"aspectRatio": "9:16", "imageSize": "1K"},
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -760,6 +853,7 @@ def test_add_new_model(client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
+@pytest.mark.xdist_group("proxy_heavy")
 def test_health(client_no_auth):
     global headers
     import logging
@@ -962,7 +1056,7 @@ async def test_team_update_redis():
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    redis_cache = RedisCache()
+    redis_cache = RedisCache(host="localhost")
 
     with patch.object(
         redis_cache,
@@ -1029,11 +1123,21 @@ from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from test_key_generate_prisma import prisma_client
 
 
+@pytest.fixture
+def mock_prisma_client():
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.disconnect = AsyncMock()
+    return client
+
+
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.parametrize(
     "user_role",
     [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.PROXY_ADMIN.value],
 )
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_create_user_default_budget(prisma_client, user_role):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -1074,6 +1178,7 @@ async def test_create_user_default_budget(prisma_client, user_role):
 
 @pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_create_team_member_add(prisma_client, new_member_method):
     import time
 
@@ -1111,16 +1216,20 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
 
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
@@ -1188,7 +1297,6 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
@@ -1263,7 +1371,6 @@ async def test_create_team_member_add_team_admin(
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
@@ -1300,16 +1407,20 @@ async def test_create_team_member_add_team_admin(
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1362,6 +1473,7 @@ async def test_create_team_member_add_team_admin(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_user_info_team_list(prisma_client):
     """Assert user_info for admin calls team_list function"""
     from litellm.proxy._types import LiteLLM_UserTable
@@ -1449,6 +1561,7 @@ async def test_add_callback_via_key(prisma_client):
                 fastapi_response=Response(),
                 user_api_key_dict=UserAPIKeyAuth(
                     metadata={
+                        "allow_client_mock_response": True,
                         "logging": [
                             {
                                 "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
@@ -1459,7 +1572,7 @@ async def test_add_callback_via_key(prisma_client):
                                     "langfuse_host": "https://us.cloud.langfuse.com",
                                 },
                             }
-                        ]
+                        ],
                     }
                 ),
             )
@@ -1498,7 +1611,10 @@ async def test_add_callback_via_key(prisma_client):
     ],
 )
 async def test_add_callback_via_key_litellm_pre_call_utils(
-    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+    mock_prisma_client,
+    callback_type,
+    expected_success_callbacks,
+    expected_failure_callbacks,
 ):
     import json
 
@@ -1507,9 +1623,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -1553,6 +1668,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langfuse",
@@ -1563,7 +1679,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
                             "langfuse_host": "https://us.cloud.langfuse.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1654,7 +1770,10 @@ async def test_disable_fallbacks_by_key(disable_fallbacks_set):
     ],
 )
 async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
-    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+    mock_prisma_client,
+    callback_type,
+    expected_success_callbacks,
+    expected_failure_callbacks,
 ):
     import json
 
@@ -1663,9 +1782,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
 
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -1709,6 +1827,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "gcs_bucket",
@@ -1718,7 +1837,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
                             "gcs_path_service_account": "pathrise-convert-1606954137718-a956eef1a2a8.json",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1787,7 +1906,10 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     ],
 )
 async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
-    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+    mock_prisma_client,
+    callback_type,
+    expected_success_callbacks,
+    expected_failure_callbacks,
 ):
     import json
 
@@ -1796,9 +1918,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -1842,6 +1963,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langsmith",
@@ -1852,7 +1974,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
                             "langsmith_base_url": "https://api.smith.langchain.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1910,6 +2032,10 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
         assert new_data["failure_callback"] == expected_failure_callbacks
 
 
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
+    reason="Requires GEMINI_API_KEY or GOOGLE_API_KEY.",
+)
 @pytest.mark.asyncio
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
@@ -1961,6 +2087,49 @@ async def test_gemini_pass_through_endpoint():
 
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
+async def test_model_info_alias_without_prisma(hidden):
+    from litellm.proxy.proxy_server import model_info_v1
+
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        }
+    ]
+
+    model_alias = "gpt-4"
+
+    router = litellm.Router(
+        model_list=_model_list,
+        model_group_alias={
+            model_alias: {
+                "model": "gpt-3.5-turbo",
+                "hidden": hidden,
+            }
+        },
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", router)
+    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+
+    resp = await model_info_v1(
+        user_api_key_dict=UserAPIKeyAuth(models=[]),
+    )
+
+    models = resp["data"]
+
+    alias_found = any(
+        m["model_name"] == model_alias
+        for m in models
+    )
+
+    assert alias_found is (not hidden)
+
+    
+@pytest.mark.parametrize("hidden", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     """
     Check if model group alias is returned on
@@ -2041,6 +2210,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_info_rerank(prisma_client):
     """
     Check if rerank model is returned on the following endpoints
@@ -2195,6 +2365,7 @@ async def test_proxy_server_prisma_setup():
         mock_client._set_spend_logs_row_count_in_proxy_state = (
             AsyncMock()
         )  # Mock the _set_spend_logs_row_count_in_proxy_state method
+        mock_client.start_db_health_watchdog_task = AsyncMock()
         # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
         mock_db = MagicMock()
         mock_db.start_token_refresh_task = AsyncMock()
@@ -2319,9 +2490,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     test_model_list_2 = [{"model_name": "model-b"}]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details):
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
         called_model_lists.append(copy.deepcopy(model_list))
-        return (["healthy"], ["unhealthy"])
+        return (["healthy"], ["unhealthy"], {})
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
@@ -2363,13 +2534,18 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
     test_model_list = [
         {"model_name": "model-a"},
-        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+        {
+            "model_name": "model-b",
+            "model_info": {"disable_background_health_check": True},
+        },
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
-        return (["healthy"], [])
+        return (["healthy"], [], {})
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
@@ -2388,6 +2564,100 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
         pass
 
     assert called_model_lists == [[{"model_name": "model-a"}]]
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_legacy_three_arg_stub(
+    monkeypatch,
+):
+    """Monkeypatched perform_health_check with only base kwargs should still run."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    result = await proxy_server._run_direct_health_check_with_instrumentation(
+        [{"model_name": "m"}],
+        True,
+        1,
+        {"enabled": True, "source": "test", "cycle_id": "c1"},
+    )
+    assert result == ([], [], {})
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_instrumentation_only(
+    monkeypatch,
+):
+    """Stub that accepts instrumentation_context but not health_check filter kwargs."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, instrumentation_context=None
+    ):
+        seen.append(instrumentation_context)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        False,
+        2,
+        {"enabled": True, "source": "test", "cycle_id": "c2"},
+    )
+    assert len(seen) == 1
+    assert seen[0]["cycle_id"] == "c2"
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
+    monkeypatch,
+):
+    """Stub that accepts health_check_skip_disabled_background_models but not instrumentation."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list,
+        details,
+        max_concurrency=None,
+        health_check_skip_disabled_background_models=False,
+    ):
+        seen.append(health_check_skip_disabled_background_models)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        True,
+        None,
+        {"enabled": False},
+    )
+    assert len(seen) == 1
+    assert seen[0] is False
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_non_kw_typeerror_reraises(
+    monkeypatch,
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(**kwargs):
+        raise TypeError("unsupported operand type(s)")
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    with pytest.raises(TypeError, match="unsupported operand"):
+        await proxy_server._run_direct_health_check_with_instrumentation(
+            [],
+            True,
+            1,
+            {},
+        )
 
 
 def test_get_timeout_from_request():
@@ -2409,15 +2679,15 @@ def test_get_timeout_from_request():
 @pytest.mark.parametrize(
     "ui_exists, ui_has_content",
     [
-        (True, True),   # UI path exists and has content
+        (True, True),  # UI path exists and has content
         (True, False),  # UI path exists but is empty
-        (False, False), # UI path doesn't exist
+        (False, False),  # UI path doesn't exist
     ],
 )
 def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content):
     """
     Test the non-root Docker UI path detection logic.
-    
+
     Tests that when LITELLM_NON_ROOT is set to "true":
     - If UI path exists and has content, it should be used
     - If UI path doesn't exist or is empty, proper error logging occurs
@@ -2425,44 +2695,54 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
     import tempfile
     import shutil
     from unittest.mock import MagicMock
-    
+
     # Create a temporary directory to act as /tmp/litellm_ui
     test_ui_path = tmp_path / "litellm_ui"
-    
+
     if ui_exists:
         test_ui_path.mkdir(parents=True, exist_ok=True)
         if ui_has_content:
             # Create some dummy files to simulate built UI
             (test_ui_path / "index.html").write_text("<html></html>")
             (test_ui_path / "app.js").write_text("console.log('test');")
-    
+
     # Mock the environment variable and os.path operations
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    
+
     # Create a mock logger to capture log messages
     mock_logger = MagicMock()
-    
+
     # We need to reimport or reload the relevant code section
     # Since this is module-level code, we'll test the logic directly
     ui_path = None
     non_root_ui_path = str(test_ui_path)
-    
+
     # Simulate the logic from proxy_server.py lines 909-920
     if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
         if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
-            mock_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
-            mock_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            mock_logger.info(
+                f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+            )
+            mock_logger.info(
+                f"UI files found: {len(os.listdir(non_root_ui_path))} items"
+            )
             ui_path = non_root_ui_path
         else:
-            mock_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
-            mock_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
-    
+            mock_logger.error(
+                f"UI not found at {non_root_ui_path}. UI will not be available."
+            )
+            mock_logger.error(
+                f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}"
+            )
+
     # Verify behavior based on test parameters
     if ui_exists and ui_has_content:
         # UI should be found and used
         assert ui_path == non_root_ui_path
         assert mock_logger.info.call_count == 2
-        mock_logger.info.assert_any_call(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+        mock_logger.info.assert_any_call(
+            f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+        )
         # Verify the second info call mentions the number of items
         info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
         assert any("UI files found:" in call and "items" in call for call in info_calls)
@@ -2471,7 +2751,9 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         # UI should not be found, error should be logged
         assert ui_path is None
         assert mock_logger.error.call_count == 2
-        mock_logger.error.assert_any_call(f"UI not found at {non_root_ui_path}. UI will not be available.")
+        mock_logger.error.assert_any_call(
+            f"UI not found at {non_root_ui_path}. UI will not be available."
+        )
         # Verify the second error call has path existence info
         error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
         assert any("Path exists:" in call for call in error_calls)
@@ -2483,17 +2765,17 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     """
     Test that /get/config/callbacks returns all three callback types:
     - success_callback with type="success"
-    - failure_callback with type="failure"  
+    - failure_callback with type="failure"
     - callbacks (success_and_failure) with type="success_and_failure"
     """
     from litellm.proxy.proxy_server import ProxyConfig
-    
+
     # Create a mock config with all three callback types
     mock_config_data = {
         "litellm_settings": {
             "success_callback": ["langfuse", "braintrust"],
             "failure_callback": ["sentry"],
-            "callbacks": ["otel", "langsmith"]
+            "callbacks": ["otel", "langsmith"],
         },
         "environment_variables": {
             "LANGFUSE_PUBLIC_KEY": "test-public-key",
@@ -2504,51 +2786,53 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
             "OTEL_ENDPOINT": "http://localhost:4317",
             "LANGSMITH_API_KEY": "test-langsmith-key",
         },
-        "general_settings": {}
+        "general_settings": {},
     }
-    
+
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
-    
+
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ):
         response = client_no_auth.get("/get/config/callbacks")
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Verify response structure
         assert "status" in result
         assert result["status"] == "success"
         assert "callbacks" in result
-        
+
         callbacks = result["callbacks"]
-        
+
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5
-        
+
         # Group callbacks by type
         success_callbacks = [cb for cb in callbacks if cb.get("type") == "success"]
         failure_callbacks = [cb for cb in callbacks if cb.get("type") == "failure"]
-        success_and_failure_callbacks = [cb for cb in callbacks if cb.get("type") == "success_and_failure"]
-        
+        success_and_failure_callbacks = [
+            cb for cb in callbacks if cb.get("type") == "success_and_failure"
+        ]
+
         # Verify all callbacks have required fields
         for callback in callbacks:
             assert "name" in callback
             assert "variables" in callback
             assert "type" in callback
             assert callback["type"] in ["success", "failure", "success_and_failure"]
-        
+
         # Verify success callbacks
         assert len(success_callbacks) == 2
         success_names = [cb["name"] for cb in success_callbacks]
         assert "langfuse" in success_names
         assert "braintrust" in success_names
-        
+
         # Verify failure callbacks
         assert len(failure_callbacks) == 1
         assert failure_callbacks[0]["name"] == "sentry"
-        
+
         # Verify success_and_failure callbacks
         assert len(success_and_failure_callbacks) == 2
         success_and_failure_names = [cb["name"] for cb in success_and_failure_callbacks]
@@ -2560,16 +2844,18 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type. Values are returned as-is from the config (no decryption).
+    for each callback type. Under ``client_no_auth`` the resolved role is
+    not ``PROXY_ADMIN``, so values matched by the redaction helper come back
+    as ``"REDACTED"`` and other values pass through verbatim.
     """
     from litellm.proxy.proxy_server import ProxyConfig
-    
+
     # Create a mock config with callbacks and their env vars
     mock_config_data = {
         "litellm_settings": {
             "success_callback": ["langfuse"],
             "failure_callback": [],
-            "callbacks": ["otel"]
+            "callbacks": ["otel"],
         },
         "environment_variables": {
             "LANGFUSE_PUBLIC_KEY": "test-public-key",
@@ -2579,21 +2865,21 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
             "OTEL_ENDPOINT": "http://localhost:4317",
             "OTEL_HEADERS": "key=value",
         },
-        "general_settings": {}
+        "general_settings": {},
     }
-    
+
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
-    
+
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ):
         response = client_no_auth.get("/get/config/callbacks")
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         callbacks = result["callbacks"]
-        
+
         # Find langfuse callback (success type)
         langfuse_callback = next(
             (cb for cb in callbacks if cb["name"] == "langfuse"), None
@@ -2601,32 +2887,28 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback is not None
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
-        
-        # Verify langfuse env vars are present (values returned as-is, no decryption)
+
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "REDACTED"
         assert "LANGFUSE_SECRET_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "REDACTED"
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
-        
+
         # Find otel callback (success_and_failure type)
-        otel_callback = next(
-            (cb for cb in callbacks if cb["name"] == "otel"), None
-        )
+        otel_callback = next((cb for cb in callbacks if cb["name"] == "otel"), None)
         assert otel_callback is not None
         assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
-        
-        # Verify otel env vars are present
+
         otel_vars = otel_callback["variables"]
         assert "OTEL_EXPORTER" in otel_vars
         assert otel_vars["OTEL_EXPORTER"] == "otlp"
         assert "OTEL_ENDPOINT" in otel_vars
         assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
         assert "OTEL_HEADERS" in otel_vars
-        assert otel_vars["OTEL_HEADERS"] == "key=value"
+        assert otel_vars["OTEL_HEADERS"] == "REDACTED"
 
 
 @pytest.mark.asyncio
@@ -2638,46 +2920,52 @@ async def test_update_config_success_callback_normalization():
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import ConfigYAML
 
-    # Ensure feature is enabled and prisma_client is set
-    setattr(proxy_server, "store_model_in_db", True)
     setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    existing_litellm_settings = {"success_callback": ["langfuse"]}
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    upserted = {}
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "litellm_settings":
+            return FakeRow("litellm_settings", existing_litellm_settings)
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
 
     class MockPrisma:
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_config = MagicMock()
-            self.db.litellm_config.upsert = AsyncMock()
-
-        # proxy_server.update_config expects this to be sync returning a dict
-        def jsonify_object(self, obj):
-            return obj
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
 
     setattr(proxy_server, "prisma_client", MockPrisma())
 
     class MockProxyConfig:
-        def __init__(self):
-            self.saved_config = None
-
-        async def get_config(self):
-            # Existing config has one lowercase callback already
-            return {"litellm_settings": {"success_callback": ["langfuse"]}}
-
-        async def save_config(self, new_config: dict):
-            self.saved_config = new_config
-
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
             return None
 
-    mock_proxy_config = MockProxyConfig()
-    setattr(proxy_server, "proxy_config", mock_proxy_config)
+    setattr(proxy_server, "proxy_config", MockProxyConfig())
 
-    # Update config with mixed-case callbacks - expect normalization to lowercase
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
-    await proxy_server.update_config(config_update)
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-    saved = mock_proxy_config.saved_config
-    assert saved is not None, "save_config was not called"
-    callbacks = saved["litellm_settings"]["success_callback"]
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+
+    assert (
+        "litellm_settings" in upserted
+    ), "litellm_config.upsert was not called for litellm_settings"
+    callbacks = upserted["litellm_settings"]["success_callback"]
 
     # Deduped and normalized
     assert "sqs" in callbacks

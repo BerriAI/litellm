@@ -5,7 +5,7 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 """
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm.secret_managers.main import get_secret_bool
 
@@ -76,3 +76,48 @@ if should_use_dd_tracer:
         tracer = NullTracer()
 else:
     tracer = NullTracer()
+
+
+def get_active_span() -> Optional[Any]:
+    """
+    Return the active Datadog span, checking current span first and then root span.
+    """
+    try:
+        current_span_fn = getattr(tracer, "current_span", None)
+        if callable(current_span_fn):
+            current_span = current_span_fn()
+            if current_span is not None:
+                return current_span
+
+        current_root_span_fn = getattr(tracer, "current_root_span", None)
+        if callable(current_root_span_fn):
+            return current_root_span_fn()
+    except Exception:
+        return None
+    return None
+
+
+def set_active_span_tag(tag_key: str, tag_value: str) -> bool:
+    """
+    Best-effort helper to set a tag on the active Datadog span.
+
+    Returns:
+        bool: True if a span tag was set, False otherwise.
+    """
+    if not tag_key or tag_value is None:
+        return False
+
+    span = get_active_span()
+    if span is None:
+        return False
+
+    try:
+        if hasattr(span, "set_tag_str"):
+            span.set_tag_str(tag_key, str(tag_value))
+            return True
+        if hasattr(span, "set_tag"):
+            span.set_tag(tag_key, str(tag_value))
+            return True
+    except Exception:
+        return False
+    return False

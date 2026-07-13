@@ -6,7 +6,9 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
@@ -54,17 +56,11 @@ class LevoLogger(OpenTelemetry):
 
         # Validate required env vars
         if not api_key:
-            raise ValueError(
-                "LEVOAI_API_KEY environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_API_KEY environment variable is required for Levo integration.")
         if not org_id:
-            raise ValueError(
-                "LEVOAI_ORG_ID environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_ORG_ID environment variable is required for Levo integration.")
         if not workspace_id:
-            raise ValueError(
-                "LEVOAI_WORKSPACE_ID environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_WORKSPACE_ID environment variable is required for Levo integration.")
         if not collector_url:
             raise ValueError(
                 "LEVOAI_COLLECTOR_URL environment variable is required for Levo integration. "
@@ -114,4 +110,3 @@ class LevoLogger(OpenTelemetry):
                 "status": "unhealthy",
                 "error_message": str(e),
             }
-

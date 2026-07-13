@@ -34,17 +34,11 @@ class Authenticator:
             "CHATGPT_TOKEN_DIR",
             os.path.expanduser("~/.config/litellm/chatgpt"),
         )
-        self.auth_file = os.path.join(
-            self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json")
-        )
+        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
         self._ensure_token_dir()
 
     def get_api_base(self) -> str:
-        return (
-            os.getenv("CHATGPT_API_BASE")
-            or os.getenv("OPENAI_CHATGPT_API_BASE")
-            or CHATGPT_API_BASE
-        )
+        return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
 
     def get_access_token(self) -> str:
         auth_data = self._read_auth_file()
@@ -58,9 +52,7 @@ class Authenticator:
                     refreshed = self._refresh_tokens(refresh_token)
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
-                    verbose_logger.warning(
-                        "ChatGPT refresh token failed, re-login required: %s", exc
-                    )
+                    verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
 
         cooldown_remaining = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:
@@ -149,9 +141,7 @@ class Authenticator:
         return None
 
     def _login_device_code(self) -> Dict[str, str]:
-        cooldown_remaining = self._get_device_code_cooldown_remaining(
-            self._read_auth_file()
-        )
+        cooldown_remaining = self._get_device_code_cooldown_remaining(self._read_auth_file())
         if cooldown_remaining > 0:
             token = self._wait_for_access_token(cooldown_remaining)
             if token:
@@ -350,9 +340,7 @@ class Authenticator:
             "account_id": account_id,
         }
 
-    def _get_device_code_cooldown_remaining(
-        self, auth_data: Optional[Dict[str, Any]]
-    ) -> float:
+    def _get_device_code_cooldown_remaining(self, auth_data: Optional[Dict[str, Any]]) -> float:
         if not auth_data:
             return 0.0
         requested_at = auth_data.get("device_code_requested_at")
@@ -377,9 +365,7 @@ class Authenticator:
             auth_data = self._read_auth_file()
             if auth_data:
                 access_token = auth_data.get("access_token")
-                if access_token and not self._is_token_expired(
-                    auth_data, access_token
-                ):
+                if access_token and not self._is_token_expired(auth_data, access_token):
                     return access_token
             sleep_for = min(DEVICE_CODE_POLL_SLEEP_SECONDS, max(0.0, deadline - time.time()))
             if sleep_for <= 0:

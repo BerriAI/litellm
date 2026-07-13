@@ -1,11 +1,13 @@
 /**
  * PrettyMessagesView - Datadog-style view with Input/Output cards
- * Two main cards showing request and response with token counts and costs
+ * Two main cards showing request and response with token counts and costs.
+ * Detects realtime API responses and renders a specialized view.
  */
 
-import { parseMessages } from './prettyMessagesUtils';
-import { InputCard } from './InputCard';
-import { OutputCard } from './OutputCard';
+import { parseMessages } from "./prettyMessagesUtils";
+import { InputCard } from "./InputCard";
+import { OutputCard } from "./OutputCard";
+import { isRealtimeResponse, RealtimePrettyView } from "./RealtimePrettyView";
 
 interface PrettyMessagesViewProps {
   request: any;
@@ -19,16 +21,16 @@ interface PrettyMessagesViewProps {
 }
 
 export function PrettyMessagesView({ request, response, metrics }: PrettyMessagesViewProps) {
+  if (isRealtimeResponse(response)) {
+    return <RealtimePrettyView response={response} metrics={metrics} />;
+  }
+
   const { requestMessages, responseMessage } = parseMessages(request, response);
 
   return (
     <div>
       {/* Input Card */}
-      <InputCard
-        messages={requestMessages}
-        promptTokens={metrics?.prompt_tokens}
-        inputCost={metrics?.input_cost}
-      />
+      <InputCard messages={requestMessages} promptTokens={metrics?.prompt_tokens} inputCost={metrics?.input_cost} />
 
       {/* Output Card */}
       <OutputCard

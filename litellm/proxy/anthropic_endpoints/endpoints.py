@@ -3,10 +3,18 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    AnthropicContextManagementError,
+)
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_response_usage as _blocked_response_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -19,18 +27,52 @@ from litellm.types.utils import TokenCountResponse
 router = APIRouter()
 
 
+def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
+    """Remove the OpenAI-flavored `usage.total_tokens` field that LiteLLM
+    injects into Anthropic /v1/messages responses.
+
+    The Anthropic /v1/messages spec only defines:
+        input_tokens, output_tokens, cache_creation_input_tokens,
+        cache_read_input_tokens, cache_creation.{ephemeral_5m,ephemeral_1h}
+    The streaming SSE path (message_delta.usage) already does not include
+    total_tokens; this brings the non-streaming path into the same shape.
+
+    Handles both shapes returned by `base_process_llm_request`:
+    - plain `dict` (most common — `AnthropicMessagesResponse` is a TypedDict
+      and is `dict` at runtime)
+    - Pydantic model whose `usage` attribute is dict-shaped (e.g. a
+      BaseModel that holds raw Anthropic usage as a `dict[str, int]`)
+
+    Streaming results (StreamingResponse, AsyncIterator, etc.) and Pydantic
+    models with strongly-typed Usage sub-models are left untouched —
+    those paths either have separate serialization handling or impose
+    type constraints the helper does not try to subvert.
+    """
+    if response is None:
+        return
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if isinstance(usage, dict) and "total_tokens" in usage:
+            usage.pop("total_tokens", None)
+        return
+    # Pydantic-model fallback: only mutate if `usage` is a dict.
+    usage = getattr(response, "usage", None)
+    if isinstance(usage, dict) and "total_tokens" in usage:
+        usage.pop("total_tokens", None)
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def anthropic_response(  # noqa: PLR0915
+async def anthropic_response(
     fastapi_response: Response,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/anthropic_completion).
+    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion).
 
     This was a BETA endpoint that calls 100+ LLMs in the anthropic format.
     """
@@ -68,6 +110,18 @@ async def anthropic_response(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+        # Optionally strip the non-Anthropic `usage.total_tokens` field
+        # LiteLLM adds internally. Anthropic's official /v1/messages spec
+        # only defines input_tokens / output_tokens / cache_*_input_tokens;
+        # total_tokens is an OpenAI convention. Default off
+        # (`litellm.strip_anthropic_total_tokens = False`) to preserve
+        # backward compatibility for clients that currently read it; set
+        # to True to align the wire response with the spec (and with the
+        # streaming SSE path, which already omits total_tokens).
+        # spend_logs / Prometheus still compute total internally — this
+        # only affects the wire response.
+        if litellm.strip_anthropic_total_tokens:
+            _strip_total_tokens_from_anthropic_response(result)
         return result
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
@@ -83,6 +137,10 @@ async def anthropic_response(  # noqa: PLR0915
 
         from litellm.types.utils import AnthropicMessagesResponse
 
+        # Report the blocked LLM response's real token usage (carried on the
+        # exception) instead of discarding it; zero for pre-call blocks.
+        _usage = _blocked_response_usage(e.original_response)
+
         _anthropic_response = AnthropicMessagesResponse(
             id=f"msg_{str(uuid.uuid4())}",
             type="message",
@@ -90,7 +148,7 @@ async def anthropic_response(  # noqa: PLR0915
             content=[{"type": "text", "text": e.message}],
             model=e.model,
             stop_reason="end_turn",
-            usage={"input_tokens": 0, "output_tokens": 0},
+            usage=_usage,
         )
 
         if data.get("stream", None) is not None and data["stream"] is True:
@@ -98,13 +156,11 @@ async def anthropic_response(  # noqa: PLR0915
             async def _passthrough_stream_generator():
                 yield _anthropic_response
 
-            selected_data_generator = (
-                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                    response=_passthrough_stream_generator(),
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=_data,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
+            selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                response=_passthrough_stream_generator(),
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
             return await create_response(
@@ -114,14 +170,27 @@ async def anthropic_response(  # noqa: PLR0915
             )
 
         return _anthropic_response
+    except AnthropicContextManagementError as e:
+        if e.status_code >= 500:
+            # Server-side polyfill failures hit the failure hook for spend/alert
+            # parity with the generic handler; 4xx validation errors do not.
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=data,
+            )
+        body = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=e.status_code,
+            raw_message=e.message,
+            request_id=request.headers.get("x-request-id"),
+        )
+        return JSONResponse(status_code=e.status_code, content=body)
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(str(e))
         )
 
         # Extract model_id from request metadata (same as success path)
@@ -192,19 +261,20 @@ async def count_tokens(
         messages = data.get("messages", [])
 
         if not model_name:
-            raise HTTPException(
-                status_code=400, detail={"error": "model parameter is required"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "model parameter is required"})
 
         if not messages:
-            raise HTTPException(
-                status_code=400, detail={"error": "messages parameter is required"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
 
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
 
-        token_request = TokenCountRequest(model=model_name, messages=messages)
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages,
+            tools=data.get("tools"),
+            system=data.get("system"),
+        )
 
         # Call the internal token counter function with direct request flag set to False
         token_response = await internal_token_counter(
@@ -234,13 +304,9 @@ async def count_tokens(
         )
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
-                str(e)
-            )
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
         )
-        raise HTTPException(
-            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
-        )
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
 
 
 @router.post(
@@ -252,7 +318,7 @@ async def event_logging_batch(
 ):
     """
     Stubbed endpoint for Anthropic event logging batch requests.
-    
+
     This endpoint accepts event logging requests but does nothing with them.
     It exists to prevent 404 errors from Claude Code clients that send telemetry.
     """

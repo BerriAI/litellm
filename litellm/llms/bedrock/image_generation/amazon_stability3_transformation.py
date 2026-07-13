@@ -67,9 +67,7 @@ class AmazonStability3Config:
         return False
 
     @classmethod
-    def transform_request_body(
-        cls, text: str, optional_params: dict
-    ) -> AmazonStability3TextToImageRequest:
+    def transform_request_body(cls, text: str, optional_params: dict) -> AmazonStability3TextToImageRequest:
         """
         Transform the request body for the Stability 3 models
         """
@@ -109,11 +107,11 @@ class AmazonStability3Config:
 
     @classmethod
     def cost_calculator(
-            cls,
-            model: str,
-            image_response: ImageResponse,
-            size: Optional[str] = None,
-            optional_params: Optional[dict] = None,
+        cls,
+        model: str,
+        image_response: ImageResponse,
+        size: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> float:
         get_model_info = get_cached_model_info()
         model_info = get_model_info(

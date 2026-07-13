@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)
+sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -56,10 +54,13 @@ def test_get_provider_create_fields():
     assert isinstance(first_provider["credential_fields"], list)
 
     has_detailed_fields = any(
-        provider.get("credential_fields") and len(provider.get("credential_fields", [])) > 0
+        provider.get("credential_fields")
+        and len(provider.get("credential_fields", [])) > 0
         for provider in response_data
     )
-    assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
+    assert (
+        has_detailed_fields
+    ), "Expected at least one provider to have detailed credential fields"
 
 
 def test_get_litellm_model_cost_map_returns_cost_map():
@@ -84,7 +85,23 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     sample_model_data = payload[sample_model]
     assert isinstance(sample_model_data, dict)
     # Check for common cost fields that should be present
-    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
+    assert (
+        "input_cost_per_token" in sample_model_data
+        or "output_cost_per_token" in sample_model_data
+    )
+
+
+def test_public_ai_hub_info_is_public_by_default(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+
+    response = client.get("/public/model_hub/info")
+
+    assert response.status_code == 200, response.text
 
 
 def test_watsonx_provider_fields():
@@ -108,6 +125,174 @@ def test_watsonx_provider_fields():
     assert "api_key" in field_keys
     assert "token" in field_keys
     assert "zen_api_key" in field_keys
+
+
+def test_azure_provider_fields_include_entra_id():
+    """Azure provider must expose Entra ID (Service Principal) credential fields so
+    the UI can input tenant_id / client_id / client_secret as an alternative to api_key.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    azure = next((p for p in providers if p["provider"] == "Azure"), None)
+    assert azure is not None
+
+    fields_by_key = {f["key"]: f for f in azure["credential_fields"]}
+    # API-key auth still supported
+    assert "api_key" in fields_by_key
+    # Entra ID fields
+    assert "tenant_id" in fields_by_key
+    assert "client_id" in fields_by_key
+    assert "client_secret" in fields_by_key
+    # client_secret must be masked in the UI
+    assert fields_by_key["client_secret"]["field_type"] == "password"
+    # Entra ID is an alternative to api_key, so none of these are individually required
+    assert fields_by_key["tenant_id"]["required"] is False
+    assert fields_by_key["client_id"]["required"] is False
+    assert fields_by_key["client_secret"]["required"] is False
+
+
+def test_anthropic_provider_fields_support_byok():
+    """
+    The Anthropic provider form must allow BYOK:
+    - api_key is optional (not required) so admins can create models without a key
+    - api_key has a non-null tooltip explaining the BYOK use case
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None, "Anthropic provider entry not found"
+
+    fields_by_key = {f["key"]: f for f in anthropic["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False, (
+        "Anthropic api_key must be optional so admins can configure BYOK models "
+        "without entering a key. See BYOK tutorial."
+    )
+    assert fields_by_key["api_key"].get(
+        "tooltip"
+    ), "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    assert "api_base" in fields_by_key, (
+        "Anthropic provider form must expose api_base so cloud customers "
+        "can override the upstream URL without env var access."
+    )
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    assert api_base_field.get(
+        "tooltip"
+    ), "api_base should have a tooltip explaining it is optional."
+
+    # UI forms render fields in credential_fields order; api_base should come first
+    # so an admin sees the URL override before the key field.
+    field_order = [f["key"] for f in anthropic["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+
+
+def test_bedrock_mantle_provider_fields():
+    """Amazon Bedrock Mantle must be a selectable provider in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so a missing
+    entry means Mantle cannot be added through the UI at all (regression guard
+    for LIT-3885). The credential fields must match what the backend actually
+    honors: an optional bearer api_key (BYOK), the AWS SigV4 chain, a region,
+    and an api_base override.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    mantle = next((p for p in providers if p["provider"] == "BedrockMantle"), None)
+    assert mantle is not None, "Bedrock Mantle provider entry not found"
+
+    # provider must equal the UI provider_map key so the model dropdown resolves
+    # bedrock_mantle models; litellm_provider must be the backend slug.
+    assert mantle["provider_display_name"] == "Amazon Bedrock Mantle"
+    assert mantle["litellm_provider"] == "bedrock_mantle"
+    assert mantle["default_model_placeholder"].startswith("bedrock_mantle/")
+
+    fields_by_key = {f["key"]: f for f in mantle["credential_fields"]}
+
+    # Bearer-token auth is BYOK: optional and masked.
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    # AWS SigV4 fallback credentials.
+    assert fields_by_key["aws_access_key_id"]["field_type"] == "password"
+    assert fields_by_key["aws_secret_access_key"]["field_type"] == "password"
+    assert "aws_region_name" in fields_by_key
+
+    # api_base override so admins can target a custom Mantle host without env access.
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+
+def test_google_ai_studio_provider_fields_expose_api_base():
+    """The Google AI Studio (gemini) credential form must let admins set a custom
+    api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
+    proxy at /v1beta) without env var access.
+
+    The runtime gemini provider already supports custom api_base via
+    `vertex_llm_base._check_custom_proxy`; the UI just needs to expose the field.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    google_ai = next(
+        (p for p in providers if p["provider"] == "Google_AI_Studio"), None
+    )
+    assert google_ai is not None, "Google_AI_Studio provider entry not found"
+    assert google_ai["litellm_provider"] == "gemini"
+
+    fields_by_key = {f["key"]: f for f in google_ai["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert "api_base" in fields_by_key, (
+        "Google_AI_Studio provider form must expose api_base so admins can "
+        "point at a Gemini-compatible gateway without env var access."
+    )
+
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    # default_value MUST be null (not the canonical URL): saving it as the
+    # default would persist v1beta into every credential record and bypass
+    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # placeholder shows the canonical URL so users still get the visual hint.
+    # (See greptileai threads on PR #30419.)
+    assert api_base_field["default_value"] is None
+    assert (
+        api_base_field["placeholder"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come
+    # first so an admin sees the URL override before the key field (matches
+    # OpenAI and Anthropic conventions).
+    field_order = [f["key"] for f in google_ai["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields."
 
 
 def test_public_model_hub_with_healthy_model():
@@ -139,12 +324,16 @@ def test_public_model_hub_with_healthy_model():
         return_value=[mock_health_check]
     )
 
-    with patch("litellm.public_model_groups", ["gpt-3.5-turbo"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-3.5-turbo"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "healthy",
@@ -193,12 +382,16 @@ def test_public_model_hub_with_unhealthy_model():
         return_value=[mock_health_check]
     )
 
-    with patch("litellm.public_model_groups", ["gpt-4"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-4"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "unhealthy",
@@ -238,11 +431,13 @@ def test_public_model_hub_without_health_check():
     mock_prisma = MagicMock()
     mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
 
-    with patch("litellm.public_model_groups", ["claude-3"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-        
+    with (
+        patch("litellm.public_model_groups", ["claude-3"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+
         mock_get_info.return_value = [mock_model_group]
 
         response = client.get(
@@ -318,12 +513,16 @@ def test_public_model_hub_mixed_health_statuses():
             }
         return {}
 
-    with patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [
             healthy_model,
             unhealthy_model,
@@ -357,3 +556,349 @@ def test_public_model_hub_mixed_health_statuses():
         assert claude["health_checked_at"] is None
     app.dependency_overrides.clear()
 
+
+# ---------------------------------------------------------------------------
+# /public/agent_hub
+# ---------------------------------------------------------------------------
+
+
+def test_public_agent_hub_rewrites_upstream_url_to_proxy():
+    """Public agent hub must not leak the upstream backend URL retained on the
+    stored card. The ``url`` field has to be overwritten with the proxy
+    ``/a2a/{agent_id}`` entrypoint, matching the well-known card endpoint, so
+    an unauthenticated client cannot call the backend directly."""
+    from litellm.types.agents import AgentResponse
+
+    upstream_url = "https://upstream.internal.example.com/a2a"
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={"name": "public-agent", "url": upstream_url},
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    card = payload[0]
+    assert upstream_url not in card.get("url", "")
+    assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_returns_empty_when_no_public_groups():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = []
+
+    with (
+        patch("litellm.public_agent_groups", None),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
+# /public/endpoints
+# ---------------------------------------------------------------------------
+
+import litellm.proxy.public_endpoints.public_endpoints as _pe_module
+from litellm.proxy.public_endpoints.public_endpoints import (
+    _build_endpoints,
+    _clean_display_name,
+)
+
+
+@pytest.fixture(autouse=False)
+def reset_endpoints_cache():
+    """Reset the module-level cache before and after each cache-related test."""
+    original = _pe_module._cached_endpoints
+    _pe_module._cached_endpoints = None
+    yield
+    _pe_module._cached_endpoints = original
+
+
+def _make_client():
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_get_supported_endpoints_returns_200(reset_endpoints_cache):
+    response = _make_client().get("/public/endpoints")
+    assert response.status_code == 200
+
+
+def test_get_supported_endpoints_response_shape(reset_endpoints_cache):
+    data = _make_client().get("/public/endpoints").json()
+    assert "endpoints" in data
+    assert isinstance(data["endpoints"], list)
+    assert len(data["endpoints"]) > 0
+
+
+def test_get_supported_endpoints_item_fields(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        assert "key" in item
+        assert "label" in item
+        assert "endpoint" in item
+        assert "providers" in item
+        assert isinstance(item["providers"], list)
+
+
+def test_get_supported_endpoints_provider_fields(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        for provider in item["providers"]:
+            assert "slug" in provider
+            assert "display_name" in provider
+
+
+def test_get_supported_endpoints_paths_start_with_slash(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        assert item["endpoint"].startswith(
+            "/"
+        ), f"Expected path starting with /, got: {item['endpoint']}"
+
+
+def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    keys = [item["key"] for item in endpoints]
+    assert "chat_completions" in keys
+
+    chat = next(item for item in endpoints if item["key"] == "chat_completions")
+    assert chat["endpoint"] == "/chat/completions"
+    assert chat["label"] == "Chat Completions"
+    assert len(chat["providers"]) > 0
+
+
+def test_get_supported_endpoints_display_names_have_no_slug_suffix(
+    reset_endpoints_cache,
+):
+    """Provider display_names must not contain the raw `` (`slug`) `` suffix."""
+    import re
+
+    suffix_re = re.compile(r"\(`[^`]+`\)")
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        for provider in item["providers"]:
+            assert not suffix_re.search(
+                provider["display_name"]
+            ), f"display_name still contains slug suffix: {provider['display_name']!r}"
+
+
+def test_get_supported_endpoints_is_cached(reset_endpoints_cache):
+    """`_load_endpoints` is called only once; subsequent requests use the cache."""
+    client = _make_client()
+    with patch(
+        "litellm.proxy.public_endpoints.public_endpoints._load_endpoints",
+        wraps=_pe_module._load_endpoints,
+    ) as mock_load:
+        client.get("/public/endpoints")
+        client.get("/public/endpoints")
+        client.get("/public/endpoints")
+
+    mock_load.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _build_endpoints unit tests (transformation logic)
+# ---------------------------------------------------------------------------
+
+_MINIMAL_RAW = {
+    "providers": {
+        "openai": {
+            "display_name": "OpenAI (`openai`)",
+            "url": "https://example.com",
+            "endpoints": {
+                "chat_completions": True,
+                "embeddings": True,
+                "images": False,
+            },
+        },
+        "anthropic": {
+            "display_name": "Anthropic (`anthropic`)",
+            "url": "https://example.com",
+            "endpoints": {
+                "chat_completions": True,
+                "embeddings": False,
+                "images": False,
+            },
+        },
+    }
+}
+
+
+def test_build_endpoints_known_key_uses_metadata():
+    result = _build_endpoints(_MINIMAL_RAW)
+    chat = next(e for e in result if e["key"] == "chat_completions")
+    assert chat["label"] == "Chat Completions"
+    assert chat["endpoint"] == "/chat/completions"
+
+
+def test_build_endpoints_only_includes_supporting_providers():
+    result = _build_endpoints(_MINIMAL_RAW)
+    embeddings = next(e for e in result if e["key"] == "embeddings")
+    slugs = [p["slug"] for p in embeddings["providers"]]
+    assert slugs == ["openai"]
+
+
+def test_build_endpoints_unknown_key_derives_label_and_path():
+    raw = {
+        "providers": {
+            "someprovider": {
+                "display_name": "Some Provider (`someprovider`)",
+                "endpoints": {"my_custom_endpoint": True},
+            }
+        }
+    }
+    result = _build_endpoints(raw)
+    item = result[0]
+    assert item["key"] == "my_custom_endpoint"
+    assert item["label"] == "My Custom Endpoint"
+    assert item["endpoint"].startswith("/")
+
+
+def test_build_endpoints_empty_providers_returns_empty():
+    result = _build_endpoints({"providers": {}})
+    assert result == []
+
+
+def test_clean_display_name_strips_suffix():
+    assert _clean_display_name("OpenAI (`openai`)") == "OpenAI"
+    assert _clean_display_name("AI/ML API (`aiml`)") == "AI/ML API"
+    assert _clean_display_name("A2A (Agent-to-Agent) (`a2a`)") == "A2A (Agent-to-Agent)"
+
+
+def test_clean_display_name_passthrough_when_no_suffix():
+    assert _clean_display_name("OpenAI") == "OpenAI"
+    assert _clean_display_name("") == ""
+
+
+def test_public_mcp_hub_returns_only_whitelisted_servers():
+    """Regression: /public/mcp_hub must gate strictly on
+    litellm.public_mcp_servers, mirroring /public/model_hub and
+    /public/agent_hub. Servers with available_on_public_internet=True that
+    are not on the whitelist must not leak."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    listed = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [listed]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_returns_empty_when_whitelist_unset():
+    """When no servers have been published via /v1/mcp/make_public, the
+    hub returns an empty list (matches /public/agent_hub behavior)."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = []
+
+    with (
+        patch("litellm.public_mcp_servers", None),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_does_not_expose_upstream_url():
+    """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
+    upstream url must never appear in its response even when the server has one."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    secret_url = "https://internal-only.example.com/mcp"
+    server = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        url=secret_url,
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [server]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    assert all("url" not in item for item in data)
+    assert secret_url not in response.text
+    app.dependency_overrides.clear()

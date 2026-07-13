@@ -256,17 +256,13 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
         return ""
 
-    def _calculate_usage(
-        self, model: str, messages: List[AllMessageValues], content: str
-    ) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: List[AllMessageValues], content: str) -> Optional[Usage]:
         """Calculate token usage using LiteLLM's token counter."""
         try:
             from litellm.utils import token_counter
 
             prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-            completion_tokens = token_counter(
-                model="gpt-3.5-turbo", text=content, count_response_tokens=True
-            )
+            completion_tokens = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
             total_tokens = prompt_tokens + completion_tokens
 
             return Usage(
@@ -393,9 +389,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
         completion_stream = self.get_streaming_response(model=model, raw_response=response)
@@ -438,9 +432,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "vertex_ai"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "vertex_ai"), params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")
@@ -455,9 +447,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream (async)
         completion_stream = VertexAgentEngineResponseIterator(
@@ -505,4 +495,3 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
     ) -> bool:
         """Agent Engine always returns SSE streams, so we use real streaming."""
         return False
-

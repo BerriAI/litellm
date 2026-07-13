@@ -6,6 +6,7 @@ and following LiteLLM testing patterns and best practices.
 """
 
 # Standard library imports
+import importlib
 import os
 import sys
 from typing import Dict
@@ -37,7 +38,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -49,17 +49,16 @@ def setup_and_teardown():
     Standard LiteLLM fixture that reloads litellm before every function
     to speed up testing by removing callbacks being chained.
     """
-    import importlib
     import asyncio
-    import sys
 
-    # Reload litellm to ensure clean state
-    # During parallel test execution, another worker might have removed litellm from sys.modules
-    # so we need to ensure it's imported before reloading
-    if "litellm" not in sys.modules:
-        import litellm as _litellm
-    else:
-        importlib.reload(litellm)
+    global litellm
+
+    # Always import then reload to ensure fresh state
+    # This handles both cases uniformly:
+    # 1. litellm not in sys.modules (parallel worker removed it)
+    # 2. litellm already imported (normal case)
+    _module = importlib.import_module("litellm")
+    litellm = importlib.reload(_module)
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
@@ -419,10 +418,20 @@ async def test_pre_call_hook_flagged_content_monitor(
     assert "metadata" in malicious_request_data
     metadata = malicious_request_data["metadata"]
     assert metadata.get("pillar_flagged") is True
-    assert metadata.get("pillar_session_id") == pillar_flagged_response.json()["session_id"]
-    assert metadata.get("pillar_session_id_response") == pillar_flagged_response.json()["session_id"]
-    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get("scanners", {})
-    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get("evidence", [])
+    assert (
+        metadata.get("pillar_session_id")
+        == pillar_flagged_response.json()["session_id"]
+    )
+    assert (
+        metadata.get("pillar_session_id_response")
+        == pillar_flagged_response.json()["session_id"]
+    )
+    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get(
+        "scanners", {}
+    )
+    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get(
+        "evidence", []
+    )
 
 
 @pytest.mark.asyncio
@@ -451,14 +460,23 @@ async def test_pre_call_hook_clean_content_returns_scanners_and_evidence(
     # Even when not flagged, we should get scanners and evidence
     assert metadata.get("pillar_flagged") is False
     # pillar_session_id preserves existing value, pillar_session_id_response is always from response
-    assert metadata.get("pillar_session_id_response") == pillar_clean_response.json()["session_id"]
-    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get("scanners", {})
-    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get("evidence", [])
+    assert (
+        metadata.get("pillar_session_id_response")
+        == pillar_clean_response.json()["session_id"]
+    )
+    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get(
+        "scanners", {}
+    )
+    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get(
+        "evidence", []
+    )
 
     # Verify headers are also built
     headers = get_logging_caching_headers(sample_request_data)
     assert headers["x-pillar-flagged"] == "false"
-    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_clean_response.json().get("scanners", {})
+    assert json.loads(
+        unquote(headers["x-pillar-scanners"])
+    ) == pillar_clean_response.json().get("scanners", {})
 
 
 def test_get_logging_caching_headers_pillar_metadata():
@@ -481,7 +499,42 @@ def test_get_logging_caching_headers_pillar_metadata():
     assert json.loads(unquote(headers["x-pillar-scanners"])) == scanners
     assert json.loads(unquote(headers["x-pillar-evidence"])) == evidence
     assert unquote(headers["x-pillar-session-id"]) == "test-session-123"
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"] == "true"
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"]
+        == "true"
+    )
+
+
+def test_get_logging_caching_headers_ignores_untrusted_pillar_headers():
+    request_data = {
+        "metadata": {
+            "pillar_response_headers": {
+                "set-cookie": "session=evil",
+                "x-pillar-flagged": "true",
+            },
+            "pillar_flagged": True,
+        }
+    }
+
+    headers = get_logging_caching_headers(request_data)
+
+    assert "set-cookie" not in headers
+    assert "x-pillar-flagged" not in headers
+
+
+def test_get_logging_caching_headers_filters_non_pillar_headers():
+    request_data = {
+        "metadata": {
+            "pillar_flagged": True,
+        }
+    }
+    build_pillar_response_headers(request_data["metadata"])
+    request_data["metadata"]["pillar_response_headers"]["set-cookie"] = "session=evil"
+
+    headers = get_logging_caching_headers(request_data)
+
+    assert headers["x-pillar-flagged"] == "true"
+    assert "set-cookie" not in headers
 
 
 def test_get_logging_caching_headers_truncates_large_evidence():
@@ -503,7 +556,10 @@ def test_get_logging_caching_headers_truncates_large_evidence():
     assert decoded_evidence[0]["evidence"].endswith("...[truncated]")
     assert decoded_evidence[0].get("evidence_truncated") is True
     assert request_data["metadata"]["pillar_evidence_truncated"] is True
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"] == evidence_header
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"]
+        == evidence_header
+    )
 
 
 @pytest.mark.asyncio
@@ -539,10 +595,17 @@ async def test_post_call_hook_flagged_content_monitor_updates_metadata_and_heade
 
     headers = get_logging_caching_headers(request_data)
     assert headers["x-pillar-flagged"] == "true"
-    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get("scanners", {})
-    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get("evidence", [])
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get(
+        "scanners", {}
+    )
+    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get(
+        "evidence", []
+    )
     assert unquote(headers["x-pillar-session-id"]) == pillar_json["session_id"]
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"] == headers["x-pillar-session-id"]
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"]
+        == headers["x-pillar-session-id"]
+    )
 
 
 @pytest.mark.asyncio
@@ -710,7 +773,7 @@ async def test_litellm_context_headers_automatically_added(
     assert captured_headers["X-LiteLLM-Team-Name"] == "engineering-team"
     assert "X-LiteLLM-Org-Id" in captured_headers
     assert captured_headers["X-LiteLLM-Org-Id"] == "org-789"
-    
+
     # Metadata is NOT sent (may contain sensitive information)
     assert "X-LiteLLM-Metadata" not in captured_headers
 
@@ -1218,7 +1281,9 @@ async def test_pre_call_hook_masking_mode(
         )
 
     # Messages should be replaced with masked messages
-    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert (
+        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    )
     assert result["messages"] != original_messages
 
 
@@ -1272,20 +1337,20 @@ async def test_exception_without_scanners(
     pillar_flagged_response,
 ):
     """Test exception excludes scanners when include_scanners is False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-no-scanners",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=False,
-        include_evidence=True,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-scanners",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=True,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,
@@ -1307,20 +1372,20 @@ async def test_exception_without_evidence(
     pillar_flagged_response,
 ):
     """Test exception excludes evidence when include_evidence is False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-no-evidence",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=True,
-        include_evidence=False,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-evidence",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=True,
+            include_evidence=False,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,
@@ -1342,20 +1407,20 @@ async def test_exception_without_scanners_or_evidence(
     pillar_flagged_response,
 ):
     """Test exception excludes both scanners and evidence when both are False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-minimal",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=False,
-        include_evidence=False,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-minimal",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=False,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,
@@ -1443,7 +1508,9 @@ async def test_mcp_call_masking(
         )
 
     # Messages should be replaced with masked messages
-    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert (
+        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    )
     assert result["messages"] != original_messages
 
 

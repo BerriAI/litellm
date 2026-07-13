@@ -21,4 +21,3 @@ __all__ = [
     "delete_skill",
     "adelete_skill",
 ]
-

@@ -1,0 +1,21 @@
+name: "LiteLLM CodeQL config"
+
+queries:
+  - uses: security-and-quality
+
+# Known OOM queries on large Python codebases:
+# CodeQL builds a full data flow graph in memory. These two queries trace
+# sensitive data through every log call / regex pattern, causing combinatorial
+# path explosion on codebases with extensive logging like LiteLLM (>2 GiB
+# result sets). This is a known CodeQL scaling limitation, not a code issue.
+# Re-test periodically as CodeQL improves or the codebase refactors logging.
+query-filters:
+  - exclude:
+      id: py/clear-text-logging-sensitive-data  # CWE-312
+  - exclude:
+      id: py/polynomial-redos                   # CWE-730
+
+paths-ignore:
+  - tests
+  - docs
+  - "**/*.md"

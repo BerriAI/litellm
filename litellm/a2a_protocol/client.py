@@ -87,9 +87,7 @@ class A2AClient:
             extra_headers=self.extra_headers,
         )
 
-    async def send_message(
-        self, request: "SendMessageRequest"
-    ) -> LiteLLMSendMessageResponse:
+    async def send_message(self, request: "SendMessageRequest") -> LiteLLMSendMessageResponse:
         """Send a message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message
 

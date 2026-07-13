@@ -140,9 +140,7 @@ async def image_generation(
 
         ### ALERTING ###
         asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
         )
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
@@ -173,15 +171,23 @@ async def image_generation(
             )
         )
 
+        # Call response headers hook (matches base_process_llm_request behavior)
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(str(e))
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
@@ -280,7 +286,14 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
-    
+
+    for _field in ("image", "mask"):
+        if _field in data and isinstance(data[_field], str):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
+            )
+
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:
         data["prompt"] = None

@@ -9,7 +9,9 @@ from opentelemetry.trace import Status, StatusCode
 from typing_extensions import override
 
 from litellm._logging import verbose_logger
-from litellm.integrations._types.open_inference import SpanAttributes as OpenInferenceSpanAttributes
+from litellm.integrations._types.open_inference import (
+    SpanAttributes as OpenInferenceSpanAttributes,
+)
 from litellm.integrations.arize import _utils
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (

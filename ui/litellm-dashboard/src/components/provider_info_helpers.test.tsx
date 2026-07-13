@@ -62,10 +62,36 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
+      const result = getProviderLogoAndName("bedrock_mantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
+    it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
+      // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
+      // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
+      // lowercase-match its slug, so without the enum-key fallback this would
+      // render a blank fallback logo for a Bedrock variant (LIT-3885).
+      const result = getProviderLogoAndName("BedrockMantle");
+      expect(result.displayName).toBe(Providers.BedrockMantle);
+      expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
       expect(result.logo).toBe(providerLogoMap[Providers.OpenAI]);
+    });
+
+    it("should resolve the zai (Z.AI) provider value to the Z.AI display name", () => {
+      // Regression test for https://github.com/BerriAI/litellm/issues/25482 —
+      // the backend already returns `zai` from /public/providers and the docs
+      // have a dedicated page, but the UI dropdown was missing an entry, so
+      // `getProviderLogoAndName("zai")` previously returned the raw value as
+      // the display name (no mapping).
+      const result = getProviderLogoAndName("zai");
+      expect(result.displayName).toBe(Providers.ZAI);
     });
 
     it("should return provider value as display name when no mapping exists", () => {
@@ -84,6 +110,27 @@ describe("provider_info_helpers", () => {
           expect(result.displayName).toBeTruthy();
         }
       });
+    });
+  });
+
+  describe("provider logo asset paths", () => {
+    // Regression: a relative "../ui/assets/logos/" base resolved to
+    // "/ui/ui/assets/logos/..." (404) on the public model hub at
+    // /ui/model_hub_table/, which sits a level below the /ui/ SPA. Root-absolute
+    // paths resolve correctly at any route depth.
+    it("should expose every provider logo as a root-absolute /ui path", () => {
+      const logos = Object.values(providerLogoMap);
+      expect(logos.length).toBeGreaterThan(0);
+      logos.forEach((logo) => {
+        expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+        expect(logo).not.toContain("../");
+      });
+    });
+
+    it("should resolve a provider logo to a root-absolute path via getProviderLogoAndName", () => {
+      const { logo } = getProviderLogoAndName("openai");
+      expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
+      expect(logo).not.toContain("../");
     });
   });
 
@@ -153,7 +200,11 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return watsonx placeholder for Watsonx provider", () => {
-      expect(getPlaceholder(Providers.Watsonx)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+      expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
+      expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
@@ -166,12 +217,6 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    afterEach(() => {
-      consoleSpy.mockClear();
-    });
-
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);
@@ -204,14 +249,100 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["gpt-3.5-turbo", "gpt-4"]);
     });
 
-    it("should return models when litellm_provider includes the provider string", () => {
+    it("should return models whose litellm_provider is a prefix-anchored variant of the provider", () => {
       const modelMap = {
-        "custom-openai-model": { litellm_provider: "custom_openai_endpoint" },
-        "another-model": { litellm_provider: "openai" },
+        "anthropic-text-model": { litellm_provider: "anthropic_text" },
+        "claude-3-opus": { litellm_provider: "anthropic" },
+      };
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toContain("anthropic-text-model");
+      expect(result).toContain("claude-3-opus");
+    });
+
+    it("should not leak vertex_ai-anthropic_models into the Anthropic provider", () => {
+      const modelMap = {
+        "claude-3-opus": { litellm_provider: "anthropic" },
+        "vertex_ai/claude-3-5-sonnet": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/claude-haiku-4-5": { litellm_provider: "vertex_ai-anthropic_models" },
+      };
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toEqual(["claude-3-opus"]);
+      expect(result).not.toContain("vertex_ai/claude-3-5-sonnet");
+      expect(result).not.toContain("vertex_ai/claude-haiku-4-5");
+    });
+
+    it("should not leak vertex_ai-openai_models into the OpenAI provider", () => {
+      const modelMap = {
+        "gpt-4": { litellm_provider: "openai" },
+        "vertex_ai/openai-something": { litellm_provider: "vertex_ai-openai_models" },
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
-      expect(result).toContain("custom-openai-model");
-      expect(result).toContain("another-model");
+      expect(result).toEqual(["gpt-4"]);
+      expect(result).not.toContain("vertex_ai/openai-something");
+    });
+
+    // Note on the next three tests: in production, AddModelForm passes the
+    // backend `provider` field (the provider_map *key*, e.g. "Vertex_AI",
+    // "Bedrock", "FireworksAI") into getProviderModels, not the Providers
+    // enum value. The `as Providers` cast in callers is misleading. We mirror
+    // the production shape here by passing the key directly.
+    it("should include all vertex_ai variants when called with 'Vertex_AI' provider key", () => {
+      const modelMap = {
+        "vertex_ai/gemini-pro": { litellm_provider: "vertex_ai" },
+        "vertex_ai/claude-3-5-sonnet": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/text-bison": { litellm_provider: "vertex_ai-text-models" },
+        "vertex_ai_beta/something": { litellm_provider: "vertex_ai_beta" },
+        "anthropic-native": { litellm_provider: "anthropic" },
+      };
+      const result = getProviderModels("Vertex_AI" as Providers, modelMap);
+      expect(result).toContain("vertex_ai/gemini-pro");
+      expect(result).toContain("vertex_ai/claude-3-5-sonnet");
+      expect(result).toContain("vertex_ai/text-bison");
+      expect(result).toContain("vertex_ai_beta/something");
+      expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
+      const modelMap = {
+        "bedrock-base": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+        "bedrock_mantle/openai.gpt-5.4": { litellm_provider: "bedrock_mantle" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("Bedrock" as Providers, modelMap);
+      expect(result).toContain("bedrock-base");
+      expect(result).toContain("bedrock-converse-model");
+      expect(result).not.toContain("bedrock_mantle/openai.gpt-5.4");
+      expect(result).not.toContain("openai-model");
+    });
+
+    it("should return only bedrock_mantle models when called with 'BedrockMantle' provider key", () => {
+      // Selecting "Amazon Bedrock Mantle" in the dropdown must populate the
+      // model field with the Mantle models and exclude the regular Bedrock
+      // ones, so onboarding a gpt-oss model is a one-click flow (LIT-3885).
+      const modelMap = {
+        "bedrock_mantle/openai.gpt-oss-120b": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.5": { litellm_provider: "bedrock_mantle" },
+        "bedrock-base": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+      };
+      const result = getProviderModels("BedrockMantle" as Providers, modelMap);
+      expect(result).toContain("bedrock_mantle/openai.gpt-oss-120b");
+      expect(result).toContain("bedrock_mantle/openai.gpt-5.5");
+      expect(result).not.toContain("bedrock-base");
+      expect(result).not.toContain("bedrock-converse-model");
+    });
+
+    it("should include fireworks_ai-embedding-models when called with 'FireworksAI' provider key", () => {
+      const modelMap = {
+        "fireworks-base": { litellm_provider: "fireworks_ai" },
+        "fireworks-embed": { litellm_provider: "fireworks_ai-embedding-models" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("FireworksAI" as Providers, modelMap);
+      expect(result).toContain("fireworks-base");
+      expect(result).toContain("fireworks-embed");
+      expect(result).not.toContain("openai-model");
     });
 
     it("should filter out models with null values", () => {
@@ -267,13 +398,6 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["valid-model"]);
     });
 
-    it("should log provider key and mapped provider when called", () => {
-      const modelMap = { "gpt-3.5-turbo": { litellm_provider: "openai" } };
-      getProviderModels(Providers.OpenAI, modelMap);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider key: ${Providers.OpenAI}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider mapped to: ${provider_map[Providers.OpenAI]}`);
-    });
-
     it("should return empty array for provider with no matching models", () => {
       const modelMap = {
         "gpt-3.5-turbo": { litellm_provider: "openai" },
@@ -297,5 +421,29 @@ describe("provider_info_helpers", () => {
       expect(anthropicResult).toEqual(["claude-3-opus"]);
       expect(groqResult).toContain("groq-model");
     });
+  });
+});
+
+describe("getProviderLogoAndName under a custom server_root_path", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
+  });
+
+  // Regression: under SERVER_ROOT_PATH=/litellm the logo must be requested at
+  // /litellm/ui/assets/logos/... A bare /ui/... path is served off the root and
+  // 404s behind the reverse proxy.
+  it("prefixes the server root path onto the resolved logo", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/litellm/ui/assets/logos/openai_small.svg");
+  });
+
+  it("leaves the logo at /ui/... when mounted at the root", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
+    const { getProviderLogoAndName } = await import("./provider_info_helpers");
+    expect(getProviderLogoAndName("openai").logo).toBe("/ui/assets/logos/openai_small.svg");
   });
 });

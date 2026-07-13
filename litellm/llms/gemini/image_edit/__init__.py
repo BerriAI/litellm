@@ -8,4 +8,3 @@ __all__ = ["GeminiImageEditConfig", "get_gemini_image_edit_config", "cost_calcul
 
 def get_gemini_image_edit_config(model: str) -> BaseImageEditConfig:
     return GeminiImageEditConfig()
-

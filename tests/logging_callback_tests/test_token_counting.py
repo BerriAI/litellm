@@ -55,7 +55,7 @@ async def test_stream_token_counting_gpt_4o():
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
 
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, how are you?" * 100}],
         stream=True,
         stream_options={"include_usage": True},
@@ -95,7 +95,7 @@ async def test_stream_token_counting_without_include_usage():
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
 
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, how are you?" * 100}],
         stream=True,
     )
@@ -133,7 +133,7 @@ async def test_stream_token_counting_with_redaction():
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
 
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, how are you?" * 100}],
         stream=True,
     )

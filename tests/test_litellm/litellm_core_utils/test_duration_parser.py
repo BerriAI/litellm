@@ -34,6 +34,23 @@ class TestStandardizedResetTime(unittest.TestCase):
         custom_day_result = get_next_standardized_reset_time("3d", base_time, "UTC")
         self.assertEqual(custom_day_result, custom_day_expected)
 
+    def test_week_based_resets(self):
+        """Test week-based reset durations (1w, 2w).
+        1w snaps to the next Monday at midnight (same as 7d).
+        2w advances exactly 14 days from the current date at midnight.
+        """
+        # 1w from a Wednesday -> next Monday (5 days away, not 7)
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)
+        weekly_result = get_next_standardized_reset_time("1w", wednesday, "UTC")
+        self.assertEqual(weekly_result, weekly_expected)
+
+        # 2w from a Wednesday -> exactly 14 days out (lands on a Wednesday, not Monday)
+        base_time = datetime(2023, 5, 17, 10, 30, 0, tzinfo=timezone.utc)
+        two_week_expected = datetime(2023, 5, 31, 0, 0, 0, tzinfo=timezone.utc)
+        two_week_result = get_next_standardized_reset_time("2w", base_time, "UTC")
+        self.assertEqual(two_week_result, two_week_expected)
+
     def test_hour_minute_second_resets(self):
         """Test hour, minute, and second based reset durations"""
         # Base time: 2023-05-15 15:20:30 UTC (3:20:30 PM)
@@ -91,7 +108,9 @@ class TestStandardizedResetTime(unittest.TestCase):
         # Test Bangkok timezone (UTC+7): 5:30 AM next day, so next reset is midnight the day after
         bangkok = ZoneInfo("Asia/Bangkok")
         bangkok_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=bangkok)
-        bangkok_result = get_next_standardized_reset_time("1d", base_time, "Asia/Bangkok")
+        bangkok_result = get_next_standardized_reset_time(
+            "1d", base_time, "Asia/Bangkok"
+        )
         self.assertEqual(bangkok_result, bangkok_expected)
 
     def test_edge_cases(self):
@@ -124,6 +143,60 @@ class TestStandardizedResetTime(unittest.TestCase):
             "1d", on_hour, "NonExistentTimeZone"
         )
         self.assertEqual(invalid_tz_result, invalid_tz_expected)
+
+    def test_iana_timezones_previously_unsupported(self):
+        """Test IANA timezones that were previously unsupported by the hardcoded map."""
+        # Base time: 2023-05-15 15:00:00 UTC
+        base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
+
+        # Asia/Tokyo (UTC+9): 15:00 UTC = 00:00 JST May 16, exactly on midnight boundary → next day
+        tokyo = ZoneInfo("Asia/Tokyo")
+        tokyo_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=tokyo)
+        tokyo_result = get_next_standardized_reset_time("1d", base_time, "Asia/Tokyo")
+        self.assertEqual(tokyo_result, tokyo_expected)
+
+        # Australia/Sydney (UTC+10): 2023-05-16 01:00 AEST
+        sydney = ZoneInfo("Australia/Sydney")
+        # At 15:00 UTC it's 01:00 AEST May 16 → next midnight is May 17 00:00 AEST
+        sydney_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=sydney)
+        sydney_result = get_next_standardized_reset_time(
+            "1d", base_time, "Australia/Sydney"
+        )
+        self.assertEqual(sydney_result, sydney_expected)
+
+        # America/Chicago (UTC-5): at 15:00 UTC it's 10:00 CDT → next midnight is May 16 00:00 CDT
+        chicago = ZoneInfo("America/Chicago")
+        chicago_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=chicago)
+        chicago_result = get_next_standardized_reset_time(
+            "1d", base_time, "America/Chicago"
+        )
+        self.assertEqual(chicago_result, chicago_expected)
+
+    def test_dst_fall_back(self):
+        """Test DST fall-back transition (clocks go back 1 hour)."""
+        # US/Eastern DST ends first Sunday of November 2023 (Nov 5)
+        # At 2023-11-05 05:30 UTC = 01:30 EDT (before fall-back)
+        # After fall-back at 06:00 UTC = 01:00 EST
+        pre_fallback = datetime(2023, 11, 5, 5, 30, 0, tzinfo=timezone.utc)
+        eastern = ZoneInfo("US/Eastern")
+
+        # Daily reset: next midnight should be Nov 6 00:00 EST
+        expected = datetime(2023, 11, 6, 0, 0, 0, tzinfo=eastern)
+        result = get_next_standardized_reset_time("1d", pre_fallback, "US/Eastern")
+        self.assertEqual(result, expected)
+
+    def test_dst_spring_forward(self):
+        """Test DST spring-forward transition (clocks go forward 1 hour)."""
+        # US/Eastern DST starts second Sunday of March 2023 (Mar 12)
+        # At 2023-03-12 06:30 UTC = 01:30 EST (before spring-forward)
+        # After spring-forward at 07:00 UTC = 03:00 EDT
+        pre_spring = datetime(2023, 3, 12, 6, 30, 0, tzinfo=timezone.utc)
+        eastern = ZoneInfo("US/Eastern")
+
+        # Daily reset: next midnight should be Mar 13 00:00 EDT
+        expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
+        result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
+        self.assertEqual(result, expected)
 
 
 if __name__ == "__main__":

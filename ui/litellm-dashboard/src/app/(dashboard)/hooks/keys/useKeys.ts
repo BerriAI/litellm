@@ -1,11 +1,6 @@
 import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -33,6 +28,8 @@ export interface DeletedKeysResponse {
 export interface KeyListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
+  projectID?: string | null;
+  agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -42,21 +39,18 @@ export interface KeyListCallOptions {
   status?: string | null;
 }
 
-const keyListCall = async (
-  accessToken: string,
-  page: number,
-  pageSize: number,
-  options: KeyListCallOptions = {},
-) => {
+const keyListCall = async (accessToken: string, page: number, pageSize: number, options: KeyListCallOptions = {}) => {
   /**
    * Get all available keys on proxy
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
+        project_id: options.projectID,
+        agent_id: options.agentID,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
@@ -70,6 +64,9 @@ const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // Opt into substring matching so the admin key-list search box keeps
+        // matching partial user_id/key_alias. /key/list is exact by default.
+        substring_matching: "true",
       })
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => [key, String(value)]),
@@ -93,7 +90,6 @@ const keyListCall = async (
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);

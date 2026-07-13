@@ -63,19 +63,13 @@ class BaseLLMException(Exception):
         if request:
             self.request = request
         else:
-            self.request = httpx.Request(
-                method="POST", url="https://docs.litellm.ai/docs"
-            )
+            self.request = httpx.Request(method="POST", url="https://docs.litellm.ai/docs")
         if response:
             self.response = response
         else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
+            self.response = httpx.Response(status_code=status_code, request=self.request)
         self.body = body
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class BaseConfig(ABC):
@@ -87,9 +81,7 @@ class BaseConfig(ABC):
         return {
             k: v
             for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
-            and not k.startswith("_is_base_class")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
@@ -110,23 +102,17 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
-        return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
-            or non_default_params.get("reasoning_effort") is not None
-        )
+        return (non_default_params.get("thinking") or {}).get("type") == "enabled" or non_default_params.get(
+            "reasoning_effort"
+        ) is not None
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
         OpenAI spec allows max_tokens or max_completion_tokens to be specified.
         """
-        return (
-            "max_tokens" in non_default_params
-            or "max_completion_tokens" in non_default_params
-        )
+        return "max_tokens" in non_default_params or "max_completion_tokens" in non_default_params
 
-    def update_optional_params_with_thinking_tokens(
-        self, non_default_params: dict, optional_params: dict
-    ):
+    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -135,14 +121,12 @@ class BaseConfig(ABC):
         if 'thinking' is enabled and 'max_tokens' or 'max_completion_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and ("max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params):
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
-                "budget_tokens", None
-            )
+        if is_thinking_enabled and (
+            "max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params
+        ):
+            thinking_token_budget = cast(dict, optional_params["thinking"]).get("budget_tokens", None)
             if thinking_token_budget is not None:
-                optional_params["max_tokens"] = (
-                    thinking_token_budget + DEFAULT_MAX_TOKENS
-                )
+                optional_params["max_tokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
     def should_fake_stream(
         self,
@@ -189,9 +173,7 @@ class BaseConfig(ABC):
         """
         return False
 
-    def transform_request_on_unprocessable_entity_error(
-        self, e: httpx.HTTPStatusError, request_data: dict
-    ) -> dict:
+    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         """
         Transform the request data on UnprocessableEntityError
         """
@@ -238,16 +220,12 @@ class BaseConfig(ABC):
         if json_schema and not is_response_format_supported:
             _tool_choice = ChatCompletionToolChoiceObjectParam(
                 type="function",
-                function=ChatCompletionToolChoiceFunctionParam(
-                    name=RESPONSE_FORMAT_TOOL_NAME
-                ),
+                function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),
             )
 
             _tool = ChatCompletionToolParam(
                 type="function",
-                function=ChatCompletionToolParamFunctionChunk(
-                    name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema
-                ),
+                function=ChatCompletionToolParamFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema),
             )
 
             optional_params.setdefault("tools", [])
@@ -377,6 +355,17 @@ class BaseConfig(ABC):
     ) -> "ModelResponse":
         pass
 
+    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+        """
+        Repair a parsed OpenAI-format response dict before generic conversion.
+
+        Providers routed through the OpenAI SDK handler bypass transform_response,
+        which calls convert_to_model_response_object directly on the SDK's parsed
+        output. Override this to normalize a malformed response (e.g. github_copilot
+        returning empty choices for Anthropic-native Claude responses).
+        """
+        return parsed_response
+
     @abstractmethod
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -438,19 +427,29 @@ class BaseConfig(ABC):
         """
         return True
 
-    def calculate_additional_costs(
-        self, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> Optional[dict]:
+    def post_stream_processing(self, stream: Any) -> Any:
+        """Hook for providers to post-process streaming responses. Default: pass-through."""
+        return stream
+
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: "ModelResponse",
+        chunks: List[Any],
+    ) -> None:
+        """Hook for providers to merge chunk metadata into assembled streaming responses."""
+        return None
+
+    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> Optional[dict]:
         """
         Calculate any additional costs beyond standard token costs.
-        
+
         This is used for provider-specific infrastructure costs, routing fees, etc.
-        
+
         Args:
             model: The model name
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
-            
+
         Returns:
             Optional dictionary with cost names and amounts, e.g.:
             {"Infrastructure Fee": 0.001, "Routing Cost": 0.0005}

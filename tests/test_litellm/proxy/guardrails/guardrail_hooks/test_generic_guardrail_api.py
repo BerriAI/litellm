@@ -13,8 +13,8 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
-from litellm.exceptions import GuardrailRaisedException
 from litellm._version import version as litellm_version
+from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -187,6 +187,97 @@ class TestGenericGuardrailAPIConfiguration:
             api_base="https://api.test.guardrail.com",
         )
         assert "x-api-key" not in guardrail.headers
+
+    def test_init_with_extra_headers(self):
+        """Test that extra_headers is stored for forwarding client headers to the guardrail"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            extra_headers=["x-request-id", "x-custom-auth"],
+        )
+        assert guardrail.extra_headers == ["x-request-id", "x-custom-auth"]
+
+
+class TestExtraHeadersForwarding:
+    """Test extra_headers: client headers allowed to be forwarded to the guardrail"""
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_values_forwarded_to_guardrail(self):
+        """When extra_headers is set, those client header values are sent to the guardrail."""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            extra_headers=["x-my-header", "x-request-id"],
+        )
+        request_data = {
+            "proxy_server_request": {
+                "headers": {
+                    "x-my-header": "my-value",
+                    "x-request-id": "req-123",
+                    "x-private": "secret",
+                },
+            },
+        }
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs["json"]
+        request_headers = json_payload.get("request_headers") or {}
+
+        # Headers in extra_headers have their values forwarded
+        assert request_headers.get("x-my-header") == "my-value"
+        assert request_headers.get("x-request-id") == "req-123"
+        # Headers not in allowlist are sent as placeholder
+        assert request_headers.get("x-private") == _HEADER_PRESENT_PLACEHOLDER
+
+    @pytest.mark.asyncio
+    async def test_without_extra_headers_custom_header_value_not_forwarded(self):
+        """Without extra_headers, a custom client header is sent as [present] only."""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            # no extra_headers
+        )
+        request_data = {
+            "proxy_server_request": {
+                "headers": {
+                    "x-custom-auth": "bearer secret-token",
+                },
+            },
+        }
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs["json"]
+        request_headers = json_payload.get("request_headers") or {}
+
+        # x-custom-auth is not in default allowlist nor extra_headers, so value is not forwarded
+        assert request_headers.get("x-custom-auth") == _HEADER_PRESENT_PLACEHOLDER
 
 
 class TestMetadataExtraction:
@@ -462,6 +553,7 @@ class TestGuardrailActions:
             # Verify the exception has the clean error message (no wrapper)
             assert str(exc_info.value) == "Content contains harmful instructions"
             assert exc_info.value.guardrail_name == "generic_guardrail_api"
+            assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_action_intervened_modifies_content(
@@ -517,7 +609,6 @@ class TestImageSupport:
                 request_data=mock_request_data_input,
                 input_type="request",
             )
-            result_texts = guardrailed_inputs.get("texts", [])
             result_images = guardrailed_inputs.get("images", None)
 
             # Verify API was called with images
@@ -704,6 +795,104 @@ class TestErrorHandling:
 
             assert "Generic Guardrail API failed" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_network_error_defaults_to_fail_closed_when_unreachable_fallback_not_set(
+        self, mock_request_data_input
+    ):
+        """Test default behavior is fail_closed when unreachable_fallback is omitted"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["test"]},
+                    request_data=mock_request_data_input,
+                    input_type="request",
+                )
+
+            assert "Generic Guardrail API failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_network_error_fail_open_allows_flow(self, mock_request_data_input):
+        """Test network error handling allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_503_fail_open_allows_flow(self, mock_request_data_input):
+        """Test HTTP 503 allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.HTTPStatusError(
+                "Service Unavailable",
+                request=MagicMock(),
+                response=MagicMock(status_code=503),
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_fail_open_allows_flow(self, mock_request_data_input):
+        """Test litellm.Timeout allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=Timeout(
+                message="Connection timed out",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
 
 class TestMultimodalSupport:
     """Test multimodal (image) message handling and serialization"""
@@ -753,7 +942,7 @@ class TestMultimodalSupport:
             guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
             # This should not raise SerializationIterator error
-            result = await guardrail.apply_guardrail(
+            await guardrail.apply_guardrail(
                 inputs={
                     "texts": ["What's in this image?"],
                     "images": ["https://example.com/image.jpg"],
@@ -816,7 +1005,7 @@ class TestMultimodalSupport:
         with patch.object(
             guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
-            result = await guardrail.apply_guardrail(
+            await guardrail.apply_guardrail(
                 inputs={
                     "texts": ["Hello", "World"],
                     "structured_messages": messages_with_iterable,
@@ -831,3 +1020,882 @@ class TestMultimodalSupport:
             call_args = mock_post.call_args
             json_payload = call_args.kwargs["json"]
             assert isinstance(json_payload["structured_messages"], list)
+
+
+def _make_stream_chunk(content: str, finish_reason=None):
+    """Build a real ModelResponseStream so the handler's isinstance checks pass."""
+    from litellm.types.utils import Delta, ModelResponseStream
+
+    return ModelResponseStream(
+        model="gpt-4",
+        choices=[
+            litellm.StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def _make_assembled_model_response(content: str) -> ModelResponse:
+    return ModelResponse(
+        id="mock-response",
+        model="gpt-4",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content=content),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+
+def _mock_guardrail_post_response(action: str = "NONE", texts=None, blocked_reason=None):
+    mock_response = MagicMock()
+    payload = {"action": action}
+    if texts is not None:
+        payload["texts"] = texts
+    if blocked_reason is not None:
+        payload["blocked_reason"] = blocked_reason
+    mock_response.json.return_value = payload
+    mock_response.raise_for_status = MagicMock()
+    return mock_response
+
+
+def _make_responses_stream_events(text: str):
+    """Minimal /v1/responses SSE event sequence ending in response.completed."""
+    return (
+        {"type": "response.created", "response": {"id": "resp_test"}},
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "message", "id": "msg_test"},
+        },
+        {
+            "type": "response.content_part.added",
+            "part": {"type": "output_text", "text": ""},
+        },
+        {"type": "response.output_text.delta", "delta": text},
+        {
+            "type": "response.output_text.done",
+            "text": text,
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_test",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_test",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}],
+                    }
+                ],
+                "status": "completed",
+            },
+        },
+    )
+
+
+class TestGenericGuardrailAPIStreamingConfig:
+    """Streaming knobs on GenericGuardrailAPI and initialize_guardrail plumbing."""
+
+    def test_streaming_defaults(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+        )
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+    def test_streaming_overrides(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=2,
+        )
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
+    @pytest.mark.parametrize("invalid_rate", [0, -1, -5])
+    def test_streaming_sampling_rate_rejects_non_positive(self, invalid_rate):
+        with pytest.raises(ValueError, match="streaming_sampling_rate must be >= 1"):
+            GenericGuardrailAPI(
+                api_base="https://api.test.guardrail.com",
+                guardrail_name="test-generic-guardrail",
+                event_hook="post_call",
+                streaming_sampling_rate=invalid_rate,
+            )
+
+    def test_optional_params_streaming_sampling_rate_ge_one(self):
+        from pydantic import ValidationError
+
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIOptionalParams,
+        )
+
+        with pytest.raises(ValidationError):
+            GenericGuardrailAPIOptionalParams(streaming_sampling_rate=0)
+
+    def test_get_config_model(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIConfigModel,
+        )
+
+        assert GenericGuardrailAPI.get_config_model() is GenericGuardrailAPIConfigModel
+
+    def test_initialize_guardrail_forwards_streaming_flags(self):
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        # LitellmParams uses extra="allow" on the base; set streaming knobs dynamically
+        litellm_params.streaming_end_of_stream_only = False  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 3  # type: ignore[attr-defined]
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 3
+
+    def test_initialize_guardrail_optional_params_defaults_do_not_shadow_top_level(
+        self,
+    ):
+        """Top-level streaming knobs win when optional_params only carries siblings."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIOptionalParams,
+        )
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = True  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 2  # type: ignore[attr-defined]
+        # Sibling optional_params only; streaming fields stay at Pydantic default None.
+        litellm_params.optional_params = GenericGuardrailAPIOptionalParams(  # type: ignore[attr-defined]
+            additional_provider_specific_params={"tenant": "acme"},
+        )
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-mixed"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
+    def test_initialize_guardrail_explicit_optional_params_streaming_wins(self):
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIOptionalParams,
+        )
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = False  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 9  # type: ignore[attr-defined]
+        litellm_params.optional_params = GenericGuardrailAPIOptionalParams(  # type: ignore[attr-defined]
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=1,
+        )
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-nested-wins"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 1
+
+    def test_initialize_guardrail_dict_optional_params_streaming_wins(self):
+        """Guardrail API/UI delivers optional_params as a plain dict, not a model."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = False  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 9  # type: ignore[attr-defined]
+        # Plain dict mirrors how configs arrive from the guardrail API/UI.
+        litellm_params.optional_params = {  # type: ignore[attr-defined]
+            "streaming_end_of_stream_only": True,
+            "streaming_sampling_rate": 1,
+        }
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-dict-optional"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 1
+
+    def test_initialize_guardrail_dict_optional_params_sibling_only_falls_through(
+        self,
+    ):
+        """Dict optional_params without streaming keys must not shadow top-level knobs."""
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        litellm_params.streaming_end_of_stream_only = True  # type: ignore[attr-defined]
+        litellm_params.streaming_sampling_rate = 2  # type: ignore[attr-defined]
+        litellm_params.optional_params = {  # type: ignore[attr-defined]
+            "additional_provider_specific_params": {"tenant": "acme"},
+        }
+
+        guardrail_config = {"guardrail_name": "test-generic-streaming-dict-sibling"}
+
+        with patch(
+            "litellm.logging_callback_manager.add_litellm_callback"
+        ):
+            guardrail = initialize_guardrail(litellm_params, guardrail_config)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
+
+class TestGenericGuardrailAPIStreamingViaUnified:
+    """Streaming output checks routed through UnifiedLLMGuardrails."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_safe_content_yields_all_chunks(self):
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            chunks_data = ["Hello", " ", "world", "!", " Goodbye"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="NONE", texts=["Hello world! Goodbye"]
+            )
+        )
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("Hello world! Goodbye"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            chunks_received = 0
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                chunks_received += 1
+
+        assert chunks_received == 5
+        assert mock_post.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_blocked_content_raises(self):
+        from litellm.exceptions import GuardrailRaisedException
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_sampling_rate=1,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            chunks_data = ["Hello", " ishaan", " here"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="BLOCKED", blocked_reason="Ishaan is not allowed"
+            )
+        )
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("Hello ishaan here"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=mock_stream(),
+                    request_data=request_data,
+                ):
+                    pass
+
+        assert "Ishaan is not allowed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_streaming_default_uses_sampled_cadence(self):
+        """Default samples every 5th chunk + final pass: 10 chunks → calls at 5, 10, and final = 3."""
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="NONE", texts=["ABCDEFGHIJ"]
+            )
+        )
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("ABCDEFGHIJ"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        assert mock_post.await_count == 3, (
+            f"Expected 3 guardrail calls (2 sampled at chunks 5 / 10 + 1 final), "
+            f"got {mock_post.await_count}"
+        )
+        for call in mock_post.await_args_list:
+            assert call.kwargs["json"]["input_type"] == "response"
+
+    @pytest.mark.asyncio
+    async def test_streaming_end_of_stream_only_calls_guardrail_once(self):
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_end_of_stream_only=True,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="NONE", texts=["ABCDEFGHIJ"]
+            )
+        )
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("ABCDEFGHIJ"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        assert mock_post.await_count == 1, (
+            f"Expected exactly one guardrail call at end of stream, "
+            f"got {mock_post.await_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_streaming_sampling_rate_override(self):
+        """sampling_rate=2 on 6 chunks → in-stream at 2,4,6 plus final = 4 calls."""
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=2,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(action="NONE", texts=["ABCDEF"])
+        )
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("ABCDEF"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        assert mock_post.await_count == 4, (
+            f"Expected 4 guardrail calls (3 sampled + 1 final aggregate), "
+            f"got {mock_post.await_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_streaming_fail_open_on_unreachable_continues_stream(self):
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            unreachable_fallback="fail_open",
+            streaming_end_of_stream_only=True,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_stream():
+            for i, content in enumerate(["A", "B", "C"]):
+                yield _make_stream_chunk(
+                    content, finish_reason="stop" if i == 2 else None
+                )
+
+        mock_post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+        with (
+            patch.object(guardrail.async_handler, "post", mock_post),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=_make_assembled_model_response("ABC"),
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            chunks_received = 0
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                chunks_received += 1
+
+        assert chunks_received == 3
+
+    @pytest.mark.asyncio
+    async def test_responses_api_streaming_end_of_stream_only_calls_guardrail_once(self):
+        """/v1/responses path through unified hook; end-of-stream-only = one call."""
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_end_of_stream_only=True,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_responses_stream():
+            for event in _make_responses_stream_events("Hello world"):
+                yield event
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="NONE", texts=["Hello world"]
+            )
+        )
+
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/v1/responses"
+            )
+            request_data = {
+                "input": "hi",
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            events_received = 0
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_responses_stream(),
+                request_data=request_data,
+            ):
+                events_received += 1
+
+        assert events_received == 6
+        assert mock_post.await_count == 1, (
+            f"Expected exactly one guardrail call at end of /v1/responses stream, "
+            f"got {mock_post.await_count}"
+        )
+        assert mock_post.await_args.kwargs["json"]["input_type"] == "response"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_streaming_blocked_raises(self):
+        """Mid-stream BLOCKED on /v1/responses surfaces GuardrailRaisedException."""
+        from litellm.exceptions import GuardrailRaisedException
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_sampling_rate=1,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        async def mock_responses_stream():
+            for event in _make_responses_stream_events("blocked content"):
+                yield event
+
+        mock_post = AsyncMock(
+            return_value=_mock_guardrail_post_response(
+                action="BLOCKED", blocked_reason="Responses content not allowed"
+            )
+        )
+
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/v1/responses"
+            )
+            request_data = {
+                "input": "hi",
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": ["test-generic-guardrail"]},
+            }
+
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=mock_responses_stream(),
+                    request_data=request_data,
+                ):
+                    pass
+
+        assert "Responses content not allowed" in str(exc_info.value)
+
+class TestToolSupport:
+    """Test tool handling in guardrail requests"""
+
+    @pytest.mark.asyncio
+    async def test_builtin_tools_without_function_block_do_not_crash(
+        self, generic_guardrail
+    ):
+        """Built-in tools (code_interpreter, file_search) have no `function` block.
+
+        Regression for a 500 where serializing them raised a Pydantic
+        ValidationError because the tool schema required `function`. The full
+        tool, including built-in tool config, must reach the guardrail intact.
+        """
+        tools = [
+            {"type": "function", "function": {"name": "get_weather", "parameters": {}}},
+            {"type": "code_interpreter"},
+            {
+                "type": "file_search",
+                "vector_store_ids": ["vs_1"],
+                "max_num_results": 5,
+            },
+        ]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"action": "NONE", "texts": ["hi"]}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+
+            forwarded_tools = mock_post.call_args.kwargs["json"]["tools"]
+
+        assert forwarded_tools == tools
+
+
+class TestFailOnError:
+    """Test fail_on_error: complete fail-open on any guardrail error"""
+
+    @pytest.fixture
+    def fail_open_guardrail(self):
+        return GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-fail-open-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+            fail_on_error=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_endpoint_error_continues_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """A non-unreachable endpoint error (HTTP 400) is swallowed and the request proceeds unchanged."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", side_effect=error
+        ):
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert result == {"texts": ["hi"]}
+
+    @pytest.mark.asyncio
+    async def test_internal_error_continues_without_calling_endpoint(
+        self, fail_open_guardrail
+    ):
+        """An error while building the request (here: invalid input_type) fails open too.
+
+        Proves the request construction runs inside the protected block: the
+        endpoint is never called, yet the request still proceeds unchanged.
+        """
+        with patch.object(fail_open_guardrail.async_handler, "post") as mock_post:
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="bogus",  # type: ignore[arg-type]
+            )
+
+        mock_post.assert_not_called()
+        assert result == {"texts": ["hi"]}
+
+    @pytest.mark.asyncio
+    async def test_valid_block_still_blocks_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """Only a valid response acts: a BLOCKED decision still raises even with fail_on_error=False."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "policy violation",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(GuardrailRaisedException):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_endpoint_error_raises_by_default(self, generic_guardrail):
+        """Default fail_on_error=True keeps blocking on a non-unreachable endpoint error."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=error):
+            with pytest.raises(Exception, match="Generic Guardrail API failed"):
+                await generic_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_response_path_continues_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """fail_on_error governs the response path identically to the request path."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", side_effect=error
+        ):
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["model output"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result == {"texts": ["model output"]}
+
+    @pytest.mark.asyncio
+    async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
+        """On the response path too, a valid BLOCKED decision raises despite fail_on_error=False."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "policy violation",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(GuardrailRaisedException):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["model output"]},
+                    request_data={},
+                    input_type="response",
+                )

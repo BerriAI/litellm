@@ -22,9 +22,7 @@ class LowestTPMLoggingHandler(CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(
-        self, router_cache: DualCache, routing_args: dict = {}
-    ):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
@@ -38,9 +36,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -65,17 +61,13 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(
-                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
-                )
+                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ## RPM
                 request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(
-                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl
-                )
+                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -99,9 +91,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 model_info = kwargs["litellm_params"].get("model_info")
                 id = None
@@ -129,9 +119,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(key=tpm_key) or {}
-                )
+                request_count_dict = await self.router_cache.async_get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
                 await self.router_cache.async_set_cache(
@@ -139,9 +127,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 )
 
                 ## RPM
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(key=rpm_key) or {}
-                )
+                request_count_dict = await self.router_cache.async_get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
                 await self.router_cache.async_set_cache(
@@ -160,7 +146,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             verbose_router_logger.debug(traceback.format_exc())
             pass
 
-    def get_available_deployments(  # noqa: PLR0915
+    def get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
@@ -181,9 +167,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         tpm_dict = self.router_cache.get_cache(key=tpm_key)
         rpm_dict = self.router_cache.get_cache(key=rpm_key)
 
-        verbose_router_logger.debug(
-            f"tpm_key={tpm_key}, tpm_dict: {tpm_dict}, rpm_dict: {rpm_dict}"
-        )
+        verbose_router_logger.debug(f"tpm_key={tpm_key}, tpm_dict: {tpm_dict}, rpm_dict: {rpm_dict}")
         try:
             input_tokens = token_counter(messages=messages, text=input)
         except Exception:
@@ -240,9 +224,7 @@ class LowestTPMLoggingHandler(CustomLogger):
 
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
-            elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 >= _deployment_rpm
-            ):
+            elif (rpm_dict is not None and item in rpm_dict) and (rpm_dict[item] + 1 >= _deployment_rpm):
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm

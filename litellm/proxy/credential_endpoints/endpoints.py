@@ -14,6 +14,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
@@ -21,7 +22,9 @@ router = APIRouter()
 
 class CredentialHelperUtils:
     @staticmethod
-    def encrypt_credential_values(credential: CredentialItem, new_encryption_key: Optional[str] = None) -> CredentialItem:
+    def encrypt_credential_values(
+        credential: CredentialItem, new_encryption_key: Optional[str] = None
+    ) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
         for key, value in (credential.credential_values or {}).items():
@@ -70,9 +73,7 @@ async def create_credential(
             model = llm_router.get_deployment(credential.model_id)
             if model is None:
                 raise HTTPException(status_code=404, detail="Model not found")
-            credential_values = llm_router.get_deployment_credentials(
-                credential.model_id
-            )
+            credential_values = llm_router.get_deployment_credentials(credential.model_id)
             if credential_values is None:
                 raise HTTPException(status_code=404, detail="Model not found")
             credential.credential_values = credential_values
@@ -87,12 +88,10 @@ async def create_credential(
             credential_values=credential.credential_values,
             credential_info=credential.credential_info,
         )
-        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(
-            processed_credential
-        )
+        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict = encrypted_credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
-        await prisma_client.db.litellm_credentialstable.create(
+        await CredentialsRepository(prisma_client).create(
             data={
                 **credentials_dict_jsonified,
                 "created_by": user_api_key_dict.user_id,
@@ -142,17 +141,47 @@ async def get_credentials(
     tags=["credential management"],
     response_model=CredentialItem,
 )
+async def get_credential_by_name(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
+    try:
+        for credential in litellm.credential_list:
+            if credential.credential_name == credential_name:
+                masked_credential = CredentialItem(
+                    credential_name=credential.credential_name,
+                    credential_values=_get_masked_values(
+                        credential.credential_values,
+                        unmasked_length=4,
+                        number_of_asterisks=4,
+                    ),
+                    credential_info=credential.credential_info,
+                )
+                return masked_credential
+        raise HTTPException(
+            status_code=404,
+            detail="Credential not found. Got credential name: " + credential_name,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
 @router.get(
     "/credentials/by_model/{model_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=CredentialItem,
 )
-async def get_credential(
+async def get_credential_by_model(
     request: Request,
     fastapi_response: Response,
-    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
-    model_id: Optional[str] = None,
+    model_id: str = Path(..., description="The model ID to look up credentials for"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -161,48 +190,25 @@ async def get_credential(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        if model_id:
-            if llm_router is None:
-                raise HTTPException(status_code=500, detail="LLM router not found")
-            model = llm_router.get_deployment(model_id)
-            if model is None:
-                raise HTTPException(status_code=404, detail="Model not found")
-            credential_values = llm_router.get_deployment_credentials(model_id)
-            if credential_values is None:
-                raise HTTPException(status_code=404, detail="Model not found")
-            masked_credential_values = _get_masked_values(
-                credential_values,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
-            credential = CredentialItem(
-                credential_name="{}-credential-{}".format(model.model_name, model_id),
-                credential_values=masked_credential_values,
-                credential_info={},
-            )
-            # return credential object
-            return credential
-        elif credential_name:
-            for credential in litellm.credential_list:
-                if credential.credential_name == credential_name:
-                    masked_credential = CredentialItem(
-                        credential_name=credential.credential_name,
-                        credential_values=_get_masked_values(
-                            credential.credential_values,
-                            unmasked_length=4,
-                            number_of_asterisks=4,
-                        ),
-                        credential_info=credential.credential_info,
-                    )
-                    return masked_credential
-            raise HTTPException(
-                status_code=404,
-                detail="Credential not found. Got credential name: " + credential_name,
-            )
-        else:
-            raise HTTPException(
-                status_code=404, detail="Credential name or model ID required"
-            )
+        if llm_router is None:
+            raise HTTPException(status_code=500, detail="LLM router not found")
+        model = llm_router.get_deployment(model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found")
+        credential_values = llm_router.get_deployment_credentials(model_id)
+        if credential_values is None:
+            raise HTTPException(status_code=404, detail="Model not found")
+        masked_credential_values = _get_masked_values(
+            credential_values,
+            unmasked_length=4,
+            number_of_asterisks=4,
+        )
+        credential = CredentialItem(
+            credential_name="{}-credential-{}".format(model.model_name, model_id),
+            credential_values=masked_credential_values,
+            credential_info={},
+        )
+        return credential
     except Exception as e:
         verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)
@@ -230,23 +236,19 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        await prisma_client.db.litellm_credentialstable.delete(
-            where={"credential_name": credential_name}
-        )
+        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
 
         ## DELETE FROM LITELLM ##
-        litellm.credential_list = [
-            cred
-            for cred in litellm.credential_list
-            if cred.credential_name != credential_name
-        ]
+        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
 
 
 def update_db_credential(
-    db_credential: CredentialItem, updated_patch: CredentialItem, new_encryption_key: Optional[str] = None
+    db_credential: CredentialItem,
+    updated_patch: CredentialItem,
+    new_encryption_key: Optional[str] = None,
 ) -> CredentialItem:
     """
     Update a credential in the DB.
@@ -268,9 +270,7 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params = {
-            k: v for k, v in encrypted_credential.credential_values.items()
-        }
+        encrypted_params = {k: v for k, v in encrypted_credential.credential_values.items()}
 
         merged_credential.credential_values.update(encrypted_params)
 
@@ -307,20 +307,45 @@ async def update_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        db_credential = await prisma_client.db.litellm_credentialstable.find_unique(
-            where={"credential_name": credential_name},
-        )
+        credentials_repository = CredentialsRepository(prisma_client)
+        db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
         merged_credential = update_db_credential(db_credential, credential)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
-        await prisma_client.db.litellm_credentialstable.update(
-            where={"credential_name": credential_name},
+        await credentials_repository.update_by_name(
+            credential_name,
             data={
                 **credential_object_jsonified,
                 "updated_by": user_api_key_dict.user_id,
             },
         )
+
+        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+        new_name = merged_credential.credential_name
+        existing_in_memory: Optional[CredentialItem] = None
+        for cred in litellm.credential_list:
+            if cred.credential_name == credential_name:
+                existing_in_memory = cred
+                break
+
+        if existing_in_memory is not None:
+            in_memory_values = dict(existing_in_memory.credential_values or {})
+            if credential.credential_values:
+                in_memory_values.update(credential.credential_values)
+            in_memory_info = dict(existing_in_memory.credential_info or {})
+            if credential.credential_info:
+                in_memory_info.update(credential.credential_info)
+            updated_in_memory = CredentialItem(
+                credential_name=new_name,
+                credential_values=in_memory_values,
+                credential_info=in_memory_info,
+            )
+            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
+            if new_name != credential_name:
+                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
+            CredentialAccessor.upsert_credentials([updated_in_memory])
+
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)

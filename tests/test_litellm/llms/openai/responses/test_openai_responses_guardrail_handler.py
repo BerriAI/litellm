@@ -901,6 +901,20 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert result == responses_so_far
 
     @pytest.mark.asyncio
+    async def test_process_output_streaming_response_null_response(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        responses_so_far = [{"type": "response.completed", "response": None}]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
     async def test_process_output_streaming_response_unrecognized_output_type(self):
         """Test that streaming response with unrecognized output types doesn't raise IndexError
 
@@ -995,3 +1009,162 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         # Should return the responses
         assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_writes_back_guardrailed_text(self):
+        """Guardrailed text must be written back into the response.completed chunk in-place."""
+
+        class RewriteGuardrail(CustomGuardrail):
+            """Replaces '<TOKEN_1>' with 'john@example.com' to simulate PII unmasking."""
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = inputs.get("texts", [])
+                inputs["texts"] = [
+                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
+                ]
+                return inputs
+
+        handler = OpenAIResponsesHandler()
+        guardrail = RewriteGuardrail(guardrail_name="test-rewrite")
+
+        responses_so_far = [
+            {"type": "response.output_text.delta", "delta": "send to "},
+            {"type": "response.output_text.delta", "delta": "<TOKEN_1>"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_123",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "send to <TOKEN_1>"},
+                            ],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        completed_chunk = next(
+            c
+            for c in result
+            if isinstance(c, dict) and c.get("type") == "response.completed"
+        )
+        output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
+        assert (
+            output_text == "send to john@example.com"
+        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_pass_through_unchanged(self):
+        """A pass-through guardrail must not modify the output text."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="pass-through")
+
+        original_text = "No PII here, just normal text."
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_456",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_456",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": original_text}],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            }
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
+        assert output_text == original_text
+
+
+class TestGetStructuredMessages:
+    """Test the get_structured_messages method for Responses API handler."""
+
+    def test_should_convert_string_input_to_messages(self):
+        """Test that a simple string input is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": "What is the capital of France?"}
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 1
+        found_user = False
+        for msg in result:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                found_user = True
+                break
+        assert found_user, f"Expected a user message, got: {result}"
+
+    def test_should_convert_list_input_to_messages(self):
+        """Test that list input (ResponseInputParam) is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 3
+
+    def test_should_include_instructions_as_system_message(self):
+        """Test that instructions are included as a system message."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": "Roll a d20",
+            "instructions": "You are a helpful dungeon master.",
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        has_system = any(
+            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
+        )
+        assert has_system, f"Expected system message from instructions, got: {result}"
+
+    def test_should_return_none_when_no_input(self):
+        """Test that None is returned when input key is missing."""
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-4o"}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_return_none_for_none_input(self):
+        """Test that None is returned when input is explicitly None."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": None}
+        result = handler.get_structured_messages(data)
+        assert result is None

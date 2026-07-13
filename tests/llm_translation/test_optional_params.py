@@ -144,6 +144,45 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["reasoning_effort"] == reasoning_effort
 
 
+def test_allowed_openai_params_does_not_forward_unset_params():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/25697
+
+    When a user lists a param in ``allowed_openai_params`` but does not
+    actually send that param in the request, litellm must not forward it
+    to the provider SDK as ``None``. The openai SDK rejects unknown
+    top-level kwargs with
+    ``AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'``.
+
+    Reproduces the reported config where the user listed both
+    ``chat_template_kwargs`` and ``enable_thinking`` in
+    ``allowed_openai_params`` and only sent ``chat_template_kwargs``
+    (with ``enable_thinking`` nested inside it). Previously the loop
+    added ``optional_params["enable_thinking"] = None`` which then
+    crashed the openai client.
+    """
+    from litellm.utils import _apply_openai_param_overrides
+
+    chat_template_kwargs = {"enable_thinking": False}
+    optional_params: dict = {}
+    non_default_params = {"chat_template_kwargs": chat_template_kwargs}
+
+    result = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=["chat_template_kwargs", "enable_thinking"],
+    )
+
+    assert result["chat_template_kwargs"] == chat_template_kwargs
+    # enable_thinking was NOT sent as a top-level param — it must not be
+    # forwarded to the provider SDK (openai AsyncCompletions.create would
+    # reject an unknown kwarg, even if its value is None).
+    assert "enable_thinking" not in result
+    # And the only entry actually moved out of non_default_params is
+    # the one the caller sent.
+    assert "chat_template_kwargs" not in non_default_params
+
+
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
@@ -769,7 +808,7 @@ def test_parse_additional_properties_json_schema(model, provider, expectedAddPro
 
 def test_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview-2024-09-12",
+        model="o1-2024-12-17",
         custom_llm_provider="openai",
         seed=10,
         user="John",
@@ -780,7 +819,7 @@ def test_o1_model_params():
 
 def test_azure_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview",
+        model="o1",
         custom_llm_provider="azure",
         seed=10,
         user="John",
@@ -798,13 +837,13 @@ def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview",
+                model="o1",
                 custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
         get_optional_params(
-            model="o1-preview-2024-09-12",
+            model="o1-2024-12-17",
             custom_llm_provider="openai",
             temperature=temperature,
         )
@@ -1220,7 +1259,7 @@ def test_anthropic_thinking_param(model, expected_thinking):
 
 def test_bedrock_invoke_anthropic_max_tokens():
     passed_params = {
-        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "functions": None,
         "function_call": None,
         "temperature": 0.8,
@@ -1789,18 +1828,23 @@ def test_azure_response_format_param():
     "model, provider",
     [
         ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
         ("claude-3-7-sonnet@20250219", "vertex_ai"),
     ],
 )
 def test_anthropic_unified_reasoning_content(model, provider):
+    from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
     optional_params = get_optional_params(
         model=model,
         custom_llm_provider=provider,
         reasoning_effort="high",
     )
-    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert optional_params["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
 
 
 def test_azure_response_format(monkeypatch):
@@ -1894,28 +1938,28 @@ def test_validate_openai_optional_params_stop_truncation():
     result = validate_openai_optional_params(stop=stop_sequences)
     assert result == ["stop1", "stop2", "stop3", "stop4"]
     assert len(result) == 4
-    
+
     # Test with exactly 4 stop sequences - should not truncate
     stop_sequences_4 = ["stop1", "stop2", "stop3", "stop4"]
     result = validate_openai_optional_params(stop=stop_sequences_4)
     assert result == ["stop1", "stop2", "stop3", "stop4"]
     assert len(result) == 4
-    
+
     # Test with less than 4 stop sequences - should not truncate
     stop_sequences_2 = ["stop1", "stop2"]
     result = validate_openai_optional_params(stop=stop_sequences_2)
     assert result == ["stop1", "stop2"]
     assert len(result) == 2
-    
+
     # Test with single stop sequence as string - should return as is
     stop_string = "stop1"
     result = validate_openai_optional_params(stop=stop_string)
     assert result == "stop1"
-    
+
     # Test with None - should return None
     result = validate_openai_optional_params(stop=None)
     assert result is None
-    
+
     # Test with empty list - should return empty list
     result = validate_openai_optional_params(stop=[])
     assert result == []
@@ -1928,7 +1972,7 @@ def test_validate_openai_optional_params_disable_stop_sequence_limit():
     """
     # Save original value
     original_value = litellm.disable_stop_sequence_limit
-    
+
     try:
         # Test with disable_stop_sequence_limit = True - should NOT truncate
         litellm.disable_stop_sequence_limit = True
@@ -1936,7 +1980,7 @@ def test_validate_openai_optional_params_disable_stop_sequence_limit():
         result = validate_openai_optional_params(stop=stop_sequences)
         assert result == ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
         assert len(result) == 6
-        
+
         # Test with disable_stop_sequence_limit = False - should truncate to 4
         litellm.disable_stop_sequence_limit = False
         stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
@@ -1965,19 +2009,122 @@ def test_validate_openai_optional_params_integration():
             mock_response.usage.prompt_tokens = 10
             mock_response.usage.completion_tokens = 5
             mock_response.usage.total_tokens = 15
-            
-            mock_client.return_value.chat.completions.create.return_value = mock_response
-            
+
+            mock_client.return_value.chat.completions.create.return_value = (
+                mock_response
+            )
+
             # Call completion with more than 4 stop sequences
             response = litellm.completion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello"}],
                 stop=["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"],
-                mock_response="Test response"  # This will use mock
+                mock_response="Test response",  # This will use mock
             )
-            
+
             # Verify the call was made (stop sequences should be truncated internally)
             assert response is not None
     except Exception as e:
         # Should not raise an exception
         pytest.fail(f"validate_openai_optional_params integration failed: {e}")
+
+
+def test_drop_store_param_for_anthropic():
+    """
+    Test that the OpenAI-specific `store` parameter is correctly dropped
+    when calling Anthropic with drop_params=True.
+
+    `store` is an OpenAI Chat Completion parameter (for storing completions
+    for distillation/evals) that Anthropic does not support. Without proper
+    handling, it leaks through to the Anthropic API and causes a
+    "store: Extra inputs are not permitted" error.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19700
+    """
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        drop_params=True,
+        store=True,
+    )
+    assert "store" not in optional_params
+
+
+def test_additional_drop_params_store_for_anthropic():
+    """
+    Test that `additional_drop_params=["store"]` correctly strips the `store`
+    parameter for non-OpenAI providers like Anthropic.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19700
+    """
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        additional_drop_params=["store"],
+        store=True,
+    )
+    assert "store" not in optional_params
+
+
+def test_store_in_openai_chat_completion_params():
+    """
+    Test that `store` is recognized as a standard OpenAI Chat Completion
+    parameter. This ensures it is correctly handled by helper functions
+    like `get_standard_openai_params()` and provider configs that rely on
+    `OPENAI_CHAT_COMPLETION_PARAMS`.
+
+    Without `store` in this list, functions that filter by known OpenAI
+    params will silently drop it for OpenAI calls or incorrectly treat
+    it as a provider-specific param for non-OpenAI providers.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19700
+    """
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+
+    assert "store" in OPENAI_CHAT_COMPLETION_PARAMS
+
+    # Verify get_standard_openai_params recognizes store
+    from litellm.utils import get_standard_openai_params
+
+    result = get_standard_openai_params({"store": True, "temperature": 0.7})
+    assert "store" in result
+    assert result["store"] is True
+
+
+def test_store_param_passed_through_openai_azure():
+    """
+    Test that the `store` parameter is correctly passed through to OpenAI
+    and Azure OpenAI providers when using get_optional_params().
+
+    This verifies the fix for the regression where `store` was being filtered
+    out by get_non_default_completion_params() due to architectural issues
+    in parameter processing pipeline.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19700
+    """
+    # Test OpenAI provider
+    optional_params_openai = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        store=True,
+    )
+    assert "store" in optional_params_openai
+    assert optional_params_openai["store"] is True
+
+    # Test Azure OpenAI provider
+    optional_params_azure = get_optional_params(
+        model="gpt-4.1-2025-04-14",
+        custom_llm_provider="azure",
+        store=True,
+    )
+    assert "store" in optional_params_azure
+    assert optional_params_azure["store"] is True
+
+    # Test with store=False
+    optional_params_false = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        store=False,
+    )
+    assert "store" in optional_params_false
+    assert optional_params_false["store"] is False

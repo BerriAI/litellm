@@ -12,7 +12,10 @@ import {
 } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import { TableHeaderSortDropdown, SortState } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import {
+  TableHeaderSortDropdown,
+  SortState,
+} from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -30,6 +33,7 @@ interface AllModelsDataTableProps<TData, TValue> {
   pagination?: PaginationState;
   onPaginationChange?: OnChangeFn<PaginationState>;
   enablePagination?: boolean;
+  onRowClick?: (row: TData) => void;
 }
 
 export function AllModelsDataTable<TData, TValue>({
@@ -41,6 +45,7 @@ export function AllModelsDataTable<TData, TValue>({
   pagination,
   onPaginationChange,
   enablePagination = false,
+  onRowClick,
 }: AllModelsDataTableProps<TData, TValue>) {
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [columnSizing, setColumnSizing] = React.useState({});
@@ -109,10 +114,11 @@ export function AllModelsDataTable<TData, TValue>({
                   {headerGroup.headers.map((header) => (
                     <TableHeaderCell
                       key={header.id}
-                      className={`py-1 h-8 relative ${header.id === "actions"
-                        ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                        : ""
-                        } ${header.column.columnDef.meta?.className || ""}`}
+                      className={`py-1 h-8 relative ${
+                        header.id === "actions"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                          : ""
+                      } ${header.column.columnDef.meta?.className || ""}`}
                       style={{
                         width: header.id === "actions" ? 120 : header.getSize(),
                         position: header.id === "actions" ? "sticky" : "relative",
@@ -128,9 +134,7 @@ export function AllModelsDataTable<TData, TValue>({
                         {header.id !== "actions" && header.column.getCanSort() && onSortingChange && (
                           <TableHeaderSortDropdown
                             sortState={
-                              header.column.getIsSorted() === false
-                                ? false
-                                : (header.column.getIsSorted() as SortState)
+                              header.column.getIsSorted() === false ? false : (header.column.getIsSorted() as SortState)
                             }
                             onSortChange={(newState) => {
                               // Convert SortState to TanStack SortingState
@@ -154,8 +158,9 @@ export function AllModelsDataTable<TData, TValue>({
                         <div
                           onMouseDown={header.getResizeHandler()}
                           onTouchStart={header.getResizeHandler()}
-                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
-                            }`}
+                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${
+                            header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
+                          }`}
                         />
                       )}
                     </TableHeaderCell>
@@ -174,14 +179,19 @@ export function AllModelsDataTable<TData, TValue>({
                 </TableRow>
               ) : tableInstance.getRowModel().rows.length > 0 ? (
                 tableInstance.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow
+                    key={row.id}
+                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                    onClick={() => onRowClick?.(row.original)}
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className={`py-0.5 overflow-hidden ${cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                          : ""
-                          } ${cell.column.columnDef.meta?.className || ""}`}
+                        className={`py-0.5 overflow-hidden ${
+                          cell.column.id === "actions"
+                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                            : ""
+                        } ${cell.column.columnDef.meta?.className || ""}`}
                         style={{
                           width: cell.column.id === "actions" ? 120 : cell.column.getSize(),
                           position: cell.column.id === "actions" ? "sticky" : "relative",

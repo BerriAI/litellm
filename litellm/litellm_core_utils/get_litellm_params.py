@@ -1,38 +1,49 @@
 from typing import Optional
 
+from litellm.llms.openai.data_residency import infer_openai_data_residency
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-_OPTIONAL_KWARGS_KEYS = frozenset({
-    "azure_ad_token",
-    "tenant_id",
-    "client_id",
-    "client_secret",
-    "azure_username",
-    "azure_password",
-    "azure_scope",
-    "timeout",
-    "bucket_name",
-    "vertex_credentials",
-    "vertex_project",
-    "vertex_location",
-    "vertex_ai_project",
-    "vertex_ai_location",
-    "vertex_ai_credentials",
-    "aws_region_name",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-    "aws_bedrock_runtime_endpoint",
-    "tpm",
-    "rpm",
-})
+OPTIONAL_KWARGS_KEYS = frozenset(
+    {
+        "azure_ad_token",
+        "tenant_id",
+        "client_id",
+        "client_secret",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
+        "timeout",
+        "gcs_bucket_name",
+        "bucket_name",
+        "vertex_credentials",
+        "vertex_project",
+        "vertex_location",
+        "vertex_ai_project",
+        "vertex_ai_location",
+        "vertex_ai_credentials",
+        "aws_region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
+        "tpm",
+        "rpm",
+        "itpm",
+        "otpm",
+        "use_xai_oauth",
+    }
+)
+
+# Backward-compatible alias for existing imports/tests.
+_OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -65,6 +76,7 @@ def get_litellm_params(
     proxy_server_request=None,
     acompletion=None,
     aembedding=None,
+    allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
     input_cost_per_second=None,
@@ -95,15 +107,26 @@ def get_litellm_params(
     litellm_request_debug: Optional[bool] = None,
     **kwargs,
 ) -> dict:
+    # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
+    _meta = metadata or {}
+    if litellm_session_id is None:
+        litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
+    if litellm_trace_id is None:
+        litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
+
+    data_residency: Optional[str] = infer_openai_data_residency(custom_llm_provider, api_base)
+
     # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,
+        "allm_passthrough_route": allm_passthrough_route,
         "api_key": api_key,
         "force_timeout": force_timeout,
         "logger_fn": logger_fn,
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
         "api_base": api_base,
+        "data_residency": data_residency,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
@@ -124,11 +147,7 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (
-            _get_base_model_from_litellm_call_metadata(metadata=metadata)
-            if metadata
-            else None
-        ),
+        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
@@ -149,7 +168,7 @@ def get_litellm_params(
 
     # Sparse extraction: only add kwargs keys that are actually present
     if kwargs:
-        for key in _OPTIONAL_KWARGS_KEYS:
+        for key in OPTIONAL_KWARGS_KEYS:
             if key in kwargs:
                 litellm_params[key] = kwargs[key]
 

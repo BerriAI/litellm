@@ -49,13 +49,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             },
         )
     else:
-        raise ValueError(
-            f"Azure Content Safety: {azure_guardrail} is not a valid guardrail"
-        )
+        raise ValueError(f"Azure Content Safety: {azure_guardrail} is not a valid guardrail")
 
-    litellm.logging_callback_manager.add_litellm_callback(
-        azure_content_safety_guardrail
-    )
+    litellm.logging_callback_manager.add_litellm_callback(azure_content_safety_guardrail)
     return azure_content_safety_guardrail
 
 

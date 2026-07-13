@@ -8,6 +8,7 @@ try:
 except Exception:
     version = "0.0.0"
 
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -20,6 +21,7 @@ def get_default_headers() -> dict:
         return {"User-Agent": user_agent}
 
     return {"User-Agent": f"litellm/{version}"}
+
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):
@@ -37,9 +39,7 @@ class HTTPHandler:
         # Close the client when you're done with it
         await self.client.aclose()
 
-    async def get(
-        self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
-    ):
+    async def get(self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None):
         response = await self.client.get(url, params=params, headers=headers)
         return response
 
@@ -52,7 +52,10 @@ class HTTPHandler:
     ):
         try:
             response = await self.client.post(
-                url, data=data, params=params, headers=headers  # type: ignore
+                url,
+                data=data,
+                params=params,
+                headers=headers,  # type: ignore
             )
             return response
         except Exception as e:

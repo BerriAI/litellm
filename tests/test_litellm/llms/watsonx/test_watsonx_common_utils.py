@@ -77,7 +77,10 @@ class TestGenerateIAMToken:
             (
                 {"WATSONX_API_KEY": "watsonx-api-key"},
                 "watsonx-api-key",
-                ["WX_API_KEY", "WATSONX_API_KEY"],  # Should check WX_API_KEY first, then WATSONX_API_KEY
+                [
+                    "WX_API_KEY",
+                    "WATSONX_API_KEY",
+                ],  # Should check WX_API_KEY first, then WATSONX_API_KEY
             ),
             (
                 {"WATSONX_APIKEY": "watsonx-apikey"},
@@ -87,7 +90,12 @@ class TestGenerateIAMToken:
             (
                 {"WATSONX_ZENAPIKEY": "watsonx-zenapikey"},
                 "watsonx-zenapikey",
-                ["WX_API_KEY", "WATSONX_API_KEY", "WATSONX_APIKEY", "WATSONX_ZENAPIKEY"],
+                [
+                    "WX_API_KEY",
+                    "WATSONX_API_KEY",
+                    "WATSONX_APIKEY",
+                    "WATSONX_ZENAPIKEY",
+                ],
             ),
             # Test that higher priority keys take precedence
             (

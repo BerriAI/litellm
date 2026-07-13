@@ -71,10 +71,7 @@ def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
     ingestion_class = INGESTION_REGISTRY.get(provider)
     if ingestion_class is None:
         supported = ", ".join(INGESTION_REGISTRY.keys())
-        raise ValueError(
-            f"Provider '{provider}' is not supported for RAG ingestion. "
-            f"Supported providers: {supported}"
-        )
+        raise ValueError(f"Provider '{provider}' is not supported for RAG ingestion. Supported providers: {supported}")
     return ingestion_class
 
 
@@ -233,9 +230,7 @@ async def _execute_query_pipeline(
                 documents=documents,
                 top_n=rerank.get("top_n", 5),
             )
-            context_chunks = RAGQuery.get_top_chunks_from_rerank(
-                search_response, rerank_response
-            )
+            context_chunks = RAGQuery.get_top_chunks_from_rerank(search_response, rerank_response)
 
     # 4. Build context message and call completion
     context_message = RAGQuery.build_context_message(context_chunks)

@@ -1,21 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer } from "antd";
-import {
-  CheckOutlined,
-  CopyOutlined,
-  LeftOutlined,
-  RightOutlined,
-} from "@ant-design/icons";
-import { Sparkles, Wrench } from "lucide-react";
+import { Button, Drawer, Segmented } from "antd";
+import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
-import { MCP_CALL_TYPES } from "../constants";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import { LogDetailContent } from "./LogDetailContent";
+import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
+import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -25,13 +21,20 @@ export interface LogDetailsDrawerProps {
   logEntry: LogEntry | null;
   sessionId?: string | null;
   accessToken?: string | null;
-  onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
 }
 
 const SIDEBAR_WIDTH_PX = 224;
+
+// Session logs are fetched page-by-page from the paginated backend and
+// accumulated so the drawer can show the whole session. page_size is the
+// backend maximum (le=100); the page cap bounds the fetch and the
+// (un-virtualized) sidebar list for pathological sessions, keeping the most
+// recent logs since the endpoint returns newest-first.
+const SESSION_PAGE_SIZE = 100;
+const MAX_SESSION_PAGES = 50;
 
 /* ------------------------------------------------------------------ */
 /*  TraceEventRow — compact event row used in both session & non-     */
@@ -45,9 +48,10 @@ interface TraceEventRowProps {
 
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+  const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
   const durationValue =
-    row.duration != null
-      ? row.duration.toFixed(3)
+    row.request_duration_ms != null
+      ? (row.request_duration_ms / 1000).toFixed(3)
       : row.startTime && row.endTime
         ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
         : "-";
@@ -62,9 +66,11 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
     >
       <div className="flex items-center gap-1">
         {isMcp ? (
-          <Wrench size={12} className="text-slate-500 flex-shrink-0" />
+          <Wrench size={12} className="text-slate-500 shrink-0" />
+        ) : isAgent ? (
+          <Bot size={12} className="text-slate-500 shrink-0" />
         ) : (
-          <Sparkles size={12} className="text-slate-500 flex-shrink-0" />
+          <Sparkles size={12} className="text-slate-500 shrink-0" />
         )}
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
@@ -105,59 +111,105 @@ export function LogDetailsDrawer({
   logEntry,
   sessionId,
   accessToken,
-  onOpenSettings,
   allLogs = [],
   onSelectLog,
   startTime,
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
+  const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionLogs = [] } = useQuery({
+  const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return [];
-      const response = await sessionSpendLogsCall(accessToken, sessionId);
-      const allSessionLogs: LogEntry[] = response.data || response || [];
-      return allSessionLogs
-        .map((row) => ({
-          ...row,
-          duration: (Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000,
-        }))
-        .sort((a, b) => {
-          const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
-          const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
-          if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
-        });
+      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
+
+      // Fetch the first page, then page through the rest so sessions with more
+      // than one page of logs are shown in full (capped for safety).
+      const firstPage = await sessionSpendLogsCall(accessToken, sessionId, 1, SESSION_PAGE_SIZE);
+      let rows: LogEntry[] = firstPage.data || firstPage || [];
+      const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
+
+      if (pagesToFetch > 1) {
+        const BATCH = 5;
+        const remaining: Awaited<ReturnType<typeof sessionSpendLogsCall>>[] = [];
+        for (let start = 2; start <= pagesToFetch; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, pagesToFetch);
+          const batch = await Promise.all(
+            Array.from({ length: end - start + 1 }, (_, i) =>
+              sessionSpendLogsCall(accessToken, sessionId, start + i, SESSION_PAGE_SIZE),
+            ),
+          );
+          remaining.push(...batch);
+        }
+        for (const page of remaining) {
+          rows = rows.concat(page.data || []);
+        }
+      }
+
+      // Fall back to the accumulated row count (not just the first page) when the
+      // backend omits total, so the truncation note reflects what was fetched.
+      const total: number = firstPage.total ?? rows.length;
+
+      const logs = rows.map((row) => ({
+        ...row,
+        request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
+      }));
+
+      return { logs, total };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
 
+  const sessionLogs: LogEntry[] = useMemo(
+    () => sortSessionLogs(sessionData?.logs ?? [], sessionSortMode),
+    [sessionData, sessionSortMode],
+  );
+  // total reported by the backend; when the page cap truncates the fetch this
+  // exceeds sessionLogs.length, which drives the "showing most recent" note.
+  const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
+  const sessionTruncated = sessionTotalCount > sessionLogs.length;
+
+  // Default selection for a freshly opened session: the most recent log (latest
+  // startTime). The list is ordered by the selected sort mode, so the latest
+  // log by time is not necessarily sessionLogs[0]; compute it explicitly.
+  // A clicked/remembered log still wins over this default.
+  const mostRecentLog = useMemo<LogEntry | null>(
+    () =>
+      sessionLogs.reduce<LogEntry | null>(
+        (latest, row) =>
+          !latest || new Date(row.startTime).getTime() > new Date(latest.startTime).getTime() ? row : latest,
+        null,
+      ),
+    [sessionLogs],
+  );
+
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
     if (!sessionLogs.length) return null;
+    const fallbackLog = mostRecentLog ?? sessionLogs[0];
     if (selectedSessionRequestId) {
-      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || sessionLogs[0];
+      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
     }
     if (logEntry?.request_id) {
       const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || sessionLogs[0];
+      return clickedLog || fallbackLog;
     }
-    return sessionLogs[0];
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+    return fallbackLog;
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
     if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
-      const fallbackRequestId = logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
-        ? logEntry.request_id
-        : sessionLogs[0].request_id;
+      const fallbackRequestId =
+        logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
+          ? logEntry.request_id
+          : (mostRecentLog ?? sessionLogs[0]).request_id;
       setSelectedSessionRequestId(fallbackRequestId);
     }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
@@ -165,6 +217,7 @@ export function LogDetailsDrawer({
       setIsSidebarCollapsed(false);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
+      setSessionSortMode("duration");
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
@@ -210,20 +263,20 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
-  const sessionStart = sessionLogs.length > 0
-    ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
-    : null;
-  const sessionEnd = sessionLogs.length > 0
-    ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
-    : null;
+  const sessionStart =
+    sessionLogs.length > 0 ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime()))) : null;
+  const sessionEnd =
+    sessionLogs.length > 0 ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime()))) : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
-  const llmCount = sessionLogs.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length;
+  const llmCount = sessionLogs.filter(
+    (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+  ).length;
+  const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
-  const leftPanelDisplayId =
-    leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
+  const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
@@ -231,7 +284,9 @@ export function LogDetailsDrawer({
       await navigator.clipboard.writeText(leftPanelId);
       setCopiedLeftPanelId(true);
       setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch { /* clipboard unavailable in non-secure contexts */ }
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
   };
 
   if (!currentLog || !enrichedLog) return null;
@@ -252,30 +307,27 @@ export function LogDetailsDrawer({
       }}
     >
       <div style={{ height: "100%" }} className="flex relative">
-          {!isSidebarCollapsed ? (
-            <Button
-              type="text"
-              size="small"
-              icon={<LeftOutlined />}
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-              aria-label="Collapse trace sidebar"
-            />
-          ) : (
-            <Button
-              type="text"
-              size="small"
-              icon={<RightOutlined />}
-              onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-              aria-label="Expand trace sidebar"
-            />
-          )}
-          {!isSidebarCollapsed && (
-          <div
-            className="border-r border-slate-200 bg-slate-50 flex flex-col"
-            style={{ width: SIDEBAR_WIDTH_PX }}
-          >
+        {!isSidebarCollapsed ? (
+          <Button
+            type="text"
+            size="small"
+            icon={<LeftOutlined />}
+            onClick={() => setIsSidebarCollapsed(true)}
+            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
+            aria-label="Collapse trace sidebar"
+          />
+        ) : (
+          <Button
+            type="text"
+            size="small"
+            icon={<RightOutlined />}
+            onClick={() => setIsSidebarCollapsed(false)}
+            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
+            aria-label="Expand trace sidebar"
+          />
+        )}
+        {!isSidebarCollapsed && (
+          <div className="border-r border-slate-200 bg-slate-50 flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
             <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -301,18 +353,28 @@ export function LogDetailsDrawer({
               </div>
               <div className="mt-1 text-[11px] text-slate-500 font-mono">
                 {logsForList.length} req
+                {[
+                  isSessionMode
+                    ? llmCount
+                    : logsForList.filter(
+                        (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                      ).length,
+                  isSessionMode
+                    ? agentCount
+                    : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                  isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
+                ].map((count, i) => {
+                  const label = [" LLM", " Agent", " MCP"][i];
+                  return count > 0 ? (
+                    <span key={label}>
+                      <span className="mx-1.5">·</span>
+                      {count}
+                      {label}
+                    </span>
+                  ) : null;
+                })}
                 <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? `${llmCount} LLM`
-                  : `${logsForList.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length} LLM`}
-                <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? `${mcpCount} MCP`
-                  : `${logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length} MCP`}
-                <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? getSpendString(totalSessionCost)
-                  : getSpendString(currentLog.spend || 0)}
+                {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
                 {isSessionMode && (
                   <>
                     <span className="mx-1.5">·</span>
@@ -320,9 +382,32 @@ export function LogDetailsDrawer({
                   </>
                 )}
               </div>
+              {isSessionMode && sessionTruncated && (
+                <div className="mt-1 text-[11px] text-amber-600 font-mono">
+                  Showing most recent {logsForList.length} of {sessionTotalCount}
+                </div>
+              )}
+              {isSessionMode && (
+                <Segmented
+                  block
+                  size="small"
+                  className="mt-1.5 [&_.ant-segmented-item-label]:text-[11px]"
+                  options={[
+                    { label: "Duration", value: "duration" },
+                    { label: "Start time", value: "start_time" },
+                  ]}
+                  value={sessionSortMode}
+                  onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                />
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto">
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="px-3 pt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
               {isSessionMode ? (
                 <div className="py-1">
                   {/* Child events — vertical tree line with horizontal connectors */}
@@ -361,27 +446,27 @@ export function LogDetailsDrawer({
               )}
             </div>
           </div>
-          )}
+        )}
 
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <DrawerHeader
-              log={currentLog}
-              onClose={onClose}
-              onPrevious={selectPreviousLog}
-              onNext={selectNextLog}
-              statusLabel={statusLabel}
-              statusColor={statusColor}
-              environment={environment}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <DrawerHeader
+            log={currentLog}
+            onClose={onClose}
+            onPrevious={selectPreviousLog}
+            onNext={selectNextLog}
+            statusLabel={statusLabel}
+            statusColor={statusColor}
+            environment={environment}
+          />
+          <div className="flex-1 overflow-y-auto">
+            <LogDetailContent
+              logEntry={enrichedLog}
+              isLoadingDetails={isLoadingDetails}
+              accessToken={accessToken ?? null}
             />
-            <div className="flex-1 overflow-y-auto">
-              <LogDetailContent
-                logEntry={enrichedLog}
-                onOpenSettings={onOpenSettings}
-                isLoadingDetails={isLoadingDetails}
-              />
-            </div>
           </div>
         </div>
+      </div>
     </Drawer>
   );
 }

@@ -16,6 +16,7 @@ class HeliconeLogger:
     helicone_model_list = [
         "gpt",
         "claude",
+        "gemini",
         "command-r",
         "command-r-plus",
         "command-light",
@@ -31,7 +32,7 @@ class HeliconeLogger:
         if self.is_mock_mode:
             create_mock_helicone_client()
             verbose_logger.info("[HELICONE MOCK] Helicone logger initialized in mock mode")
-        
+
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
@@ -103,14 +104,12 @@ class HeliconeLogger:
         if metadata is None:
             metadata = {}
 
-        proxy_headers = (
-            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-        )
+        proxy_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
         for header_key in proxy_headers:
             if header_key.startswith("helicone_"):
                 metadata[header_key] = proxy_headers.get(header_key)
-        
+
         # Remove OpenTelemetry span from metadata as it's not JSON serializable
         # The span is used internally for tracing but shouldn't be logged to external services
         if "litellm_parent_otel_span" in metadata:
@@ -118,36 +117,30 @@ class HeliconeLogger:
 
         return metadata
 
-    def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
-    ):
+    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
         # Method definition
         try:
-            print_verbose(
-                f"Helicone Logging - Enters logging function for model {model}"
-            )
+            print_verbose(f"Helicone Logging - Enters logging function for model {model}")
             litellm_params = kwargs.get("litellm_params", {})
+            custom_llm_provider = litellm_params.get("custom_llm_provider", "")
             kwargs.get("litellm_call_id", None)
             metadata = litellm_params.get("metadata", {}) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
+
+            # Check if model is a vertex_ai model
+            is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
+
             model = (
                 model
-                if any(
-                    accepted_model in model
-                    for accepted_model in self.helicone_model_list
-                )
+                if any(accepted_model in model for accepted_model in self.helicone_model_list) or is_vertex_ai
                 else "gpt-3.5-turbo"
             )
             provider_request = {"model": model, "messages": messages}
-            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(
-                response_obj, litellm.ModelResponse
-            ):
+            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(response_obj, litellm.ModelResponse):
                 response_obj = response_obj.json()
 
-            if "claude" in model:
-                response_obj = self.claude_mapping(
-                    model=model, messages=messages, response_obj=response_obj
-                )
+            if "claude" in model and not is_vertex_ai:
+                response_obj = self.claude_mapping(model=model, messages=messages, response_obj=response_obj)
 
             providerResponse = {
                 "json": response_obj,
@@ -158,21 +151,23 @@ class HeliconeLogger:
             # Code to be executed
             provider_url = self.provider_url
             url = f"{self.api_base}/oai/v1/log"
-            if "claude" in model:
+            if "claude" in model and not is_vertex_ai:
                 url = f"{self.api_base}/anthropic/v1/log"
                 provider_url = "https://api.anthropic.com/v1/messages"
+            elif is_vertex_ai:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://aiplatform.googleapis.com/v1"
+            elif "gemini" in model:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://generativelanguage.googleapis.com/v1beta"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
             }
             start_time_seconds = int(start_time.timestamp())
-            start_time_milliseconds = int(
-                (start_time.timestamp() - start_time_seconds) * 1000
-            )
+            start_time_milliseconds = int((start_time.timestamp() - start_time_seconds) * 1000)
             end_time_seconds = int(end_time.timestamp())
-            end_time_milliseconds = int(
-                (end_time.timestamp() - end_time_seconds) * 1000
-            )
+            end_time_milliseconds = int((end_time.timestamp() - end_time_seconds) * 1000)
             meta = {"Helicone-Auth": f"Bearer {self.key}"}
             meta.update(metadata)
             data = {

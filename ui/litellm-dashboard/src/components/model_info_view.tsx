@@ -1,5 +1,6 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -17,6 +18,7 @@ import {
   Button as TremorButton,
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
@@ -30,6 +32,7 @@ import {
   CredentialItem,
   credentialCreateCall,
   credentialGetCall,
+  credentialListCall,
   getGuardrailsList,
   modelDeleteCall,
   modelInfoV1Call,
@@ -38,6 +41,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
@@ -52,6 +56,18 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
+// The /model/info response redacts secrets by masking them (e.g. "sk-1****2345"),
+// not by removing them. The edit form must never echo a masked value back on save:
+// the backend would encrypt the asterisks and overwrite the real secret. A run of
+// 2+ mask chars only appears in masker output (real config — incl. wildcard model
+// names like "openai/*" — carries at most a single "*"), so this reliably detects a
+// redacted value without a provider-metadata lookup. API-key rotation goes through
+// UpdateModelCredentialsModal instead, which sends only the new key.
+const isMaskedSecret = (value: unknown): boolean => typeof value === "string" && /\*{2,}/.test(value);
+
+const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(params).filter(([, value]) => !isMaskedSecret(value)));
+
 export default function ModelInfoView({
   modelId,
   onClose,
@@ -62,10 +78,12 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
+  const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
+  const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -75,6 +93,7 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -105,7 +124,10 @@ export default function ModelInfoView({
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
-  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
+  const isAutoRouter =
+    modelData?.litellm_params?.auto_router_config != null ||
+    modelData?.litellm_params?.complexity_router_config != null ||
+    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
@@ -191,10 +213,21 @@ export default function ModelInfoView({
       }
     };
 
+    const fetchCredentials = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await credentialListCall(accessToken);
+        setCredentialsList(response.credentials || []);
+      } catch (error) {
+        console.error("Failed to fetch credentials:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
     fetchGuardrails();
     fetchTags();
+    fetchCredentials();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -220,6 +253,7 @@ export default function ModelInfoView({
       let parsedExtraParams: Record<string, any> = {};
       try {
         parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
+        delete parsedExtraParams.litellm_credential_name;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
@@ -238,12 +272,72 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // Explicit null signals the backend to remove the pricing override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
+      }
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.output_cost_per_token = null;
+        }
+      }
+
+      // Cache Read Cost:
+      //   - explicit value provided → use it
+      //   - field touched but empty → explicit null (signals backend to remove override)
+      //   - only input_cost touched → fall back to input_cost (guarded against null)
+      if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
+        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
+          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
+        } else if (form.isFieldTouched("cache_read_cost")) {
+          updatedLitellmParams.cache_read_input_token_cost = null;
+        } else if (
+          updatedLitellmParams.input_cost_per_token !== undefined &&
+          updatedLitellmParams.input_cost_per_token !== null
+        ) {
+          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
+        }
+      }
+
+      // Cache Write Cost: explicit value if provided, else explicit null so the
+      // backend removes the override and falls back to the model-level default.
+      // Sending 0 here would persist a zero rate even when the user intended to unset it.
+      if (form.isFieldTouched("cache_write_cost")) {
+        if (
+          values.cache_write_cost !== undefined &&
+          values.cache_write_cost !== null &&
+          values.cache_write_cost !== ""
+        ) {
+          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.cache_creation_input_token_cost = null;
+        }
+      }
+
+      if (values.litellm_credential_name) {
+        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      } else {
+        delete updatedLitellmParams.litellm_credential_name;
+      }
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
+      }
+      if (values.vector_store_ids?.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else if (values.vector_store_ids !== undefined) {
+        // User explicitly cleared previously-set vector stores — send [] to clear on backend
+        updatedLitellmParams.vector_store_ids = [];
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
@@ -276,9 +370,15 @@ export default function ModelInfoView({
         return;
       }
 
+      // Final guard: never PATCH a redacted secret. The /model/info snapshot that
+      // seeds this form masks secrets, and any save re-sends the whole params blob;
+      // without this strip a masked value would be re-encrypted over the real secret.
+      // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
+      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+
       const updateData = {
         model_name: values.model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
@@ -288,7 +388,7 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
@@ -345,6 +445,12 @@ export default function ModelInfoView({
           model: localModelData.litellm_model_name,
         },
         {
+          // `id` is required to disambiguate when multiple deployments
+          // share the same model_name (e.g. wildcard `openai/*` with two
+          // different `api_base` values for failover). Without it the
+          // backend silently falls back to deployments[0] and probes
+          // the wrong endpoint.
+          id: localModelData.model_info?.id,
           mode: localModelData.model_info?.mode,
         },
         localModelData.model_info?.mode,
@@ -421,44 +527,53 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["model-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
         <div className="flex gap-2">
-          <TremorButton
-            variant="secondary"
-            icon={RefreshIcon}
+          <Button
+            icon={<RefreshIcon className="h-4 w-4" />}
             onClick={handleTestConnection}
             className="flex items-center gap-2"
             data-testid="test-connection-button"
           >
             Test Connection
-          </TremorButton>
+          </Button>
 
-          <TremorButton
-            icon={KeyIcon}
-            variant="secondary"
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
+            onClick={() => setIsUpdateCredentialsModalOpen(true)}
+            className="flex items-center"
+            disabled={!canEditModel}
+            data-testid="update-api-key-button"
+          >
+            Update API Key
+          </Button>
+
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
             onClick={() => setIsCredentialModalOpen(true)}
             className="flex items-center"
             disabled={!isAdmin}
             data-testid="reuse-credentials-button"
           >
             Re-use Credentials
-          </TremorButton>
-          <TremorButton
-            icon={TrashIcon}
-            variant="secondary"
+          </Button>
+          <Button
+            danger
+            icon={<TrashIcon className="h-4 w-4" />}
             onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
+            className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
             Delete Model
-          </TremorButton>
+          </Button>
         </div>
       </div>
 
@@ -535,10 +650,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -598,6 +713,22 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    cache_read_cost:
+                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_read_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_read_input_token_cost !== null
+                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
+                          : null,
+                    cache_write_cost:
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_creation_input_token_cost !== null
+                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
+                          : null,
                     cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
                     cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
@@ -606,9 +737,23 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
+                    vector_store_ids:
+                      Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
+                      localModelData.litellm_params.vector_store_ids.length > 0
+                        ? localModelData.litellm_params.vector_store_ids
+                        : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
-                    litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
+                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
+                    litellm_extra_params: JSON.stringify(
+                      Object.fromEntries(
+                        Object.entries(localModelData.litellm_params || {}).filter(
+                          ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
+                        ),
+                      ),
+                      null,
+                      2,
+                    ),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -622,7 +767,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.model_name}</div>
                         )}
                       </div>
 
@@ -633,7 +778,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter LiteLLM model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.litellm_model_name}</div>
                         )}
                       </div>
 
@@ -644,7 +789,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.input_cost_per_token
                               ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
@@ -661,11 +806,57 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.output_cost_per_token
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_read_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_read_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_read_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_read_input_token_cost !== null
+                                ? (localModelData.model_info.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Write Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_write_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData?.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_creation_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_creation_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_creation_input_token_cost !== null
+                                ? (localModelData.model_info.cache_creation_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
@@ -678,7 +869,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter API base" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.api_base || "Not Set"}
                           </div>
                         )}
@@ -691,7 +882,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter custom LLM provider" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.custom_llm_provider || "Not Set"}
                           </div>
                         )}
@@ -704,7 +895,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter organization" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.organization || "Not Set"}
                           </div>
                         )}
@@ -717,7 +908,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter TPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tpm || "Not Set"}
                           </div>
                         )}
@@ -730,7 +921,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter RPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.rpm || "Not Set"}
                           </div>
                         )}
@@ -743,7 +934,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter max retries" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.max_retries || "Not Set"}
                           </div>
                         )}
@@ -756,7 +947,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.timeout || "Not Set"}
                           </div>
                         )}
@@ -769,7 +960,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter stream timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.stream_timeout || "Not Set"}
                           </div>
                         )}
@@ -795,7 +986,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.model_info?.access_groups ? (
                               Array.isArray(localModelData.model_info.access_groups) ? (
                                 localModelData.model_info.access_groups.length > 0 ? (
@@ -854,7 +1045,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.guardrails ? (
                               Array.isArray(localModelData.litellm_params.guardrails) ? (
                                 localModelData.litellm_params.guardrails.length > 0 ? (
@@ -884,6 +1075,58 @@ export default function ModelInfoView({
                       </div>
 
                       <div>
+                        <Text className="font-medium">
+                          Attached Knowledge Bases (RAG)
+                          <Tooltip title="Vector stores used for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/knowledgebase"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="vector_store_ids" className="mb-0">
+                            <VectorStoreSelector
+                              onChange={() => {}}
+                              accessToken={accessToken || ""}
+                              placeholder="Select knowledge bases (optional)"
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData.litellm_params?.vector_store_ids ? (
+                              Array.isArray(localModelData.litellm_params.vector_store_ids) ? (
+                                localModelData.litellm_params.vector_store_ids.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.vector_store_ids.map(
+                                      (vsId: string, index: number) => (
+                                        <span
+                                          key={index}
+                                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                                        >
+                                          {vsId}
+                                        </span>
+                                      ),
+                                    )}
+                                  </div>
+                                ) : (
+                                  "No knowledge bases attached"
+                                )
+                              ) : (
+                                String(localModelData.litellm_params.vector_store_ids)
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
                         <Text className="font-medium">Tags</Text>
                         {isEditing ? (
                           <Form.Item name="tags" className="mb-0">
@@ -904,7 +1147,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tags ? (
                               Array.isArray(localModelData.litellm_params.tags) ? (
                                 localModelData.litellm_params.tags.length > 0 ? (
@@ -930,6 +1173,33 @@ export default function ModelInfoView({
                           </div>
                         )}
                       </div>
+                      <div>
+                        <Text className="font-medium">Existing Credentials</Text>
+                        {isEditing ? (
+                          <Form.Item name="litellm_credential_name" className="mb-0">
+                            <Select
+                              showSearch
+                              placeholder="Select or search for existing credentials"
+                              optionFilterProp="children"
+                              filterOption={(input, option) =>
+                                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                              }
+                              options={[
+                                { value: "", label: "None" },
+                                ...credentialsList.map((credential) => ({
+                                  value: credential.credential_name,
+                                  label: credential.credential_name,
+                                })),
+                              ]}
+                              allowClear
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData.litellm_params?.litellm_credential_name || "Manual"}
+                          </div>
+                        )}
+                      </div>
 
                       {isWildcardModel && (
                         <div>
@@ -943,23 +1213,25 @@ export default function ModelInfoView({
                                 allowClear
                                 options={(() => {
                                   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
-                                  return modelHubData?.data
-                                    ?.filter((model: any) => {
-                                      // Filter by provider to match the wildcard provider
-                                      return (
-                                        model.providers?.includes(wildcardProvider) &&
-                                        model.model_group !== modelData.litellm_model_name
-                                      );
-                                    })
-                                    .map((model: any) => ({
-                                      value: model.model_group,
-                                      label: model.model_group,
-                                    })) || [];
+                                  return (
+                                    modelHubData?.data
+                                      ?.filter((model: any) => {
+                                        // Filter by provider to match the wildcard provider
+                                        return (
+                                          model.providers?.includes(wildcardProvider) &&
+                                          model.model_group !== modelData.litellm_model_name
+                                        );
+                                      })
+                                      .map((model: any) => ({
+                                        value: model.model_group,
+                                        label: model.model_group,
+                                      })) || []
+                                  );
                                 })()}
                               />
                             </Form.Item>
                           ) : (
-                            <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                               {localModelData.model_info?.health_check_model || "Not Set"}
                             </div>
                           )}
@@ -976,7 +1248,7 @@ export default function ModelInfoView({
                       ) : (
                         <div>
                           <Text className="font-medium">Cache Control</Text>
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.cache_control_injection_points ? (
                               <div>
                                 <p>Enabled</p>
@@ -1009,8 +1281,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.model_info, null, 2)}
                             </pre>
                           </div>
@@ -1042,8 +1314,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.litellm_params, null, 2)}
                             </pre>
                           </div>
@@ -1051,7 +1323,9 @@ export default function ModelInfoView({
                       </div>
                       <div>
                         <Text className="font-medium">Team ID</Text>
-                        <div className="mt-1 p-2 bg-gray-50 rounded">{modelData.model_info.team_id || "Not Set"}</div>
+                        <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                          {modelData.model_info.team_id || "Not Set"}
+                        </div>
                       </div>
                     </div>
 
@@ -1083,7 +1357,9 @@ export default function ModelInfoView({
 
           <TabPanel>
             <Card>
-              <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-gray-100 p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(modelData, null, 2)}
+              </pre>
             </Card>
           </TabPanel>
         </TabPanels>
@@ -1134,6 +1410,18 @@ export default function ModelInfoView({
         >
           <Text>{modelData.litellm_params.litellm_credential_name}</Text>
         </Modal>
+      )}
+
+      {isUpdateCredentialsModalOpen && accessToken && (
+        <UpdateModelCredentialsModal
+          open={isUpdateCredentialsModalOpen}
+          onCancel={() => setIsUpdateCredentialsModalOpen(false)}
+          accessToken={accessToken}
+          modelId={modelId}
+          onUpdated={() => {
+            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+          }}
+        />
       )}
 
       {/* Edit Auto Router Modal */}

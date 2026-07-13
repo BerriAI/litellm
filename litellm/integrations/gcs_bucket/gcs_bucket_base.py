@@ -7,10 +7,14 @@ from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
     create_mock_gcs_client,
     mock_vertex_auth_methods,
 )
-        
+
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.cloud_storage_security import (
+    encode_gcs_object_name_for_url,
+    split_configured_cloud_bucket_name,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -28,14 +32,12 @@ IAM_AUTH_KEY = "IAM_AUTH"
 class GCSBucketBase(CustomBatchLogger):
     def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
         self.is_mock_mode = should_use_gcs_mock()
-        
+
         if self.is_mock_mode:
             mock_vertex_auth_methods()
             create_mock_gcs_client()
-        
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
         _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
         self.path_service_account_json: Optional[str] = _path_service_account
@@ -70,7 +72,7 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug("constructed auth_header [set=%s]", auth_header is not None)
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -85,10 +87,10 @@ class GCSBucketBase(CustomBatchLogger):
         from litellm import vertex_chat_completion
 
         # Get project_id from environment if available, otherwise None
-        # This helps support use of this library to auth to pull secrets 
+        # This helps support use of this library to auth to pull secrets
         # from Secret Manager.
         project_id = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
-        
+
         _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=project_id,
@@ -106,7 +108,7 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug("constructed auth_header [set=%s]", auth_header is not None)
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -129,15 +131,13 @@ class GCSBucketBase(CustomBatchLogger):
             - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
 
         """
-        if "/" in bucket_name:
-            bucket_name, prefix = bucket_name.split("/", 1)
+        bucket_name, prefix = split_configured_cloud_bucket_name(bucket_name)
+        if prefix:
             object_name = f"{prefix}/{object_name}"
             return bucket_name, object_name
         return bucket_name, object_name
 
-    async def get_gcs_logging_config(
-        self, kwargs: Optional[Dict[str, Any]] = {}
-    ) -> GCSLoggingConfig:
+    async def get_gcs_logging_config(self, kwargs: Optional[Dict[str, Any]] = {}) -> GCSLoggingConfig:
         """
         This function is used to get the GCS logging config for the GCS Bucket Logger.
         It checks if the dynamic parameters are provided in the kwargs and uses them to get the GCS logging config.
@@ -146,25 +146,21 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+            "standard_callback_dynamic_params", None
+        )
 
         bucket_name: str
         path_service_account: Optional[str]
         if standard_callback_dynamic_params is not None:
             verbose_logger.debug("Using dynamic GCS logging")
-            verbose_logger.debug(
-                "standard_callback_dynamic_params: %s", standard_callback_dynamic_params
-            )
+            verbose_logger.debug("standard_callback_dynamic_params: %s", standard_callback_dynamic_params)
 
             _bucket_name: Optional[str] = (
-                standard_callback_dynamic_params.get("gcs_bucket_name", None)
-                or self.BUCKET_NAME
+                standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME
             )
             _path_service_account: Optional[str] = (
-                standard_callback_dynamic_params.get("gcs_path_service_account", None)
-                or self.path_service_account_json
+                standard_callback_dynamic_params.get("gcs_path_service_account", None) or self.path_service_account_json
             )
 
             if _bucket_name is None:
@@ -173,9 +169,7 @@ class GCSBucketBase(CustomBatchLogger):
                 )
             bucket_name = _bucket_name
             path_service_account = _path_service_account
-            vertex_instance = await self.get_or_create_vertex_instance(
-                credentials=path_service_account
-            )
+            vertex_instance = await self.get_or_create_vertex_instance(credentials=path_service_account)
         else:
             # If no dynamic parameters, use the default instance
             if self.BUCKET_NAME is None:
@@ -184,9 +178,7 @@ class GCSBucketBase(CustomBatchLogger):
                 )
             bucket_name = self.BUCKET_NAME
             path_service_account = self.path_service_account_json
-            vertex_instance = await self.get_or_create_vertex_instance(
-                credentials=path_service_account
-            )
+            vertex_instance = await self.get_or_create_vertex_instance(credentials=path_service_account)
 
         return GCSLoggingConfig(
             bucket_name=bucket_name,
@@ -194,9 +186,7 @@ class GCSBucketBase(CustomBatchLogger):
             path_service_account=path_service_account,
         )
 
-    async def get_or_create_vertex_instance(
-        self, credentials: Optional[str]
-    ) -> VertexBase:
+    async def get_or_create_vertex_instance(self, credentials: Optional[str]) -> VertexBase:
         """
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
@@ -232,9 +222,7 @@ class GCSBucketBase(CustomBatchLogger):
         https://cloud.google.com/storage/docs/downloading-objects#download-object-json
         """
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs=kwargs
-            )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(kwargs=kwargs)
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],
@@ -244,6 +232,7 @@ class GCSBucketBase(CustomBatchLogger):
                 bucket_name=bucket_name,
                 object_name=object_name,
             )
+            object_name = encode_gcs_object_name_for_url(object_name)
 
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
 
@@ -251,14 +240,10 @@ class GCSBucketBase(CustomBatchLogger):
             response = await self.async_httpx_client.get(url=url, headers=headers)
 
             if response.status_code != 200:
-                verbose_logger.error(
-                    "GCS object download error: %s", str(response.text)
-                )
+                verbose_logger.error("GCS object download error: %s", str(response.text))
                 return None
 
-            verbose_logger.debug(
-                "GCS object download response status code: %s", response.status_code
-            )
+            verbose_logger.debug("GCS object download response status code: %s", response.status_code)
 
             # Return the content of the downloaded object
             return response.content
@@ -272,9 +257,7 @@ class GCSBucketBase(CustomBatchLogger):
         Delete an object from GCS.
         """
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs=kwargs
-            )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(kwargs=kwargs)
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],
@@ -284,6 +267,7 @@ class GCSBucketBase(CustomBatchLogger):
                 bucket_name=bucket_name,
                 object_name=object_name,
             )
+            object_name = encode_gcs_object_name_for_url(object_name)
 
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
 
@@ -330,10 +314,11 @@ class GCSBucketBase(CustomBatchLogger):
             bucket_name=bucket_name,
             object_name=object_name,
         )
+        encoded_object_name = encode_gcs_object_name_for_url(object_name)
 
         response = await self.async_httpx_client.post(
             headers=headers,
-            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
+            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}",
             data=json_logged_payload,
         )
 

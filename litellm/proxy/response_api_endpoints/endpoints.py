@@ -1,14 +1,21 @@
 import asyncio
+import json
 import time
-from typing import Any, AsyncIterator, Optional, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 from uuid import uuid4
 
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
@@ -84,12 +91,12 @@ async def responses_api(
     )
 
     data = await _read_request_body(request=request)
-    
+
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
         should_use_polling_for_request,
     )
-    
+
     should_use_polling = should_use_polling_for_request(
         background_mode=data.get("background", False),
         polling_via_cache_enabled=polling_via_cache_enabled,
@@ -98,7 +105,7 @@ async def responses_api(
         llm_router=llm_router,
         native_background_mode=native_background_mode,
     )
-    
+
     # If polling is enabled, use polling mode
     if should_use_polling:
         from litellm.proxy.response_polling.background_streaming import (
@@ -107,27 +114,56 @@ async def responses_api(
         from litellm.proxy.response_polling.polling_handler import (
             ResponsePollingHandler,
         )
-        
-        verbose_proxy_logger.info(
-            f"Starting background response with polling for model={data.get('model')}"
-        )
-        
+
+        verbose_proxy_logger.info(f"Starting background response with polling for model={data.get('model')}")
+
+        # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
+        # polling ID. This ensures rate-limited requests get a synchronous 429
+        # instead of a polling ID that immediately fails in the background task.
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+        try:
+            data, _logging_obj = await processor.common_processing_pre_call_logic(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=None,
+                route_type="aresponses",
+                llm_router=llm_router,
+            )
+        except Exception as e:
+            raise await processor._handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
+
         # Initialize polling handler with configured TTL (from global config)
         polling_handler = ResponsePollingHandler(
             redis_cache=redis_usage_cache,
-            ttl=polling_cache_ttl  # Global var set at startup
+            ttl=polling_cache_ttl,  # Global var set at startup
         )
-        
+
         # Generate polling ID
         polling_id = ResponsePollingHandler.generate_polling_id()
-        
+
         # Create initial state in Redis
         initial_state = await polling_handler.create_initial_state(
             polling_id=polling_id,
             request_data=data,
         )
-        
-        # Start background task to stream and update cache
+
+        # Start background task to stream and update cache.
+        # Pass pre-processed data so the background task skips pre-call logic
+        # (rate limits, guardrails already checked above).
         asyncio.create_task(
             background_streaming_task(
                 polling_id=polling_id,
@@ -149,11 +185,11 @@ async def responses_api(
                 version=version,
             )
         )
-        
+
         # Return OpenAI Response object format (initial state)
         # https://platform.openai.com/docs/api-reference/responses/object
         return initial_state
-    
+
     # Normal response flow
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -175,24 +211,25 @@ async def responses_api(
             user_api_base=user_api_base,
             version=version,
         )
-        
+
         # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
                 from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
                     _PROXY_LiteLLMManagedFiles,
-                )                
+                )
+
                 managed_files_obj = cast(
                     Optional[_PROXY_LiteLLMManagedFiles],
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
-                
+
                 if managed_files_obj and llm_router:
                     try:
                         # Get the actual deployment model_id from hidden params
                         hidden_params = getattr(response, "_hidden_params", {}) or {}
                         model_id = hidden_params.get("model_id", None)
-                        
+
                         if not model_id:
                             verbose_proxy_logger.warning(
                                 f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
@@ -207,7 +244,7 @@ async def responses_api(
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
                         )
-                        
+
                         verbose_proxy_logger.info(
                             f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
                         )
@@ -215,7 +252,7 @@ async def responses_api(
                         verbose_proxy_logger.error(
                             f"Failed to store background response in managed objects table: {str(e)}"
                         )
-        
+
         return response
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
@@ -234,9 +271,7 @@ async def responses_api(
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(
-                input_tokens=0, output_tokens=0, total_tokens=0
-            ),
+            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
         )
         return response_obj
     except Exception as e:
@@ -298,26 +333,26 @@ async def cursor_chat_completions(
     from litellm.types.utils import ModelResponse
 
     data = await _read_request_body(request=request)
-    
+
     # Convert 'messages' to 'input' for Responses API compatibility
     # Cursor sends 'messages' but Responses API expects 'input'
     if "messages" in data and "input" not in data:
         data["input"] = data.pop("messages")
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
     def cursor_data_generator(response, user_api_key_dict, request_data):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
-        
+
         This generator is used for the cursor endpoint to convert Responses API format responses
         to chat completion format that Cursor IDE expects.
-        
+
         Args:
             response: The streaming response (BaseResponsesAPIStreamingIterator or other)
             user_api_key_dict: User API key authentication dict
             request_data: Request data containing model, logging_obj, etc.
-        
+
         Returns:
             Async generator that yields SSE-formatted chat completion chunks
         """
@@ -463,24 +498,24 @@ async def get_response(
         if not redis_usage_cache:
             raise HTTPException(
                 status_code=500,
-                detail="Redis cache not configured. Polling requires Redis."
+                detail="Redis cache not configured. Polling requires Redis.",
             )
-        
+
         polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
-        
+
         # Get current state from cache
         state = await polling_handler.get_state(response_id)
-        
+
         if not state:
             raise HTTPException(
                 status_code=404,
-                detail=f"Polling response {response_id} not found or expired"
+                detail=f"Polling response {response_id} not found or expired",
             )
-        
+
         # Return the whole state directly (OpenAI Response object format)
         # https://platform.openai.com/docs/api-reference/responses/object
         return state
-    
+
     # Normal provider response flow
     data = await _read_request_body(request=request)
     data["response_id"] = response_id
@@ -569,37 +604,24 @@ async def delete_response(
     if ResponsePollingHandler.is_polling_id(response_id):
         # Handle polling response deletion
         if not redis_usage_cache:
-            raise HTTPException(
-                status_code=500,
-                detail="Redis cache not configured."
-            )
-        
+            raise HTTPException(status_code=500, detail="Redis cache not configured.")
+
         polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
-        
+
         # Get state to verify access
         state = await polling_handler.get_state(response_id)
-        
+
         if not state:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Polling response {response_id} not found"
-            )
-        
+            raise HTTPException(status_code=404, detail=f"Polling response {response_id} not found")
+
         # Delete from cache
         success = await polling_handler.delete_polling(response_id)
-        
+
         if success:
-            return DeleteResponseResult(
-                id=response_id,
-                object="response",
-                deleted=True
-            )
+            return DeleteResponseResult(id=response_id, object="response", deleted=True)
         else:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to delete polling response"
-            )
-    
+            raise HTTPException(status_code=500, detail="Failed to delete polling response")
+
     # Normal provider response flow
     data = await _read_request_body(request=request)
     data["response_id"] = response_id
@@ -843,37 +865,28 @@ async def cancel_response(
     if ResponsePollingHandler.is_polling_id(response_id):
         # Handle polling response cancellation
         if not redis_usage_cache:
-            raise HTTPException(
-                status_code=500,
-                detail="Redis cache not configured."
-            )
-        
+            raise HTTPException(status_code=500, detail="Redis cache not configured.")
+
         polling_handler = ResponsePollingHandler(redis_cache=redis_usage_cache)
-        
+
         # Get current state to verify it exists
         state = await polling_handler.get_state(response_id)
-        
+
         if not state:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Polling response {response_id} not found"
-            )
-        
+            raise HTTPException(status_code=404, detail=f"Polling response {response_id} not found")
+
         # Cancel the polling response (sets status to "cancelled")
         success = await polling_handler.cancel_polling(response_id)
-        
+
         if success:
             # Fetch the updated state with cancelled status
             updated_state = await polling_handler.get_state(response_id)
-            
+
             # Return the whole state directly (now with status="cancelled")
             return updated_state
         else:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to cancel polling response"
-            )
-    
+            raise HTTPException(status_code=500, detail="Failed to cancel polling response")
+
     # Normal provider response flow
     data = await _read_request_body(request=request)
     data["response_id"] = response_id
@@ -904,3 +917,265 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+async def _read_ws_model_from_first_frame(
+    websocket: WebSocket,
+) -> Optional[tuple]:
+    """Read the first WS frame and return (model, raw_message), or None on error.
+
+    Sends an appropriate error frame and closes the socket before returning None.
+    """
+    try:
+        first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="Timed out waiting for first message")
+        return None
+    except WebSocketDisconnect:
+        return None
+    except Exception:
+        verbose_proxy_logger.exception("Responses WebSocket error reading first message")
+        await websocket.close(code=1011, reason="Internal server error")
+        return None
+
+    try:
+        first_event = json.loads(first_message)
+    except json.JSONDecodeError:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message is not valid JSON.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid JSON in first message")
+        return None
+
+    if not isinstance(first_event, dict) or first_event.get("type") != "response.create":
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message must be a response.create JSON object.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid first message")
+        return None
+
+    model = _extract_model_from_first_ws_event(first_event)
+    if not model:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="No model provided")
+        return None
+
+    return model, first_message
+
+
+def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
+    """Extract model from a response.create WS event, handling flat and nested formats.
+
+    Flat:   {"type": "response.create", "model": "gpt-4o", ...}
+    Nested: {"type": "response.create", "response": {"model": "gpt-4o", ...}}
+    """
+    if not isinstance(first_event, dict):
+        return None
+    nested = first_event.get("response")
+    return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
+
+
+async def _enforce_responses_ws_first_frame_model_auth(
+    request: Request,
+    model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Optional[Any],
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import (
+        _enforce_key_and_fallback_model_access,
+        _run_centralized_common_checks,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_model_list,
+        master_key,
+        user_custom_auth,
+    )
+
+    request_data = {"model": model}
+    route = request.scope.get("path") or "/v1/responses"
+    if master_key is None and not (
+        general_settings.get("enable_jwt_auth", False)
+        or general_settings.get("enable_oauth2_auth", False)
+        or general_settings.get("enable_oauth2_proxy_auth", False)
+    ):
+        return
+    if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
+        return
+    await _enforce_key_and_fallback_model_access(
+        valid_token=user_api_key_dict,
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_model_list=llm_model_list,
+        llm_router=llm_router,
+    )
+    await _run_centralized_common_checks(
+        user_api_key_auth_obj=user_api_key_dict,
+        request=request,
+        request_data=request_data,
+        route=route,
+    )
+
+
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: Optional[str] = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+    from litellm.proxy.route_llm_request import route_request
+
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
+    requested_protocols = [
+        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
+    ]
+    accept_kwargs: dict = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    first_message: Optional[str] = None
+    if not model:
+        result = await _read_ws_model_from_first_frame(websocket)
+        if result is None:
+            return
+        model, first_message = result
+
+    data: Dict[str, Any] = {
+        "model": model,
+        "websocket": websocket,
+    }
+    if first_message is not None:
+        data["first_message"] = first_message
+
+    # Construct a synthetic Request for pre-call processing
+    headers_list = list(websocket.scope.get("headers") or [])
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/responses",
+        "headers": headers_list,
+    }
+    request = Request(scope=scope)
+    request._url = websocket.url
+
+    _body_bytes = json.dumps({"model": model}).encode()
+
+    async def return_body():
+        return _body_bytes
+
+    request.body = return_body  # type: ignore
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits)
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        if first_message is not None:
+            await _enforce_responses_ws_first_frame_model_auth(
+                request=request,
+                model=model,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_aresponses_websocket",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1008, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream provider
+    try:
+        data["user_api_key_dict"] = user_api_key_dict
+        llm_call = await route_request(
+            data=data,
+            route_type="_aresponses_websocket",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        await llm_call
+    except Exception:
+        verbose_proxy_logger.exception("Responses WebSocket error")
+        await websocket.close(code=1011, reason="Internal server error")

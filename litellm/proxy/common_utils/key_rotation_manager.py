@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
     LITELLM_KEY_ROTATION_GRACE_PERIOD,
+    LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS,
 )
 from litellm.proxy._types import (
     GenerateKeyResponse,
@@ -23,6 +24,12 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import (
+    DeprecatedVerificationTokenRepository,
+)
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 
 class KeyRotationManager:
@@ -30,14 +37,42 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient):
+    def __init__(self, prisma_client: PrismaClient, pod_lock_manager=None):
         self.prisma_client = prisma_client
+        self.pod_lock_manager = pod_lock_manager
 
     async def process_rotations(self):
         """
-        Main entry point - find and rotate keys that are due for rotation
+        Main entry point - find and rotate keys that are due for rotation.
+        Uses PodLockManager to ensure only one pod runs rotation in multi-pod deployments.
         """
+        from litellm.constants import KEY_ROTATION_JOB_NAME
+
+        lock_acquired = False
         try:
+            # If we have a pod lock manager with Redis, try to acquire the lock
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                # Use a dedicated lock TTL (default 600s) instead of the check interval
+                # (which defaults to 86400s / 24h). Using the check interval would create
+                # a 24-hour deadlock window if a pod crashes before releasing the lock.
+                lock_ttl = max(
+                    LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS, 300
+                )  # At least 5 minutes, configurable via LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=KEY_ROTATION_JOB_NAME,
+                        ttl=lock_ttl,
+                    )
+                    or False
+                )
+                if not lock_acquired:
+                    verbose_proxy_logger.warning(
+                        "Key rotation: another pod is already running rotation "
+                        "or Redis lock acquisition failed — skipping this cycle. "
+                        "Keys will be rotated on the next cycle."
+                    )
+                    return
+
             verbose_proxy_logger.info("Starting scheduled key rotation check...")
 
             # Clean up expired deprecated keys first
@@ -50,30 +85,26 @@ class KeyRotationManager:
                 verbose_proxy_logger.debug("No keys are due for rotation at this time")
                 return
 
-            verbose_proxy_logger.info(
-                f"Found {len(keys_to_rotate)} keys due for rotation"
-            )
+            verbose_proxy_logger.info(f"Found {len(keys_to_rotate)} keys due for rotation")
 
             # Rotate each key
             for key in keys_to_rotate:
                 try:
                     await self._rotate_key(key)
-                    key_identifier = key.key_name or (
-                        key.token[:8] + "..." if key.token else "unknown"
-                    )
-                    verbose_proxy_logger.info(
-                        f"Successfully rotated key: {key_identifier}"
-                    )
+                    key_identifier = key.key_name or (key.token[:8] + "..." if key.token else "unknown")
+                    verbose_proxy_logger.info(f"Successfully rotated key: {key_identifier}")
                 except Exception as e:
-                    key_identifier = key.key_name or (
-                        key.token[:8] + "..." if key.token else "unknown"
-                    )
-                    verbose_proxy_logger.error(
-                        f"Failed to rotate key {key_identifier}: {e}"
-                    )
+                    key_identifier = key.key_name or (key.token[:8] + "..." if key.token else "unknown")
+                    verbose_proxy_logger.error(f"Failed to rotate key {key_identifier}: {e}")
 
         except Exception as e:
             verbose_proxy_logger.error(f"Key rotation process failed: {e}")
+        finally:
+            # Only release the lock if it was actually acquired
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=KEY_ROTATION_JOB_NAME,
+                )
 
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """
@@ -85,20 +116,14 @@ class KeyRotationManager:
         """
         now = datetime.now(timezone.utc)
 
-        keys_with_rotation = (
-            await self.prisma_client.db.litellm_verificationtoken.find_many(
-                where={
-                    "auto_rotate": True,  # Only keys marked for auto rotation
-                    "OR": [
-                        {
-                            "key_rotation_at": None
-                        },  # Keys that need initial rotation time setup
-                        {
-                            "key_rotation_at": {"lte": now}
-                        },  # Keys where rotation time has passed
-                    ],
-                }
-            )
+        keys_with_rotation = await VerificationTokenRepository(self.prisma_client).table.find_many(
+            where={
+                "auto_rotate": True,  # Only keys marked for auto rotation
+                "OR": [
+                    {"key_rotation_at": None},  # Keys that need initial rotation time setup
+                    {"key_rotation_at": {"lte": now}},  # Keys where rotation time has passed
+                ],
+            }
         )
 
         return keys_with_rotation
@@ -109,17 +134,13 @@ class KeyRotationManager:
         """
         try:
             now = datetime.now(timezone.utc)
-            result = await self.prisma_client.db.litellm_deprecatedverificationtoken.delete_many(
+            result = await DeprecatedVerificationTokenRepository(self.prisma_client).table.delete_many(
                 where={"revoke_at": {"lt": now}}
             )
             if result > 0:
-                verbose_proxy_logger.debug(
-                    "Cleaned up %s expired deprecated key(s)", result
-                )
+                verbose_proxy_logger.debug("Cleaned up %s expired deprecated key(s)", result)
         except Exception as e:
-            verbose_proxy_logger.debug(
-                "Deprecated key cleanup skipped (table may not exist): %s", e
-            )
+            verbose_proxy_logger.debug("Deprecated key cleanup skipped (table may not exist): %s", e)
 
     def _should_rotate_key(self, key: LiteLLM_VerificationToken, now: datetime) -> bool:
         """
@@ -159,15 +180,11 @@ class KeyRotationManager:
         )
 
         # Update the NEW key with rotation info (regenerate_key_fn creates a new token)
-        if (
-            isinstance(response, GenerateKeyResponse)
-            and response.token_id
-            and key.rotation_interval
-        ):
+        if isinstance(response, GenerateKeyResponse) and response.token_id and key.rotation_interval:
             # Calculate next rotation time using helper function
             now = datetime.now(timezone.utc)
             next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
-            await self.prisma_client.db.litellm_verificationtoken.update(
+            await VerificationTokenRepository(self.prisma_client).table.update(
                 where={"token": response.token_id},
                 data={
                     "rotation_count": (key.rotation_count or 0) + 1,

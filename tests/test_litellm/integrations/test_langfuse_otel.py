@@ -114,6 +114,9 @@ class TestLangfuseOtelIntegration:
             mock_set_attributes.assert_called_once_with(
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
+            mock_span.set_attribute.assert_any_call(
+                "langfuse.observation.type", "generation"
+            )
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
@@ -157,8 +160,12 @@ class TestLangfuseOtelIntegration:
 
         stub_module.LangFuseLogger = StubLFLogger  # type: ignore
 
-        # Register stub in sys.modules so import inside method succeeds
-        sys.modules["litellm.integrations.langfuse.langfuse"] = stub_module  # type: ignore
+        # Register stub in sys.modules so import inside method succeeds.
+        # Use monkeypatch so the real module is restored after the test runs,
+        # preventing sys.modules corruption that would break patch() targets in
+        # later tests (the patch would hit the stub while the real module's
+        # globals remain unpatched).
+        monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse", stub_module)  # type: ignore
 
         kwargs = {"litellm_params": {"metadata": {"foo": "bar"}}}
         extracted = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)

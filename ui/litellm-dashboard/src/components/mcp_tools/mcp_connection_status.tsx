@@ -1,31 +1,32 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { Button, Spin, Alert, Collapse } from "antd";
 import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
-import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPConnectionStatusProps {
-  accessToken: string | null;
-  oauthAccessToken?: string | null;
   formValues: Record<string, any>;
-  onToolsLoaded?: (tools: any[]) => void;
+  tools: any[];
+  isLoadingTools: boolean;
+  toolsError: string | null;
+  toolsErrorStatus?: number | null;
+  toolsErrorStackTrace: string | null;
+  canFetchTools: boolean;
+  fetchTools: () => Promise<void>;
 }
 
-const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, oauthAccessToken, formValues, onToolsLoaded }) => {
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools } = useTestMCPConnection({
-    accessToken,
-    oauthAccessToken,
-    formValues, 
-    enabled: true, // Auto-fetch when required fields are available
-  });
-
-  // Notify parent component when tools change
-  useEffect(() => {
-    onToolsLoaded?.(tools);
-  }, [tools, onToolsLoaded]);
-
+const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
+  formValues,
+  tools,
+  isLoadingTools,
+  toolsError,
+  toolsErrorStatus = null,
+  toolsErrorStackTrace,
+  canFetchTools,
+  fetchTools,
+}) => {
+  const isPreviewForbidden = toolsErrorStatus === 403;
   // Don't show anything if required fields aren't filled
-  if (!canFetchTools && !formValues.url) {
+  if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
   }
 
@@ -37,7 +38,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
           <Title>Connection Status</Title>
         </div>
 
-        {!canFetchTools && formValues.url && (
+        {!canFetchTools && (formValues.url || formValues.spec_path) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>Complete required fields to test connection</Text>
@@ -56,11 +57,13 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
                     : tools.length > 0
                       ? "Connection successful"
                       : toolsError
-                        ? "Connection failed"
+                        ? isPreviewForbidden
+                          ? "Ready to submit"
+                          : "Connection failed"
                         : "Ready to test connection"}
                 </Text>
                 <br />
-                <Text className="text-gray-500 text-sm">Server: {formValues.url}</Text>
+                <Text className="text-gray-500 text-sm">Server: {formValues.url || formValues.spec_path}</Text>
               </div>
 
               {isLoadingTools && (
@@ -77,7 +80,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
                 </div>
               )}
 
-              {toolsError && (
+              {toolsError && !isPreviewForbidden && (
                 <div className="flex items-center text-red-600">
                   <ExclamationCircleOutlined className="mr-1" />
                   <Text className="text-red-600 font-medium">Failed</Text>
@@ -92,7 +95,11 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
               </div>
             )}
 
-            {toolsError && (
+            {toolsError && isPreviewForbidden && (
+              <Alert message="Tool preview unavailable" description={toolsError} type="info" showIcon />
+            )}
+
+            {toolsError && !isPreviewForbidden && (
               <Alert
                 message="Connection Failed"
                 description={
@@ -105,18 +112,20 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
                             key: "stack-trace",
                             label: "Stack Trace",
                             children: (
-                              <pre style={{ 
-                                whiteSpace: "pre-wrap", 
-                                wordBreak: "break-word",
-                                fontSize: "12px",
-                                fontFamily: "monospace",
-                                margin: 0,
-                                padding: "8px",
-                                backgroundColor: "#f5f5f5",
-                                borderRadius: "4px",
-                                maxHeight: "400px",
-                                overflow: "auto"
-                              }}>
+                              <pre
+                                style={{
+                                  whiteSpace: "pre-wrap",
+                                  wordBreak: "break-word",
+                                  fontSize: "12px",
+                                  fontFamily: "monospace",
+                                  margin: 0,
+                                  padding: "8px",
+                                  backgroundColor: "#f5f5f5",
+                                  borderRadius: "4px",
+                                  maxHeight: "400px",
+                                  overflow: "auto",
+                                }}
+                              >
                                 {toolsErrorStackTrace}
                               </pre>
                             ),

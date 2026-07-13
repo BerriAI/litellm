@@ -1,4 +1,12 @@
 # conftest.py
+#
+# xdist-compatible test isolation for logging callback tests.
+#
+# Key design: capture litellm's true default values at conftest import time
+# (BEFORE test modules are imported) so we can reset to clean defaults before
+# each test. This is necessary because some test modules set module-level
+# globals like `litellm.num_retries = 3` which pollute state for all tests
+# in the same xdist worker.
 
 import importlib
 import os
@@ -10,61 +18,197 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-import asyncio
 
-@pytest.fixture(scope="session")
-def event_loop():
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+from tests._vcr_conftest_common import (  # noqa: E402,F401
+    VerboseReporterState,
+    _pin_multipart_boundary,
+    apply_vcr_auto_marker_to_items,
+    emit_cassette_cache_session_banner,
+    emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
+    install_live_call_probe,
+    record_vcr_outcome,
+    register_persister_if_enabled,
+    reset_vcr_diag_dir,
+    vcr_config_dict,
+)
+
+# vcrpy and respx both patch the httpx transport — applying both makes one
+# silently win, so respx-using files opt out of the auto-marker.
+_RESPX_CONFLICTING_FILES = frozenset(
+    {
+        "test_assemble_streaming_responses.py",
+        "test_langfuse_unit_tests.py",
+    }
+)
+
+_VCR_INCOMPATIBLE_FILES = frozenset()
+
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+
+
+_verbose_state = VerboseReporterState()
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return vcr_config_dict()
+
+
+def pytest_recording_configure(config, vcr):
+    register_persister_if_enabled(vcr)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+def pytest_configure(config):
+    _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
+
+
+def pytest_runtest_logreport(report):
+    _verbose_state.maybe_emit_verdict(report)
+
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+# ---- Capture true defaults at conftest import time ----
+# This runs BEFORE any test modules are imported, so values are clean.
+_DEFAULTS: dict = {}
+for _attr in _LIST_ATTRS:
+    if hasattr(litellm, _attr):
+        _val = getattr(litellm, _attr)
+        _DEFAULTS[_attr] = _val.copy() if isinstance(_val, list) else _val
+for _attr in _SCALAR_ATTRS:
+    if hasattr(litellm, _attr):
+        _DEFAULTS[_attr] = getattr(litellm, _attr)
+
 
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
+def isolate_litellm_state():
     """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
     """
-    curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
 
-    import litellm
-    from litellm import Router
-    import asyncio
+    # Flush cache and clear internal logger instances before test
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    # Clear cached logger instances (LangsmithLogger, SlackAlerting, etc.)
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
 
+    # Reset ALL attrs to their true defaults before the test runs.
+    # This undoes any module-level mutations from test file imports.
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(
+                litellm, attr, default.copy() if isinstance(default, list) else default
+            )
 
-    importlib.reload(litellm)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
 
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
-
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-
-    import asyncio
-
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
-    # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
-    asyncio.set_event_loop(None)  # Remove the reference to the loop
+    # Teardown: reset back to defaults again (belt-and-suspenders)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(
+                litellm, attr, default.copy() if isinstance(default, list) else default
+            )
+
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    sys.path.insert(0, os.path.abspath("../.."))
+
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
+    yield
 
 
 def pytest_collection_modifyitems(config, items):
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_files=_RESPX_CONFLICTING_FILES | _VCR_INCOMPATIBLE_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
+
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
@@ -77,3 +221,9 @@ def pytest_collection_modifyitems(config, items):
 
     # Reorder the items list
     items[:] = custom_logger_tests + other_tests
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    emit_cassette_cache_session_banner(terminalreporter)
+    emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)

@@ -17,11 +17,11 @@ from .common_utils import (
     RefreshAPIKeyError,
 )
 
-# Constants
-GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
-GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
-GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
+# Constants (default values — overridable via environment variables at call time)
+DEFAULT_GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+DEFAULT_GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
+DEFAULT_GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
+DEFAULT_GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
 
 
 class Authenticator:
@@ -36,9 +36,7 @@ class Authenticator:
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
-        self.api_key_file = os.path.join(
-            self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
-        )
+        self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
         self._ensure_token_dir()
 
     def get_access_token(self) -> str:
@@ -57,9 +55,7 @@ class Authenticator:
                 if access_token:
                     return access_token
         except IOError:
-            verbose_logger.warning(
-                "No existing access token found or error reading file"
-            )
+            verbose_logger.warning("No existing access token found or error reading file")
 
         for attempt in range(3):
             verbose_logger.debug(f"Access token acquisition attempt {attempt + 1}/3")
@@ -161,12 +157,13 @@ class Authenticator:
         """
         access_token = self.get_access_token()
         headers = self._get_github_headers(access_token)
+        api_key_url = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 sync_client = _get_httpx_client()
-                response = sync_client.get(GITHUB_API_KEY_URL, headers=headers)
+                response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
                 response_json = response.json()
@@ -174,13 +171,9 @@ class Authenticator:
                 if "token" in response_json:
                     return response_json
                 else:
-                    verbose_logger.warning(
-                        f"API key response missing token: {response_json}"
-                    )
+                    verbose_logger.warning(f"API key response missing token: {response_json}")
             except httpx.HTTPStatusError as e:
-                verbose_logger.error(
-                    f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
-                )
+                verbose_logger.error(f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {str(e)}")
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
 
@@ -232,10 +225,12 @@ class Authenticator:
         """
         try:
             sync_client = _get_httpx_client()
+            device_code_url = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
+            client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
             resp = sync_client.post(
-                GITHUB_DEVICE_CODE_URL,
+                device_code_url,
                 headers=self._get_github_headers(),
-                json={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
+                json={"client_id": client_id, "scope": "read:user"},
             )
             resp.raise_for_status()
             resp_json = resp.json()
@@ -284,13 +279,16 @@ class Authenticator:
         sync_client = _get_httpx_client()
         max_attempts = 12  # 1 minute (12 * 5 seconds)
 
+        access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
+        client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+
         for attempt in range(max_attempts):
             try:
                 resp = sync_client.post(
-                    GITHUB_ACCESS_TOKEN_URL,
+                    access_token_url,
                     headers=self._get_github_headers(),
                     json={
-                        "client_id": GITHUB_CLIENT_ID,
+                        "client_id": client_id,
                         "device_code": device_code,
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     },
@@ -301,13 +299,8 @@ class Authenticator:
                 if "access_token" in resp_json:
                     verbose_logger.info("Authentication successful!")
                     return resp_json["access_token"]
-                elif (
-                    "error" in resp_json
-                    and resp_json.get("error") == "authorization_pending"
-                ):
-                    verbose_logger.debug(
-                        f"Authorization pending (attempt {attempt+1}/{max_attempts})"
-                    )
+                elif "error" in resp_json and resp_json.get("error") == "authorization_pending":
+                    verbose_logger.debug(f"Authorization pending (attempt {attempt + 1}/{max_attempts})")
                 else:
                     verbose_logger.warning(f"Unexpected response: {resp_json}")
             except httpx.HTTPStatusError as e:
@@ -323,9 +316,7 @@ class Authenticator:
                     status_code=400,
                 )
             except Exception as e:
-                verbose_logger.error(
-                    f"Unexpected error polling for access token: {str(e)}"
-                )
+                verbose_logger.error(f"Unexpected error polling for access token: {str(e)}")
                 raise GetAccessTokenError(
                     message=f"Failed to get access token: {str(e)}",
                     status_code=400,
@@ -357,7 +348,6 @@ class Authenticator:
 
         print(  # noqa: T201
             f"Please visit {verification_uri} and enter code {user_code} to authenticate.",
-
             # When this is running in docker, it may not be flushed immediately
             # so we force flush to ensure the user sees the message
             flush=True,

@@ -3,13 +3,15 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
+import { AuthProvider } from "@/contexts/AuthContext";
+import ReactQueryProvider from "@/contexts/ReactQueryProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "LiteLLM Dashboard",
   description: "LiteLLM Proxy Admin UI",
-  icons: { icon: "./favicon.ico" },
+  icons: { icon: "/get_favicon" },
 };
 
 export default function RootLayout({
@@ -20,7 +22,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <AntdGlobalProvider>{children}</AntdGlobalProvider>
+        <ReactQueryProvider>
+          <AntdGlobalProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </AntdGlobalProvider>
+        </ReactQueryProvider>
       </body>
     </html>
   );

@@ -1,13 +1,22 @@
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { Badge } from "@tremor/react";
-import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Minus,
+  TrendingUp,
+  UserCheck,
+  Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
+import { getRemainingUsers } from "./networking";
 
-// Simple utility function to combine class names
-const cn = (...classes: (string | boolean | undefined)[]) => {
-  return classes.filter(Boolean).join(" ");
-};
+import { cn } from "@/lib/cva.config";
+import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 
 interface UsageIndicatorProps {
   accessToken: string | null;
@@ -22,17 +31,6 @@ interface UsageData {
   total_teams_used: number;
   total_teams_remaining: number | null;
 }
-
-// Calculate days until expiration
-const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
-  if (!expirationDate) return null;
-  const expDate = new Date(expirationDate + 'T00:00:00Z'); // Force UTC midnight
-  const now = new Date();
-  now.setHours(0, 0, 0, 0); // Normalize to local midnight
-  const diffTime = expDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
-};
 
 // Format expiration for display
 const formatExpirationDisplay = (daysRemaining: number | null): string => {
@@ -51,9 +49,10 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [data, setData] = useState<UsageData | null>(null);
-  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const licenseInfo = useLicenseInfo(accessToken).data ?? null;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -63,12 +62,8 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
       setError(null);
 
       try {
-        const [usageResult, licenseResult] = await Promise.all([
-          getRemainingUsers(accessToken),
-          getLicenseInfo(accessToken).catch(() => null), // Don't fail if license endpoint unavailable
-        ]);
+        const usageResult = await getRemainingUsers(accessToken);
         setData(usageResult);
-        setLicenseInfo(licenseResult);
       } catch (err) {
         console.error("Failed to fetch usage data:", err);
         setError("Failed to load usage data");
@@ -81,9 +76,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   }, [accessToken]);
 
   // Calculate license expiration metrics
-  const daysUntilExpiration = licenseInfo?.expiration_date
-    ? getDaysUntilExpiration(licenseInfo.expiration_date)
-    : null;
+  const daysUntilExpiration = licenseInfo?.expiration_date ? getDaysUntilExpiration(licenseInfo.expiration_date) : null;
   const isLicenseExpired = daysUntilExpiration !== null && daysUntilExpiration < 0;
   const isLicenseExpiringSoon = daysUntilExpiration !== null && daysUntilExpiration >= 0 && daysUntilExpiration < 30;
 
@@ -165,36 +158,40 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <button
           onClick={() => setIsMinimized(false)}
           className={cn(
-            "flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors p-1 rounded w-full",
+            "flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-sm w-full",
             hasError && "text-red-400 hover:text-red-600",
             hasWarning && "text-yellow-500 hover:text-yellow-700",
           )}
           title="Show usage details"
         >
-          <Users className="h-3 w-3 flex-shrink-0" />
-          {hasAnyIssue && <span className="flex-shrink-0">{getStatusIcon()}</span>}
+          <Users className="h-3 w-3 shrink-0" />
+          {hasAnyIssue && <span className="shrink-0">{getStatusIcon()}</span>}
           <div className="flex items-center gap-1 truncate">
             {data && data.total_users !== null && (
-              <span className="flex-shrink-0">
+              <span className="shrink-0">
                 U:{data.total_users_used}/{data.total_users}
               </span>
             )}
             {data && data.total_teams !== null && (
-              <span className="flex-shrink-0">
+              <span className="shrink-0">
                 T:{data.total_teams_used}/{data.total_teams}
               </span>
             )}
             {licenseInfo?.expiration_date && daysUntilExpiration !== null && (
-              <span className={cn(
-                "flex-shrink-0",
-                isLicenseExpired && "text-red-500",
-                isLicenseExpiringSoon && "text-yellow-500",
-              )}>
+              <span
+                className={cn(
+                  "shrink-0",
+                  isLicenseExpired && "text-red-500",
+                  isLicenseExpiringSoon && "text-yellow-500",
+                )}
+              >
                 {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
               </span>
             )}
             {!data ||
-              (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
+              (data.total_users === null && data.total_teams === null && !licenseInfo && (
+                <span className="truncate">Usage</span>
+              ))}
           </div>
         </button>
       </div>
@@ -210,7 +207,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     if (isLoading) {
       return (
         <div className="flex items-center gap-3 px-3 py-2 text-gray-500" style={{ maxWidth: `${width}px` }}>
-          <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
           <span className="text-sm truncate">Loading...</span>
         </div>
       );
@@ -223,12 +220,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
           style={{ maxWidth: `${width}px` }}
         >
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <Users className="h-4 w-4 flex-shrink-0" />
+            <Users className="h-4 w-4 shrink-0" />
             <span className="text-sm truncate">{error || "No data"}</span>
           </div>
           <button
             onClick={() => setIsMinimized(true)}
-            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded transition-all flex-shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded-sm transition-all shrink-0"
             title="Minimize"
           >
             <Minus className="h-3 w-3" />
@@ -249,24 +246,24 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
               hasWarning && "text-yellow-600",
             )}
           >
-            <Users className="h-4 w-4 flex-shrink-0" />
+            <Users className="h-4 w-4 shrink-0" />
             <span className="text-sm font-medium truncate">Usage Status</span>
             {hasAnyIssue && (
-              <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
+              <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 shrink-0">
                 {getStatusIcon()}
               </Badge>
             )}
             {isExpanded ? (
-              <ChevronUp className="h-3 w-3 text-gray-400 ml-auto flex-shrink-0" />
+              <ChevronUp className="h-3 w-3 text-gray-400 ml-auto shrink-0" />
             ) : (
-              <ChevronDown className="h-3 w-3 text-gray-400 ml-auto flex-shrink-0" />
+              <ChevronDown className="h-3 w-3 text-gray-400 ml-auto shrink-0" />
             )}
           </button>
 
           {/* Minimize button */}
           <button
             onClick={() => setIsMinimized(true)}
-            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded transition-all ml-1 flex-shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded-sm transition-all ml-1 shrink-0"
             title="Minimize"
           >
             <Minus className="h-3 w-3 text-gray-400" />
@@ -283,11 +280,13 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   <Calendar className="h-3 w-3" />
                   <span className="font-medium">License</span>
                 </div>
-                <div className={cn(
-                  "flex items-center gap-1 text-xs",
-                  isLicenseExpired && "text-red-600",
-                  isLicenseExpiringSoon && "text-yellow-600",
-                )}>
+                <div
+                  className={cn(
+                    "flex items-center gap-1 text-xs",
+                    isLicenseExpired && "text-red-600",
+                    isLicenseExpiringSoon && "text-yellow-600",
+                  )}
+                >
                   {isLicenseExpired ? (
                     <AlertTriangle className="h-3 w-3" />
                   ) : isLicenseExpiringSoon ? (
@@ -396,18 +395,18 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <button
           onClick={() => setIsMinimized(false)}
           className={cn(
-            "bg-white border border-gray-200 rounded-lg shadow-sm p-3 hover:shadow-md transition-all w-full",
+            "bg-white border border-gray-200 rounded-lg shadow-xs p-3 hover:shadow-md transition-all w-full",
           )}
           title="Show usage details"
         >
           <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 flex-shrink-0" />
-            {hasAnyIssue && <span className="flex-shrink-0">{getStatusIcon()}</span>}
+            <Users className="h-4 w-4 shrink-0" />
+            {hasAnyIssue && <span className="shrink-0">{getStatusIcon()}</span>}
             <div className="flex items-center gap-2 text-sm font-medium truncate">
               {data && data.total_users !== null && (
                 <span
                   className={cn(
-                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    "shrink-0 px-1.5 py-0.5 rounded-sm text-xs border",
                     userMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
                     userMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !userMetrics.isOverLimit && !userMetrics.isNearLimit && "bg-gray-50 text-gray-700 border-gray-200",
@@ -419,7 +418,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
               {data && data.total_teams !== null && (
                 <span
                   className={cn(
-                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    "shrink-0 px-1.5 py-0.5 rounded-sm text-xs border",
                     teamMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
                     teamMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !teamMetrics.isOverLimit && !teamMetrics.isNearLimit && "bg-gray-50 text-gray-700 border-gray-200",
@@ -431,7 +430,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
               {licenseInfo?.expiration_date && daysUntilExpiration !== null && (
                 <span
                   className={cn(
-                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    "shrink-0 px-1.5 py-0.5 rounded-sm text-xs border",
                     isLicenseExpired && "bg-red-50 text-red-700 border-red-200",
                     isLicenseExpiringSoon && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-700 border-gray-200",
@@ -441,7 +440,9 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 </span>
               )}
               {!data ||
-                (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
+                (data.total_users === null && data.total_teams === null && !licenseInfo && (
+                  <span className="truncate">Usage</span>
+                ))}
             </div>
           </div>
         </button>
@@ -450,7 +451,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
     if (isLoading) {
       return (
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 w-full">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-xs p-4 w-full">
           <div className="flex items-center justify-center gap-2 py-2">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-sm text-gray-500 truncate">Loading...</span>
@@ -461,14 +462,14 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
     if (error || !data) {
       return (
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 group w-full">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-xs p-4 group w-full">
           <div className="flex items-center justify-between gap-2">
             <div className="flex-1 min-w-0">
               <span className="text-sm text-gray-500 truncate block">{error || "No data"}</span>
             </div>
             <button
               onClick={() => setIsMinimized(true)}
-              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded transition-all flex-shrink-0"
+              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded-sm transition-all shrink-0"
               title="Minimize"
             >
               <Minus className="h-3 w-3 text-gray-400" />
@@ -479,15 +480,15 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     }
 
     return (
-      <div className={cn("bg-white border rounded-lg shadow-sm p-3 transition-all duration-200 group w-full")}>
+      <div className={cn("bg-white border rounded-lg shadow-xs p-3 transition-all duration-200 group w-full")}>
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Users className="h-4 w-4 flex-shrink-0" />
+            <Users className="h-4 w-4 shrink-0" />
             <span className="font-medium text-sm truncate">Usage</span>
           </div>
           <button
             onClick={() => setIsMinimized(true)}
-            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded transition-all flex-shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded-sm transition-all shrink-0"
             title="Minimize"
           >
             <Minus className="h-3 w-3 text-gray-400" />
@@ -510,7 +511,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 <span className="font-medium">License</span>
                 <span
                   className={cn(
-                    "ml-1 px-1.5 py-0.5 rounded border",
+                    "ml-1 px-1.5 py-0.5 rounded-sm border",
                     isLicenseExpired && "bg-red-50 text-red-700 border-red-200",
                     isLicenseExpiringSoon && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-600 border-gray-200",
@@ -554,7 +555,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 <span className="font-medium">Users</span>
                 <span
                   className={cn(
-                    "ml-1 px-1.5 py-0.5 rounded border",
+                    "ml-1 px-1.5 py-0.5 rounded-sm border",
                     userMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
                     userMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !userMetrics.isOverLimit && !userMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",
@@ -615,7 +616,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 <span className="font-medium">Teams</span>
                 <span
                   className={cn(
-                    "ml-1 px-1.5 py-0.5 rounded border",
+                    "ml-1 px-1.5 py-0.5 rounded-sm border",
                     teamMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
                     teamMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
                     !teamMetrics.isOverLimit && !teamMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",

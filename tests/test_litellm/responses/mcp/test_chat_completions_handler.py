@@ -14,7 +14,9 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 @pytest.mark.asyncio
-async def test_acompletion_with_mcp_returns_normal_completion_without_tools(monkeypatch):
+async def test_acompletion_with_mcp_returns_normal_completion_without_tools(
+    monkeypatch,
+):
     mock_acompletion = AsyncMock(return_value="normal_response")
 
     with patch("litellm.acompletion", mock_acompletion):
@@ -43,6 +45,7 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
         "_parse_mcp_tools",
         staticmethod(lambda tools: (tools, [])),
     )
+
     async def mock_process(**_):
         return ([], {})
 
@@ -91,13 +94,88 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_tools(
+    monkeypatch,
+):
+    """
+    Test that MCP auth headers extracted from secret_fields (e.g. x-mcp-linear_config-authorization)
+    are passed to _process_mcp_tools_without_openai_transform for dynamic auth when fetching tools.
+    """
+    tools = [{"type": "mcp", "server_url": "litellm_proxy"}]
+    mock_acompletion = AsyncMock(return_value="ok")
+
+    captured_process_kwargs = {}
+
+    async def mock_process(**kwargs):
+        captured_process_kwargs.update(kwargs)
+        return ([], {})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda t: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda t: (t, [])),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: ["openai-tool"]),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: False),
+    )
+
+    # secret_fields with raw_headers containing MCP auth - extract_mcp_headers_from_request
+    # will parse these and pass to _process_mcp_tools_without_openai_transform
+    secret_fields = {
+        "raw_headers": {
+            "x-mcp-linear_config-authorization": "Bearer linear-token",
+        },
+    }
+
+    with patch("litellm.acompletion", mock_acompletion):
+        await acompletion_with_mcp(
+            model="test-model",
+            messages=[],
+            tools=tools,
+            secret_fields=secret_fields,
+        )
+
+    assert "mcp_server_auth_headers" in captured_process_kwargs
+    mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
+    assert mcp_server_auth_headers is not None
+    assert "linear_config" in mcp_server_auth_headers
+    assert (
+        mcp_server_auth_headers["linear_config"]["Authorization"]
+        == "Bearer linear-token"
+    )
+
+
+@pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function
+    from litellm.types.utils import (
+        ModelResponseStream,
+        StreamingChoices,
+        Delta,
+        ChatCompletionDeltaToolCall,
+        Function,
+    )
     from unittest.mock import MagicMock
-    
+
     tools = [{"type": "function", "function": {"name": "tool"}}]
-    
+
     # Create mock streaming chunks for initial response
     def create_chunk(content, finish_reason=None, tool_calls=None):
         return ModelResponseStream(
@@ -117,7 +195,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
                 )
             ],
         )
-    
+
     initial_chunks = [
         create_chunk(
             "",
@@ -132,15 +210,15 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
             ],
         ),
     ]
-    
+
     follow_up_chunks = [
         create_chunk("Hello"),
         create_chunk(" world", finish_reason="stop"),
     ]
-    
+
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
-    
+
     class InitialStreamingResponse(CustomStreamWrapper):
         def __init__(self):
             super().__init__(
@@ -160,7 +238,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
                 self._index += 1
                 return chunk
             raise StopAsyncIteration
-    
+
     class FollowUpStreamingResponse(CustomStreamWrapper):
         def __init__(self):
             super().__init__(
@@ -180,12 +258,13 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
                 self._index += 1
                 return chunk
             raise StopAsyncIteration
-    
+
     async def mock_acompletion(**kwargs):
         if kwargs.get("stream", False):
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg))
+                msg.get("role") == "tool"
+                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
                 for msg in messages
             )
             if is_follow_up:
@@ -200,7 +279,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
             created=0,
             object="chat.completion",
         )
-    
+
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
 
     monkeypatch.setattr(
@@ -213,6 +292,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
         "_parse_mcp_tools",
         staticmethod(lambda tools: (tools, [])),
     )
+
     async def mock_process(**_):
         return (tools, {"tool": "server"})
 
@@ -234,8 +314,17 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_extract_tool_calls_from_chat_response",
-        staticmethod(lambda **_: [{"id": "call-1", "type": "function", "function": {"name": "tool", "arguments": "{}"}}]),
+        staticmethod(
+            lambda **_: [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "tool", "arguments": "{}"},
+                }
+            ]
+        ),
     )
+
     async def mock_execute(**_):
         return [{"tool_call_id": "call-1", "result": "executed"}]
 
@@ -247,11 +336,27 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_create_follow_up_messages_for_chat",
-        staticmethod(lambda **_: [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "tool", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "call-1", "name": "tool", "content": "executed"}
-        ]),
+        staticmethod(
+            lambda **_: [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "tool", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "tool",
+                    "content": "executed",
+                },
+            ]
+        ),
     )
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
@@ -260,8 +365,15 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     )
 
     # Patch litellm.acompletion at module level to catch function-level imports
-    with patch("litellm.acompletion", mock_acompletion_func), \
-         patch.object(chat_completions_handler, "litellm_acompletion", mock_acompletion_func, create=True):
+    with (
+        patch("litellm.acompletion", mock_acompletion_func),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            mock_acompletion_func,
+            create=True,
+        ),
+    ):
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -288,7 +400,9 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     follow_up_call = None
     for call in mock_acompletion_func.await_args_list:
         messages = call.kwargs.get("messages", [])
-        if messages and any(msg.get("role") == "tool" for msg in messages if isinstance(msg, dict)):
+        if messages and any(
+            msg.get("role") == "tool" for msg in messages if isinstance(msg, dict)
+        ):
             follow_up_call = call.kwargs
             break
     assert follow_up_call is not None, "Should have a follow-up call"
@@ -307,7 +421,13 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
-    tool_calls = [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "local_search", "arguments": "{}"},
+        }
+    ]
     tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
 
     # Create mock streaming chunks
@@ -336,6 +456,7 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     # Create a proper CustomStreamWrapper
     from unittest.mock import MagicMock
+
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
 
@@ -378,6 +499,7 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
         "_parse_mcp_tools",
         staticmethod(lambda tools: (tools, [])),
     )
+
     async def mock_process(**_):
         return (tools, {"local_search": "local"})
 
@@ -427,16 +549,20 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     assert len(all_chunks) > 0
 
     # Verify mcp_list_tools is in the first chunk
-    first_chunk = all_chunks[0] if all_chunks else None
-    assert first_chunk is not None, "Should have a first chunk"
-    if hasattr(first_chunk, "choices") and first_chunk.choices:
-        choice = first_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            # mcp_list_tools should be added to the first chunk
-            assert provider_fields is not None, f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
-            assert "mcp_list_tools" in provider_fields, f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
-            assert provider_fields["mcp_list_tools"] == openai_tools
+    first_chunk = all_chunks[0]
+    assert (
+        hasattr(first_chunk, "choices") and first_chunk.choices
+    ), "First chunk must have choices"
+    choice = first_chunk.choices[0]
+    assert hasattr(choice, "delta") and choice.delta, "First choice must have delta"
+    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+    assert (
+        provider_fields is not None
+    ), f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
+    assert (
+        "mcp_list_tools" in provider_fields
+    ), f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
+    assert provider_fields["mcp_list_tools"] == openai_tools
 
 
 @pytest.mark.asyncio
@@ -476,6 +602,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
     # Create a proper CustomStreamWrapper
     from unittest.mock import MagicMock
+
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
 
@@ -511,6 +638,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
         "_parse_mcp_tools",
         staticmethod(lambda tools: (tools, [])),
     )
+
     async def mock_process(**_):
         return (tools, {"local_search": "local"})
 
@@ -532,8 +660,17 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_extract_tool_calls_from_chat_response",
-        staticmethod(lambda **_: [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]),
+        staticmethod(
+            lambda **_: [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "local_search", "arguments": "{}"},
+                }
+            ]
+        ),
     )
+
     async def mock_execute(**_):
         return [{"tool_call_id": "call-1", "result": "executed"}]
 
@@ -545,11 +682,27 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_create_follow_up_messages_for_chat",
-        staticmethod(lambda **_: [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "call-1", "name": "local_search", "content": "executed"}
-        ]),
+        staticmethod(
+            lambda **_: [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "local_search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "local_search",
+                    "content": "executed",
+                },
+            ]
+        ),
     )
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
@@ -558,8 +711,15 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     )
 
     # Patch litellm.acompletion at module level to catch function-level imports
-    with patch("litellm.acompletion", mock_acompletion), \
-         patch.object(chat_completions_handler, "litellm_acompletion", mock_acompletion, create=True):
+    with (
+        patch("litellm.acompletion", mock_acompletion),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            mock_acompletion,
+            create=True,
+        ),
+    ):
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -573,7 +733,9 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     # Verify that the first call was made with stream=True
     assert mock_acompletion.await_count >= 1
     first_call = mock_acompletion.await_args_list[0].kwargs
-    assert first_call["stream"] is True, "First call should be streaming with new implementation"
+    assert (
+        first_call["stream"] is True
+    ), "First call should be streaming with new implementation"
 
 
 @pytest.mark.asyncio
@@ -584,11 +746,23 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     - mcp_tool_calls and mcp_call_results should be in the final chunk of initial response
     """
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function
+    from litellm.types.utils import (
+        ModelResponseStream,
+        StreamingChoices,
+        Delta,
+        ChatCompletionDeltaToolCall,
+        Function,
+    )
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
-    tool_calls = [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "local_search", "arguments": "{}"},
+        }
+    ]
     tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
 
     # Create mock streaming chunks
@@ -625,7 +799,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             ],
         ),  # Final chunk with tool_calls
     ]
-    
+
     follow_up_chunks = [
         create_chunk("Hello"),
         create_chunk(" world", finish_reason="stop"),
@@ -633,6 +807,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
 
     # Create a proper CustomStreamWrapper
     from unittest.mock import MagicMock
+
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
 
@@ -683,7 +858,8 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         if kwargs.get("stream", False):
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg))
+                msg.get("role") == "tool"
+                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
                 for msg in messages
             )
             if is_follow_up:
@@ -704,6 +880,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         "_parse_mcp_tools",
         staticmethod(lambda tools: (tools, [])),
     )
+
     async def mock_process(**_):
         return (tools, {"local_search": "local"})
 
@@ -727,6 +904,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         "_extract_tool_calls_from_chat_response",
         staticmethod(lambda **_: tool_calls),
     )
+
     async def mock_execute(**_):
         return tool_results
 
@@ -738,11 +916,27 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
         "_create_follow_up_messages_for_chat",
-        staticmethod(lambda **_: [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "call-1", "name": "local_search", "content": "executed"}
-        ]),
+        staticmethod(
+            lambda **_: [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "local_search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "local_search",
+                    "content": "executed",
+                },
+            ]
+        ),
     )
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
@@ -751,8 +945,15 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     )
 
     # Patch litellm.acompletion at module level to catch function-level imports
-    with patch("litellm.acompletion", mock_acompletion_func), \
-         patch.object(chat_completions_handler, "litellm_acompletion", side_effect=mock_acompletion, create=True):
+    with (
+        patch("litellm.acompletion", mock_acompletion_func),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            side_effect=mock_acompletion,
+            create=True,
+        ),
+    ):
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -778,28 +979,53 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         for chunk in all_chunks:
             if hasattr(chunk, "choices") and chunk.choices:
                 choice = chunk.choices[0]
-                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
+                if (
+                    hasattr(choice, "finish_reason")
+                    and choice.finish_reason == "tool_calls"
+                ):
                     initial_final_chunk = chunk
 
         assert first_chunk is not None, "Should have a first chunk"
-        assert initial_final_chunk is not None, "Should have a final chunk from initial response"
+        assert (
+            initial_final_chunk is not None
+        ), "Should have a final chunk from initial response"
 
         # Verify mcp_list_tools is in the first chunk
-        if hasattr(first_chunk, "choices") and first_chunk.choices:
-            choice = first_chunk.choices[0]
-            if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-                assert provider_fields is not None, "First chunk should have provider_specific_fields"
-                assert "mcp_list_tools" in provider_fields, "First chunk should have mcp_list_tools"
+        assert (
+            hasattr(first_chunk, "choices") and first_chunk.choices
+        ), "First chunk must have choices"
+        first_choice = first_chunk.choices[0]
+        assert (
+            hasattr(first_choice, "delta") and first_choice.delta
+        ), "First choice must have delta"
+        first_provider_fields = getattr(
+            first_choice.delta, "provider_specific_fields", None
+        )
+        assert (
+            first_provider_fields is not None
+        ), "First chunk should have provider_specific_fields"
+        assert (
+            "mcp_list_tools" in first_provider_fields
+        ), "First chunk should have mcp_list_tools"
 
         # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
-        if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
-            choice = initial_final_chunk.choices[0]
-            if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-                assert provider_fields is not None, "Final chunk should have provider_specific_fields"
-                assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
-                assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
+        assert (
+            hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices
+        ), "Final chunk must have choices"
+        final_choice = initial_final_chunk.choices[0]
+        assert (
+            hasattr(final_choice, "delta") and final_choice.delta
+        ), "Final choice must have delta"
+        final_provider_fields = getattr(
+            final_choice.delta, "provider_specific_fields", None
+        )
+        assert (
+            final_provider_fields is not None
+        ), "Final chunk should have provider_specific_fields"
+        assert "mcp_tool_calls" in final_provider_fields, "Should have mcp_tool_calls"
+        assert (
+            "mcp_call_results" in final_provider_fields
+        ), "Should have mcp_call_results"
 
 
 @pytest.mark.asyncio
@@ -810,10 +1036,10 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     """
     import importlib
     from unittest.mock import MagicMock
-    
+
     # Capture the kwargs passed to function_setup
     captured_kwargs = {}
-    
+
     def mock_function_setup(original_function, rules_obj, start_time, **kwargs):
         captured_kwargs.update(kwargs)
         # Return a mock logging object
@@ -824,14 +1050,14 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
         logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
         logging_obj.async_success_handler = AsyncMock()
         return logging_obj, kwargs
-    
+
     # Mock the MCP server manager
     mock_result = MagicMock()
     mock_result.content = [MagicMock(text="test result")]
-    
+
     async def mock_call_tool(**kwargs):
         return mock_result
-    
+
     # NOTE: avoid monkeypatch string path here because `litellm.responses` is also
     # exported as a function on the top-level `litellm` package, which can confuse
     # pytest's dotted-path resolver.
@@ -843,7 +1069,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
         mock_call_tool,
     )
-    
+
     # Create test data
     tool_calls = [
         {
@@ -858,19 +1084,263 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     tool_server_map = {"test_tool": "test_server"}
     user_api_key_auth = MagicMock()
     user_api_key_auth.api_key = "test_key"
-    
+
     # Call _execute_tool_calls
     result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
         user_api_key_auth=user_api_key_auth,
     )
-    
+
     # Verify that proxy_server_request was set with arguments
-    assert "proxy_server_request" in captured_kwargs, "proxy_server_request should be in logging_request_data"
+    assert (
+        "proxy_server_request" in captured_kwargs
+    ), "proxy_server_request should be in logging_request_data"
     proxy_server_request = captured_kwargs["proxy_server_request"]
     assert "body" in proxy_server_request, "proxy_server_request should have body"
     assert "name" in proxy_server_request["body"], "body should have name"
     assert "arguments" in proxy_server_request["body"], "body should have arguments"
     assert proxy_server_request["body"]["name"] == "test_tool", "name should match"
-    assert proxy_server_request["body"]["arguments"] == {"param1": "value1", "param2": 123}, "arguments should be parsed correctly"
+    assert proxy_server_request["body"]["arguments"] == {
+        "param1": "value1",
+        "param2": 123,
+    }, "arguments should be parsed correctly"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_chunk(monkeypatch):
+    """
+    Regression test: after yielding the final chunk, MCPStreamingIterator drains
+    the inner CustomStreamWrapper to fire end-of-stream spend logging. If the
+    inner stream raises a non-StopAsyncIteration error during that drain (e.g.
+    a transient APIError on the trailing usage chunk), the error must not
+    escape __anext__ and drop the already-assembled final chunk.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+
+    def create_chunk(content, finish_reason=None):
+        return ModelResponseStream(
+            id="test-stream",
+            model="test-model",
+            created=1234567890,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    chunks = [
+        create_chunk("Hello"),
+        create_chunk(" world", finish_reason="stop"),
+    ]
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class DrainErrorStreamingResponse(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=logging_obj,
+            )
+            self.chunks = chunks
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index < len(self.chunks):
+                chunk = self.chunks[self._index]
+                self._index += 1
+                return chunk
+            if self._index == len(self.chunks):
+                self._index += 1
+                raise RuntimeError("connection dropped on trailing usage chunk")
+            raise StopAsyncIteration
+
+    mock_acompletion = AsyncMock(return_value=DrainErrorStreamingResponse())
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda tools: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda tools: (tools, [])),
+    )
+
+    async def mock_process(**_):
+        return (tools, {"local_search": "local"})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: openai_tools),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_extract_tool_calls_from_chat_response",
+        staticmethod(lambda **_: []),
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_: (None, None, None, None)),
+    )
+
+    with patch("litellm.acompletion", mock_acompletion):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    final_chunks = [
+        chunk
+        for chunk in all_chunks
+        if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    ]
+    assert len(final_chunks) == 1, f"Final chunk must survive a drain error. Got chunks: {all_chunks}"
+    assert all_chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhaustion(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+
+    def create_chunk(content):
+        return ModelResponseStream(
+            id="test-stream",
+            model="test-model",
+            created=1234567890,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    chunks = [create_chunk("Hello"), create_chunk(" world")]
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class ExhaustingStreamingResponse(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=logging_obj,
+            )
+            self.chunks = chunks
+            self._index = 0
+            self.drained_after_exhaustion = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index < len(self.chunks):
+                chunk = self.chunks[self._index]
+                self._index += 1
+                return chunk
+            if self._index == len(self.chunks):
+                self._index += 1
+                raise StopAsyncIteration
+            self.drained_after_exhaustion = True
+            raise StopAsyncIteration
+
+    initial_stream = ExhaustingStreamingResponse()
+    mock_acompletion = AsyncMock(return_value=initial_stream)
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda tools: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda tools: (tools, [])),
+    )
+
+    async def mock_process(**_):
+        return (tools, {"local_search": "local"})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: openai_tools),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_extract_tool_calls_from_chat_response",
+        staticmethod(lambda **_: []),
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_: (None, None, None, None)),
+    )
+
+    with patch("litellm.acompletion", mock_acompletion):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    assert len(all_chunks) == 3
+    assert initial_stream.drained_after_exhaustion is True

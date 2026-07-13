@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -30,9 +31,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -48,16 +47,9 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/vector_stores")],
         }
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
@@ -106,20 +98,16 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{vector_store_id}/search"
+        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
+        url = f"{api_base}/{encoded_vector_store_id}/search"
         typed_request_body = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),
-            max_num_results=vector_store_search_optional_params.get(
-                "max_num_results", None
-            ),
-            ranking_options=vector_store_search_optional_params.get(
-                "ranking_options", None
-            ),
-            rewrite_query=vector_store_search_optional_params.get(
-                "rewrite_query", None
-            ),
+            max_num_results=vector_store_search_optional_params.get("max_num_results", None),
+            ranking_options=vector_store_search_optional_params.get("ranking_options", None),
+            rewrite_query=vector_store_search_optional_params.get("rewrite_query", None),
         )
 
         dict_request_body = cast(dict, typed_request_body)
@@ -150,21 +138,15 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         typed_request_body = VectorStoreCreateRequest(
             name=vector_store_create_optional_params.get("name", None),
             file_ids=vector_store_create_optional_params.get("file_ids", None),
-            expires_after=vector_store_create_optional_params.get(
-                "expires_after", None
-            ),
-            chunking_strategy=vector_store_create_optional_params.get(
-                "chunking_strategy", None
-            ),
+            expires_after=vector_store_create_optional_params.get("expires_after", None),
+            chunking_strategy=vector_store_create_optional_params.get("chunking_strategy", None),
             metadata=metadata_payload,
         )
 
         dict_request_body = cast(dict, typed_request_body)
         return url, dict_request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         try:
             response_json = response.json()
             return VectorStoreCreateResponse(**response_json)

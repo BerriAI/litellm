@@ -4,6 +4,7 @@ Unit tests for MCP Semantic Tool Filtering
 Tests the core filtering logic that takes a long list of tools and returns
 an ordered set of top K tools based on semantic similarity.
 """
+
 import asyncio
 import os
 import sys
@@ -20,7 +21,7 @@ from mcp.types import Tool as MCPTool
 async def test_semantic_filter_basic_filtering():
     """
     Test that the semantic filter correctly filters tools based on query.
-    
+
     Given: 10 email/calendar tools
     When: Query is "send an email"
     Then: Email tools should rank higher than calendar tools
@@ -31,37 +32,77 @@ async def test_semantic_filter_basic_filtering():
 
     # Create mock tools - mix of email and calendar tools
     tools = [
-        MCPTool(name="gmail_send", description="Send an email via Gmail", inputSchema={"type": "object"}),
-        MCPTool(name="outlook_send", description="Send an email via Outlook", inputSchema={"type": "object"}),
-        MCPTool(name="calendar_create", description="Create a calendar event", inputSchema={"type": "object"}),
-        MCPTool(name="calendar_update", description="Update a calendar event", inputSchema={"type": "object"}),
-        MCPTool(name="email_read", description="Read emails from inbox", inputSchema={"type": "object"}),
-        MCPTool(name="email_delete", description="Delete an email", inputSchema={"type": "object"}),
-        MCPTool(name="calendar_delete", description="Delete a calendar event", inputSchema={"type": "object"}),
-        MCPTool(name="email_search", description="Search for emails", inputSchema={"type": "object"}),
-        MCPTool(name="calendar_list", description="List calendar events", inputSchema={"type": "object"}),
-        MCPTool(name="email_forward", description="Forward an email to someone", inputSchema={"type": "object"}),
+        MCPTool(
+            name="gmail_send",
+            description="Send an email via Gmail",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="outlook_send",
+            description="Send an email via Outlook",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="calendar_create",
+            description="Create a calendar event",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="calendar_update",
+            description="Update a calendar event",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="email_read",
+            description="Read emails from inbox",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="email_delete",
+            description="Delete an email",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="calendar_delete",
+            description="Delete a calendar event",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="email_search",
+            description="Search for emails",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="calendar_list",
+            description="List calendar events",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="email_forward",
+            description="Forward an email to someone",
+            inputSchema={"type": "object"},
+        ),
     ]
-    
+
     # Mock router that returns mock embeddings
     from litellm.types.utils import Embedding, EmbeddingResponse
-    
+
     mock_router = Mock()
-    
+
     def mock_embedding_sync(*args, **kwargs):
         return EmbeddingResponse(
             data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
             model="text-embedding-3-small",
             object="list",
-            usage={"prompt_tokens": 10, "total_tokens": 10}
+            usage={"prompt_tokens": 10, "total_tokens": 10},
         )
-    
+
     async def mock_embedding_async(*args, **kwargs):
         return mock_embedding_sync()
-    
+
     mock_router.embedding = mock_embedding_sync
     mock_router.aembedding = mock_embedding_async
-    
+
     # Create filter
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
@@ -70,28 +111,36 @@ async def test_semantic_filter_basic_filtering():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Build router with the tools before filtering
     filter_instance._build_router(tools)
-    
+
     # Filter tools with email-related query
     filtered = await filter_instance.filter_tools(
         query="send an email to john@example.com",
         available_tools=tools,
     )
-    
+
     # Assertions - validate filtering mechanics work
-    assert len(filtered) <= 3, f"Should return at most 3 tools (top_k), got {len(filtered)}"
+    assert (
+        len(filtered) <= 3
+    ), f"Should return at most 3 tools (top_k), got {len(filtered)}"
     assert len(filtered) > 0, "Should return at least some tools"
-    assert len(filtered) < len(tools), f"Should filter down from {len(tools)} tools, got {len(filtered)}"
-    
+    assert len(filtered) < len(
+        tools
+    ), f"Should filter down from {len(tools)} tools, got {len(filtered)}"
+
     # Validate tools are actual MCPTool objects
     for tool in filtered:
-        assert hasattr(tool, 'name'), "Filtered result should be MCPTool with name"
-        assert hasattr(tool, 'description'), "Filtered result should be MCPTool with description"
-    
+        assert hasattr(tool, "name"), "Filtered result should be MCPTool with name"
+        assert hasattr(
+            tool, "description"
+        ), "Filtered result should be MCPTool with description"
+
     filtered_names = [t.name for t in filtered]
-    print(f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}")
+    print(
+        f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}"
+    )
     print(f"   Filter respects top_k parameter correctly")
 
 
@@ -99,7 +148,7 @@ async def test_semantic_filter_basic_filtering():
 async def test_semantic_filter_top_k_limiting():
     """
     Test that the filter respects top_k parameter.
-    
+
     Given: 20 tools
     When: top_k=5
     Then: Should return at most 5 tools
@@ -110,29 +159,33 @@ async def test_semantic_filter_top_k_limiting():
 
     # Create 20 tools
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool number {i} for testing", inputSchema={"type": "object"})
+        MCPTool(
+            name=f"tool_{i}",
+            description=f"Tool number {i} for testing",
+            inputSchema={"type": "object"},
+        )
         for i in range(20)
     ]
-    
+
     # Mock router
     from litellm.types.utils import Embedding, EmbeddingResponse
-    
+
     mock_router = Mock()
-    
+
     def mock_embedding_sync(*args, **kwargs):
         return EmbeddingResponse(
             data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
             model="text-embedding-3-small",
             object="list",
-            usage={"prompt_tokens": 10, "total_tokens": 10}
+            usage={"prompt_tokens": 10, "total_tokens": 10},
         )
-    
+
     async def mock_embedding_async(*args, **kwargs):
         return mock_embedding_sync()
-    
+
     mock_router.embedding = mock_embedding_sync
     mock_router.aembedding = mock_embedding_async
-    
+
     # Create filter with top_k=5
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
@@ -141,16 +194,16 @@ async def test_semantic_filter_top_k_limiting():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Build router with the tools before filtering
     filter_instance._build_router(tools)
-    
+
     # Filter tools
     filtered = await filter_instance.filter_tools(
         query="test query",
         available_tools=tools,
     )
-    
+
     # Should return at most 5 tools
     assert len(filtered) <= 5, f"Expected at most 5 tools, got {len(filtered)}"
     print(f"Returned {len(filtered)} tools out of {len(tools)} (top_k=5)")
@@ -164,14 +217,16 @@ async def test_semantic_filter_disabled():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    
+
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(
+            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
+        )
         for i in range(10)
     ]
-    
+
     mock_router = Mock()
-    
+
     # Create disabled filter
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
@@ -180,15 +235,17 @@ async def test_semantic_filter_disabled():
         similarity_threshold=0.3,
         enabled=False,  # Disabled
     )
-    
+
     # Filter tools
     filtered = await filter_instance.filter_tools(
         query="test query",
         available_tools=tools,
     )
-    
+
     # Should return all tools when disabled
-    assert len(filtered) == len(tools), f"Expected all {len(tools)} tools, got {len(filtered)}"
+    assert len(filtered) == len(
+        tools
+    ), f"Expected all {len(tools)} tools, got {len(filtered)}"
 
 
 @pytest.mark.asyncio
@@ -199,9 +256,9 @@ async def test_semantic_filter_empty_tools():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    
+
     mock_router = Mock()
-    
+
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
         litellm_router_instance=mock_router,
@@ -209,13 +266,13 @@ async def test_semantic_filter_empty_tools():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Filter empty list
     filtered = await filter_instance.filter_tools(
         query="test query",
         available_tools=[],
     )
-    
+
     assert len(filtered) == 0, "Should return empty list for empty input"
 
 
@@ -227,9 +284,9 @@ async def test_semantic_filter_extract_user_query():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    
+
     mock_router = Mock()
-    
+
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
         litellm_router_instance=mock_router,
@@ -237,32 +294,35 @@ async def test_semantic_filter_extract_user_query():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Test string content
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": "Send an email to john@example.com"},
     ]
-    
+
     query = filter_instance.extract_user_query(messages)
     assert query == "Send an email to john@example.com"
-    
+
     # Test list content blocks
     messages_with_blocks = [
-        {"role": "user", "content": [
-            {"type": "text", "text": "Hello, "},
-            {"type": "text", "text": "send email please"},
-        ]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello, "},
+                {"type": "text", "text": "send email please"},
+            ],
+        },
     ]
-    
+
     query2 = filter_instance.extract_user_query(messages_with_blocks)
     assert "Hello" in query2 and "send email" in query2
-    
+
     # Test no user messages
     messages_no_user = [
         {"role": "system", "content": "System message only"},
     ]
-    
+
     query3 = filter_instance.extract_user_query(messages_no_user)
     assert query3 == ""
 
@@ -280,21 +340,21 @@ async def test_semantic_filter_hook_triggers_on_completion():
 
     # Create mock filter
     mock_router = Mock()
-    
+
     def mock_embedding_sync(*args, **kwargs):
         return EmbeddingResponse(
             data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
             model="text-embedding-3-small",
             object="list",
-            usage={"prompt_tokens": 10, "total_tokens": 10}
+            usage={"prompt_tokens": 10, "total_tokens": 10},
         )
-    
+
     async def mock_embedding_async(*args, **kwargs):
         return mock_embedding_sync()
-    
+
     mock_router.embedding = mock_embedding_sync
     mock_router.aembedding = mock_embedding_async
-    
+
     filter_instance = SemanticMCPToolFilter(
         embedding_model="text-embedding-3-small",
         litellm_router_instance=mock_router,
@@ -302,32 +362,32 @@ async def test_semantic_filter_hook_triggers_on_completion():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Prepare data - completion request with tools
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(
+            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
+        )
         for i in range(10)
     ]
-    
+
     # Build router with the tools before filtering
     filter_instance._build_router(tools)
-    
+
     # Create hook
     hook = SemanticToolFilterHook(filter_instance)
-    
+
     data = {
         "model": "gpt-4",
-        "messages": [
-            {"role": "user", "content": "Send an email"}
-        ],
+        "messages": [{"role": "user", "content": "Send an email"}],
         "tools": tools,
         "metadata": {},  # Hook needs metadata field to store filter stats
     }
-    
+
     # Mock user API key dict and cache
     mock_user_api_key_dict = Mock()
     mock_cache = Mock()
-    
+
     # Call hook
     result = await hook.async_pre_call_hook(
         user_api_key_dict=mock_user_api_key_dict,
@@ -335,14 +395,15 @@ async def test_semantic_filter_hook_triggers_on_completion():
         data=data,
         call_type="completion",
     )
-    
+
     # Assertions
     assert result is not None, "Hook should return modified data"
     assert "tools" in result, "Result should contain tools"
-    assert len(result["tools"]) < len(tools), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
-    
-    print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
+    assert len(result["tools"]) < len(
+        tools
+    ), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
 
+    print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
 
 
 @pytest.mark.asyncio
@@ -364,22 +425,20 @@ async def test_semantic_filter_hook_skips_no_tools():
         similarity_threshold=0.3,
         enabled=True,
     )
-    
+
     # Create hook
     hook = SemanticToolFilterHook(filter_instance)
-    
+
     # Prepare data - completion without tools
     data = {
         "model": "gpt-4",
-        "messages": [
-            {"role": "user", "content": "Hello"}
-        ],
+        "messages": [{"role": "user", "content": "Hello"}],
     }
-    
+
     # Mock user API key dict and cache
     mock_user_api_key_dict = Mock()
     mock_cache = Mock()
-    
+
     # Call hook
     result = await hook.async_pre_call_hook(
         user_api_key_dict=mock_user_api_key_dict,
@@ -387,8 +446,1221 @@ async def test_semantic_filter_hook_skips_no_tools():
         data=data,
         call_type="completion",
     )
-    
+
     # Should return None (no modification)
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
 
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_native_tools():
+    """
+    Regression test: mixed MCP + native tools.
+
+    Given: 5 MCP tools (registered in _tool_map) + 2 native OpenAI-format
+           function tools (not in _tool_map)
+    When:  The hook filters tools
+    Then:  The native tools must survive unconditionally, and only MCP
+           tools go through the semantic filter.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # --- MCP tools (registered in the semantic router) ---
+    mcp_tools = [
+        MCPTool(
+            name=f"mcp_tool_{i}",
+            description=f"MCP tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(mcp_tools)
+
+    # --- Native OpenAI-format function tools (NOT in _tool_map) ---
+    native_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the web",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+
+    # Combine: MCP tools + native tools
+    all_tools = list(mcp_tools) + native_tools
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "What is the weather?"}],
+        "tools": all_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # Native tools must survive
+    native_in_result = [
+        t for t in filtered if isinstance(t, dict) and t.get("type") == "function"
+    ]
+    assert (
+        len(native_in_result) == 2
+    ), f"Both native tools must survive, got {len(native_in_result)}"
+
+    # MCP tools should be filtered (top_k=2)
+    mcp_in_result = [t for t in filtered if not isinstance(t, dict)]
+    assert (
+        len(mcp_in_result) <= 2
+    ), f"MCP tools should be filtered to top_k=2, got {len(mcp_in_result)}"
+
+    # Total should be native + filtered MCP
+    assert len(filtered) <= 4, f"Expected at most 4 tools, got {len(filtered)}"
+
+    # Filter stats should be emitted (MCP tools were present)
+    assert "litellm_semantic_filter_stats" in result["metadata"]
+
+    # Stats should report MCP-only counts, not inflated with native tools
+    stats = result["metadata"]["litellm_semantic_filter_stats"]
+    mcp_before, mcp_after = stats.split("->")
+    assert (
+        int(mcp_before) == 5
+    ), f"Stats 'from' should be MCP count (5), got {mcp_before}"
+    assert int(mcp_after) == len(
+        mcp_in_result
+    ), f"Stats 'to' should match filtered MCP count, got {mcp_after}"
+
+    print(
+        f"✅ Hook preserves native tools: {len(all_tools)} -> {len(filtered)} "
+        f"({len(native_in_result)} native + {len(mcp_in_result)} MCP), "
+        f"stats={stats}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_all_native_tools():
+    """
+    Regression test: all-native request.
+
+    Given: Only native OpenAI-format function tools (none registered in
+           the MCP semantic router)
+    When:  The hook processes the request
+    Then:  All tools pass through, and NO spurious semantic filter response
+           headers are emitted (no litellm_semantic_filter_stats in metadata).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Build router with some MCP tools (so tool_router is not None)
+    mcp_tools = [
+        MCPTool(
+            name="some_mcp_tool",
+            description="An MCP tool",
+            inputSchema={"type": "object"},
+        )
+    ]
+
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance._build_router(mcp_tools)
+
+    # --- Only native tools in the request ---
+    native_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"native_func_{i}",
+                "description": f"Native function {i}",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for i in range(3)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tools": native_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # All native tools must pass through
+    assert (
+        len(filtered) == 3
+    ), f"All 3 native tools must pass through, got {len(filtered)}"
+
+    # No spurious semantic filter stats (P2 fix)
+    assert (
+        "litellm_semantic_filter_stats" not in result["metadata"]
+    ), "Should NOT emit semantic filter stats for all-native-tool requests"
+
+    print(
+        f"✅ Hook passes through all {len(filtered)} native tools, "
+        f"no spurious filter headers emitted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_responses_api_name_collision():
+    """
+    Regression test: Responses API native tool with MCP-matching name.
+
+    Given: A Responses-API native tool whose top-level ``name`` collides
+           with an MCP canonical name in ``_tool_map``
+    When:  The hook classifies tools
+    Then:  The native tool must NOT be sent to the semantic filter, even
+           though its name matches an MCP canonical.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register an MCP tool with name "github-search"
+    mcp_tools = [
+        MCPTool(
+            name="github-search",
+            description="Search GitHub repos",
+            inputSchema={"type": "object"},
+        )
+    ]
+    filter_instance._build_router(mcp_tools)
+
+    # Responses API native tool with SAME name as MCP canonical
+    responses_api_tool = {
+        "type": "function",
+        "name": "github-search",
+        "description": "Caller-owned search tool",
+        "parameters": {"type": "object"},
+    }
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    # Verify classification: should be native, not MCP
+    assert not hook._is_mcp_tool(responses_api_tool), (
+        "Responses API tool with type=function + top-level name "
+        "should be classified as native, not MCP"
+    )
+
+    # Full hook test: all-native request should preserve tools
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [responses_api_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    # All tools are native → hook returns data with all tools preserved
+    filtered = (result or data)["tools"]
+    assert len(filtered) == 1, f"Native tool must survive, got {len(filtered)}"
+    assert filtered[0]["name"] == "github-search"
+
+    print("✅ Responses API tool with MCP-matching name correctly classified as native")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
+    """
+    Regression test (LIT-4214): litellm_proxy MCP references must be
+    semantically filtered after expansion, with real filter stats.
+
+    Given: A /v1/responses-style request whose tools are a single
+           {"type": "mcp", "server_url": "litellm_proxy"} reference that
+           expands to 5 flat OpenAI function dicts
+    When:  The hook processes the request
+    Then:  The expanded tools go through the semantic filter (top_k=2)
+           and litellm_semantic_filter_stats reports pre/post counts, so
+           the x-litellm-semantic-filter header shows how many tools
+           were filtered out instead of silently forwarding all tools
+           with no stats.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            }
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    assert len(filtered) <= 2, f"Expanded tools should be filtered to top_k=2, got {len(filtered)}"
+    assert len(filtered) < len(expanded_tools), (
+        f"Hook must not forward all {len(expanded_tools)} expanded tools unfiltered, got {len(filtered)}"
+    )
+    for tool in filtered:
+        assert tool in expanded_tools, "Filtered tools must be the original expanded tool dicts"
+
+    assert (
+        "litellm_semantic_filter_stats" in result["metadata"]
+    ), "Filter stats must be emitted for the litellm_proxy expansion path"
+    stats = result["metadata"]["litellm_semantic_filter_stats"]
+    total, selected = stats.split("->")
+    assert int(total) == 5, f"Stats 'from' should be pre-filter expanded count (5), got {total}"
+    assert int(selected) == len(filtered), f"Stats 'to' should match post-filter count, got {selected}"
+
+    print(f"✅ Expanded litellm_proxy tools filtered: {len(expanded_tools)} -> {len(filtered)}, stats={stats}")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
+    """
+    Responses API requests may pass ``input`` as a plain string; the
+    expanded-tool filtering must treat it as the user query instead of
+    crashing (which would silently disable MCP expansion).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    filtered = await hook._filter_expanded_tools(
+        data={"input": "Send an email"},
+        expanded_tools=expanded_tools,
+    )
+
+    assert len(filtered) <= 2, f"String input must still drive semantic filtering, got {len(filtered)} tools"
+
+    print(f"✅ String input filtered expanded tools: {len(expanded_tools)} -> {len(filtered)}")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_expansion_skips_filter_when_disabled():
+    """
+    When the filter is disabled at runtime (e.g. via the UI toggle), the
+    expansion path must forward all expanded tools and emit NO filter
+    stats, mirroring the generic path's enabled guard.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=False,
+    )
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            }
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert result is not None, "Hook should still expand MCP references when the filter is disabled"
+    assert len(result["tools"]) == 5, f"All expanded tools must be forwarded when disabled, got {len(result['tools'])}"
+    assert (
+        "litellm_semantic_filter_stats" not in result["metadata"]
+    ), "No filter stats may be emitted when the filter is disabled"
+
+    print("✅ Disabled filter: expansion preserved, no spurious stats")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_tool_order():
+    """
+    Regression test: tool ordering preservation.
+
+    Given: An interleaved request [mcp_tool_A, native_tool, mcp_tool_B]
+    When:  The hook filters tools (all MCP tools survive)
+    Then:  The output order must match the original request order,
+           NOT native-first.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register MCP tools
+    mcp_tool_a = MCPTool(
+        name="github-search",
+        description="Search GitHub",
+        inputSchema={"type": "object"},
+    )
+    mcp_tool_b = MCPTool(
+        name="github-issue",
+        description="Create GitHub issue",
+        inputSchema={"type": "object"},
+    )
+    filter_instance._build_router([mcp_tool_a, mcp_tool_b])
+
+    # Mock filter_tools to return both MCP tools (deterministic)
+    filter_instance.filter_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=[mcp_tool_a, mcp_tool_b]
+    )
+
+    # Native tool (interleaved between MCP tools)
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    # Original order: [mcp_A, native, mcp_B]
+    original_tools = [mcp_tool_a, native_tool, mcp_tool_b]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub and check weather"}],
+        "tools": original_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # All tools should survive
+    assert len(filtered) == 3, f"Expected 3 tools, got {len(filtered)}"
+
+    # Order must be preserved: [mcp_A, native, mcp_B]
+    assert filtered[0] is mcp_tool_a, "First tool should be mcp_tool_a"
+    assert filtered[1] is native_tool, "Second tool should be native_tool"
+    assert filtered[2] is mcp_tool_b, "Third tool should be mcp_tool_b"
+
+    print(
+        "✅ Tool ordering preserved: [mcp_A, native, mcp_B] maintained after filtering"
+    )
+
+
+class TestGetToolsByNames:
+    """
+    Regression coverage for SemanticMCPToolFilter._get_tools_by_names
+    name-matching behavior (issue #26078).
+
+    The canonical name stored in the router is what the proxy's MCP
+    registry emits (e.g. ``fc_web_search-firecrawl_scrape``). Some MCP
+    clients — notably opencode — wrap every tool name with their own
+    additive namespace prefix before sending it back in ``tools[]``, so
+    the incoming name is ``litellm_fc_web_search-firecrawl_scrape``.
+
+    Exact-equality matching against the canonical dropped every such
+    tool, the proxy forwarded ``tools: []`` with ``tool_choice: auto``,
+    and strict upstream providers returned 400.
+    """
+
+    def _make_filter(self):
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
+        return SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+
+    def test_exact_match_unchanged(self):
+        """Incoming name equals canonical — the historical path still works."""
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "get_weather", "description": "fetch weather"},
+            {"name": "send_email", "description": "send mail"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "send_email"
+
+    def test_client_prefix_with_underscore_separator(self):
+        """Client wraps canonical with ``<alias>_`` (opencode pattern)."""
+        filter_instance = self._make_filter()
+        canonical = "fc_web_search-firecrawl_scrape"
+        client_name = "litellm_" + canonical
+        available_tools = [{"name": client_name, "description": "scrape"}]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        # Must return the incoming tool unchanged so the client-facing
+        # name survives, otherwise tool-call round-trips break client-side.
+        assert matched[0]["name"] == client_name
+
+    def test_client_prefix_with_dash_separator(self):
+        """Some clients use dash as alias separator; accept that too."""
+        filter_instance = self._make_filter()
+        canonical = "weather_svc-get_weather"
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "mcp-" + canonical
+
+    def test_suffix_without_separator_does_not_match(self):
+        """
+        A bare-substring suffix must not match — ``rain_gear`` is not a
+        namespaced version of canonical ``ear`` and the user would be
+        surprised to see it selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [{"name": "rain_gear", "description": "raincoat"}]
+
+        matched = filter_instance._get_tools_by_names(["ear"], available_tools)
+
+        assert matched == []
+
+    def test_exact_match_preferred_over_prefixed(self):
+        """
+        When both a bare canonical and a client-prefixed variant are
+        present, the bare one wins so ordering is stable.
+        """
+        filter_instance = self._make_filter()
+        canonical = "search"
+        available_tools = [
+            {"name": canonical, "description": "plain"},
+            {"name": "litellm_" + canonical, "description": "wrapped"},
+        ]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == canonical
+
+    def test_same_tool_not_returned_twice(self):
+        """
+        Two distinct canonicals that both suffix-match the same incoming
+        tool must not produce a duplicate in the output list.
+        ``fs-read_file`` and ``api-fs-read_file`` are both valid
+        separator-anchored suffixes of ``litellm_api-fs-read_file``.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
+
+        matched = filter_instance._get_tools_by_names(
+            ["fs-read_file", "api-fs-read_file"], available_tools
+        )
+
+        assert len(matched) == 1
+
+    def test_suffix_fallback_prefers_shortest_candidate(self):
+        """
+        When no exact match exists and several incoming tools
+        suffix-match the same canonical, the one closest in length to
+        the canonical (i.e. the least-wrapped) should be chosen.
+        """
+        filter_instance = self._make_filter()
+        canonical = "svc-search"
+        available_tools = [
+            {"name": "my_tag_" + canonical, "description": "tag search"},
+            {"name": "my_" + canonical, "description": "plain search"},
+        ]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "my_" + canonical
+
+    def test_ordering_follows_router_output(self):
+        """Returned tools follow the order the semantic router chose."""
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "litellm_fs-read", "description": "read"},
+            {"name": "litellm_fs-write", "description": "write"},
+            {"name": "litellm_fs-delete", "description": "delete"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["fs-write", "fs-delete", "fs-read"], available_tools
+        )
+
+        names = [t["name"] for t in matched]
+        assert names == [
+            "litellm_fs-write",
+            "litellm_fs-delete",
+            "litellm_fs-read",
+        ]
+
+    def test_does_not_collide_with_local_function_on_unprefixed_canonical(self):
+        """
+        Guard against the collision @krrish-berri-2 flagged on #26117:
+        if the canonical name from the router is not server-prefixed
+        (i.e. does not contain ``MCP_TOOL_PREFIX_SEPARATOR``), suffix
+        matching must not kick in. Otherwise an unrelated local user
+        function whose name happens to end in the canonical substring
+        would be spuriously selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {
+                "name": "my_firecrawl_scrape",
+                "description": "unrelated local function",
+            },
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["firecrawl_scrape"],  # no MCP_TOOL_PREFIX_SEPARATOR in canonical
+            available_tools,
+        )
+
+        assert matched == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_headers_hook_emits_only_complete_tool_names():
+    """
+    Regression test for LIT-4215.
+
+    The x-litellm-semantic-filter-tools header used to be sliced mid-name at
+    MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH with a "..." suffix, so the UI
+    rendered a chopped tool name as the last entry. The header must only ever
+    contain complete tool names, in their original order, within the cap.
+    """
+    from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=10,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    hook = SemanticToolFilterHook(filter_instance)
+
+    tool_names = [f"metrics_mcp-very_long_tool_name_for_header_{i:02d}" for i in range(8)]
+    data = {
+        "metadata": {
+            "litellm_semantic_filter_stats": "40->8",
+            "litellm_semantic_filter_tools": ",".join(tool_names),
+        }
+    }
+
+    headers = await hook.async_post_call_response_headers_hook(
+        data=data,
+        user_api_key_dict=Mock(),
+        response=None,
+    )
+
+    assert headers is not None
+    assert headers["x-litellm-semantic-filter"] == "40->8"
+
+    tools_header = headers["x-litellm-semantic-filter-tools"]
+    assert len(tools_header) <= MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
+    emitted_names = tools_header.split(",")
+    assert emitted_names == tool_names[: len(emitted_names)]
+    assert 0 < len(emitted_names) < len(tool_names)
+
+
+def test_truncate_csv_at_tool_name_boundary_edges():
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import (
+        _truncate_csv_at_tool_name_boundary,
+    )
+
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="a,b,c", max_length=150) == "a,b,c"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="abc,def", max_length=3) == "abc"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=5) == "ab,cd"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="ab,cd,ef", max_length=4) == "ab"
+    assert _truncate_csv_at_tool_name_boundary(tool_names_csv="single_name_longer_than_cap", max_length=10) == ""
+
+
+def _make_context_window_raising_router(state):
+    """
+    Mock litellm Router whose embedding call raises ContextWindowExceededError
+    once state["raise_context_error"] is flipped to True.
+    """
+    import litellm
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def mock_embedding_sync(*args, **kwargs):
+        if state["raise_context_error"]:
+            raise litellm.ContextWindowExceededError(
+                message="Invalid 'input[0]': maximum input length is 8192 tokens.",
+                model="text-embedding-3-small",
+                llm_provider="openai",
+            )
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync(*args, **kwargs)
+
+    mock_router = Mock()
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+    return mock_router
+
+
+def _make_context_window_filter(state, top_k: int = 3):
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    return SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=_make_context_window_raising_router(state),
+        top_k=top_k,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_fails_closed_on_query_time_context_window_error():
+    """
+    Regression test (LIT-4284): a context-window overflow while embedding the
+    user query must fail closed with a typed error instead of silently
+    returning all tools (previously reported as N->N "success").
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticToolFilterContextWindowError,
+    )
+
+    state = {"raise_context_error": False}
+    filter_instance = _make_context_window_filter(state)
+
+    tools = [
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        for i in range(5)
+    ]
+    filter_instance._build_router(tools)
+    assert filter_instance.tool_router is not None
+
+    state["raise_context_error"] = True
+    with pytest.raises(SemanticToolFilterContextWindowError) as exc_info:
+        await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    message = str(exc_info.value)
+    assert "context window" in message
+    assert "text-embedding-3-small" in message
+    print("✅ Query-time context window overflow fails closed")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_records_build_time_context_window_error():
+    """
+    Regression test (LIT-4284): a context-window overflow while embedding the
+    tool descriptions at router-build time must be recorded (not raised out of
+    the build, which previously left the hook unregistered and filtering
+    silently disabled) and must fail subsequent filtering closed.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticToolFilterContextWindowError,
+    )
+
+    state = {"raise_context_error": True}
+    filter_instance = _make_context_window_filter(state)
+
+    tools = [
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        for i in range(5)
+    ]
+    filter_instance._build_router(tools)
+
+    assert filter_instance.tool_router is None
+    assert filter_instance.context_window_error is not None
+
+    with pytest.raises(SemanticToolFilterContextWindowError) as exc_info:
+        await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    message = str(exc_info.value)
+    assert "context window" in message
+    assert "tool descriptions" in message
+    print("✅ Build-time context window overflow is recorded and fails closed")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_fails_closed_on_context_window_error():
+    """
+    Regression test (LIT-4284): the pre-call hook must reject the request with
+    an actionable HTTP 400 when the embedding model overflows its context
+    window, instead of forwarding all tools and emitting an N->N success
+    header.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    state = {"raise_context_error": False}
+    filter_instance = _make_context_window_filter(state)
+
+    tools = [
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        for i in range(5)
+    ]
+    filter_instance._build_router(tools)
+    hook = SemanticToolFilterHook(filter_instance)
+
+    state["raise_context_error"] = True
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Send an email"}],
+        "tools": tools,
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=Mock(),
+            cache=Mock(),
+            data=data,
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 400
+    error_message = exc_info.value.detail["error"]
+    assert "context window" in error_message
+    assert "text-embedding-3-small" in error_message
+    assert "larger context window" in error_message
+    assert "maximum input length" not in error_message
+    print("✅ Hook fails closed with actionable 400 on context window overflow")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_fails_closed_on_expanded_tools_context_window_error():
+    """
+    Regression test (LIT-4284): the litellm_proxy MCP expansion path (driven
+    by the dashboard test panel via /v1/responses) must also fail closed with
+    an actionable HTTP 400 instead of being swallowed by the expansion
+    catch-all.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    state = {"raise_context_error": False}
+    filter_instance = _make_context_window_filter(state)
+
+    registry_tools = [
+        MCPTool(name=f"srv-tool_{i}", description=f"Registry tool {i}", inputSchema={"type": "object"})
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    state["raise_context_error"] = True
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": "Send an email", "type": "message"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            }
+        ],
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=Mock(),
+            cache=Mock(),
+            data=data,
+            call_type="aresponses",
+        )
+
+    assert exc_info.value.status_code == 400
+    error_message = exc_info.value.detail["error"]
+    assert "context window" in error_message
+    assert "larger context window" in error_message
+    assert "maximum input length" not in error_message
+    print("✅ Expansion path fails closed with actionable 400 on context window overflow")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_ignores_build_error_for_native_only_tools():
+    """
+    A recorded build-time context-window error must only block requests that
+    rely on MCP tool filtering; requests carrying only native tools pass
+    through untouched.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    state = {"raise_context_error": True}
+    filter_instance = _make_context_window_filter(state)
+
+    mcp_tools = [
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        for i in range(3)
+    ]
+    filter_instance._build_router(mcp_tools)
+    assert filter_instance.context_window_error is not None
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    native_tools = [
+        {
+            "type": "function",
+            "function": {"name": "local_fn", "description": "A local function", "parameters": {}},
+        }
+    ]
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Send an email"}],
+        "tools": native_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    assert result["tools"] == native_tools
+    print("✅ Native-only requests pass through despite recorded build error")
+
+
+def test_is_context_window_error_detection_variants():
+    """
+    _is_context_window_error must detect the overflow in every shape it
+    reaches filter_tools in: the raw typed exception, the encoder's
+    explicitly chained ValueError wrapper, an implicitly chained wrapper,
+    and a bare error whose message carries a known overflow phrase; a
+    generic error must not match.
+    """
+    import litellm
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        _is_context_window_error,
+    )
+
+    cwe = litellm.ContextWindowExceededError(
+        message="Invalid 'input[0]': maximum input length is 8192 tokens.",
+        model="text-embedding-3-small",
+        llm_provider="openai",
+    )
+    assert _is_context_window_error(cwe)
+
+    try:
+        raise ValueError("Internal_litellm_router API call failed") from cwe
+    except ValueError as explicitly_chained:
+        assert _is_context_window_error(explicitly_chained)
+
+    try:
+        try:
+            raise litellm.ContextWindowExceededError(
+                message="overflow", model="m", llm_provider="openai"
+            )
+        except litellm.ContextWindowExceededError:
+            raise ValueError("wrapper without explicit chaining")
+    except ValueError as implicitly_chained:
+        assert _is_context_window_error(implicitly_chained)
+
+    assert _is_context_window_error(ValueError("Invalid 'input[0]': maximum input length is 8192 tokens."))
+    assert not _is_context_window_error(ValueError("A generic API error occurred."))
+    assert not _is_context_window_error(None)

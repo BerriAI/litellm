@@ -1,6 +1,7 @@
 """
 Constants and helpers for ChatGPT subscription OAuth.
 """
+
 import os
 import platform
 from typing import Any, Optional, Union
@@ -145,9 +146,7 @@ def _safe_header_value(value: str) -> str:
 def _sanitize_user_agent_token(value: str) -> str:
     if not value:
         return ""
-    return "".join(
-        ch if (ch.isalnum() or ch in "-_./") else "_" for ch in value
-    )
+    return "".join(ch if (ch.isalnum() or ch in "-_./") else "_" for ch in value)
 
 
 def _terminal_user_agent() -> str:
@@ -159,16 +158,10 @@ def _terminal_user_agent() -> str:
 
     wezterm_version = os.getenv("WEZTERM_VERSION")
     if wezterm_version is not None:
-        token = (
-            f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
-        )
+        token = f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
         return _sanitize_user_agent_token(token) or "WezTerm"
 
-    if (
-        os.getenv("ITERM_SESSION_ID")
-        or os.getenv("ITERM_PROFILE")
-        or os.getenv("ITERM_PROFILE_NAME")
-    ):
+    if os.getenv("ITERM_SESSION_ID") or os.getenv("ITERM_PROFILE") or os.getenv("ITERM_PROFILE_NAME"):
         return "iTerm.app"
 
     if os.getenv("TERM_SESSION_ID"):
@@ -182,9 +175,7 @@ def _terminal_user_agent() -> str:
 
     konsole_version = os.getenv("KONSOLE_VERSION")
     if konsole_version is not None:
-        token = (
-            f"Konsole/{konsole_version}" if konsole_version else "Konsole"
-        )
+        token = f"Konsole/{konsole_version}" if konsole_version else "Konsole"
         return _sanitize_user_agent_token(token) or "Konsole"
 
     if os.getenv("GNOME_TERMINAL_SCREEN"):
@@ -230,9 +221,7 @@ def get_chatgpt_user_agent(originator: str) -> str:
     terminal_ua = _terminal_user_agent()
     suffix = os.getenv("CHATGPT_USER_AGENT_SUFFIX", "").strip()
     suffix = f" ({suffix})" if suffix else ""
-    candidate = (
-        f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
-    )
+    candidate = f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
     return _safe_header_value(candidate) or DEFAULT_USER_AGENT
 
 

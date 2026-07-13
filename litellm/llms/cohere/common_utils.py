@@ -27,9 +27,7 @@ class CohereModelInfo(BaseLLMModelInfo):
         """
         return None
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by this provider.
         """
@@ -66,24 +64,25 @@ class CohereModelInfo(BaseLLMModelInfo):
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
         pass
-    
+
     @staticmethod
     def get_cohere_route(model: str) -> Literal["v1", "v2"]:
         """
         Get the Cohere route for the given model.
-        
+
         Args:
             model: The model name (e.g., "cohere_chat/v2/command-r-plus", "command-r-plus")
-            
+
         Returns:
             "v2" for standard Cohere v2 API (default), "v1" for Cohere v1 API
         """
         # Check for explicit v1 route
         if "v1/" in model:
             return "v1"
-        
+
         # Default to v2 for all other cases
         return "v2"
+
 
 def validate_environment(
     headers: dict,
@@ -117,9 +116,7 @@ def validate_environment(
 
 
 class ModelResponseIterator:
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List = []
@@ -216,12 +213,11 @@ class ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
+
 class CohereV2ModelResponseIterator:
     """V2-specific response iterator for Cohere streaming"""
-    
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List = []
@@ -249,8 +245,8 @@ class CohereV2ModelResponseIterator:
                 "type": "function",
                 "function": {
                     "name": tool_calls[0].get("name", ""),
-                    "arguments": tool_calls[0].get("arguments", "")
-                }
+                    "arguments": tool_calls[0].get("arguments", ""),
+                },
             }  # type: ignore
         return None
 
@@ -276,7 +272,7 @@ class CohereV2ModelResponseIterator:
                 "end": citations.get("end", 0),
                 "text": citations.get("text", ""),
                 "sources": citations.get("sources", []),
-                "type": citations.get("type", "TEXT_CONTENT")
+                "type": citations.get("type", "TEXT_CONTENT"),
             }
             return {"citations": [citation_data]}
         return None
@@ -287,7 +283,7 @@ class CohereV2ModelResponseIterator:
         delta = data.get("delta", {})
         is_finished = True
         finish_reason = delta.get("finish_reason", "stop")
-        
+
         usage = None
         usage_data = delta.get("usage", {})
         if usage_data:
@@ -295,15 +291,15 @@ class CohereV2ModelResponseIterator:
             usage = ChatCompletionUsageBlock(
                 prompt_tokens=tokens_data.get("input_tokens", 0),
                 completion_tokens=tokens_data.get("output_tokens", 0),
-                total_tokens=tokens_data.get("input_tokens", 0) + tokens_data.get("output_tokens", 0)
+                total_tokens=tokens_data.get("input_tokens", 0) + tokens_data.get("output_tokens", 0),
             )
-        
+
         return is_finished, finish_reason, usage
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         """
         Parse Cohere v2 streaming chunks.
-        
+
         v2 format:
         - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text
         - Tool calls: chunk.type == "tool-call-delta" -> chunk.delta.tool_calls
@@ -408,4 +404,3 @@ class CohereV2ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
-

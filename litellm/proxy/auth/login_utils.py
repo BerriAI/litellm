@@ -12,7 +12,7 @@ from typing import Literal, Optional, cast
 from fastapi import HTTPException
 
 import litellm
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -20,7 +20,6 @@ from litellm.proxy._types import (
     ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
-    hash_token,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -29,9 +28,28 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
-from litellm.proxy.utils import PrismaClient, get_server_root_path
+from litellm.proxy.utils import (
+    PrismaClient,
+    get_server_root_path,
+    hash_password,
+    verify_password,
+)
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+
+async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
+    """Rehash legacy password (SHA256) to scrypt on successful login."""
+    if stored.startswith("scrypt:"):
+        return
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": user_id},
+            data={"password": hash_password(password)},
+        )
 
 
 def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
@@ -85,7 +103,7 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(  # noqa: PLR0915
+async def authenticate_user(
     username: str,
     password: str,
     master_key: Optional[str],
@@ -134,7 +152,7 @@ async def authenticate_user(  # noqa: PLR0915
     if prisma_client is not None:
         _user_row = cast(
             Optional[LiteLLM_UserTable],
-            await prisma_client.db.litellm_usertable.find_first(
+            await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
         )
@@ -144,9 +162,9 @@ async def authenticate_user(  # noqa: PLR0915
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(
-        username.encode("utf-8"), ui_username.encode("utf-8")
-    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8")):
+    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -154,8 +172,7 @@ async def authenticate_user(  # noqa: PLR0915
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
         key_user_id = LITELLM_PROXY_ADMIN_NAME
         if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None
-            and os.environ["PROXY_ADMIN_ID"] == user_id
+            os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
         ) or user_id == LITELLM_PROXY_ADMIN_NAME:
             # checks if user is admin
             key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
@@ -178,7 +195,7 @@ async def authenticate_user(  # noqa: PLR0915
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "24hr",
+                    "duration": LITELLM_UI_SESSION_DURATION,
                     "key_max_budget": litellm.max_ui_session_budget,
                     "models": [],
                     "aliases": {},
@@ -204,9 +221,7 @@ async def authenticate_user(  # noqa: PLR0915
             user_info: Optional[LiteLLM_UserTable] = None
             if _user_row is not None:
                 user_info = _user_row
-            elif (
-                user_id is not None
-            ):  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
+            elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
                 user_info = LiteLLM_UserTable(
                     user_id=user_id,
                     user_role=user_role,
@@ -216,14 +231,10 @@ async def authenticate_user(  # noqa: PLR0915
             if user_info is None:
                 raise HTTPException(
                     status_code=401,
-                    detail={
-                        "error": "User Information is required for experimental UI login"
-                    },
+                    detail={"error": "User Information is required for experimental UI login"},
                 )
 
-            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
-                user_info
-            )
+            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
         return LoginResult(
             user_id=user_id,
@@ -240,9 +251,7 @@ async def authenticate_user(  # noqa: PLR0915
         -> if the user has no role in the DB assume they are only a viewer
         """
         user_id = getattr(_user_row, "user_id", "unknown")
-        user_role = getattr(
-            _user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        )
+        user_role = getattr(_user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
 
@@ -254,17 +263,14 @@ async def authenticate_user(  # noqa: PLR0915
                 code=401,
             )
 
-        # check if password == _user_row.password
-        hash_password = hash_token(token=password)
-        if secrets.compare_digest(
-            password.encode("utf-8"), _password.encode("utf-8")
-        ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
+        if verify_password(password, _password):
+            await _rehash_password_if_needed(_user_row.user_id, password, _password)
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore
                         "user_role": user_role,
-                        "duration": "24hr",
+                        "duration": LITELLM_UI_SESSION_DURATION,
                         "key_max_budget": litellm.max_ui_session_budget,
                         "models": [],
                         "aliases": {},
@@ -323,9 +329,7 @@ def create_ui_token_object(
     Returns:
         ReturnedUITokenObject: Token object ready for JWT encoding
     """
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
-    )
+    disabled_non_admin_personal_key_creation = get_disabled_non_admin_personal_key_creation()
 
     return ReturnedUITokenObject(
         user_id=login_result.user_id,
@@ -334,10 +338,7 @@ def create_ui_token_object(
         user_role=login_result.user_role,
         login_method=login_result.login_method,
         premium_user=premium_user,
-        auth_header_name=general_settings.get(
-            "litellm_key_header_name", "Authorization"
-        ),
+        auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
-

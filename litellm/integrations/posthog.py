@@ -45,23 +45,21 @@ class PostHogLogger(CustomBatchLogger):
         """
         try:
             verbose_logger.debug("PostHog: in init posthog logger")
-            
+
             self.is_mock_mode = should_use_posthog_mock()
             if self.is_mock_mode:
                 create_mock_posthog_client()
                 verbose_logger.debug("[POSTHOG MOCK] PostHog logger initialized in mock mode")
-            
+
             if os.getenv("POSTHOG_API_KEY", None) is None:
                 raise Exception("POSTHOG_API_KEY is not set, set 'POSTHOG_API_KEY=<>'")
 
-            self.async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
-            )
+            self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
             self.sync_client = _get_httpx_client()
-            
+
             self.POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
             posthog_api_url = os.getenv("POSTHOG_API_URL", "https://us.i.posthog.com")
-            self.posthog_host = posthog_api_url.rstrip('/')
+            self.posthog_host = posthog_api_url.rstrip("/")
             self.capture_url = f"{self.posthog_host}/batch/"
 
             self._async_initialized = False
@@ -71,21 +69,15 @@ class PostHogLogger(CustomBatchLogger):
             # Register cleanup handler to flush internal queue on exit
             atexit.register(self._flush_on_exit)
 
-            super().__init__(
-                **kwargs, flush_lock=None, batch_size=POSTHOG_MAX_BATCH_SIZE
-            )
+            super().__init__(**kwargs, flush_lock=None, batch_size=POSTHOG_MAX_BATCH_SIZE)
 
         except Exception as e:
-            verbose_logger.exception(
-                f"PostHog: Got exception on init PostHog client {str(e)}"
-            )
+            verbose_logger.exception(f"PostHog: Got exception on init PostHog client {str(e)}")
             raise e
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(
-                "PostHog: Sync logging - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("PostHog: Sync logging - Enters logging function for model %s", kwargs)
 
             api_key, api_url = self._get_credentials_for_request(kwargs)
             if api_key is None or api_url is None:
@@ -107,9 +99,7 @@ class PostHogLogger(CustomBatchLogger):
             response.raise_for_status()
 
             if response.status_code != 200:
-                raise Exception(
-                    f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
-                )
+                raise Exception(f"Response from PostHog API status_code: {response.status_code}, text: {response.text}")
 
             if self.is_mock_mode:
                 verbose_logger.debug("[POSTHOG MOCK] Sync event successfully mocked")
@@ -121,9 +111,7 @@ class PostHogLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(
-                "PostHog: Async logging - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("PostHog: Async logging - Enters logging function for model %s", kwargs)
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
@@ -132,9 +120,7 @@ class PostHogLogger(CustomBatchLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(
-                "PostHog: Async logging - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("PostHog: Async logging - Enters logging function for model %s", kwargs)
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
@@ -147,14 +133,8 @@ class PostHogLogger(CustomBatchLogger):
         event_payload = self.create_posthog_event_payload(kwargs)
 
         # Store event with its credentials for batch sending
-        self.log_queue.append({
-            "event": event_payload,
-            "api_key": api_key,
-            "api_url": api_url
-        })
-        verbose_logger.debug(
-            f"PostHog, event added to queue. Will flush in {self.flush_interval} seconds..."
-        )
+        self.log_queue.append({"event": event_payload, "api_key": api_key, "api_url": api_url})
+        verbose_logger.debug(f"PostHog, event added to queue. Will flush in {self.flush_interval} seconds...")
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
@@ -169,9 +149,7 @@ class PostHogLogger(CustomBatchLogger):
         Returns:
             PostHogEventPayload: defined in types.py
         """
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object", None
-        )
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
         if standard_logging_object is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
@@ -263,24 +241,46 @@ class PostHogLogger(CustomBatchLogger):
             return
 
         litellm_internal_fields = {
-            "endpoint", "caching_groups", "user_api_key_hash", "user_api_key_alias",
-            "user_api_key_team_id", "user_api_key_user_id", "user_api_key_org_id",
-            "user_api_key_team_alias", "user_api_key_end_user_id", "user_api_key_user_email",
-            "user_api_key", "user_api_end_user_max_budget", "litellm_api_version",
-            "global_max_parallel_requests", "user_api_key_team_max_budget", "user_api_key_team_spend",
-            "user_api_key_spend", "user_api_key_max_budget", "user_api_key_model_max_budget",
-            "user_api_key_metadata", "headers", "litellm_parent_otel_span", "requester_ip_address",
-            "model_group", "model_group_size", "deployment", "model_info", "api_base",
-            "caching_groups", "hidden_params", "parent_run_id", "parent_id", "user_id"
+            "endpoint",
+            "caching_groups",
+            "user_api_key_hash",
+            "user_api_key_alias",
+            "user_api_key_team_id",
+            "user_api_key_user_id",
+            "user_api_key_org_id",
+            "user_api_key_team_alias",
+            "user_api_key_end_user_id",
+            "user_api_key_user_email",
+            "user_api_key",
+            "user_api_end_user_max_budget",
+            "litellm_api_version",
+            "global_max_parallel_requests",
+            "user_api_key_team_max_budget",
+            "user_api_key_team_spend",
+            "user_api_key_spend",
+            "user_api_key_max_budget",
+            "user_api_key_model_max_budget",
+            "user_api_key_metadata",
+            "headers",
+            "litellm_parent_otel_span",
+            "requester_ip_address",
+            "model_group",
+            "model_group_size",
+            "deployment",
+            "model_info",
+            "api_base",
+            "caching_groups",
+            "hidden_params",
+            "parent_run_id",
+            "parent_id",
+            "user_id",
         }
 
         for key, value in metadata.items():
             if key not in litellm_internal_fields:
                 properties[key] = value
 
-    def _get_distinct_id(
-        self, standard_logging_object: StandardLoggingPayload, kwargs: Dict[str, Any]
-    ) -> str:
+    def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: Dict[str, Any]) -> str:
         metadata = self._extract_metadata(kwargs)
         user_id = self._safe_get(metadata, "user_id")
         if user_id:
@@ -307,8 +307,8 @@ class PostHogLogger(CustomBatchLogger):
         Returns:
             tuple[str, str]: (api_key, api_url)
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+            "standard_callback_dynamic_params", None
         )
 
         if standard_callback_dynamic_params is not None:
@@ -331,10 +331,8 @@ class PostHogLogger(CustomBatchLogger):
             if not self.log_queue:
                 return
 
-            verbose_logger.debug(
-                f"PostHog: Sending batch of {len(self.log_queue)} events"
-            )
-            
+            verbose_logger.debug(f"PostHog: Sending batch of {len(self.log_queue)} events")
+
             if self.is_mock_mode:
                 verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
@@ -370,9 +368,7 @@ class PostHogLogger(CustomBatchLogger):
             if self.is_mock_mode:
                 verbose_logger.debug(f"[POSTHOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
             else:
-                verbose_logger.debug(
-                    f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
-                )
+                verbose_logger.debug(f"PostHog: Batch of {len(self.log_queue)} events successfully sent")
         except Exception as e:
             verbose_logger.exception(f"PostHog Error sending batch API - {str(e)}")
 
@@ -398,7 +394,7 @@ class PostHogLogger(CustomBatchLogger):
         return {"api_key": api_key, "batch": events}
 
     def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
-        if obj is None or not hasattr(obj, 'get'):
+        if obj is None or not hasattr(obj, "get"):
             return default
         return obj.get(key, default)
 
@@ -415,9 +411,7 @@ class PostHogLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        verbose_logger.debug(
-            f"PostHog: Flushing {len(self.log_queue)} remaining events on exit"
-        )
+        verbose_logger.debug(f"PostHog: Flushing {len(self.log_queue)} remaining events on exit")
 
         try:
             # Group events by credentials (same logic as async_send_batch)
@@ -445,18 +439,12 @@ class PostHogLogger(CustomBatchLogger):
                 response.raise_for_status()
 
                 if response.status_code != 200:
-                    verbose_logger.error(
-                        f"PostHog: Failed to flush on exit - status {response.status_code}"
-                    )
+                    verbose_logger.error(f"PostHog: Failed to flush on exit - status {response.status_code}")
 
             if self.is_mock_mode:
-                verbose_logger.debug(
-                    f"[POSTHOG MOCK] Successfully flushed {len(self.log_queue)} events on exit"
-                )
+                verbose_logger.debug(f"[POSTHOG MOCK] Successfully flushed {len(self.log_queue)} events on exit")
             else:
-                verbose_logger.debug(
-                    f"PostHog: Successfully flushed {len(self.log_queue)} events on exit"
-                )
+                verbose_logger.debug(f"PostHog: Successfully flushed {len(self.log_queue)} events on exit")
             self.log_queue.clear()
 
         except Exception as e:

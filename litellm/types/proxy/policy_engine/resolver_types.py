@@ -198,39 +198,78 @@ class PolicyDBResponse(BaseModel):
 
     policy_id: str = Field(description="Unique ID of the policy.")
     policy_name: str = Field(description="Name of the policy.")
+    version_number: int = Field(default=1, description="Version number of this policy.")
+    version_status: str = Field(
+        default="production",
+        description="One of: draft, published, production.",
+    )
+    parent_version_id: Optional[str] = Field(default=None, description="Policy ID this version was cloned from.")
+    is_latest: bool = Field(
+        default=True,
+        description="True if this is the latest version by version_number.",
+    )
+    published_at: Optional[datetime] = Field(default=None, description="When this version was published.")
+    production_at: Optional[datetime] = Field(default=None, description="When this version was promoted to production.")
     inherit: Optional[str] = Field(default=None, description="Parent policy name.")
     description: Optional[str] = Field(default=None, description="Policy description.")
-    guardrails_add: List[str] = Field(
-        default_factory=list, description="Guardrails to add."
-    )
-    guardrails_remove: List[str] = Field(
-        default_factory=list, description="Guardrails to remove."
-    )
-    condition: Optional[Dict[str, Any]] = Field(
-        default=None, description="Policy condition."
-    )
-    pipeline: Optional[Dict[str, Any]] = Field(
-        default=None, description="Optional guardrail pipeline."
-    )
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the policy was created."
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the policy was last updated."
-    )
+    guardrails_add: List[str] = Field(default_factory=list, description="Guardrails to add.")
+    guardrails_remove: List[str] = Field(default_factory=list, description="Guardrails to remove.")
+    condition: Optional[Dict[str, Any]] = Field(default=None, description="Policy condition.")
+    pipeline: Optional[Dict[str, Any]] = Field(default=None, description="Optional guardrail pipeline.")
+    created_at: Optional[datetime] = Field(default=None, description="When the policy was created.")
+    updated_at: Optional[datetime] = Field(default=None, description="When the policy was last updated.")
     created_by: Optional[str] = Field(default=None, description="Who created the policy.")
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the policy."
-    )
+    updated_by: Optional[str] = Field(default=None, description="Who last updated the policy.")
 
 
 class PolicyListDBResponse(BaseModel):
     """Response for listing policies from the database."""
 
-    policies: List[PolicyDBResponse] = Field(
-        default_factory=list, description="List of policies."
-    )
+    policies: List[PolicyDBResponse] = Field(default_factory=list, description="List of policies.")
     total_count: int = Field(default=0, description="Total number of policies.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy Versioning Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PolicyVersionCreateRequest(BaseModel):
+    """Request body for creating a new policy version (draft)."""
+
+    source_policy_id: Optional[str] = Field(
+        default=None,
+        description="Policy ID to clone from. If None, clone from current production version.",
+    )
+
+
+class PolicyVersionStatusUpdateRequest(BaseModel):
+    """Request body for updating a policy version's status."""
+
+    version_status: str = Field(
+        description="New status: 'published' or 'production'.",
+    )
+
+
+class PolicyVersionListResponse(BaseModel):
+    """Response for listing all versions of a policy."""
+
+    policy_name: str = Field(description="Name of the policy.")
+    versions: List[PolicyDBResponse] = Field(
+        default_factory=list, description="All versions ordered by version_number desc."
+    )
+    total_count: int = Field(default=0, description="Total number of versions.")
+
+
+class PolicyVersionCompareResponse(BaseModel):
+    """Response for comparing two policy versions."""
+
+    version_a: PolicyDBResponse = Field(description="First version.")
+    version_b: PolicyDBResponse = Field(description="Second version.")
+    field_diffs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Field name -> {version_a: val, version_b: val} for differing fields.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,18 +313,10 @@ class PolicyAttachmentDBResponse(BaseModel):
     keys: List[str] = Field(default_factory=list, description="Key patterns.")
     models: List[str] = Field(default_factory=list, description="Model patterns.")
     tags: List[str] = Field(default_factory=list, description="Tag patterns.")
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was created."
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was last updated."
-    )
-    created_by: Optional[str] = Field(
-        default=None, description="Who created the attachment."
-    )
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the attachment."
-    )
+    created_at: Optional[datetime] = Field(default=None, description="When the attachment was created.")
+    updated_at: Optional[datetime] = Field(default=None, description="When the attachment was last updated.")
+    created_by: Optional[str] = Field(default=None, description="Who created the attachment.")
+    updated_by: Optional[str] = Field(default=None, description="Who last updated the attachment.")
 
 
 class PolicyAttachmentListResponse(BaseModel):
@@ -316,18 +347,10 @@ class PipelineTestRequest(BaseModel):
 class PolicyResolveRequest(BaseModel):
     """Request body for resolving effective policies/guardrails for a context."""
 
-    team_alias: Optional[str] = Field(
-        default=None, description="Team alias to resolve for."
-    )
-    key_alias: Optional[str] = Field(
-        default=None, description="Key alias to resolve for."
-    )
-    model: Optional[str] = Field(
-        default=None, description="Model name to resolve for."
-    )
-    tags: Optional[List[str]] = Field(
-        default=None, description="Tags to resolve for."
-    )
+    team_alias: Optional[str] = Field(default=None, description="Team alias to resolve for.")
+    key_alias: Optional[str] = Field(default=None, description="Key alias to resolve for.")
+    model: Optional[str] = Field(default=None, description="Model name to resolve for.")
+    tags: Optional[List[str]] = Field(default=None, description="Tags to resolve for.")
 
 
 class PolicyMatchDetail(BaseModel):
@@ -365,17 +388,15 @@ class AttachmentImpactResponse(BaseModel):
     """Response for estimating the impact of a policy attachment."""
 
     affected_keys_count: int = Field(
-        default=0, description="Number of keys that would be affected (named + unnamed)."
+        default=0,
+        description="Number of keys that would be affected (named + unnamed).",
     )
     affected_teams_count: int = Field(
-        default=0, description="Number of teams that would be affected (named + unnamed)."
+        default=0,
+        description="Number of teams that would be affected (named + unnamed).",
     )
-    unnamed_keys_count: int = Field(
-        default=0, description="Number of affected keys without an alias."
-    )
-    unnamed_teams_count: int = Field(
-        default=0, description="Number of affected teams without an alias."
-    )
+    unnamed_keys_count: int = Field(default=0, description="Number of affected keys without an alias.")
+    unnamed_teams_count: int = Field(default=0, description="Number of affected teams without an alias.")
     sample_keys: List[str] = Field(
         default_factory=list,
         description="Sample of affected key aliases (up to 10).",

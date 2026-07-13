@@ -1,6 +1,7 @@
 """
 Constants for Copilot integration
 """
+
 from typing import Optional, Union
 from uuid import uuid4
 
@@ -13,7 +14,8 @@ COPILOT_VERSION = "0.26.7"
 EDITOR_PLUGIN_VERSION = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION = "2025-04-01"
-GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
+DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
+
 
 class GithubCopilotError(BaseLLMException):
     def __init__(

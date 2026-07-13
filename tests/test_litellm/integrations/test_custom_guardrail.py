@@ -84,6 +84,112 @@ class TestCustomGuardrailDeploymentHook:
         assert result["messages"] == mock_result["messages"]
         assert result["messages"] != original_messages
 
+    @pytest.mark.asyncio
+    async def test_deployment_hook_skips_when_pre_call_already_ran(self):
+        """The deployment hook must not re-run async_pre_call_hook once the proxy
+        pre-call loop has already run it for this request."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_runs_when_not_marked(self):
+        """Without the proxy marker (direct-SDK usage) the deployment hook is the
+        only execution path and must still run the guardrail exactly once."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
+    def test_mark_pre_call_hook_ran_uses_litellm_metadata(self):
+        """The marker is recorded in litellm_metadata when that is the metadata
+        bucket in use, and is then visible to the skip check."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        guardrail = CustomGuardrail(guardrail_name="g1")
+        kwargs = {"litellm_metadata": {}}
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+
+        assert kwargs["litellm_metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY]
+        assert guardrail._pre_call_hook_already_ran(kwargs) is True
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_ignores_forged_caller_marker(self):
+        """A direct-SDK caller controls request metadata but cannot know the
+        per-process token, so a hand-crafted marker must not suppress a
+        requested guardrail in async_pre_call_deployment_hook."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {PRE_CALL_EXECUTED_GUARDRAILS_KEY: ["g1"]},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
 
 class TestCustomGuardrailShouldRunGuardrail:
 
@@ -173,17 +279,16 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert result is False
 
     def test_should_run_guardrail_with_disable_global_guardrail(self):
-        """Test that disable_global_guardrail disables a global guardrail when set to True"""
+        """Test that disable_global_guardrails only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks
 
-        # Create a guardrail with default_on=True (global guardrail)
         custom_guardrail = CustomGuardrail(
             guardrail_name="global_guardrail",
             default_on=True,
             event_hook=GuardrailEventHooks.pre_call,
         )
 
-        # Test 1: Global guardrail runs by default when default_on=True
+        # Test 1: Global guardrail runs by default
         data = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -193,57 +298,220 @@ class TestCustomGuardrailShouldRunGuardrail:
         )
         assert result is True, "Global guardrail should run when default_on=True"
 
-        # Test 2: Global guardrail is disabled when disable_global_guardrail=True at root level
+        # Test 2: User-injected disable at root level is IGNORED
         data_with_disable_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": True,
+            "disable_global_guardrails": True,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_root, event_type=GuardrailEventHooks.pre_call
         )
         assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True"
+            result is True
+        ), "User-injected disable_global_guardrails should be ignored"
 
-        # Test 3: Global guardrail is disabled when disable_global_guardrail=True in litellm_metadata
-        data_with_disable_litellm = {
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"disable_global_guardrail": True},
-        }
-        result = custom_guardrail.should_run_guardrail(
-            data=data_with_disable_litellm, event_type=GuardrailEventHooks.pre_call
-        )
-        assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True in litellm_metadata"
-
-        # Test 4: Global guardrail is disabled when disable_global_guardrail=True in metadata
+        # Test 3: User-injected disable in metadata is IGNORED
         data_with_disable_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "metadata": {"disable_global_guardrail": True},
+            "metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_metadata, event_type=GuardrailEventHooks.pre_call
         )
-        assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True in metadata"
+        assert result is True, "User-injected metadata disable should be ignored"
 
-        # Test 5: Global guardrail runs when disable_global_guardrail=False
-        data_with_disable_false = {
+        # Test 4: Admin-configured disable via user_api_key_metadata IS respected
+        data_with_admin_disable = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": False,
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
         }
         result = custom_guardrail.should_run_guardrail(
-            data=data_with_disable_false, event_type=GuardrailEventHooks.pre_call
+            data=data_with_admin_disable, event_type=GuardrailEventHooks.pre_call
+        )
+        assert result is False, "Admin-configured disable should be respected"
+
+        # Test 5: Admin config in metadata isn't shadowed by user-supplied litellm_metadata
+        data_cross_key = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {"request_tags": ["user-supplied"]},
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_cross_key, event_type=GuardrailEventHooks.pre_call
         )
         assert (
-            result is True
-        ), "Global guardrail should still run when disable_global_guardrail=False"
+            result is False
+        ), "Admin config in metadata must not be shadowed by user-supplied litellm_metadata"
+
+        # Test 6: After the pre-call strip runs, user-injected
+        # user_api_key_metadata in the non-authoritative metadata key is gone.
+        # _get_admin_metadata must then surface admin config unchanged.
+        data_post_strip = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {},  # post-strip: attacker payload removed
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_post_strip, event_type=GuardrailEventHooks.pre_call
+        )
+        assert (
+            result is False
+        ), "Admin config in metadata must be respected when other metadata key is empty"
+
+    def test_should_run_guardrail_key_disable_global_not_overruled_by_team_guardrail_list(
+        self,
+    ):
+        """Key disable_global_guardrails must take precedence over the guardrail
+        appearing in the team's explicit guardrails list."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Key disabled globals; team added the same guardrail to its explicit list
+        # (simulates what _add_guardrails_from_key_or_team_metadata produces).
+        data_key_disabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_disabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is False
+        ), "Key disable_global_guardrails must win over team's explicit guardrail list"
+
+        # Complementary: key NOT disabled, team added guardrail → should run
+        data_key_enabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_enabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is True
+        ), "Guardrail in team's explicit list should run when key has not disabled globals"
+
+    def test_should_run_guardrail_with_opted_out_global_guardrails(self):
+        """Test that per-guardrail opt-out only works from admin metadata"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Test 1: User-injected opt-out at root level is IGNORED
+        data_root = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "opted_out_global_guardrails": ["global_guardrail"],
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_root, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 2: User-injected opt-out in metadata is IGNORED
+        data_metadata = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_metadata, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 4: a different guardrail in the opt-out list → still runs
+        data_other = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["some_other_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_other, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 5: empty opt-out list → still runs
+        data_empty = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": []},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_empty, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 6: malformed value (bool instead of list) → safely ignored, guardrail runs
+        data_malformed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": True},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_malformed, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+    def test_should_run_guardrail_opt_out_does_not_affect_non_global(self):
+        """Opt-out list only matters for default_on=True guardrails"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        non_global = CustomGuardrail(
+            guardrail_name="opt_in_guardrail",
+            default_on=False,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # An opt-in guardrail named in opted_out_global_guardrails is still controlled
+        # by the explicit `guardrails` request list, not by the global opt-out list.
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "opted_out_global_guardrails": ["opt_in_guardrail"],
+                "guardrails": ["opt_in_guardrail"],
+            },
+        }
+        assert (
+            non_global.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
 
 
 class TestApplyGuardrailCheck:
@@ -386,6 +654,352 @@ class TestGuardrailLoggingAggregation:
         assert info[1]["guardrail_name"] == "test_guardrail"
 
 
+class TestGuardrailOtelSpanEmission:
+    """Recording a guardrail emits its otel span inline, so every guardrail
+    execution produces a span — including the pass-through allow path that never
+    reaches a post-call hook."""
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="emit_guard",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def _record(self, guardrail, request_data):
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            start_time=1.0,
+            end_time=2.0,
+            duration=1.0,
+        )
+
+    def test_emits_span_for_recorded_entry(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            "litellm.integrations.otel.logger.emit_guardrail_span",
+            captured.append,
+        )
+
+        request_data = {"metadata": {}}
+        self._record(self._make_guardrail(), request_data)
+
+        assert len(captured) == 1
+        emitted = captured[0]
+        recorded = request_data["metadata"]["standard_logging_guardrail_information"][
+            -1
+        ]
+        assert emitted is recorded
+        assert emitted["guardrail_name"] == "emit_guard"
+        assert emitted["start_time"] == 1.0
+        assert emitted["end_time"] == 2.0
+
+    def test_span_emission_failure_does_not_break_recording(self, monkeypatch):
+        def _boom(_entry):
+            raise RuntimeError("otel exporter down")
+
+        monkeypatch.setattr(
+            "litellm.integrations.otel.logger.emit_guardrail_span", _boom
+        )
+
+        request_data = {"metadata": {}}
+        self._record(self._make_guardrail(), request_data)
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(info) == 1
+        assert info[0]["guardrail_name"] == "emit_guard"
+
+
+class TestGuardrailSensitiveFieldStripping:
+    """Tests that secret_fields is stripped from guardrail responses before logging.
+
+    Matches the pattern used by Langfuse and Arize integrations which also
+    pop("secret_fields") to prevent raw Authorization headers from being persisted.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_secret_fields_stripped_from_guardrail_response(self):
+        """Ensure secret_fields (containing raw Authorization headers) is not persisted."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail_response_with_secrets = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "secret_fields": {
+                "raw_headers": {
+                    "authorization": "Bearer sk-live-secret-key-12345",
+                    "content-type": "application/json",
+                }
+            },
+            "proxy_server_request": {"url": "http://localhost:4000/chat/completions"},
+        }
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response_with_secrets,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(info) == 1
+        logged_response = info[0]["guardrail_response"]
+
+        # secret_fields must be stripped
+        assert "secret_fields" not in logged_response
+
+        # Other fields should be preserved
+        assert "model" in logged_response
+        assert "messages" in logged_response
+        assert "proxy_server_request" in logged_response
+
+    def test_string_guardrail_response_not_affected(self):
+        """String responses (e.g. 'allow', 'deny') should pass through unchanged."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="allow",
+            request_data=request_data,
+            guardrail_status="success",
+            duration=0.5,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_response"] == "allow"
+
+    def test_no_authorization_header_in_logged_response(self):
+        """Verify no plaintext Authorization header ends up in the logged guardrail response."""
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-SHOULD-NOT-APPEAR",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged_response = request_data["metadata"][
+            "standard_logging_guardrail_information"
+        ][0]["guardrail_response"]
+        assert "secret_fields" not in logged_response
+        assert "sk-live-SHOULD-NOT-APPEAR" not in json.dumps(logged_response)
+
+    def test_secret_fields_stripped_from_list_dict_response(self):
+        """Ensure secret_fields is stripped from List[dict] guardrail responses too."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=[
+                {
+                    "result": "ok",
+                    "secret_fields": {
+                        "raw_headers": {"authorization": "Bearer sk-secret"}
+                    },
+                },
+                {"result": "also_ok"},
+            ],
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        import json
+
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-secret" not in serialized
+
+
+class TestGuardrailResponseCredentialMasking:
+    """LIT-4314 issue B regression: credentials embedded in guardrail_response
+    (via team callback_vars flowing through data["metadata"]) must be masked at
+    the construction seam so every downstream sink (SpendLogs, OTel, Langfuse,
+    custom loggers) sees masked values rather than plaintext.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_callback_vars_api_key_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext_key = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata_snapshot": {
+                    "callback_vars": {
+                        "langsmith_api_key": plaintext_key,
+                        "langsmith_project": "proj-name",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+
+        masked_key = logged["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked_key != plaintext_key
+        assert "*" in masked_key
+        assert plaintext_key not in json.dumps(request_data)
+
+        assert logged["model"] == "gpt-4o-mini"
+        assert logged["messages"] == [{"role": "user", "content": "hi"}]
+        assert (
+            logged["metadata_snapshot"]["callback_vars"]["langsmith_project"]
+            == "proj-name"
+        )
+
+    def test_nested_user_api_key_auth_metadata_is_masked(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        token_value = "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "evaluated_metadata": {
+                    "user_api_key_auth": {
+                        "token": token_value,
+                        "api_key": token_value,
+                        "metadata": {
+                            "callback_vars": {
+                                "langsmith_api_key": "lsv2_pt_super_secret_value_1234",
+                            }
+                        },
+                    }
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert token_value not in serialized
+        assert "lsv2_pt_super_secret_value_1234" not in serialized
+
+    def test_secret_fields_pop_still_runs(self):
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-should-not-appear",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-live-should-not-appear" not in serialized
+
+    def test_match_and_regex_redaction_still_runs(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+
+    def test_scalar_types_pass_through_unchanged(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "flagged": True,
+                "score": 0.94,
+                "tokens_used": 42,
+                "categories": ["pii", "toxicity"],
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]
+        assert logged["flagged"] is True
+        assert logged["score"] == 0.94
+        assert logged["tokens_used"] == 42
+        assert logged["categories"] == ["pii", "toxicity"]
+
+    def test_masking_reveals_prefix_and_suffix(self):
+        guardrail = self._make_guardrail()
+        request_data: dict = {"metadata": {}}
+        plaintext = "lsv2_pt_abcdef1234567890"
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "metadata_snapshot": {
+                    "callback_vars": {"langsmith_api_key": plaintext}
+                }
+            },
+            request_data=request_data,
+            guardrail_status="success",
+        )
+
+        masked = request_data["metadata"]["standard_logging_guardrail_information"][0][
+            "guardrail_response"
+        ]["metadata_snapshot"]["callback_vars"]["langsmith_api_key"]
+        assert masked != plaintext
+        assert masked.startswith(plaintext[:4])
+        assert masked.endswith(plaintext[-4:])
+
+
 class TestCustomGuardrailPassthroughSupport:
     """Tests for passthrough endpoint guardrail support - Issue fixes."""
 
@@ -394,21 +1008,21 @@ class TestCustomGuardrailPassthroughSupport:
         """
         Test that async_post_call_success_deployment_hook handles raw httpx.Response objects
         from passthrough endpoints without crashing with TypeError.
-        
+
         This tests Fix #3: TypeError: TypedDict does not support instance and class checks
         """
         import httpx
 
         custom_guardrail = CustomGuardrail()
-        
+
         # Mock the async_post_call_success_hook to return None (guardrail didn't modify response)
         custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
-        
+
         # Create a mock httpx.Response object (typical passthrough response)
         mock_response = AsyncMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.text = "Mock response"
-        
+
         request_data = {
             "guardrails": ["test_guardrail"],
             "user_api_key_user_id": "test_user",
@@ -417,14 +1031,14 @@ class TestCustomGuardrailPassthroughSupport:
             "user_api_key_hash": "test_hash",
             "user_api_key_request_route": "passthrough_route",
         }
-        
+
         # This should not raise TypeError: TypedDict does not support instance and class checks
         result = await custom_guardrail.async_post_call_success_deployment_hook(
             request_data=request_data,
             response=mock_response,
             call_type=CallTypes.allm_passthrough_route,
         )
-        
+
         # When result is None, should return the original response
         assert result == mock_response
 
@@ -432,53 +1046,53 @@ class TestCustomGuardrailPassthroughSupport:
     async def test_async_post_call_success_deployment_hook_with_none_call_type(self):
         """
         Test that async_post_call_success_deployment_hook handles None call_type gracefully.
-        
+
         This ensures that even if call_type is None (before fix #1), the guardrail doesn't crash.
         """
         custom_guardrail = CustomGuardrail()
-        
+
         # Mock the async_post_call_success_hook to return None
         custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
-        
+
         mock_response = AsyncMock()
-        
+
         request_data = {
             "guardrails": ["test_guardrail"],
             "user_api_key_user_id": "test_user",
         }
-        
+
         # Call with None call_type - should not crash
         result = await custom_guardrail.async_post_call_success_deployment_hook(
             request_data=request_data,
             response=mock_response,
             call_type=None,
         )
-        
+
         # Should return the original response when result is None
         assert result == mock_response
 
     def test_is_valid_response_type_with_none(self):
         """
         Test _is_valid_response_type helper method correctly identifies None as invalid.
-        
+
         This is part of Fix #3: Safely handling TypedDict types that don't support isinstance checks.
         """
         custom_guardrail = CustomGuardrail()
-        
+
         # None should be invalid
         assert custom_guardrail._is_valid_response_type(None) is False
 
     def test_is_valid_response_type_with_typeddict_error(self):
         """
         Test _is_valid_response_type gracefully handles TypeError from TypedDict.
-        
+
         This tests Fix #3: When isinstance() is called with TypedDict types, it raises TypeError.
         The method should catch this and allow the response through.
         """
         from litellm.types.utils import ModelResponse
-        
+
         custom_guardrail = CustomGuardrail()
-        
+
         # Create a valid LiteLLM response object
         response = ModelResponse(
             id="test-id",
@@ -487,11 +1101,10 @@ class TestCustomGuardrailPassthroughSupport:
             model="test-model",
             object="chat.completion",
         )
-        
+
         # This should return True (it's a valid response type or TypeError is caught)
         result = custom_guardrail._is_valid_response_type(response)
         assert result is True
-
 
 
 class TestEventTypeLogging:
@@ -696,6 +1309,91 @@ class TestEventTypeLogging:
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
 
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_if_function_already_recorded(
+        self,
+    ):
+        """When a wrapped guardrail function records its own entry directly
+        (e.g. block_code_execution.apply_guardrail records a rich
+        ``[detections...]`` payload), the decorator must NOT also append its
+        own ``"allow"``/raw-response entry — otherwise every backend
+        (OTEL spans, Datadog, Langfuse, spend logs) double-records one
+        logical guardrail invocation."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response=[{"action_taken": "block"}],
+                    request_data=request_data,
+                    guardrail_status="success",
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                return inputs
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=request_data
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1, (
+            f"Decorator must not double-record when the wrapped function "
+            f"already appended its own entry; got {len(logged_info)} entries"
+        )
+        assert logged_info[0]["guardrail_response"] == [{"action_taken": "block"}]
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_on_exception_if_function_already_recorded(
+        self,
+    ):
+        """Same as above on the failure path: if the wrapped function
+        appended an entry in its ``finally`` block before re-raising, the
+        decorator must just re-raise without auto-recording on top."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                try:
+                    raise ValueError("blocked")
+                finally:
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_json_response=[{"action_taken": "block"}],
+                        request_data=request_data,
+                        guardrail_status="guardrail_intervened",
+                        event_type=GuardrailEventHooks.pre_call,
+                    )
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        with pytest.raises(ValueError, match="blocked"):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["x"]}, request_data=request_data
+            )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_status"] == "guardrail_intervened"
+
     def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
         self,
     ):
@@ -787,7 +1485,9 @@ class TestTracingFieldsPopulation:
             guardrail_json_response="blocked",
             request_data=request_data,
             guardrail_status="guardrail_intervened",
-            tracing_detail=GuardrailTracingDetail(policy_template="EU AI Act Article 5"),
+            tracing_detail=GuardrailTracingDetail(
+                policy_template="EU AI Act Article 5"
+            ),
         )
 
         slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
@@ -820,3 +1520,97 @@ class TestTracingFieldsPopulation:
         assert slg["classification"] == classification
         assert slg["detection_method"] == "llm-judge"
         assert slg["confidence_score"] == 0.94
+
+
+class TestCustomGuardrailSpendLogMatchRedaction:
+    """Guardrail JSON persisted via standard_logging must not contain raw match spans."""
+
+    def test_add_standard_logging_redacts_nested_match(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": "NAME", "match": "GG", "action": "BLOCKED"}
+                        ]
+                    }
+                }
+            ]
+        }
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert (
+            slg["guardrail_response"]["assessments"][0]["sensitiveInformationPolicy"][
+                "piiEntities"
+            ][0]["match"]
+            == "[REDACTED]"
+        )
+        assert (
+            raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+                "match"
+            ]
+            == "GG"
+        )
+
+    def test_add_standard_logging_redacts_regex_field(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {"filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]}
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+        assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestGuardrailInterventionClassification:
+    """A routing decision is a deliberate guardrail intervention, not a failure."""
+
+    def test_sensitive_data_route_exception_is_intervention(self):
+        from litellm.exceptions import SensitiveDataRouteException
+
+        exc = SensitiveDataRouteException(
+            route_to_model="on-prem-model",
+            session_id="sess-1",
+            guardrail_name="pii-rail",
+        )
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.asyncio
+    async def test_routing_logged_as_intervened_not_failed(self):
+        from litellm.exceptions import SensitiveDataRouteException
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class RoutingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="pii-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise SensitiveDataRouteException(
+                    route_to_model="on-prem-model",
+                    session_id="sess-1",
+                    guardrail_name=self.guardrail_name,
+                )
+
+        guardrail = RoutingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(SensitiveDataRouteException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"

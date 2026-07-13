@@ -113,7 +113,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -121,6 +121,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
 
 class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
     """Test Gemini image generation models (Nano Banana)"""
+
     def get_base_image_generation_call_args(self) -> dict:
         # comment this when running locally
         load_vertex_ai_credentials()
@@ -128,7 +129,7 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/gemini-2.5-flash-image",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
             "size": "1024x1024",
@@ -162,11 +163,6 @@ class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
         }
 
 
-class TestOpenAIDalle3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "dall-e-3"}
-
-
 class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
@@ -198,12 +194,15 @@ class TestAimlImageGeneration(BaseImageGenTest):
         mock_response.text = json.dumps(mock_aiml_response)
         mock_response.headers = {}
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_async_post, patch(
-            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
-        ) as mock_sync_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_async_post,
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            ) as mock_sync_post,
+        ):
             mock_async_post.return_value = mock_response
             mock_sync_post.return_value = mock_response
 
@@ -212,7 +211,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                 custom_logger = TestCustomLogger()
                 litellm.logging_callback_manager._reset_all_callbacks()
                 litellm.callbacks = [custom_logger]
-                base_image_generation_call_args = self.get_base_image_generation_call_args()
+                base_image_generation_call_args = (
+                    self.get_base_image_generation_call_args()
+                )
                 litellm.set_verbose = True
                 # Pass dummy api_key so validate_environment passes; HTTP is mocked
                 response = await litellm.aimage_generation(
@@ -229,7 +230,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                 # print("response_cost", response._hidden_params["response_cost"])
 
                 logged_standard_logging_payload = custom_logger.standard_logging_payload
-                print("logged_standard_logging_payload", logged_standard_logging_payload)
+                print(
+                    "logged_standard_logging_payload", logged_standard_logging_payload
+                )
                 assert logged_standard_logging_payload is not None
                 assert logged_standard_logging_payload["response_cost"] is not None
                 assert logged_standard_logging_payload["response_cost"] > 0
@@ -244,7 +247,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                     response_dict["usage"] = dict(response_dict["usage"])
                 print("response usage=", response_dict.get("usage"))
 
-                assert response.data is not None  # type guard for iteration (base fails here if None)
+                assert (
+                    response.data is not None
+                )  # type guard for iteration (base fails here if None)
                 for d in response.data:
                     assert isinstance(d, Image)
                     print("data in response.data", d)
@@ -266,25 +271,27 @@ class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
 
+
 @pytest.mark.skip(reason="Runwayml image generation API only tested locally")
 class TestRunwaymlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "runwayml/gen4_image"}
 
 
-class TestAzureOpenAIDalle3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {
-            "model": "azure/dall-e-3",
-            "api_version": "2024-02-01",
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "metadata": {
-                "model_info": {
-                    "base_model": "azure/dall-e-3",
-                }
-            },
-        }
+## AZURE AI DALL-E 3 is deprecated and new deployments cannot be made
+# class TestAzureOpenAIDalle3(BaseImageGenTest):
+#     def get_base_image_generation_call_args(self) -> dict:
+#         return {
+#             "model": "azure/dall-e-3",
+#             "api_version": "2024-02-01",
+#             "api_base": os.getenv("AZURE_AI_API_BASE"),
+#             "api_key": os.getenv("AZURE_AI_API_KEY"),
+#             "metadata": {
+#                 "model_info": {
+#                     "base_model": "azure/dall-e-3",
+#                 }
+#             },
+#         }
 
 
 @pytest.mark.skip(reason="model EOL")
@@ -380,7 +387,64 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
 
 @pytest.mark.asyncio
+async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
+    """End-to-end check that ``aiml/openai/gpt-image-2`` keeps the upstream
+    OpenAI request shape (``size``/``n``/``response_format``) instead of
+    being remapped to the AI/ML flux schema (``image_size``/``num_images``/
+    ``output_format``), and hits the correct upstream model name.
+    """
+    from unittest.mock import MagicMock, patch
+    import json as _json
+
+    mock_aiml_response = {
+        "created": 1703658209,
+        "data": [{"url": "https://example.com/gpt-image-2.png"}],
+    }
+
+    captured = {}
+
+    def capture_post_call(*args, **kwargs):
+        captured["url"] = kwargs.get("url") or (args[0] if args else None)
+        captured["headers"] = kwargs.get("headers", {})
+        captured["json"] = kwargs.get("json", {})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_aiml_response
+        mock_response.text = _json.dumps(mock_aiml_response)
+        return mock_response
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.side_effect = capture_post_call
+
+        await litellm.aimage_generation(
+            prompt="A T-Rex relaxing on a beach",
+            model="aiml/openai/gpt-image-2",
+            api_key="test-key-mocked-no-credits-needed",
+            size="1024x1536",
+            quality="high",
+            response_format="b64_json",
+            n=1,
+        )
+
+    assert captured["url"] is not None
+    assert "api.aimlapi.com" in captured["url"]
+    assert "/v1/images/generations" in captured["url"]
+
+    body = captured["json"]
+    assert body["model"] == "openai/gpt-image-2"
+    assert body["prompt"] == "A T-Rex relaxing on a beach"
+    assert body["size"] == "1024x1536"
+    assert body["quality"] == "high"
+    assert body["response_format"] == "b64_json"
+    assert body["n"] == 1
+    assert "image_size" not in body
+    assert "num_images" not in body
+    assert "output_format" not in body
+
+
+@pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
+    """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
 
     test_dir = os.path.dirname(__file__)

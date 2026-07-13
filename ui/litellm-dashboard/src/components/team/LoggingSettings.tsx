@@ -6,6 +6,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, Card, TextInput } from "@tremor/react";
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;
@@ -121,12 +122,12 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
                 </Tooltip>
                 {paramType === "password" && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Sensitive
                   </span>
                 )}
                 {paramType === "number" && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Number
                   </span>
                 )}
@@ -178,7 +179,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             optionLabelProp="label"
           >
             {allCallbacks.map((callbackName) => {
-              const logo = callbackInfo[callbackName]?.logo;
+              const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
               const description = callbackInfo[callbackName]?.description;
               return (
                 <Option key={callbackName} value={callbackName} label={callbackName}>
@@ -244,12 +245,12 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           const callbackDisplayName = config.callback_name
             ? Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0]
             : undefined;
-          const logoUrl = callbackDisplayName ? callbackInfo[callbackDisplayName]?.logo : null;
+          const logoUrl = callbackDisplayName ? resolveLogoSrc(callbackInfo[callbackDisplayName]?.logo) : null;
 
           return (
             <Card
               key={index}
-              className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200"
+              className="border border-gray-200 shadow-xs hover:shadow-md transition-shadow duration-200"
               decoration="top"
               decorationColor="blue"
             >
@@ -282,7 +283,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       optionLabelProp="label"
                     >
                       {supportedCallbacks.map((callbackName) => {
-                        const logo = callbackInfo[callbackName]?.logo;
+                        const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
                         const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>

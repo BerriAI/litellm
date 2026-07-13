@@ -41,9 +41,13 @@ class TestMask:
     def test_empty_returns_none_label(self):
         assert MCPDebug._mask("") == "(none)"
 
-    def test_short_value_unchanged(self):
-        # visible_prefix=6 + visible_suffix=4 = 10, so <= 10 chars unchanged
-        assert MCPDebug._mask("sk-1234") == "sk-1234"
+    def test_short_value_masked(self):
+        # Short auth values must not be echoed verbatim in debug headers, even though
+        # visible_prefix + visible_suffix would otherwise reveal the whole value.
+        masked = MCPDebug._mask("sk-1234")
+        assert "sk-1234" not in masked
+        assert set(masked) == {"*"}
+        assert len(masked) == len("sk-1234")
 
     def test_long_value_masked(self):
         result = MCPDebug._mask("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9")
@@ -175,14 +179,18 @@ class TestResolveAuthResolution:
     def test_per_request_header(self):
         server = self._make_server()
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header="Bearer xxx", mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header="Bearer xxx",
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "per-request-header"
 
     def test_server_specific_header(self):
         server = self._make_server(alias="atlas")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None,
+            server,
+            mcp_auth_header=None,
             mcp_server_auth_headers={"atlas": {"Authorization": "Bearer xxx"}},
             oauth2_headers=None,
         )
@@ -191,21 +199,29 @@ class TestResolveAuthResolution:
     def test_m2m(self):
         server = self._make_server(has_client_credentials=True)
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "m2m-client-credentials"
 
     def test_static_token(self):
         server = self._make_server(authentication_token="static-tok")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "static-token"
 
     def test_oauth2_passthrough(self):
         server = self._make_server(auth_type="oauth2")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None,
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
             oauth2_headers={"Authorization": "Bearer eyJ..."},
         )
         assert result == "oauth2-passthrough"
@@ -213,7 +229,10 @@ class TestResolveAuthResolution:
     def test_no_auth(self):
         server = self._make_server()
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "no-auth"
 
@@ -230,7 +249,7 @@ class TestWrapSendWithDebugHeaders:
         )
 
         message = {"type": "http.response.start", "status": 200, "headers": []}
-        asyncio.get_event_loop().run_until_complete(wrapped(message))
+        asyncio.run(wrapped(message))
 
         assert len(captured) == 1
         headers = dict(captured[0]["headers"])
@@ -247,6 +266,6 @@ class TestWrapSendWithDebugHeaders:
         )
 
         body_msg = {"type": "http.response.body", "body": b"hello"}
-        asyncio.get_event_loop().run_until_complete(wrapped(body_msg))
+        asyncio.run(wrapped(body_msg))
 
         assert captured[0] == body_msg

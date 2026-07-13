@@ -293,7 +293,7 @@ async def test_user_model_access():
         await chat_completion(
             session=session,
             key=key,
-            model="anthropic/claude-3-5-haiku-20241022",
+            model="anthropic/claude-haiku-4-5-20251001",
         )
 
         await chat_completion(
@@ -302,14 +302,14 @@ async def test_user_model_access():
             model="good-model",
         )
 
-        with pytest.raises(openai.AuthenticationError):
+        with pytest.raises(openai.PermissionDeniedError):
             await chat_completion(
                 session=session,
                 key=key,
                 model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             )
 
-        with pytest.raises(openai.AuthenticationError):
+        with pytest.raises(openai.PermissionDeniedError):
             await chat_completion(
                 session=session,
                 key=key,
@@ -335,7 +335,7 @@ async def setup_test_users(session: aiohttp.ClientSession) -> Tuple[Dict, Dict]:
         i=0,
         budget=100,
         budget_duration="30d",
-        models=["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        models=["anthropic.claude-haiku-4-5-20251001-v1:0"],
     )
 
     user2 = await new_user(
@@ -343,7 +343,7 @@ async def setup_test_users(session: aiohttp.ClientSession) -> Tuple[Dict, Dict]:
         i=1,
         budget=100,
         budget_duration="30d",
-        models=["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        models=["anthropic.claude-haiku-4-5-20251001-v1:0"],
     )
 
     print("\nCreated two test users:")
@@ -360,7 +360,7 @@ async def setup_test_users(session: aiohttp.ClientSession) -> Tuple[Dict, Dict]:
         "user_id": user1["user_id"],
         "duration": "7d",
         "key_alias": f"test_key_{uuid.uuid4()}",
-        "models": ["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        "models": ["anthropic.claude-haiku-4-5-20251001-v1:0"],
     }
 
     print("\nGenerating additional key for user1...")

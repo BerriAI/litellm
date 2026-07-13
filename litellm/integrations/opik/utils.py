@@ -43,9 +43,7 @@ def _read_opik_config_file() -> Dict[str, str]:
     config = configparser.ConfigParser()
     config.read(config_path)
 
-    config_values = {
-        section: dict(config.items(section)) for section in config.sections()
-    }
+    config_values = {section: dict(config.items(section)) for section in config.sections()}
 
     if "opik" in config_values:
         return config_values["opik"]
@@ -105,7 +103,7 @@ def _remove_nulls(x: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_traces_and_spans_from_payload(
-    payload: List[Dict[str, Any]]
+    payload: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Separate traces and spans from payload.

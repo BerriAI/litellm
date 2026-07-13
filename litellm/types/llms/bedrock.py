@@ -28,9 +28,7 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
-BedrockVideoTypes = Literal[
-    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
-]
+BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
 
 
 class VideoBlock(TypedDict):
@@ -38,9 +36,7 @@ class VideoBlock(TypedDict):
     source: SourceBlock
 
 
-BedrockDocumentTypes = Literal[
-    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
-]
+BedrockDocumentTypes = Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
 
 
 class DocumentBlock(TypedDict):
@@ -49,9 +45,24 @@ class DocumentBlock(TypedDict):
     name: str
 
 
+class SearchResultBlock(TypedDict, total=False):
+    """
+    Search result block used in Bedrock toolResult content.
+
+    Reference:
+    https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultBlock.html
+    """
+
+    source: str
+    title: str
+    content: List[dict]
+    citations: dict
+
+
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    searchResult: SearchResultBlock
     json: dict
     text: str
 
@@ -106,24 +117,41 @@ class CitationWebLocationBlock(TypedDict, total=False):
     domain: str
 
 
+class CitationSearchResultLocationBlock(TypedDict, total=False):
+    """
+    Character span of a Nova grounding citation within the cited content,
+    plus the index of the search result it refers to.
+    """
+
+    start: int
+    end: int
+    searchResultIndex: int
+
+
 class CitationLocationBlock(TypedDict, total=False):
     """
-    Location block containing the web location for a citation.
+    Location block describing where a citation points to.
     """
 
     web: CitationWebLocationBlock
+    searchResultLocation: CitationSearchResultLocationBlock
 
 
 class CitationReferenceBlock(TypedDict, total=False):
     """
-    Citation reference block containing a single citation with its location.
-
-    Each citation contains:
-    - location.web.url: The URL of the source
-    - location.web.domain: The domain of the source
+    Citation reference block containing a single citation with its location,
+    source URL and title.
     """
 
     location: CitationLocationBlock
+    source: str
+    title: str
+
+
+class CitationGeneratedContentBlock(TypedDict, total=False):
+    """A piece of generated text associated with a citationsContent block."""
+
+    text: str
 
 
 class CitationsContentBlock(TypedDict, total=False):
@@ -131,27 +159,33 @@ class CitationsContentBlock(TypedDict, total=False):
     Citations content block returned by Nova grounding (web search) tool.
 
     When Nova grounding is enabled via systemTool, the model may return
-    citationsContent blocks containing web search citation references.
+    citationsContent blocks containing the grounded text and its citation
+    references.
 
     Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
 
     Example response structure:
         {
             "citationsContent": {
+                "content": [{"text": "The grounded answer text ..."}],
                 "citations": [
                     {
                         "location": {
-                            "web": {
-                                "url": "https://example.com/article",
-                                "domain": "example.com"
+                            "searchResultLocation": {
+                                "start": 0,
+                                "end": 42,
+                                "searchResultIndex": 0
                             }
-                        }
+                        },
+                        "source": "https://example.com/article",
+                        "title": "Example Article"
                     }
                 ]
             }
         }
     """
 
+    content: List[CitationGeneratedContentBlock]
     citations: List[CitationReferenceBlock]
 
 
@@ -199,9 +233,7 @@ class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
     output: Required[ConverseResponseOutputBlock]
-    stopReason: Required[
-        str
-    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    stopReason: Required[str]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
     usage: Required[ConverseTokenUsageBlock]
     serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
@@ -210,6 +242,7 @@ class ToolJsonSchemaBlock(TypedDict, total=False):
     type: Literal["object"]
     properties: dict
     required: List[str]
+    additionalProperties: bool
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -220,6 +253,7 @@ class ToolSpecBlock(TypedDict, total=False):
     inputSchema: Required[ToolInputSchemaBlock]
     name: Required[str]
     description: str
+    strict: bool
 
 
 class SystemToolBlock(TypedDict, total=False):
@@ -243,6 +277,36 @@ class ToolBlock(TypedDict, total=False):
     cachePoint: Optional[CachePointBlock]
 
 
+class BedrockToolSpec(dict):
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        parameters: dict,
+        strict: Optional[bool],
+        supports_strict_tools: bool,
+    ) -> None:
+        json_schema: ToolJsonSchemaBlock = {
+            "type": parameters["type"],
+            "properties": parameters.get("properties", {}),
+            "required": parameters.get("required", []),
+        }
+        additional_properties = parameters.get("additionalProperties")
+        if supports_strict_tools and additional_properties is not None:
+            json_schema["additionalProperties"] = additional_properties
+
+        tool_spec: ToolSpecBlock = {
+            "inputSchema": {"json": json_schema},
+            "name": name,
+            "description": description,
+        }
+        if supports_strict_tools and strict is not None:
+            tool_spec["strict"] = strict
+
+        super().__init__(toolSpec=tool_spec)
+
+
 class SpecificToolChoiceBlock(TypedDict):
     name: str
 
@@ -261,7 +325,7 @@ class ToolConfigBlock(TypedDict, total=False):
 class GuardrailConfigBlock(TypedDict, total=False):
     guardrailIdentifier: str
     guardrailVersion: str
-    trace: Literal["enabled", "disabled"]
+    trace: Literal["enabled", "disabled", "enabled_full"]
 
 
 class InferenceConfig(TypedDict, total=False):
@@ -302,9 +366,34 @@ class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
 
 
-class CommonRequestObject(
-    TypedDict, total=False
-):  # common request object across sync + async flows
+class JsonSchemaDefinition(TypedDict, total=False):
+    """JSON schema structured output format options for Bedrock Converse API."""
+
+    schema: Required[str]  # JSON string, not dict
+    name: str
+    description: str
+
+
+class OutputFormatStructure(TypedDict, total=False):
+    """The structure that the model's output must adhere to (union type)."""
+
+    jsonSchema: Required[JsonSchemaDefinition]
+
+
+class OutputFormat(TypedDict):
+    """Structured output parameters to control the model's response."""
+
+    type: Literal["json_schema"]
+    structure: OutputFormatStructure
+
+
+class OutputConfigBlock(TypedDict, total=False):
+    """Output configuration for a model response in Converse/ConverseStream."""
+
+    textFormat: OutputFormat
+
+
+class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
@@ -314,6 +403,7 @@ class CommonRequestObject(
     performanceConfig: Optional[PerformanceConfigBlock]
     serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
+    outputConfig: Optional[OutputConfigBlock]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -387,9 +477,7 @@ class ServerSentEvent:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
 
 
-COHERE_EMBEDDING_INPUT_TYPES = Literal[
-    "search_document", "search_query", "classification", "clustering", "image"
-]
+COHERE_EMBEDDING_INPUT_TYPES = Literal["search_document", "search_query", "classification", "clustering", "image"]
 
 
 class CohereEmbeddingRequest(TypedDict, total=False):
@@ -536,9 +624,7 @@ NOVA_DETAIL_LEVELS = Literal["STANDARD_IMAGE", "DOCUMENT_IMAGE"]
 
 NOVA_EMBEDDING_MODES = Literal["AUDIO_VIDEO_COMBINED", "AUDIO_VIDEO_SEPARATE"]
 
-NOVA_EMBEDDING_TYPES = Literal[
-    "TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"
-]
+NOVA_EMBEDDING_TYPES = Literal["TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"]
 
 
 class NovaSourceS3Location(TypedDict):
@@ -657,9 +743,7 @@ class AmazonStability3TextToImageRequest(TypedDict, total=False):
     """
 
     prompt: str
-    aspect_ratio: Literal[
-        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
-    ]
+    aspect_ratio: Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
     mode: Literal["image-to-image", "text-to-image"]
     output_format: Literal["JPEG", "PNG"]
     seed: int
@@ -722,9 +806,7 @@ class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     conditionImage: str
 
 
-class AmazonNovaCanvasTextToImageRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Text to Image API
 
@@ -747,9 +829,7 @@ class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasColorGuidedRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Color Guided Generation API
 
@@ -782,9 +862,7 @@ class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasInpaintingRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasInpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Inpainting API
 
@@ -924,9 +1002,7 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
     tags: Optional[List[dict]]
 
 
-BedrockBatchJobStatus = Literal[
-    "Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"
-]
+BedrockBatchJobStatus = Literal["Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"]
 
 
 class BedrockCreateBatchResponse(TypedDict):
@@ -967,3 +1043,55 @@ class BedrockToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
     systemTool: Optional[SystemToolBlock]  # For Nova grounding
     cachePoint: Optional[CachePointBlock]
+
+
+class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
+    """
+    Top-level request body accepted by AWS Bedrock `InvokeModel` /
+    `InvokeModelWithResponseStream` when calling an Anthropic Claude model with
+    the Messages API format. The LiteLLM /v1/messages → Bedrock Invoke
+    transformation filters outgoing requests to the keys of this TypedDict; any
+    other field (Anthropic-only extension, internal metadata, future addition)
+    is dropped before signing so Bedrock doesn't 400 with
+    "Extra inputs are not permitted".
+
+    Reference:
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+
+    Editing this type is the single source of truth — the runtime allowlist in
+    `AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS`
+    is derived from `__annotations__`, and a test asserts the resolved set
+    exactly, so any edit forces a conscious review.
+
+    Value types are intentionally loose (`list`, `dict`) — this type exists to
+    pin the allowed field names, not to validate nested structure.
+    """
+
+    # Required by Bedrock
+    anthropic_version: str
+    max_tokens: int
+    messages: list
+
+    # Documented optional fields
+    anthropic_beta: List[str]
+    system: object  # str or list[TextBlock]
+    stop_sequences: List[str]
+    temperature: float
+    top_p: float
+    top_k: int
+    tools: list
+    tool_choice: dict
+
+    # `thinking` is required for Opus 4.5 / Sonnet 4 extended thinking,
+    # `metadata` is part of the common Anthropic Messages API shape.
+    thinking: dict
+    metadata: dict
+    output_config: dict
+
+    # `context_management` is allowed for Bedrock InvokeModel only when it
+    # carries `compact_20260112` edits paired with the `compact-2026-01-12`
+    # anthropic-beta header. The Invoke transformation filters edits to the
+    # supported subset and strips the field entirely when nothing remains, so
+    # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
+    context_management: dict

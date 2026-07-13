@@ -4,31 +4,21 @@
 
 import React, { useState } from "react";
 import { Button, TextInput, Switch } from "@tremor/react";
-import {
-  Card,
-  Title,
-  Subtitle,
-} from "@tremor/react";
+import { Card, Title, Subtitle } from "@tremor/react";
 import { createPassThroughEndpoint } from "./networking";
-import {
-  Modal,
-  Form,
-  Select as Select2,
-  Tooltip,
-  Alert,
-} from "antd";
+import { Modal, Form, Select as Select2, Tooltip, Alert } from "antd";
 import NumericalInput from "./shared/numerical_input";
-import {
-  InfoCircleOutlined,
-  ApiOutlined,
-} from "@ant-design/icons";
+import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
+import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
+
+const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
 interface AddFallbacksProps {
   //   models: string[] | undefined;
@@ -52,12 +42,16 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
   const [authEnabled, setAuthEnabled] = useState(false);
-  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>({});
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
+  const [guardrails, setGuardrails] = useState<
+    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
+  >({});
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
     setTargetValue("");
     setIncludeSubpath(true);
+    setSelectedMethods([]);
     setGuardrails({});
     setIsModalVisible(false);
   };
@@ -73,20 +67,22 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   };
 
   const addPassThrough = async (formValues: Record<string, any>) => {
-    console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
       // Remove auth field if not premium user
-      if (!premiumUser && 'auth' in formValues) {
+      if (!premiumUser && "auth" in formValues) {
         delete formValues.auth;
       }
-      
+
       // Add guardrails to formValues (only if not empty)
       if (guardrails && Object.keys(guardrails).length > 0) {
         formValues.guardrails = guardrails;
       }
-      
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
+
+      // Add methods to formValues (only if specific methods are selected)
+      if (selectedMethods && selectedMethods.length > 0) {
+        formValues.methods = selectedMethods;
+      }
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
 
@@ -101,6 +97,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setPathValue("");
       setTargetValue("");
       setIncludeSubpath(true);
+      setSelectedMethods([]);
       setGuardrails({});
       setIsModalVisible(false);
     } catch (error) {
@@ -204,6 +201,41 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   />
                 </Form.Item>
 
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      HTTP Methods (Optional)
+                      <Tooltip title="Select specific HTTP methods. Leave empty to support all methods (GET, POST, PUT, DELETE, PATCH). Useful when the same path needs different targets for different methods.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="methods"
+                  extra={
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedMethods.length === 0
+                        ? "All HTTP methods supported (default)"
+                        : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`}
+                    </div>
+                  }
+                  className="mb-4"
+                >
+                  <Select2
+                    mode="multiple"
+                    placeholder="Select methods (leave empty for all)"
+                    value={selectedMethods}
+                    onChange={setSelectedMethods}
+                    allowClear
+                    style={{ width: "100%" }}
+                  >
+                    {HTTP_METHODS.map((method) => (
+                      <Option key={method} value={method}>
+                        {method}
+                      </Option>
+                    ))}
+                  </Select2>
+                </Form.Item>
+
                 <div className="flex items-center justify-between py-3">
                   <div>
                     <div className="text-sm font-medium text-gray-700">Include Subpaths</div>
@@ -250,6 +282,34 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
               </Form.Item>
             </Card>
 
+            {/* Default Query Parameters Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Default Query Parameters</Title>
+              <Subtitle className="text-gray-600 mb-6">
+                Add query parameters that will be automatically sent with every request to the target API
+              </Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Default Query Parameters (Optional)
+                    <Tooltip title="Query parameters that will be added to all requests. Clients can override these by providing their own values.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="default_query_params"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    <div className="font-medium mb-1">Parameters are sent with all GET, POST, PUT, PATCH requests</div>
+                    <div>Client parameters override defaults. Examples: version=v1, format=json, key=default</div>
+                  </div>
+                }
+              >
+                <QueryParamInput />
+              </Form.Item>
+            </Card>
+
             {/* Security Section */}
             <PassThroughSecuritySection
               premiumUser={premiumUser}
@@ -261,11 +321,32 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             />
 
             {/* Guardrails Section */}
-            <PassThroughGuardrailsSection
-              accessToken={accessToken}
-              value={guardrails}
-              onChange={setGuardrails}
-            />
+            <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
+
+            {/* Performance Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Performance</Title>
+              <Subtitle className="text-gray-600 mb-6">Configure upstream request timeout for this endpoint</Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Request Timeout (seconds)
+                    <Tooltip title="Max time to wait for the upstream API to respond. Leave empty to use general_settings.pass_through_request_timeout (default 600s).">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="timeout"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    Use a higher value for slow upstream APIs (e.g. 1200 for long-running LLM calls)
+                  </div>
+                }
+              >
+                <NumericalInput min={1} step={1} precision={0} placeholder="600" size="large" />
+              </Form.Item>
+            </Card>
 
             {/* Billing Section */}
             <Card className="p-6">
@@ -300,7 +381,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 variant="primary"
                 loading={isLoading}
                 onClick={() => {
-                  console.log("Submit button clicked");
                   form.submit();
                 }}
               >

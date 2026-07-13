@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_GuardrailsTable" ADD COLUMN     "team_id" TEXT;
+ALTER TABLE "LiteLLM_GuardrailsTable" ADD COLUMN IF NOT EXISTS "team_id" TEXT;
 

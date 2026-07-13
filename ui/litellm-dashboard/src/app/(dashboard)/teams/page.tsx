@@ -1,31 +1,9 @@
 "use client";
 
-import TeamsView from "@/app/(dashboard)/teams/TeamsView";
+import OldTeams from "@/components/OldTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { useEffect, useState } from "react";
-import { Organization } from "@/components/networking";
-import { fetchOrganizations } from "@/components/organizations";
 
-const TeamsPage = () => {
-  const { accessToken, userId, userRole } = useAuthorized();
-  const { teams, setTeams } = useTeams();
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-
-  useEffect(() => {
-    fetchOrganizations(accessToken, setOrganizations).then(() => {});
-  }, [accessToken]);
-
-  return (
-    <TeamsView
-      teams={teams}
-      accessToken={accessToken}
-      setTeams={setTeams}
-      userID={userId}
-      userRole={userRole}
-      organizations={organizations}
-    />
-  );
-};
-
-export default TeamsPage;
+export default function TeamsPage() {
+  const { accessToken, userId, userRole, premiumUser } = useAuthorized();
+  return <OldTeams accessToken={accessToken} userID={userId} userRole={userRole} premiumUser={premiumUser ?? false} />;
+}

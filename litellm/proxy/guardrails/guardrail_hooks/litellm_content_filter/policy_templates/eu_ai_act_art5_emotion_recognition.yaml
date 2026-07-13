@@ -1,0 +1,143 @@
+# EU AI Act Article 5.1(f) — Emotion Recognition in Workplace & Education
+# Prohibits AI systems that infer emotions in the workplace or educational
+# institutions, except for medical or safety reasons.
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_emotion_recognition"
+description: "Art. 5.1(f) — Blocks emotion recognition and sentiment analysis in workplace and educational settings"
+default_action: "BLOCK"
+
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+  - "deploy"
+  - "setup"
+  - "install"
+
+  # Detection/recognition actions
+  - "recognize"
+  - "detect"
+  - "identify"
+  - "infer"
+  - "deduce"
+  - "predict"
+  - "determine"
+  - "analyze"
+  - "measure"
+  - "monitor"
+  - "track"
+  - "assess"
+  - "evaluate"
+  - "classify"
+
+additional_block_words:
+  # Employee emotion
+  - "employee emotion"
+  - "employee emotions"
+  - "employee mood"
+  - "employee moods"
+  - "employee sentiment"
+  - "employee feeling"
+  - "employee feelings"
+  - "employee affect"
+  - "employee mental state"
+
+  # Worker emotion
+  - "worker emotion"
+  - "worker emotions"
+  - "worker mood"
+  - "worker sentiment"
+  - "worker feeling"
+  - "worker feelings"
+  - "worker mental state"
+
+  # Staff emotion
+  - "staff emotion"
+  - "staff emotions"
+  - "staff mood"
+  - "staff sentiment"
+  - "staff feeling"
+
+  # Workplace emotion
+  - "workplace emotion"
+  - "workplace emotions"
+  - "workplace mood"
+  - "workplace sentiment"
+  - "workplace feeling"
+  - "office emotion"
+  - "office mood"
+  - "office sentiment"
+
+  # Student emotion
+  - "student emotion"
+  - "student emotions"
+  - "student mood"
+  - "student sentiment"
+  - "student feeling"
+  - "student feelings"
+  - "student mental state"
+  - "pupil emotion"
+  - "pupil mood"
+
+  # Classroom emotion
+  - "classroom emotion"
+  - "classroom emotions"
+  - "classroom mood"
+  - "classroom sentiment"
+  - "classroom engagement"
+  - "school emotion"
+  - "school mood"
+  - "lecture emotion"
+
+  # Job candidate/interview emotion
+  - "candidate emotion"
+  - "candidate sentiment"
+  - "interview emotion"
+  - "interview sentiment"
+  - "applicant emotion"
+  - "applicant sentiment"
+
+always_block_keywords:
+  - keyword: "emotion recognition in workplace"
+    severity: "high"
+  - keyword: "emotion detection of employees"
+    severity: "high"
+  - keyword: "emotion recognition in classroom"
+    severity: "high"
+  - keyword: "student emotion detection"
+    severity: "high"
+  - keyword: "workplace emotion monitoring"
+    severity: "high"
+  - keyword: "employee emotion tracking"
+    severity: "high"
+  - keyword: "employee sentiment analysis system"
+    severity: "high"
+  - keyword: "classroom emotion surveillance"
+    severity: "high"
+  - keyword: "worker mood monitoring system"
+    severity: "high"
+  - keyword: "student engagement emotion tracking"
+    severity: "high"
+
+exceptions:
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"
+  - "compliance monitoring"
+  - "ethical review"
+  - "movie"
+  - "game"
+  - "customer feedback"
+  - "product review"
+  - "medical"
+  - "safety reason"
+  - "driver drowsiness"
+  - "pilot fatigue"

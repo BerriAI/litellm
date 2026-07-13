@@ -27,6 +27,8 @@ const mockSetSelectedEditMember = vi.fn();
 const mockSetIsEditMemberModalVisible = vi.fn();
 const mockSetIsAddMemberModalVisible = vi.fn();
 
+const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
+
 const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
   team_id: "team-123",
   team_info: {
@@ -78,6 +80,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
         rpm_limit: 100,
         model_max_budget: null,
         budget_duration: null,
+        budget_reset_at: budgetResetIso,
       },
     },
   ],
@@ -168,7 +171,7 @@ describe("TeamMembersComponent", () => {
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
-        canEditTeam={false}
+        canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
@@ -202,7 +205,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(1);
   });
 
   it("should display Default Proxy Admin tag for default_user_id", () => {
@@ -243,12 +246,12 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText(/\$100\.5/)).toBeInTheDocument();
+    expect(screen.getByText("$100.5000")).toBeInTheDocument();
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });
 
-  it("should display No Limit for budget when member has no budget", () => {
+  it("should display the budget reset date for member with a budget reset", () => {
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
@@ -260,7 +263,23 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("No Limit")).toBeInTheDocument();
+    expect(screen.getByText("Jul 15, 2026")).toBeInTheDocument();
+  });
+
+  it("should display formatted budget and Unlimited for member with no budget", () => {
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByText("$1,000.0000")).toBeInTheDocument();
+    expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 
   it("should display No Limits for rate limits when member has no limits", () => {

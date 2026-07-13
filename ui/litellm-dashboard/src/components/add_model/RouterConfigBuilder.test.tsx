@@ -139,9 +139,6 @@ describe("RouterConfigBuilder", () => {
     });
   });
 
-
-
-
   it("should update route when description is changed", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -233,9 +230,7 @@ describe("RouterConfigBuilder", () => {
       <RouterConfigBuilder
         modelInfo={MOCK_MODEL_INFO}
         value={{
-          routes: [
-            { name: "gpt-4", utterances: ["hello"], description: "test", score_threshold: 0.8 },
-          ],
+          routes: [{ name: "gpt-4", utterances: ["hello"], description: "test", score_threshold: 0.8 }],
         }}
       />,
     );
@@ -255,9 +250,7 @@ describe("RouterConfigBuilder", () => {
 
   it("should display model selector with options from modelInfo", async () => {
     const value = {
-      routes: [
-        { name: "", utterances: [], description: "", score_threshold: 0.5 },
-      ],
+      routes: [{ name: "", utterances: [], description: "", score_threshold: 0.5 }],
     };
     render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} value={value} />);
 

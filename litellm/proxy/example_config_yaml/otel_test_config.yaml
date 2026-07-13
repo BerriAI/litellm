@@ -1,17 +1,17 @@
 model_list:
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/gpt-3.5-turbo-0301
+     model: openai/gpt-5-mini
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
      tags: ["teamA"]
    model_info:
      id: "team-a-model"
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/gpt-3.5-turbo-0301
+     model: openai/gpt-5-mini
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
      tags: ["teamB"]
    model_info:
      id: "team-b-model"
@@ -19,11 +19,12 @@ model_list:
    litellm_params:
      model: cohere/rerank-english-v3.0
      api_key: os.environ/COHERE_API_KEY
+     api_base: os.environ/RECORDER_COHERE_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to Cohere
  - model_name: fake-azure-endpoint
    litellm_params:
      model: openai/429
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app
+     api_base: os.environ/FAKE_OPENAI_API_BASE
  - model_name: llava-hf
    litellm_params:
      model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
@@ -34,35 +35,26 @@ model_list:
  - model_name: bedrock/*
    litellm_params:
      model:  bedrock/*
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
  - model_name: openai/*
    litellm_params:
      model: openai/*
      api_key: os.environ/OPENAI_API_KEY
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     api_base: os.environ/FAKE_OPENAI_API_BASE
 
 
 litellm_settings:
   cache: true
   callbacks: ["otel", "prometheus"]
   disable_end_user_cost_tracking_prometheus_only: True
+  # /metrics auth is on by default; tests/otel_tests/test_prometheus.py
+  # scrapes the endpoint without credentials, so opt out here.
+  require_auth_for_metrics_endpoint: False
 
 guardrails:
-  - guardrail_name: "aporia-pre-guard"
-    litellm_params:
-      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
-      mode: "post_call"
-      api_key: os.environ/APORIA_API_KEY_1
-      api_base: os.environ/APORIA_API_BASE_1
-  - guardrail_name: "aporia-post-guard"
-    litellm_params:
-      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
-      mode: "post_call"
-      api_key: os.environ/APORIA_API_KEY_2
-      api_base: os.environ/APORIA_API_BASE_2
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "bedrock", "lakera"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"

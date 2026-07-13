@@ -10,7 +10,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterato
 )
 from litellm.types.utils import (
     Delta,
-    ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
     Usage,
     ChatCompletionDeltaToolCall,
@@ -19,7 +19,7 @@ from litellm.types.utils import (
 
 
 class MockCompletionStream:
-    def __init__(self, responses: List[ModelResponse]):
+    def __init__(self, responses: List[ModelResponseStream]):
         self.responses = responses
         self.index = 0
 
@@ -44,9 +44,8 @@ class MockCompletionStream:
         return response
 
 
-def construct_text_chunk(text: str) -> ModelResponse:
-    return ModelResponse(
-        stream=True,
+def construct_text_chunk(text: str) -> ModelResponseStream:
+    return ModelResponseStream(
         choices=[
             StreamingChoices(
                 delta=Delta(content=text),
@@ -59,11 +58,10 @@ def construct_text_chunk(text: str) -> ModelResponse:
 
 def construct_split_tool_call(
     id: str, function_name: str, function_arg_parts: List[str]
-) -> List[ModelResponse]:
+) -> List[ModelResponseStream]:
     return [
         # https://platform.openai.com/docs/guides/function-calling#streaming
-        ModelResponse(
-            stream=True,
+        ModelResponseStream(
             choices=[
                 StreamingChoices(
                     delta=Delta(
@@ -82,8 +80,7 @@ def construct_split_tool_call(
             ],
         ),
         *[
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(
@@ -109,8 +106,7 @@ def construct_split_tool_call(
 def test_anthropic_stream_wrapper_single_tool_call():
     responses = [
         *construct_split_tool_call("tooluse_foo", "get_weather", ['{"city":', '"NY"}']),
-        ModelResponse(
-            stream=True,
+        ModelResponseStream(
             choices=[
                 StreamingChoices(
                     delta=Delta(content="", stop_reason="tool_calls"),
@@ -172,8 +168,7 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
     responses = [
         *construct_split_tool_call("tooluse_foo", "get_weather", ['{"city":', '"NY"}']),
         *construct_split_tool_call("tooluse_bar", "get_weather", ['{"city":', '"SF"}']),
-        ModelResponse(
-            stream=True,
+        ModelResponseStream(
             choices=[
                 StreamingChoices(
                     delta=Delta(content="", stop_reason="tool_calls"),
@@ -244,8 +239,7 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
             "tooluse_bar", "get_weather", ['{"city":', '"CHI"}']
         ),
         construct_text_chunk("The weather is not so nice today."),
-        ModelResponse(
-            stream=True,
+        ModelResponseStream(
             choices=[
                 StreamingChoices(
                     delta=Delta(content="", stop_reason="tool_calls"),
@@ -284,7 +278,8 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
-        "content_block_start",  # "The weather is nice today"
+        "content_block_start",  # "The weather is nice today" text block
+        "content_block_delta",  # "The weather is nice today." text_delta
         "content_block_stop",
         "content_block_start",  # Start of second tool_use content block
         "content_block_delta",  # {"city":
@@ -294,13 +289,28 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # {"city":
         "content_block_delta",  # " CHI"}
         "content_block_stop",  # End of third tool_use content block
-        "content_block_start",  # "The weather is not so nice today"
+        "content_block_start",  # "The weather is not so nice today" text block
+        "content_block_delta",  # "The weather is not so nice today." text_delta
         "content_block_stop",
         "message_delta",  # Stop reason with merged usage
         "message_stop",  # Final message stop
     ]
 
     assert expected_types == chunk_types
+
+    # Regression: the first (and only) text delta of each text block sits in
+    # the chunk that *triggered* the tool_use -> text transition. It must be
+    # re-emitted as a content_block_delta instead of being silently dropped.
+    text_deltas = [
+        chunk["delta"]["text"]
+        for chunk in chunks
+        if chunk.get("type") == "content_block_delta"
+        and chunk["delta"].get("type") == "text_delta"
+    ]
+    assert text_deltas == [
+        "The weather is nice today.",
+        "The weather is not so nice today.",
+    ]
 
     get_weather_calls = 0
 

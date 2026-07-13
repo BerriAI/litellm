@@ -7,6 +7,7 @@ import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
 import { ColumnDef } from "@tanstack/react-table";
+import { IdCell, StatusBadge } from "@/components/shared/table_cells";
 import { Eye, EyeOff } from "lucide-react";
 import NotificationsManager from "./molecules/notifications_manager";
 
@@ -38,8 +39,11 @@ export interface passThroughItem {
   headers: object;
   include_subpath?: boolean;
   cost_per_request?: number;
+  timeout?: number;
   auth?: boolean;
+  methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  default_query_params?: Record<string, string>;
 }
 
 // Password field component for headers
@@ -50,14 +54,20 @@ const PasswordField: React.FC<{ value: object }> = ({ value }) => {
   return (
     <div className="flex items-center space-x-2">
       <span className="font-mono text-xs">{showPassword ? headerString : "••••••••"}</span>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded" type="button">
+      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded-sm" type="button">
         {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
   );
 };
 
-const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData, premiumUser }) => {
+const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  modelData,
+  premiumUser,
+}) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -127,16 +137,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
     {
       header: "ID",
       accessorKey: "id",
-      cell: (info: any) => (
-        <Tooltip title={info.row.original.id}>
-          <div
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-            onClick={() => info.row.original.id && setSelectedEndpointId(info.row.original.id)}
-          >
-            {info.row.original.id}
-          </div>
-        </Tooltip>
-      ),
+      cell: (info: any) => <IdCell value={info.row.original.id} onClick={setSelectedEndpointId} />,
     },
     {
       header: "Path",
@@ -150,6 +151,32 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
     {
       header: () => (
         <div className="flex items-center gap-1">
+          <span>Methods</span>
+          <Tooltip title="HTTP methods supported by this endpoint">
+            <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
+          </Tooltip>
+        </div>
+      ),
+      accessorKey: "methods",
+      cell: (info: any) => {
+        const methods = info.getValue();
+        if (!methods || methods.length === 0) {
+          return <Badge color="blue">ALL</Badge>;
+        }
+        return (
+          <div className="flex flex-wrap gap-1">
+            {methods.map((method: string) => (
+              <Badge key={method} color="indigo" className="text-xs">
+                {method}
+              </Badge>
+            ))}
+          </div>
+        );
+      },
+    },
+    {
+      header: () => (
+        <div className="flex items-center gap-1">
           <span>Authentication</span>
           <Tooltip title="LiteLLM Virtual Key required to call endpoint">
             <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
@@ -157,7 +184,9 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         </div>
       ),
       accessorKey: "auth",
-      cell: (info: any) => <Badge color={info.getValue() ? "green" : "gray"}>{info.getValue() ? "Yes" : "No"}</Badge>,
+      cell: (info: any) => (
+        <StatusBadge tone={info.getValue() ? "success" : "neutral"} label={info.getValue() ? "Yes" : "No"} />
+      ),
     },
     {
       header: "Headers",
@@ -193,8 +222,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
   // If a specific endpoint is selected, show the info view
   if (selectedEndpointId) {
     // Find the endpoint by ID to get the endpoint data for the info view
-    console.log("selectedEndpointId", selectedEndpointId);
-    console.log("generalSettings", generalSettings);
     const selectedEndpoint = generalSettings.find((endpoint) => endpoint.id === selectedEndpointId);
 
     if (!selectedEndpoint) {
@@ -230,8 +257,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
       <DataTable
         data={generalSettings}
         columns={columns}
-        renderSubComponent={() => <div></div>}
-        getRowCanExpand={() => false}
         isLoading={false}
         noDataMessage="No pass-through endpoints configured"
       />

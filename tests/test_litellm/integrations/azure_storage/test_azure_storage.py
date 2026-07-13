@@ -28,11 +28,14 @@ async def test_async_upload_payload_to_azure_blob_storage(mock_env_vars):
     Test that async_upload_payload_to_azure_blob_storage correctly uploads
     a payload to Azure Blob Storage using the 3-step process (create, append, flush).
     """
-    with patch(
-        "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
-    ) as mock_get_client, patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
-    ) as mock_get_token:
+    with (
+        patch(
+            "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
+        ) as mock_get_client,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
+        ) as mock_get_token,
+    ):
         # Create mock HTTP client
         mock_http_client = AsyncMock()
         mock_response = AsyncMock()
@@ -68,14 +71,14 @@ async def test_async_upload_payload_to_azure_blob_storage(mock_env_vars):
 
         # Verify the 3-step upload process was called correctly
         # Step 1: Create file
-        expected_base_url = (
-            "https://test-account.dfs.core.windows.net/test-container/test-log-id-123.json"
-        )
+        expected_base_url = "https://test-account.dfs.core.windows.net/test-container/test-log-id-123.json"
         mock_http_client.put.assert_called_once()
         put_call_args = mock_http_client.put.call_args
         assert put_call_args[0][0] == f"{expected_base_url}?resource=file"
         assert put_call_args[1]["headers"]["x-ms-version"] is not None
-        assert put_call_args[1]["headers"]["Authorization"] == "Bearer mock-azure-ad-token"
+        assert (
+            put_call_args[1]["headers"]["Authorization"] == "Bearer mock-azure-ad-token"
+        )
 
         # Step 2: Append data
         assert mock_http_client.patch.call_count == 2  # Called for append and flush
@@ -83,7 +86,9 @@ async def test_async_upload_payload_to_azure_blob_storage(mock_env_vars):
         assert append_call[0][0] == f"{expected_base_url}?action=append&position=0"
         assert append_call[1]["headers"]["x-ms-version"] is not None
         assert append_call[1]["headers"]["Content-Type"] == "application/json"
-        assert append_call[1]["headers"]["Authorization"] == "Bearer mock-azure-ad-token"
+        assert (
+            append_call[1]["headers"]["Authorization"] == "Bearer mock-azure-ad-token"
+        )
         assert "test-log-id-123" in append_call[1]["data"]
 
         # Step 3: Flush data

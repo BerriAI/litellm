@@ -18,6 +18,18 @@ env_keys = set()
 
 # Terminal/environment detection variables that should not be documented
 # These are internal variables used for terminal detection, not user-configurable settings
+# Guard-only env vars: read solely to raise on invalid values; the only valid
+# value is the default, so there is nothing meaningful to document.
+EXCLUDED_GUARD_ONLY_VARS = {
+    "MAVVRIK_FOCUS_FREQUENCY",
+}
+
+# Temporary/internal rollout flags are intentionally not added to the public
+# environment settings docs until the feature is ready for broad use.
+EXCLUDED_ROLLOUT_FLAGS = {
+    "LITELLM_USE_RUST_OCR",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -35,8 +47,23 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
+# Directories to skip (dependencies, venvs, caches) - only scan litellm source
+SKIP_DIRS = {
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".git",
+    "node_modules",
+    "site-packages",
+    ".eggs",
+    "dist",
+    "build",
+}
+
 # Walk through all files in the litellm repo to find references of os.getenv() and litellm.get_secret()
 for root, dirs, files in os.walk(repo_base):
+    # Skip dependency/venv directories - prevents picking up env vars from installed packages
+    dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
     for file in files:
         if file.endswith(".py"):  # Only process Python files
             file_path = os.path.join(root, file)
@@ -46,8 +73,11 @@ for root, dirs, files in os.walk(repo_base):
                 # Find all keys using os.getenv()
                 getenv_matches = getenv_pattern.findall(content)
                 env_keys.update(
-                    match for match in getenv_matches
+                    match
+                    for match in getenv_matches
                     if match not in EXCLUDED_TERMINAL_VARS
+                    and match not in EXCLUDED_GUARD_ONLY_VARS
+                    and match not in EXCLUDED_ROLLOUT_FLAGS
                 )  # Extract only the key part, excluding terminal vars
 
                 # Find all keys using litellm.get_secret()
@@ -83,12 +113,13 @@ try:
         )
         print(f"general_settings_section: {general_settings_section}")
         if general_settings_section:
-            # Extract the table rows, which contain the documented keys
+            # Extract the table rows - only first column (key name) from each row
             table_content = general_settings_section.group(1)
-            doc_key_pattern = re.compile(
-                r"\|\s*([^\|]+?)\s*\|"
-            )  # Capture the key from each row of the table
-            documented_keys.update(doc_key_pattern.findall(table_content))
+            for line in table_content.split("\n"):
+                # Match | KEY_NAME | description | - capture first column only
+                match = re.match(r"^\|\s*([A-Z_][A-Z0-9_]*)\s*\|", line)
+                if match:
+                    documented_keys.add(match.group(1).strip())
 except Exception as e:
     raise Exception(
         f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"

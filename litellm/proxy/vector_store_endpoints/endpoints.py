@@ -2,7 +2,6 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -10,6 +9,15 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _resolve_embedding_config,
+)
+from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_vector_store_index_management,
+    assert_user_can_access_vector_store,
+    get_litellm_managed_vector_store,
+)
+from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
@@ -18,83 +26,65 @@ router = APIRouter()
 ########################################################
 
 
-def _check_vector_store_access(
-    vector_store: LiteLLM_ManagedVectorStore,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> bool:
-    """
-    Check if the user has access to the vector store based on team membership.
-    
-    Args:
-        vector_store: The vector store to check access for
-        user_api_key_dict: User API key authentication info
-        
-    Returns:
-        True if user has access, False otherwise
-        
-    Access rules:
-    - If vector store has no team_id, it's accessible to all (legacy behavior)
-    - If user's team_id matches the vector store's team_id, access is granted
-    - Otherwise, access is denied
-    """
-    vector_store_team_id = vector_store.get("team_id")
-    
-    # If vector store has no team_id, it's accessible to all (legacy behavior)
-    if vector_store_team_id is None:
-        return True
-    
-    # Check if user's team matches the vector store's team
-    user_team_id = user_api_key_dict.team_id
-    if user_team_id == vector_store_team_id:
-        return True
-    
-    return False
-
-
-def _update_request_data_with_litellm_managed_vector_store_registry(
+async def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Dict:
     """
     Update the request data with the litellm managed vector store registry.
-    
+
     Args:
         data: Request data to update
         vector_store_id: ID of the vector store
         user_api_key_dict: User API key authentication info for access control
-        
+
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    if litellm.vector_store_registry is not None:
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=vector_store_id
+    vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = await get_litellm_managed_vector_store(
+        vector_store_id=vector_store_id
+    )
+    if vector_store_to_run is not None:
+        if user_api_key_dict is not None:
+            await assert_user_can_access_vector_store(
+                vector_store=vector_store_to_run,
+                user_api_key_dict=user_api_key_dict,
             )
-        )
-        if vector_store_to_run is not None:
-            # Check access control if user_api_key_dict is provided
-            if user_api_key_dict is not None:
-                if not _check_vector_store_access(vector_store_to_run, user_api_key_dict):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Access denied: You do not have permission to access this vector store",
-                    )
-            
-            if "custom_llm_provider" in vector_store_to_run:
-                data["custom_llm_provider"] = vector_store_to_run.get(
-                    "custom_llm_provider"
-                )
 
-            if "litellm_credential_name" in vector_store_to_run:
-                data["litellm_credential_name"] = vector_store_to_run.get(
-                    "litellm_credential_name"
-                )
+        if "custom_llm_provider" in vector_store_to_run:
+            data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
 
-            if "litellm_params" in vector_store_to_run:
-                litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
-                data.update(litellm_params)
+        if "litellm_credential_name" in vector_store_to_run:
+            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
+
+        if "litellm_params" in vector_store_to_run:
+            litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
+            # Resolve ``litellm_embedding_config`` here, at request-handling
+            # time, instead of at row-creation time. The resolved
+            # ``api_key`` / ``api_base`` / ``api_version`` lives only in
+            # this per-request ``data`` dict and is never persisted.
+            # Legacy rows that already carry a resolved (cleartext)
+            # ``litellm_embedding_config`` skip the lookup and pass through
+            # unchanged so the embed call keeps working.
+            embedding_model = litellm_params.get("litellm_embedding_model")
+            if embedding_model and not litellm_params.get("litellm_embedding_config"):
+                from litellm.proxy.proxy_server import prisma_client
+
+                resolved_config = await _resolve_embedding_config(
+                    embedding_model=embedding_model, prisma_client=prisma_client
+                )
+                if resolved_config:
+                    # Build a fresh dict via spread instead of mutating
+                    # ``litellm_params`` in place — the registry hands back
+                    # a reference to its cached object, so an in-place
+                    # update would persist the resolved cleartext into the
+                    # in-memory cache for the lifetime of the process.
+                    litellm_params = {
+                        **litellm_params,
+                        "litellm_embedding_config": resolved_config,
+                    }
+            data.update(litellm_params)
     return data
 
 
@@ -103,7 +93,8 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/vector_stores/{vector_store_id:path}/search", dependencies=[Depends(user_api_key_auth)]
+    "/vector_stores/{vector_store_id:path}/search",
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def vector_store_search(
     request: Request,
@@ -133,11 +124,10 @@ async def vector_store_search(
     )
 
     data = await _read_request_body(request=request)
-    if "vector_store_id" not in data:
-        data["vector_store_id"] = vector_store_id
+    data["vector_store_id"] = vector_store_id
 
     # Check for legacy vector store registry (non-managed vector stores)
-    data = _update_request_data_with_litellm_managed_vector_store_registry(
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
@@ -146,7 +136,7 @@ async def vector_store_search(
     # 2. Extracting model and provider resource ID
     # 3. Setting up proper routing
     # 4. Authentication checks
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -188,7 +178,7 @@ async def vector_store_create(
 
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/create
-    
+
     Supports target_model_names parameter for creating vector stores across multiple models:
     ```json
     {
@@ -213,10 +203,10 @@ async def vector_store_create(
     )
 
     data = await _read_request_body(request=request)
-    
+
     # Check for target_model_names parameter
     target_model_names = data.pop("target_model_names", None)
-    
+
     if target_model_names:
         # Use managed vector stores for multi-model support
         if isinstance(target_model_names, str):
@@ -228,7 +218,7 @@ async def vector_store_create(
                 status_code=400,
                 detail="target_model_names must be a comma-separated string or list of model names",
             )
-        
+
         # Get managed vector stores hook
         managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         if managed_vector_stores is None:
@@ -236,13 +226,13 @@ async def vector_store_create(
                 status_code=500,
                 detail="Managed vector stores not configured. Please ensure the proxy is initialized with database support.",
             )
-        
+
         if llm_router is None:
             raise HTTPException(
                 status_code=500,
                 detail="LLM Router not initialized. Ensure models are added to proxy.",
             )
-        
+
         # Create vector store across multiple models
         response = await managed_vector_stores.acreate_vector_store(
             create_request=data,
@@ -251,9 +241,9 @@ async def vector_store_create(
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
         )
-        
+
         return response
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -261,6 +251,268 @@ async def vector_store_create(
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             route_type="avector_store_create",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.get("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+async def vector_store_retrieve(
+    request: Request,
+    vector_store_id: str,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Retrieve a vector store.
+
+    API Reference:
+    https://platform.openai.com/docs/api-reference/vector-stores/retrieve
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data = {"vector_store_id": vector_store_id}
+
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
+        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="avector_store_retrieve",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get("/v1/vector_stores", dependencies=[Depends(user_api_key_auth)])
+@router.get("/vector_stores", dependencies=[Depends(user_api_key_auth)])
+async def vector_store_list(
+    request: Request,
+    fastapi_response: Response,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    limit: Optional[int] = 20,
+    order: Optional[str] = "desc",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List vector stores.
+
+    API Reference:
+    https://platform.openai.com/docs/api-reference/vector-stores/list
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data: dict = {}
+    if after is not None:
+        data["after"] = after
+    if before is not None:
+        data["before"] = before
+    if limit is not None:
+        data["limit"] = limit
+    if order is not None:
+        data["order"] = order
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="avector_store_list",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.post("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+async def vector_store_update(
+    request: Request,
+    vector_store_id: str,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update a vector store.
+
+    API Reference:
+    https://platform.openai.com/docs/api-reference/vector-stores/modify
+    """
+    from litellm.proxy.proxy_server import (
+        _read_request_body,
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data = await _read_request_body(request=request)
+    if "vector_store_id" not in data:
+        data["vector_store_id"] = vector_store_id
+
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
+        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="avector_store_update",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.delete("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.delete("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+async def vector_store_delete(
+    request: Request,
+    vector_store_id: str,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete a vector store.
+
+    API Reference:
+    https://platform.openai.com/docs/api-reference/vector-stores/delete
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data = {"vector_store_id": vector_store_id}
+
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
+        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="avector_store_delete",
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -310,16 +562,19 @@ async def index_create(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    assert_proxy_admin_for_vector_store_index_management(
+        user_api_key_dict,
+        operation="create",
+    )
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = (
-        await prisma_client.db.litellm_managedvectorstoreindextable.find_unique(
-            where={"index_name": index_create_request.index_name}
-        )
+    existing_index = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
+        where={"index_name": index_create_request.index_name}
     )
 
     ## 2. set created_by and updated_by
@@ -334,8 +589,6 @@ async def index_create(
     index_data = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await prisma_client.db.litellm_managedvectorstoreindextable.create(
-        data=jsonify_object(index_data)
-    )
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
 
     return new_index.model_dump()

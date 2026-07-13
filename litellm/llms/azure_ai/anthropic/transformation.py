@@ -1,6 +1,7 @@
 """
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
+
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -9,6 +10,23 @@ from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     pass
+
+
+def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
+    """Promote anthropic-native passthrough keys out of ``extra_body``.
+
+    ``azure_ai`` is an OpenAI-compatible provider, so non-OpenAI kwargs like
+    ``output_config`` get auto-routed into ``extra_body`` by
+    ``add_provider_specific_params_to_optional_params``. For the Azure→Anthropic
+    route those keys must reach the request body and be validated, so promote
+    them. ``setdefault`` keeps explicit top-level values authoritative.
+    """
+    extra_body = optional_params.get("extra_body")
+    if not isinstance(extra_body, dict) or not extra_body:
+        return
+    for k, v in extra_body.items():
+        optional_params.setdefault(k, v)
+    optional_params.pop("extra_body", None)
 
 
 class AzureAnthropicConfig(AnthropicConfig):
@@ -21,6 +39,9 @@ class AzureAnthropicConfig(AnthropicConfig):
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "azure_ai"
+
+    def should_strip_billing_metadata(self) -> bool:
+        return True
 
     def validate_environment(
         self,
@@ -38,6 +59,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         1. API key via 'api-key' header
         2. Azure AD token via 'Authorization: Bearer <token>' header
         """
+        _promote_extra_body_to_optional_params(optional_params)
+
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
             # Ensure api_key is included if provided
@@ -49,19 +72,15 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params_obj
-        )
+        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
-        mcp_server_used = self.is_mcp_server_used(
-            mcp_servers=optional_params.get("mcp_servers")
-        )
+        mcp_server_used = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
@@ -86,7 +105,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
 
-
         return headers
 
     def transform_request(
@@ -101,7 +119,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
-        # Call parent transform_request
+        _promote_extra_body_to_optional_params(optional_params)
+
         data = super().transform_request(
             model=model,
             messages=messages,
@@ -116,4 +135,3 @@ class AzureAnthropicConfig(AnthropicConfig):
         data.pop("stream_options", None)
 
         return data
-

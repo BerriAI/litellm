@@ -1,11 +1,49 @@
-from unittest.mock import MagicMock
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
+from litellm.types.responses.main import OutputCodeInterpreterCall
+
+
+@pytest.mark.asyncio
+async def test_make_call_passes_logging_obj_to_client_post():
+    """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(
+        return_value=iter(
+            [b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n']
+        )
+    )
+    mock_client.post.return_value = mock_response
+
+    logging_obj = MagicMock()
+
+    await make_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-3-5-haiku",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=logging_obj,
+        timeout=60.0,
+        json_mode=False,
+    )
+
+    mock_client.post.assert_called_once()
+    call_kwargs = mock_client.post.call_args[1]
+    assert call_kwargs.get("logging_obj") is logging_obj
 
 
 def test_redacted_thinking_content_block_delta():
@@ -34,6 +72,150 @@ def test_redacted_thinking_content_block_delta():
 
     assert model_response.choices[0].delta.provider_specific_fields is not None
     assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
+
+
+def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig-final"},
+        },
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+    expected_delta_blocks = (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
+    expected_thinking_block = {
+        "type": "thinking",
+        "thinking": "Step 1. Step 2.",
+        "signature": "sig-final",
+    }
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (*expected_delta_blocks, expected_thinking_block)
+    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [expected_delta_blocks[0]]
+    }
+    assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [expected_thinking_block]
+    }
+
+
+def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
+
+
+def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
 
 
 def test_handle_json_mode_chunk_response_format_tool():
@@ -309,6 +491,289 @@ def test_text_only_streaming_has_index_zero():
             ), f"Expected index=0, got {parsed.choices[0].index}"
 
 
+def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
+    """Anthropic streaming usage should account for emitted thinking deltas."""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "First I need to count the favorable outcomes. ",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "Then I compare that count with all possible outcomes.",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig_123"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "The probability is 3/8."},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    final_usage = None
+    reasoning_deltas = []
+
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        reasoning_content = getattr(parsed.choices[0].delta, "reasoning_content", None)
+        if reasoning_content:
+            reasoning_deltas.append(reasoning_content)
+        if parsed.usage is not None:
+            final_usage = parsed.usage
+
+    assert reasoning_deltas == [
+        "First I need to count the favorable outcomes. ",
+        "Then I compare that count with all possible outcomes.",
+    ]
+    assert final_usage is not None
+    completion_tokens_details = final_usage.completion_tokens_details
+    assert completion_tokens_details is not None
+    assert completion_tokens_details.reasoning_tokens > 0
+    assert completion_tokens_details.text_tokens == (
+        final_usage.completion_tokens - completion_tokens_details.reasoning_tokens
+    )
+
+
+def test_anthropic_completion_streaming_usage_matches_non_streaming_with_thinking():
+    """The completion API should preserve Anthropic thinking usage in streaming mode."""
+    thinking_parts = [
+        "First I need to count the favorable outcomes. ",
+        "Then I compare that count with all possible outcomes.",
+    ]
+    thinking_text = "".join(thinking_parts)
+    answer_text = "The probability is 3/8."
+    requests_seen = []
+
+    class MockAnthropicHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format, *args):  # type: ignore[no-untyped-def]
+            return
+
+        def do_POST(self):  # type: ignore[no-untyped-def]
+            content_length = int(self.headers.get("content-length", "0"))
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            requests_seen.append(
+                {
+                    "path": self.path,
+                    "model": payload.get("model"),
+                    "stream": payload.get("stream", False),
+                    "thinking": payload.get("thinking"),
+                }
+            )
+
+            if payload.get("stream"):
+                events = [
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_mock",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": payload.get("model"),
+                            "content": [],
+                            "usage": {"input_tokens": 10, "output_tokens": 1},
+                        },
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": thinking_parts[0],
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": thinking_parts[1],
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "signature_delta",
+                            "signature": "sig_mock",
+                        },
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {
+                        "type": "content_block_start",
+                        "index": 1,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 1,
+                        "delta": {"type": "text_delta", "text": answer_text},
+                    },
+                    {"type": "content_block_stop", "index": 1},
+                    {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                        "usage": {"output_tokens": 50},
+                    },
+                    {"type": "message_stop"},
+                ]
+                self._write_response(
+                    content_type="text/event-stream",
+                    body="".join(
+                        f"data: {json.dumps(event)}\n\n" for event in events
+                    ).encode("utf-8"),
+                )
+                return
+
+            self._write_response(
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "id": "msg_mock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": payload.get("model"),
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": thinking_text,
+                                "signature": "sig_mock",
+                            },
+                            {"type": "text", "text": answer_text},
+                        ],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 50},
+                    }
+                ).encode("utf-8"),
+            )
+
+        def _write_response(self, content_type: str, body: bytes) -> None:
+            self.send_response(200)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MockAnthropicHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        request_kwargs = {
+            "model": "anthropic/claude-sonnet-4-6",
+            "api_base": f"http://127.0.0.1:{server.server_port}",
+            "api_key": "test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Solve a probability problem and show thinking.",
+                }
+            ],
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 128,
+        }
+
+        non_stream_response = litellm.completion(**request_kwargs, stream=False)
+        non_stream_details = non_stream_response.usage.completion_tokens_details
+        assert non_stream_details is not None
+        assert non_stream_details.reasoning_tokens > 0
+
+        reasoning_chunks = []
+        content_chunks = []
+        stream_usage = None
+        for chunk in litellm.completion(
+            **request_kwargs,
+            stream=True,
+            stream_options={"include_usage": True},
+        ):
+            chunk_dict = chunk.model_dump(exclude_none=True)
+            choices = chunk_dict.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                if delta.get("reasoning_content"):
+                    reasoning_chunks.append(delta["reasoning_content"])
+                if delta.get("content"):
+                    content_chunks.append(delta["content"])
+            if chunk_dict.get("usage"):
+                stream_usage = chunk_dict["usage"]
+
+        assert reasoning_chunks == thinking_parts
+        assert content_chunks == [answer_text]
+        assert stream_usage is not None
+        stream_completion_details = stream_usage["completion_tokens_details"]
+        assert (
+            stream_completion_details["reasoning_tokens"]
+            == non_stream_details.reasoning_tokens
+        )
+        assert stream_completion_details["text_tokens"] == (
+            stream_usage["completion_tokens"]
+            - stream_completion_details["reasoning_tokens"]
+        )
+        assert requests_seen == [
+            {
+                "path": "/v1/messages",
+                "model": "claude-sonnet-4-6",
+                "stream": False,
+                "thinking": {"type": "adaptive"},
+            },
+            {
+                "path": "/v1/messages",
+                "model": "claude-sonnet-4-6",
+                "stream": True,
+                "thinking": {"type": "adaptive"},
+            },
+        ]
+    finally:
+        server.shutdown()
+
+
 def test_text_and_tool_streaming_has_index_zero():
     """Test that mixed text and tool streaming responses have choice index=0"""
     chunks = [
@@ -479,14 +944,22 @@ def test_partial_json_chunk_accumulation():
     # First partial chunk should return None (still accumulating)
     result1 = iterator._parse_sse_data(f"data:{partial_chunk_1}")
     assert result1 is None, "First partial chunk should return None while accumulating"
-    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
-    assert iterator.accumulated_json == partial_chunk_1, "Should have accumulated first part"
+    assert (
+        iterator.chunk_type == "accumulated_json"
+    ), "Should switch to accumulated_json mode"
+    assert (
+        iterator.accumulated_json == partial_chunk_1
+    ), "Should have accumulated first part"
 
     # Second partial chunk should complete the JSON and return a parsed result
     result2 = iterator._parse_sse_data(f"data:{partial_chunk_2}")
     assert result2 is not None, "Second chunk should return parsed result"
-    assert iterator.accumulated_json == "", "Buffer should be cleared after successful parse"
-    assert result2.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
+    assert (
+        iterator.accumulated_json == ""
+    ), "Buffer should be cleared after successful parse"
+    assert (
+        result2.choices[0].delta.content == "Hello"
+    ), f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
 
 
 def test_complete_json_chunk_no_accumulation():
@@ -503,7 +976,9 @@ def test_complete_json_chunk_no_accumulation():
     assert result is not None, "Complete chunk should return parsed result immediately"
     assert iterator.chunk_type == "valid_json", "Should remain in valid_json mode"
     assert iterator.accumulated_json == "", "Buffer should remain empty"
-    assert result.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result.choices[0].delta.content}'"
+    assert (
+        result.choices[0].delta.content == "Hello"
+    ), f"Expected 'Hello', got '{result.choices[0].delta.content}'"
 
 
 def test_multiple_partial_chunks_accumulation():
@@ -620,7 +1095,9 @@ def test_web_search_tool_result_no_extra_tool_calls():
     # Should have exactly 2 tool calls:
     # 1. From content_block_start (server_tool_use) with id and name
     # 2. From content_block_delta with the actual query
-    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert (
+        len(tool_calls_emitted) == 2
+    ), f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
 
     # First tool call should have the id and name
     assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
@@ -722,7 +1199,10 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
         {
             "type": "content_block_delta",
             "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"query": "otter facts"}'},
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"query": "otter facts"}',
+            },
         },
         # 4. content_block_stop for server_tool_use
         {"type": "content_block_stop", "index": 0},
@@ -822,7 +1302,10 @@ def test_web_fetch_tool_result_captured_in_provider_specific_fields():
         {
             "type": "content_block_delta",
             "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://example.com"}'},
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"url": "https://example.com"}',
+            },
         },
         # 4. content_block_stop for server_tool_use
         {"type": "content_block_stop", "index": 0},
@@ -946,7 +1429,7 @@ def test_web_fetch_tool_result_no_extra_tool_calls():
 def test_container_in_provider_specific_fields_streaming():
     """
     Test that container is captured in provider_specific_fields for streaming responses.
-    
+
     When container with skills is used, the container field should be present in
     the provider_specific_fields of the message_delta chunk.
     """
@@ -1025,7 +1508,9 @@ def test_container_in_provider_specific_fields_streaming():
             ]
 
     # Verify container was captured
-    assert container_field is not None, "container should be captured in provider_specific_fields"
+    assert (
+        container_field is not None
+    ), "container should be captured in provider_specific_fields"
     assert (
         container_field["id"] == "container_011CW9hA9zpZ8xD3bjjShy4p"
     ), "container id should match"
@@ -1033,18 +1518,14 @@ def test_container_in_provider_specific_fields_streaming():
         container_field["expires_at"] == "2025-12-16T04:57:16.913181Z"
     ), "expires_at should match"
     assert len(container_field["skills"]) == 1, "Should have 1 skill"
-    assert (
-        container_field["skills"][0]["skill_id"] == "pptx"
-    ), "skill_id should be pptx"
-    assert (
-        container_field["skills"][0]["version"] == "20251013"
-    ), "version should match"
+    assert container_field["skills"][0]["skill_id"] == "pptx", "skill_id should be pptx"
+    assert container_field["skills"][0]["version"] == "20251013", "version should match"
 
 
 def test_container_in_provider_specific_fields_non_streaming():
     """
     Test that container is captured in provider_specific_fields for non-streaming responses.
-    
+
     When container with skills is used in non-streaming, the container field should be
     present in the provider_specific_fields of the response.
     """
@@ -1106,7 +1587,7 @@ def test_container_in_provider_specific_fields_non_streaming():
 def test_container_absent_when_not_provided():
     """
     Test that container is not added to provider_specific_fields when not provided.
-    
+
     This ensures we don't add empty or None container fields.
     """
     iterator = ModelResponseIterator(
@@ -1133,3 +1614,434 @@ def test_container_absent_when_not_provided():
         assert (
             "container" not in model_response.choices[0].delta.provider_specific_fields
         ), "container should not be present when not provided in delta"
+
+
+def test_streaming_code_execution_produces_code_interpreter_results():
+    """
+    Test that bash_code_execution_tool_result content blocks in streaming
+    produce code_interpreter_results in provider_specific_fields, so the
+    Responses API layer can use them without Anthropic-specific knowledge.
+    """
+
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "text",
+                "text": "",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Running code..."},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC",
+                "name": "bash_code_execution",
+                "input": {"command": "echo hello"},
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01ABC",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    found_code_interpreter_results = False
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            found_code_interpreter_results = True
+            results = psf["code_interpreter_results"]
+            assert len(results) == 1
+            assert isinstance(results[0], OutputCodeInterpreterCall)
+            assert results[0].type == "code_interpreter_call"
+            assert results[0].id == "srvtoolu_01ABC"
+            assert results[0].code == "echo hello"
+            assert results[0].outputs is not None
+            assert len(results[0].outputs) == 1
+            assert results[0].outputs[0].logs == "hello\n"
+
+    assert found_code_interpreter_results, (
+        "code_interpreter_results should appear in provider_specific_fields "
+        "when bash_code_execution_tool_result is streamed"
+    )
+
+
+def test_streaming_multiple_code_executions_no_duplicates():
+    """
+    Test that multiple code executions in a single streaming response emit
+    cumulative code_interpreter_results on each chunk (matching stream_chunk_builder's
+    "last value wins" contract).  The final emission must contain ALL results.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        # First code execution
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "bash_code_execution",
+                "input": {"command": "echo first"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "first\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        # Second code execution
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01BBB",
+                "name": "bash_code_execution",
+                "input": {"command": "echo second"},
+            },
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "content_block_start",
+            "index": 3,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01BBB",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "second\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 3},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # Collect each emission of code_interpreter_results
+    emissions = []
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            emissions.append(psf["code_interpreter_results"])
+
+    # Should have 2 emissions (one per tool_result block)
+    assert len(emissions) == 2, f"Expected 2 emissions, got {len(emissions)}"
+
+    # First emission: cumulative list with 1 result
+    assert len(emissions[0]) == 1
+    assert emissions[0][0].id == "srvtoolu_01AAA"
+    assert emissions[0][0].code == "echo first"
+    assert emissions[0][0].outputs[0].logs == "first\n"
+
+    # Second (final) emission: cumulative list with BOTH results
+    # This is what stream_chunk_builder will pick as "last value wins"
+    assert len(emissions[1]) == 2, (
+        f"Expected final emission to have 2 results, got {len(emissions[1])}. "
+        f"IDs: {[r.id for r in emissions[1]]}"
+    )
+    assert emissions[1][0].id == "srvtoolu_01AAA"
+    assert emissions[1][0].code == "echo first"
+    assert emissions[1][0].outputs[0].logs == "first\n"
+    assert emissions[1][1].id == "srvtoolu_01BBB"
+    assert emissions[1][1].code == "echo second"
+    assert emissions[1][1].outputs[0].logs == "second\n"
+
+
+def test_streaming_code_execution_input_assembled_from_deltas():
+    """
+    In real Anthropic streaming, content_block_start for server_tool_use has
+    input: {}.  The actual input arrives via input_json_delta deltas and must
+    be assembled at content_block_stop so the code field is populated.
+
+    This test uses realistic chunk shapes (empty input in start, partial JSON
+    in deltas) to exercise the input assembly path.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        # server_tool_use with empty input (real streaming behaviour)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "code_execution",
+                "input": {},
+            },
+        },
+        # Input arrives via deltas, split across two chunks
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"comma',
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": 'nd": "echo hello"}',
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # Tool result
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # The code field must contain the assembled input, not be empty
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert code_results[0].code == "echo hello"
+    assert code_results[0].outputs[0].logs == "hello\n"
+
+
+def test_empty_output_produces_null_outputs():
+    """
+    When both stdout and stderr are empty, outputs should be None
+    (matching OpenAI's native behavior) rather than [{logs: ""}].
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "bash_code_execution",
+                "input": {"command": "true"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert (
+        code_results[0].outputs is None
+    ), f"Expected outputs=None for empty execution, got {code_results[0].outputs}"
+
+
+def test_non_bash_tool_result_skipped():
+    """
+    Tool result types other than bash_code_execution_tool_result (e.g.
+    text_editor_code_execution_tool_result) should be skipped and NOT
+    produce code_interpreter_call items.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "text_editor",
+                "input": {"command": "view", "path": "/tmp/test.py"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # text_editor result — should NOT become a code_interpreter_call
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": [
+                    {"type": "text", "text": "file contents here"},
+                ],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # code_interpreter_results should be emitted but empty (no bash results)
+    assert (
+        code_results is not None
+    ), "Expected code_interpreter_results key to be emitted"
+    assert (
+        len(code_results) == 0
+    ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"

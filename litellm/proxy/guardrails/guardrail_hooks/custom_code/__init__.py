@@ -2,6 +2,9 @@
 
 This module allows users to write custom guardrail logic using Python-like code
 that runs in a sandboxed environment with access to LiteLLM-provided primitives.
+
+Pre-built custom code for common guardrails (e.g. response rejection detection)
+is available in response_rejection_code.py.
 """
 
 from typing import TYPE_CHECKING
@@ -9,14 +12,16 @@ from typing import TYPE_CHECKING
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .custom_code_guardrail import CustomCodeGuardrail
+from .response_rejection_code import (
+    DEFAULT_REJECTION_PHRASES,
+    RESPONSE_REJECTION_GUARDRAIL_CODE,
+)
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> CustomCodeGuardrail:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> CustomCodeGuardrail:
     """
     Initialize a custom code guardrail.
 
@@ -36,9 +41,7 @@ def initialize_guardrail(
     # Get the custom code from litellm_params
     custom_code = getattr(litellm_params, "custom_code", None)
     if not custom_code:
-        raise ValueError(
-            "Custom code guardrail requires 'custom_code' in litellm_params"
-        )
+        raise ValueError("Custom code guardrail requires 'custom_code' in litellm_params")
 
     custom_code_guardrail = CustomCodeGuardrail(
         guardrail_name=guardrail_name,
@@ -61,5 +64,7 @@ guardrail_class_registry = {
 
 __all__ = [
     "CustomCodeGuardrail",
+    "DEFAULT_REJECTION_PHRASES",
+    "RESPONSE_REJECTION_GUARDRAIL_CODE",
     "initialize_guardrail",
 ]

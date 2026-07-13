@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,
@@ -71,25 +72,19 @@ async def get_marketplace():
     try:
         prisma_client = await _get_prisma_client()
 
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
-            where={"enabled": True}
-        )
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
 
         plugin_list = []
         for plugin in plugins:
             try:
                 manifest = json.loads(plugin.manifest_json)
             except json.JSONDecodeError:
-                verbose_proxy_logger.warning(
-                    f"Plugin {plugin.name} has invalid manifest JSON, skipping"
-                )
+                verbose_proxy_logger.warning(f"Plugin {plugin.name} has invalid manifest JSON, skipping")
                 continue
 
             # Source must be specified for URL-based marketplaces
             if "source" not in manifest:
-                verbose_proxy_logger.warning(
-                    f"Plugin {plugin.name} has no source field, skipping"
-                )
+                verbose_proxy_logger.warning(f"Plugin {plugin.name} has no source field, skipping")
                 continue
 
             entry: Dict[str, Any] = {
@@ -130,6 +125,55 @@ async def get_marketplace():
         )
 
 
+# Allowlist for git-subdir paths: one or more segments separated by '/'.
+# Each segment must start with an alphanumeric character and contain only
+# alphanumeric characters, dots, hyphens, and underscores.
+# This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+
+
+def _validate_plugin_source(source: Dict[str, Any]) -> None:
+    """Validate plugin source format, raising HTTPException on invalid input."""
+    source_type = source.get("source")
+    if source_type == "github":
+        if "repo" not in source:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "GitHub source must include 'repo' field (e.g., 'org/repo')"},
+            )
+    elif source_type == "url":
+        if "url" not in source:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"},
+            )
+    elif source_type == "git-subdir":
+        if not source.get("url"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "git-subdir source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
+                },
+            )
+        if not source.get("path"):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"},
+            )
+        if not _VALID_GIT_SUBDIR_PATH_RE.match(source["path"]):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
+                },
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "source.source must be 'github', 'url', or 'git-subdir'"},
+        )
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
@@ -148,7 +192,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github or url format)
+        - source: Git source reference (github, url, or git-subdir format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
@@ -179,36 +223,12 @@ async def register_plugin(
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"
-                },
+                detail={"error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"},
             )
 
         # Validate source format
         source = request.source
-        source_type = source.get("source")
-
-        if source_type == "github":
-            if "repo" not in source:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "GitHub source must include 'repo' field (e.g., 'org/repo')"
-                    },
-                )
-        elif source_type == "url":
-            if "url" not in source:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
-                    },
-                )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "source.source must be 'github' or 'url'"},
-            )
+        _validate_plugin_source(source)
 
         # Build manifest for storage
         manifest: Dict[str, Any] = {
@@ -227,14 +247,16 @@ async def register_plugin(
             manifest["keywords"] = request.keywords
         if request.category:
             manifest["category"] = request.category
+        if request.domain:
+            manifest["domain"] = request.domain
+        if request.namespace:
+            manifest["namespace"] = request.namespace
 
         # Check if plugin exists
-        existing = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": request.name}
-        )
+        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": request.name})
 
         if existing:
-            plugin = await prisma_client.db.litellm_claudecodeplugintable.update(
+            plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
                 where={"name": request.name},
                 data={
                     "version": request.version,
@@ -246,7 +268,7 @@ async def register_plugin(
             )
             action = "updated"
         else:
-            plugin = await prisma_client.db.litellm_claudecodeplugintable.create(
+            plugin = await ClaudeCodePluginRepository(prisma_client).table.create(
                 data={
                     "name": request.name,
                     "version": request.version,
@@ -309,9 +331,7 @@ async def list_plugins(
         prisma_client = await _get_prisma_client()
 
         where = {"enabled": True} if enabled_only else {}
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
-            where=where
-        )
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
 
         plugin_list = []
         for p in plugins:
@@ -329,6 +349,8 @@ async def list_plugins(
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
                     category=manifest.get("category"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
@@ -374,9 +396,7 @@ async def get_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
 
         if not plugin:
             raise HTTPException(
@@ -430,16 +450,14 @@ async def enable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.update(
+        await ClaudeCodePluginRepository(prisma_client).table.update(
             where={"name": plugin_name},
             data={"enabled": True, "updated_at": datetime.now(timezone.utc)},
         )
@@ -475,16 +493,14 @@ async def disable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.update(
+        await ClaudeCodePluginRepository(prisma_client).table.update(
             where={"name": plugin_name},
             data={"enabled": False, "updated_at": datetime.now(timezone.utc)},
         )
@@ -520,18 +536,14 @@ async def delete_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.delete(
-            where={"name": plugin_name}
-        )
+        await ClaudeCodePluginRepository(prisma_client).table.delete(where={"name": plugin_name})
 
         verbose_proxy_logger.info(f"Plugin {plugin_name} deleted")
         return {"status": "success", "message": f"Plugin '{plugin_name}' deleted"}

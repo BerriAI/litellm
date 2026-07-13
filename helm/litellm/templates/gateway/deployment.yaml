@@ -1,0 +1,94 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "litellm.gateway.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    matchLabels:
+      {{- include "litellm.gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.gateway.config.create }}
+        checksum/config: {{ include (print $.Template.BasePath "/gateway/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.gateway.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "litellm.gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "litellm.gateway.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccounts.gateway.automount }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          env:
+            {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
+            {{- if .Values.gateway.config.create }}
+            - name: CONFIG_FILE_PATH
+              value: /app/config/config.yaml
+            {{- end }}
+            {{- if .Values.gateway.numWorkers }}
+            - name: NUM_WORKERS
+              value: {{ .Values.gateway.numWorkers | quote }}
+            {{- end }}
+          {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts }}
+          volumeMounts:
+            {{- if .Values.gateway.config.create }}
+            - name: gateway-config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+            {{- end }}
+            {{- with .Values.gateway.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.gateway.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.gateway.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes }}
+      volumes:
+        {{- if .Values.gateway.config.create }}
+        - name: gateway-config
+          configMap:
+            name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- with .Values.gateway.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

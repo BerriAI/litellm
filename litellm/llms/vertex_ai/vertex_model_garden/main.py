@@ -27,6 +27,17 @@ from ..common_utils import VertexAIError, get_vertex_base_model_name
 from ..vertex_llm_base import VertexBase
 
 
+def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
+    """
+    Vertex catalog / publisher models are addressed as publisher/model (e.g.
+    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
+
+    Deployed Model Garden endpoints are typically a single segment (often numeric)
+    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
+    """
+    return "/" in model
+
+
 def create_vertex_url(
     vertex_location: str,
     vertex_project: str,
@@ -34,14 +45,16 @@ def create_vertex_url(
     model: str,
     api_base: Optional[str] = None,
 ) -> str:
-    """Return the base url for the vertex garden models"""
+    """Return the api base for vertex model garden (without /chat/completions)."""
     base_url = get_vertex_base_url(vertex_location)
+    if _vertex_model_garden_model_id_in_json_body(model):
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
 class VertexAIModelGardenModels(VertexBase):
     def __init__(self) -> None:
-        pass
+        super().__init__()
 
     def completion(
         self,
@@ -73,27 +86,21 @@ class VertexAIModelGardenModels(VertexBase):
             import vertexai
 
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                VertexLLM,
-            )
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
             model = get_vertex_base_model_name(model=model)
-            vertex_httpx_logic = VertexLLM()
 
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",
@@ -102,34 +109,22 @@ class VertexAIModelGardenModels(VertexBase):
             openai_like_chat_completions = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
+            # Skip _check_custom_proxy: its ":verb" URL construction corrupts a
+            # user-supplied api_base (e.g. Vertex MG dedicated endpoint), and
+            # OpenAILikeChatHandler already appends "/chat/completions".
             stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
-            default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
-                vertex_project=vertex_project or project_id,
-                stream=stream,
-                model=model,
-            )
-
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
-                api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
-                model=model,
-                vertex_project=vertex_project or project_id,
-                vertex_location=vertex_location or "us-central1",
-                vertex_api_version="v1beta1",
-            )
-            model = ""
+            if api_base is None:
+                api_base = create_vertex_url(
+                    vertex_location=vertex_location or "us-central1",
+                    vertex_project=vertex_project or project_id,
+                    stream=stream,
+                    model=model,
+                )
+            # Publisher/catalog models: model id must be sent in the JSON body (OpenAPI route).
+            # Single-segment endpoint ids: model is encoded in the URL path; body model stays empty.
+            if not _vertex_model_garden_model_id_in_json_body(model):
+                model = ""
             return openai_like_chat_completions.completion(
                 model=model,
                 messages=messages,

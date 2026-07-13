@@ -1,0 +1,47 @@
+name: Create Daily oss-agent-shin Branch
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Runs every day at midnight UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  create-oss-agent-shin-branch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create daily oss-agent-shin branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure Git user
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Generate branch name with MM_DD_YYYY format
+          BRANCH_NAME="litellm_oss_agent_shin_$(date +'%m_%d_%Y')"
+          echo "Creating branch: $BRANCH_NAME"
+
+          # Fetch all branches
+          git fetch --all
+
+          # Check if the branch already exists
+          if git show-ref --verify --quiet refs/remotes/origin/$BRANCH_NAME; then
+            echo "Branch $BRANCH_NAME already exists. Skipping creation."
+          else
+            echo "Creating new branch: $BRANCH_NAME"
+            # Create the new branch from main
+            git checkout -b $BRANCH_NAME origin/main
+            # Push the new branch
+            git push origin $BRANCH_NAME
+            echo "Successfully created and pushed branch: $BRANCH_NAME"
+          fi
