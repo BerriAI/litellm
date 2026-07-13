@@ -1716,6 +1716,35 @@ class PrometheusLogger(CustomLogger):
             amount=float(response_cost),
         )
 
+    @staticmethod
+    def _get_remaining_from_v3_rate_limit_headers(
+        standard_logging_payload: StandardLoggingPayload | None,
+        rate_limit_type: Literal["requests", "tokens"],
+    ) -> int | None:
+        """
+        Read the per-(key, model) remaining value emitted by the v3 rate
+        limiter (``parallel_request_limiter_v3.py``), which writes
+        ``x-ratelimit-model_per_key-remaining-{requests,tokens}`` into
+        ``standard_logging_object.hidden_params.additional_headers`` instead
+        of the ``litellm-key-remaining-*`` metadata keys the legacy limiter
+        sets. The header carries no model group; it always refers to this
+        request's model group, which is what the gauges are labeled with.
+        Values are written in-process as plain ints (never HTTP-serialized
+        strings), so anything else is rejected rather than coerced.
+        """
+        if standard_logging_payload is None:
+            return None
+        hidden_params = standard_logging_payload.get("hidden_params")
+        if hidden_params is None:
+            return None
+        additional_headers = hidden_params.get("additional_headers")
+        if additional_headers is None:
+            return None
+        value = dict(additional_headers).get(f"x-ratelimit-model_per_key-remaining-{rate_limit_type}")
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
     def _set_virtual_key_rate_limit_metrics(
         self,
         user_api_key: Optional[str],
@@ -1733,11 +1762,20 @@ class PrometheusLogger(CustomLogger):
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
 
         remaining_requests = metadata.get(remaining_requests_variable_name)
         if remaining_requests is None:
+            remaining_requests = self._get_remaining_from_v3_rate_limit_headers(
+                standard_logging_payload=standard_logging_payload, rate_limit_type="requests"
+            )
+        if remaining_requests is None:
             remaining_requests = sys.maxsize
         remaining_tokens = metadata.get(remaining_tokens_variable_name)
+        if remaining_tokens is None:
+            remaining_tokens = self._get_remaining_from_v3_rate_limit_headers(
+                standard_logging_payload=standard_logging_payload, rate_limit_type="tokens"
+            )
         if remaining_tokens is None:
             remaining_tokens = sys.maxsize
 
