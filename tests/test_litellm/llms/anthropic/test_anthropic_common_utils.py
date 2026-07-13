@@ -386,7 +386,26 @@ class TestPassthroughOAuth:
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
 
-    def test_passthrough_custom_base_uses_bearer_from_litellm_params(self):
+    @pytest.mark.parametrize(
+        ("api_base", "litellm_params"),
+        [
+            (
+                None,
+                {
+                    "api_base": "https://custom-gateway.example.com",
+                    "use_bearer_for_custom_base": True,
+                },
+            ),
+            (
+                "https://custom-gateway.example.com",
+                {
+                    "api_base": "https://api.anthropic.com",
+                    "use_bearer_for_custom_base": True,
+                },
+            ),
+        ],
+    )
+    def test_passthrough_custom_base_uses_bearer(self, api_base, litellm_params):
         from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
             AnthropicMessagesConfig,
         )
@@ -398,12 +417,9 @@ class TestPassthroughOAuth:
             model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
-            litellm_params={
-                "api_base": "https://custom-gateway.example.com",
-                "use_bearer_for_custom_base": True,
-            },
+            litellm_params=litellm_params,
             api_key="custom-api-key",
-            api_base=None,
+            api_base=api_base,
         )
 
         assert updated_headers["authorization"] == "Bearer custom-api-key"
