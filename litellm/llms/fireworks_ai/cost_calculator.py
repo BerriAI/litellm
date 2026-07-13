@@ -12,7 +12,6 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
 
 
 # Extract the number of billion parameters from the model name
@@ -67,9 +66,10 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     try:
-        get_model_info(model=model, custom_llm_provider="fireworks_ai")
-        resolved_model = model
+        return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="fireworks_ai")
     except Exception:
-        resolved_model = get_base_model_for_pricing(model_name=model)
-
-    return generic_cost_per_token(model=resolved_model, usage=usage, custom_llm_provider="fireworks_ai")
+        return generic_cost_per_token(
+            model=get_base_model_for_pricing(model_name=model),
+            usage=usage,
+            custom_llm_provider="fireworks_ai",
+        )
