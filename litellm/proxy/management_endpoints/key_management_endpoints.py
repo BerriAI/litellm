@@ -274,6 +274,13 @@ def _team_key_operation_team_member_check(
             detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
 
+    if (
+        route == KeyManagementRoutes.KEY_GENERATE
+        and assigned_user_id is not None
+        and assigned_user_id == user_api_key_dict.user_id
+    ):
+        return True
+
     TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
         team_member_object=team_member_object,
         team_table=team_table,

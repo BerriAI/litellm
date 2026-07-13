@@ -119,6 +119,101 @@ describe("SpendLogsTable", () => {
     });
   });
 
+  describe("session rows are not collapsed", () => {
+    const makeLog = (overrides: Partial<{
+      request_id: string;
+      session_id: string;
+      call_type: string;
+      session_total_count: number;
+      model: string;
+    }>) => ({
+      request_id: overrides.request_id ?? "req-1",
+      api_key: "key-hash",
+      team_id: "team-1",
+      model: overrides.model ?? "gpt-4o",
+      model_id: "model-1",
+      call_type: overrides.call_type ?? "acompletion",
+      spend: 0.01,
+      total_tokens: 10,
+      prompt_tokens: 5,
+      completion_tokens: 5,
+      startTime: "2026-07-13 20:00:00",
+      endTime: "2026-07-13 20:00:01",
+      user: "user-1",
+      cache_hit: "None",
+      messages: [],
+      response: {},
+      session_id: overrides.session_id,
+      session_total_count: overrides.session_total_count,
+      status: "success",
+    });
+
+    beforeEach(() => {
+      vi.mocked(useLogFilterLogic).mockReturnValue({
+        logsQuery: {
+          isLoading: false,
+          isFetching: false,
+          isPlaceholderData: false,
+          refetch: vi.fn(),
+        },
+        filteredLogs: {
+          data: [
+            makeLog({
+              request_id: "req-session-a-1",
+              session_id: "session-a",
+              session_total_count: 3,
+              call_type: "acompletion",
+            }),
+            makeLog({
+              request_id: "req-session-a-2",
+              session_id: "session-a",
+              session_total_count: 3,
+              call_type: "call_mcp_tool",
+            }),
+            makeLog({
+              request_id: "req-session-a-3",
+              session_id: "session-a",
+              session_total_count: 3,
+              call_type: "acompletion",
+            }),
+            makeLog({
+              request_id: "req-session-b-1",
+              session_id: "session-b",
+              session_total_count: 2,
+              call_type: "acompletion",
+            }),
+            makeLog({
+              request_id: "req-session-b-2",
+              session_id: "session-b",
+              session_total_count: 2,
+              call_type: "acompletion",
+            }),
+          ],
+          total: 5,
+          page: 1,
+          page_size: 50,
+          total_pages: 1,
+        },
+        allTeams: [],
+        handleFilterChange: vi.fn(),
+        handleFilterReset: mockHandleFilterResetFromHook,
+      } as unknown as ReturnType<typeof useLogFilterLogic>);
+    });
+
+    it("renders every spend-log row even when multiple share a session_id", async () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("req-session-a-1")).toBeInTheDocument();
+      });
+      expect(screen.getByText("req-session-a-2")).toBeInTheDocument();
+      expect(screen.getByText("req-session-a-3")).toBeInTheDocument();
+      expect(screen.getByText("req-session-b-1")).toBeInTheDocument();
+      expect(screen.getByText("req-session-b-2")).toBeInTheDocument();
+      expect(screen.getByText(/Showing 1 - 5 of 5 results/)).toBeInTheDocument();
+    });
+  });
+
   describe("Quick Select time range", () => {
     // uiSpendLogsCall fires from the real useLogFilterLogic query, so restore it here.
     beforeEach(async () => {
