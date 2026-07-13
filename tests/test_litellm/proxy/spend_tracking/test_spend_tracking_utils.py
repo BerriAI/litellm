@@ -2257,6 +2257,7 @@ def _make_counting_cache(supported_call_types):
         (["acompletion"], "acompletion", "HASH", 1),
         # Cache backend present but a different call type is requested.
         (["completion"], "acompletion", "Cache OFF", 0),
+        (["acompletion"], None, "Cache OFF", 0),
     ],
 )
 def test_get_logging_payload_cache_key_respects_supported_call_types(
