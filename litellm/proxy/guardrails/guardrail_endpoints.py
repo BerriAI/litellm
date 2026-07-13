@@ -2232,7 +2232,11 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: dict = {"messages": request.messages} if request.messages else {}
+        request_data: dict = {}
+        if request.messages:
+            request_data["messages"] = request.messages
+        if request.metadata is not None:
+            request_data["metadata"] = request.metadata
         _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
