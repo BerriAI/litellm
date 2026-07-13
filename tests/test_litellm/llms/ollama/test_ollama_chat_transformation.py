@@ -906,3 +906,81 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaReasoningEffortToThinkMapping:
+    """Regression tests for reasoning_effort to ollama think parameter translation.
+
+    Ollama's think field accepts booleans or levels (low/medium/high/max).
+    See https://docs.ollama.com/capabilities/thinking.
+
+    GPT-OSS only accepts low/medium/high (no max, no boolean).
+    """
+
+    @pytest.mark.parametrize(
+        "effort,expected_think",
+        [
+            ("none", False),
+            ("minimal", False),
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("xhigh", "max"),
+            ("max", "max"),
+        ],
+    )
+    def test_non_gpt_oss_effort_to_think_mapping(self, effort, expected_think):
+        """Each reasoning_effort level maps to the correct ollama think value."""
+        config = OllamaChatConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="qwen3",
+            drop_params=False,
+        )
+        assert optional_params["think"] == expected_think
+
+    @pytest.mark.parametrize(
+        "effort,expected_think",
+        [
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("xhigh", "high"),
+            ("max", "high"),
+            ("none", "low"),
+            ("minimal", "low"),
+        ],
+    )
+    def test_gpt_oss_effort_to_think_mapping(self, effort, expected_think):
+        """GPT-OSS only accepts low/medium/high; max/xhigh clamp to high, none/minimal to low."""
+        config = OllamaChatConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="gpt-oss:120b",
+            drop_params=False,
+        )
+        assert optional_params["think"] == expected_think
+
+    def test_non_string_reasoning_effort_falls_back_to_bool(self):
+        """A non-string value (e.g. True) is coerced to a boolean."""
+        config = OllamaChatConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": True},
+            optional_params={},
+            model="qwen3",
+            drop_params=False,
+        )
+        assert optional_params["think"] is True
+
+    def test_reasoning_effort_none_value_does_not_set_think(self):
+        """When reasoning_effort is explicitly None, think is not set at all."""
+        config = OllamaChatConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": None},
+            optional_params={},
+            model="qwen3",
+            drop_params=False,
+        )
+        assert "think" not in optional_params

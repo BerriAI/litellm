@@ -28,6 +28,7 @@ from litellm.types.utils import (
 )
 
 from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
+from ..chat.transformation import _map_reasoning_effort_to_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -177,10 +178,7 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = _map_reasoning_effort_to_think(value, model)
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
