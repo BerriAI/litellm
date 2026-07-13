@@ -112,6 +112,34 @@ def patched_speech_client_error(monkeypatch):
 
 
 @pytest.fixture
+def patched_speech_http_exception(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _raise(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=413, detail="payload too large")
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise)
+    yield
+
+
+@pytest.fixture
 def patched_transcription(monkeypatch):
     router = MagicMock()
     router.model_names = ["whisper-1"]
@@ -205,6 +233,17 @@ def test_audio_speech_client_error_preserves_status(
     assert response.status_code == 400
     body = response.json()
     assert "OperationNotSupported" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_http_exception_preserves_status(
+    client, auth_as, patched_speech_http_exception, path
+):
+    """An ``HTTPException`` raised on speech must keep its status code, not become 500."""
+    payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 413
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
