@@ -572,6 +572,48 @@ class TestBedrockRealtimeResponseTransformation:
         args = json.loads(function_call["arguments"])
         assert args["location"] == "San Francisco"
 
+    def test_transform_tool_use_response_with_content_field(self):
+        """Test toolUse response transformation with Nova 2 Sonic `content` field"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "toolUseId": "tool_call_123",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "San Francisco"}),
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_123",
+                "current_response_id": "resp_123",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        # Check for function call event
+        assert len(result["response"]) == 1
+        function_call = result["response"][0]
+        assert function_call["type"] == "response.function_call_arguments.done"
+        assert function_call["call_id"] == "tool_call_123"
+        assert function_call["name"] == "get_weather"
+
+        # Verify arguments are properly formatted
+        args = json.loads(function_call["arguments"])
+        assert args["location"] == "San Francisco"
+
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
         config = BedrockRealtimeConfig()

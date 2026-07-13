@@ -1022,11 +1022,13 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_output_item_id or not current_response_id:
             return [], "", ""
 
-        # Parse the tool input
+        # Parse the tool input. Nova 2 Sonic sends arguments in `content`;
+        # fall back to `input` for backward compatibility.
         tool_input = {}
-        if "input" in tool_use:
+        raw_input = tool_use.get("content") or tool_use.get("input")
+        if raw_input:
             try:
-                tool_input = json.loads(tool_use["input"]) if isinstance(tool_use["input"], str) else tool_use["input"]
+                tool_input = json.loads(raw_input) if isinstance(raw_input, str) else raw_input
             except json.JSONDecodeError:
                 tool_input = {}
 
