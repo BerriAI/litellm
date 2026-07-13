@@ -5177,6 +5177,54 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
 
 
 @pytest.mark.asyncio
+async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring():
+    """The upstream invalid_grant detection parses the RFC 6749 5.2 error field, not a substring of the
+    body. An upstream error whose code is not invalid_grant (here invalid_client, with the string
+    invalid_grant only inside error_description) must NOT be mistaken for a dead refresh token, so it
+    propagates as the upstream error rather than triggering a spurious authorization_code re-run."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="UP")
+
+    error_response = MagicMock()
+    error_response.status_code = 400
+    error_response.text = '{"error": "invalid_client", "error_description": "this is not an invalid_grant problem"}'
+    error_response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
+    )
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=error_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            await exchange_token_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=server,
+                grant_type="refresh_token",
+                code=None,
+                redirect_uri=None,
+                client_id="dcr-client-123",
+                client_secret=None,
+                code_verifier=None,
+                refresh_token=refresh_env,
+            )
+
+
+@pytest.mark.asyncio
 async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_globals):
     """A key_hash refresh envelope whose key is still active but whose OWNING user was SCIM-deactivated must
     fail closed to no_active_key, mirroring how admission's _reject_if_admitted_owner_scim_deactivated
