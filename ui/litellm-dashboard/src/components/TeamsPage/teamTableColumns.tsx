@@ -77,7 +77,7 @@ function RateLimitLine({ label, value }: { label: string; value: number | null }
 interface TeamRowActionsProps {
   team: Team;
   canManage: boolean;
-  onEditTeam: (teamId: string) => void;
+  onEditTeam: (team: Team) => void;
   onDeleteTeam: (team: Team) => void;
 }
 
@@ -97,7 +97,7 @@ function TeamRowActions({ team, canManage, onEditTeam, onDeleteTeam }: TeamRowAc
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         {canManage && (
-          <DropdownMenuItem onClick={() => onEditTeam(team.team_id)} data-testid="team-action-edit">
+          <DropdownMenuItem onClick={() => onEditTeam(team)} data-testid="team-action-edit">
             <Pencil />
             Edit team
           </DropdownMenuItem>
@@ -123,8 +123,8 @@ function TeamRowActions({ team, canManage, onEditTeam, onDeleteTeam }: TeamRowAc
 interface TeamTableColumnsDeps {
   organizations: Organization[];
   userRole: string | null;
-  onSelectTeam: (teamId: string) => void;
-  onEditTeam: (teamId: string) => void;
+  onSelectTeam: (team: Team) => void;
+  onEditTeam: (team: Team) => void;
   onDeleteTeam: (team: Team) => void;
 }
 
@@ -160,7 +160,7 @@ export const getTeamTableColumns = ({
           <IdentityCell
             title={team.team_alias || team.team_id}
             subtitle={hasAlias ? team.team_id : undefined}
-            onClick={() => onSelectTeam(team.team_id)}
+            onClick={() => onSelectTeam(team)}
           />
         );
       },

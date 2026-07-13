@@ -216,7 +216,7 @@ describe("row actions", () => {
     renderTable({ onSelectTeam });
 
     fireEvent.click(screen.getByText("Acme Team"));
-    expect(onSelectTeam).toHaveBeenCalledWith("team-1");
+    expect(onSelectTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
   });
 
   it("offers Edit and Delete to an Admin and wires them to the callbacks", async () => {
@@ -228,7 +228,7 @@ describe("row actions", () => {
     await user.click(screen.getByTestId("team-actions-team-1"));
 
     await user.click(await screen.findByText("Edit team"));
-    expect(onEditTeam).toHaveBeenCalledWith("team-1");
+    expect(onEditTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
 
     await user.click(screen.getByTestId("team-actions-team-1"));
     await user.click(await screen.findByText("Delete team"));

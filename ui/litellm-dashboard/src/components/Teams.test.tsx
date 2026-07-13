@@ -8,7 +8,6 @@ import Teams from "./Teams";
 
 const mockTeamInfoView = vi.fn();
 const mockUseOrganizations = vi.fn();
-const mockUseTeam = vi.fn();
 
 // The teams grid is unit-tested in TeamsPage/TeamsTable.test.tsx. Here we stub it and drive its callbacks
 // directly so we can test the Teams shell wiring (delete modal, detail view) without the real DataTable.
@@ -29,10 +28,8 @@ vi.mock("./networking", () => ({
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
 }));
 
-// Teams resolves the selected team via useTeam (for is_team_admin) and invalidates teamsTableKeys on mutations.
-// Fall back to a safe shape so a describe's vi.clearAllMocks() (which wipes the return value) can't crash the render.
+// Teams invalidates teamsTableKeys on mutations; the selected team is passed up from the table.
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useTeam: (...args: unknown[]) => mockUseTeam(...args) ?? { data: undefined },
   teamsTableKeys: { all: ["teamsTable"] },
 }));
 
@@ -162,7 +159,6 @@ const renderWithQueryClient = (component: React.ReactElement) => {
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
-  mockUseTeam.mockReturnValue({ data: undefined });
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -170,7 +166,6 @@ describe("Teams - handleCreate organization handling", () => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
     mockTeamsTableProps = null;
-    mockUseTeam.mockReturnValue({ data: undefined });
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
     vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
@@ -431,11 +426,10 @@ describe("Teams - premium props", () => {
 
   it("passes premiumUser flag to TeamInfoView when a team is opened", async () => {
     const premiumTeam = { ...baseTableTeam, team_id: "team-123456789", team_alias: "Premium Team" };
-    mockUseTeam.mockReturnValue({ data: premiumTeam });
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" premiumUser={true} />);
 
     await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
-    act(() => mockTeamsTableProps.onSelectTeam("team-123456789"));
+    act(() => mockTeamsTableProps.onSelectTeam(premiumTeam));
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ premiumUser: true }));
@@ -446,7 +440,6 @@ describe("Teams - Default Team Settings tab visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
-    mockUseTeam.mockReturnValue({ data: undefined });
   });
 
   it("should show Default Team Settings tab for Admin role", () => {
@@ -474,7 +467,6 @@ describe("Teams - access_group_ids in team create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
-    mockUseTeam.mockReturnValue({ data: undefined });
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
     vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
@@ -534,7 +526,6 @@ describe("Teams - access_group_ids in team create", () => {
 describe("Teams - models dropdown options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseTeam.mockReturnValue({ data: undefined });
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
@@ -562,7 +553,6 @@ describe("Teams - delete team warning copy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
-    mockUseTeam.mockReturnValue({ data: undefined });
   });
 
   const openDeleteModal = async (team: any) => {
@@ -599,7 +589,6 @@ describe("Teams - LIT-2530 organization stays optional for proxy admin with a si
   beforeEach(() => {
     vi.clearAllMocks();
     mockTeamInfoView.mockClear();
-    mockUseTeam.mockReturnValue({ data: undefined });
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
     vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });

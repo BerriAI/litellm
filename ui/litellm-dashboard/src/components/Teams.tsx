@@ -11,7 +11,7 @@ import React, { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
-import { teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
@@ -134,10 +134,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [value, setValue] = useState("");
   const [editModalVisible, setEditModalVisible] = useState(false);
 
-  const [selectedTeam, setSelectedTeam] = useState<null | any>(null);
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [editTeam, setEditTeam] = useState<boolean>(false);
-  const { data: selectedTeamData } = useTeam(selectedTeamId ?? undefined);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -481,12 +480,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           <TeamsTable
             userRole={userRole}
             userID={userID}
-            onSelectTeam={(teamId) => {
-              setSelectedTeamId(teamId);
+            onSelectTeam={(team) => {
+              setSelectedTeam(team);
+              setSelectedTeamId(team.team_id);
               setEditTeam(false);
             }}
-            onEditTeam={(teamId) => {
-              setSelectedTeamId(teamId);
+            onEditTeam={(team) => {
+              setSelectedTeam(team);
+              setSelectedTeamId(team.team_id);
               setEditTeam(true);
             }}
             onDeleteTeam={handleDelete}
@@ -545,11 +546,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             refreshTeams();
           }}
           onClose={() => {
+            setSelectedTeam(null);
             setSelectedTeamId(null);
             setEditTeam(false);
           }}
           accessToken={accessToken}
-          is_team_admin={is_team_admin(selectedTeamData)}
+          is_team_admin={is_team_admin(selectedTeam)}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
           editTeam={editTeam}

@@ -21,8 +21,8 @@ import { getTeamTableColumns, TEAM_TABLE_HIDDEN_COLUMNS } from "./teamTableColum
 interface TeamsTableProps {
   userRole: string | null;
   userID: string | null;
-  onSelectTeam: (teamId: string) => void;
-  onEditTeam: (teamId: string) => void;
+  onSelectTeam: (team: Team) => void;
+  onEditTeam: (team: Team) => void;
   onDeleteTeam: (team: Team) => void;
 }
 
