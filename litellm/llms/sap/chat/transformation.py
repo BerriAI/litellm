@@ -382,6 +382,38 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         return body
 
+    @staticmethod
+    def _normalize_gemini_thinking(raw: dict) -> dict:
+        """Convert list-shaped reasoning_content from Gemini to thinking_blocks.
+
+        AI Core forwards Gemini's thinking tokens as:
+          message.reasoning_content = [{"thought": "...", "signature": "..."}]
+
+        ModelResponse.reasoning_content is typed Optional[str], so model_validate
+        hard-fails on a list. Map to thinking_blocks (already typed for this shape)
+        and set reasoning_content to the concatenated thought text so callers that
+        only read the string field still get something useful.
+        """
+        for choice in raw.get("choices", []):
+            msg = choice.get("message", {})
+            rc = msg.get("reasoning_content")
+            if not isinstance(rc, list):
+                continue
+            thinking_blocks = [
+                {
+                    "type": "thinking",
+                    "thinking": item.get("thought", ""),
+                    "signature": item.get("signature"),
+                }
+                for item in rc
+                if isinstance(item, dict)
+            ]
+            msg["thinking_blocks"] = thinking_blocks
+            msg["reasoning_content"] = "\n".join(
+                b["thinking"] for b in thinking_blocks if b["thinking"]
+            ) or None
+        return raw
+
     def transform_response(
         self,
         model: str,
@@ -402,7 +434,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        final_result = self._normalize_gemini_thinking(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(final_result)
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

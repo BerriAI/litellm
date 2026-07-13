@@ -3,6 +3,237 @@ import pytest
 from pydantic import ValidationError
 
 
+class TestGeminiThinkingNormalization:
+    """Regression tests for list-shaped reasoning_content from Gemini models.
+
+    AI Core returns Gemini thinking as:
+      message.reasoning_content = [{"thought": "...", "signature": "..."}]
+
+    ModelResponse.reasoning_content is typed Optional[str], so model_validate
+    would crash without the normalization step in transform_response.
+    """
+
+    @pytest.fixture
+    def normalize(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        return GenAIHubOrchestrationConfig._normalize_gemini_thinking
+
+    def test_list_reasoning_content_converted_to_thinking_blocks(self, normalize):
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "42",
+                        "reasoning_content": [
+                            {"thought": "let me think", "signature": "sig-abc"},
+                        ],
+                    }
+                }
+            ]
+        }
+        out = normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "let me think"
+        assert msg["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "let me think", "signature": "sig-abc"}
+        ]
+
+    def test_multiple_thought_blocks_joined(self, normalize):
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "reasoning_content": [
+                            {"thought": "first", "signature": "s1"},
+                            {"thought": "second", "signature": "s2"},
+                        ],
+                        "content": "done",
+                    }
+                }
+            ]
+        }
+        out = normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "first\nsecond"
+        assert len(msg["thinking_blocks"]) == 2
+
+    def test_string_reasoning_content_untouched(self, normalize):
+        raw = {
+            "choices": [
+                {"message": {"reasoning_content": "plain string", "content": "hi"}}
+            ]
+        }
+        out = normalize(raw)
+        assert out["choices"][0]["message"]["reasoning_content"] == "plain string"
+        assert "thinking_blocks" not in out["choices"][0]["message"]
+
+    def test_no_reasoning_content_untouched(self, normalize):
+        raw = {"choices": [{"message": {"content": "hi"}}]}
+        out = normalize(raw)
+        assert "thinking_blocks" not in out["choices"][0]["message"]
+        assert "reasoning_content" not in out["choices"][0]["message"]
+
+    def test_model_validate_succeeds_after_normalization(self, normalize):
+        from litellm.types.utils import ModelResponse
+
+        raw = {
+            "id": "x",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gemini-2.5-pro",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": [
+                            {"thought": "thinking...", "signature": "abc"}
+                        ],
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "type": "function",
+                                "function": {"name": "fn", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+        normalized = normalize(raw)
+        response = ModelResponse.model_validate(normalized)
+        assert response.choices[0].message.reasoning_content == "thinking..."
+        assert response.choices[0].message.thinking_blocks[0]["thinking"] == "thinking..."
+        assert response.choices[0].message.thinking_blocks[0]["signature"] == "abc"
+
+    def test_thought_signature_preserved_on_tool_call_response(self, normalize):
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": [
+                            {"thought": "I need to call a tool", "signature": "sig-xyz"}
+                        ],
+                        "tool_calls": [
+                            {
+                                "id": "c2",
+                                "type": "function",
+                                "function": {"name": "search", "arguments": '{"q":"x"}'},
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+        out = normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"][0]["signature"] == "sig-xyz"
+        assert msg["reasoning_content"] == "I need to call a tool"
+
+
+class TestReasoningParamSupport:
+    @pytest.fixture
+    def mock_config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+        config.token_creator = lambda: "Bearer TEST_TOKEN"
+        config._base_url = "https://api.test-sap.com"
+        config._resource_group = "test-group"
+        return config
+
+    def test_reasoning_params_included_for_o_series(self, mock_config):
+        params = mock_config.get_supported_openai_params("o4-mini")
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+    def test_reasoning_params_included_for_anthropic_claude4(self, mock_config):
+        params = mock_config.get_supported_openai_params("anthropic--claude-4.5-sonnet")
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+    def test_reasoning_params_included_for_anthropic_claude37(self, mock_config):
+        params = mock_config.get_supported_openai_params(
+            "anthropic--claude-3-7-sonnet-20250219"
+        )
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+    def test_reasoning_params_excluded_for_anthropic_claude3(self, mock_config):
+        # claude-3-haiku does not support extended thinking
+        params = mock_config.get_supported_openai_params("anthropic--claude-3-haiku")
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    def test_cohere_reasoning_model_supports_thinking_only(self, mock_config):
+        # Cohere accepts thinking but not reasoning_effort
+        params = mock_config.get_supported_openai_params("cohere--command-a-reasoning")
+        assert "thinking" in params
+        assert "reasoning_effort" not in params
+
+    def test_cohere_non_reasoning_model_excluded(self, mock_config):
+        params = mock_config.get_supported_openai_params("cohere-reranker")
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    def test_reasoning_params_excluded_for_gpt_model(self, mock_config):
+        params = mock_config.get_supported_openai_params("gpt-4o")
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    def test_reasoning_params_excluded_for_model_starting_with_o_but_not_o_series(
+        self, mock_config
+    ):
+        params = mock_config.get_supported_openai_params("oceanai-model")
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    def test_reasoning_params_excluded_for_mistralai(self, mock_config):
+        params = mock_config.get_supported_openai_params(
+            "mistralai--mistral-large-instruct"
+        )
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    def test_reasoning_effort_reaches_model_params(self, mock_config):
+        result = mock_config.transform_request(
+            model="o4-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"reasoning_effort": "low"},
+            litellm_params={},
+            headers={},
+        )
+        model_params = result["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
+        assert model_params["reasoning_effort"] == "low"
+
+    def test_thinking_reaches_model_params(self, mock_config):
+        thinking = {"type": "enabled", "budget_tokens": 8000}
+        result = mock_config.transform_request(
+            model="anthropic--claude-3-7-sonnet-20250219",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"thinking": thinking},
+            litellm_params={},
+            headers={},
+        )
+        model_params = result["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
+        assert model_params["thinking"] == thinking
+
+
 class TestSAPTransformationIntegration:
     """Integration tests for SAP transformation."""
 
