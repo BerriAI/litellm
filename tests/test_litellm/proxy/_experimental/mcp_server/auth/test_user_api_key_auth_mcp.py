@@ -5023,6 +5023,22 @@ class TestMCPDcrBridgeDelegateAdmission:
             yield get_user_object
 
     @staticmethod
+    def _wrapped_user_lookup_error(original: BaseException) -> ValueError:
+        """Reproduce get_user_object's real exception contract (litellm/proxy/auth/auth_checks.py): it
+        catches every DB failure in a broad ``except`` and re-raises a bare ``ValueError``, so the
+        original error (a missing-user Exception or a real outage) survives only as ``__context__``.
+        Injecting a raw ConnectionError/Exception instead would exercise a shape production never
+        produces and let a chain-blind outage classifier pass. That wrapping fidelity is itself pinned by
+        test_get_user_object_wraps_db_outage_as_valueerror_preserving_context in test_auth_checks."""
+        try:
+            raise original
+        except BaseException:
+            try:
+                raise ValueError(f"User doesn't exist in db. Got error - {original}")
+            except ValueError as wrapped:
+                return wrapped
+
+    @staticmethod
     def _mcp_request(path="/mcp/bridge_delegate_server"):
         """A minimal ``Request`` for direct ``_admit_dcr_bridge_delegate`` calls, mirroring how
         ``process_mcp_request`` builds one from the ASGI scope with a stubbed empty JSON body."""
@@ -5162,9 +5178,10 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     async def test_user_subject_envelope_missing_user_fails_closed_401(self):
         """A user_id envelope whose user has since been deleted must fail closed with a 401, not a 500.
-        get_user_object raises a bare Exception for a missing user (it does not return None on the
-        production path), so the reload must catch it and fail closed rather than let it propagate as an
-        opaque 500. Regression for the missing-user path surfacing as a 500."""
+        get_user_object catches the missing row and re-raises a bare ValueError (it does not return None
+        on the production path), so the reload must fail closed rather than let it propagate as an opaque
+        500, and must not mistake the wrapped ValueError for a DB outage. Regression for the missing-user
+        path surfacing as a 500."""
         envelope = self._mint_bridge_envelope(user_id="ghost-user")
         scope = {
             "type": "http",
@@ -5175,7 +5192,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(side_effect=Exception("user not found")),
+            self._patch_user_reload(side_effect=self._wrapped_user_lookup_error(Exception())),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -5186,7 +5203,9 @@ class TestMCPDcrBridgeDelegateAdmission:
     async def test_user_subject_envelope_db_outage_is_retryable_503(self):
         """A transient database outage while reloading the envelope's user is a retryable 503, not an
         opaque 500, matching the key path's contract so an interactive DCR client retries instead of
-        treating a live identity as invalid. Regression for the user reload dropping the 503 arm."""
+        treating a live identity as invalid. get_user_object wraps the outage in a bare ValueError, so this
+        exercises the chain-aware classifier; a raw ConnectionError would falsely pass even the old
+        chain-blind check because it is an OSError. Regression for the user reload dropping the 503 arm."""
         envelope = self._mint_bridge_envelope(user_id="sso-user-7")
         scope = {
             "type": "http",
@@ -5197,7 +5216,9 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(side_effect=ConnectionError("auth database unreachable")),
+            self._patch_user_reload(
+                side_effect=self._wrapped_user_lookup_error(ConnectionError("auth database unreachable"))
+            ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
