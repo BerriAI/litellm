@@ -387,6 +387,7 @@ class TestPassthroughOAuth:
         assert "authorization" not in updated_headers
 
     def test_passthrough_custom_api_base_uses_bearer_when_configured(self):
+        """Passthrough messages endpoint uses Bearer auth for custom api_base when configured."""
         from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
             AnthropicMessagesConfig,
         )
