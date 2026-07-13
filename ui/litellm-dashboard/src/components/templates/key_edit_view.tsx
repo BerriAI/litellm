@@ -26,6 +26,7 @@ import {
 } from "../key_team_helpers/TagRateLimitEditor";
 import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import SkillPermissionsPicker from "../claude_code_plugins/SkillPermissionsPicker";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -204,6 +205,7 @@ export function KeyEditView({
       agents: keyData.object_permission?.agents || [],
       accessGroups: keyData.object_permission?.agent_access_groups || [],
     },
+    allowed_skills: keyData.object_permission?.allowed_skills || [],
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -233,6 +235,7 @@ export function KeyEditView({
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+      allowed_skills: keyData.object_permission?.allowed_skills || [],
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
@@ -747,6 +750,14 @@ export function KeyEditView({
           value={form.getFieldValue("agents_and_groups")}
           accessToken={accessToken || ""}
           placeholder="Select agents or access groups (optional)"
+        />
+      </Form.Item>
+
+      <Form.Item label="Skills" name="allowed_skills" help="Select skills this key can access, beyond public skills">
+        <SkillPermissionsPicker
+          onChange={(skills) => form.setFieldValue("allowed_skills", skills)}
+          value={form.getFieldValue("allowed_skills")}
+          accessToken={accessToken || ""}
         />
       </Form.Item>
 

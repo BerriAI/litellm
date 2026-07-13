@@ -25,3 +25,4 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     blocked_tools: Optional[List[str]] = []
     search_tools: Optional[List[str]] = []
     mcp_tool_search_enabled: Optional[bool] = None
+    allowed_skills: list[str] | None = None

@@ -87,6 +87,46 @@ export interface MarketplaceResponse {
   plugins: MarketplacePluginEntry[];
 }
 
+// Marketplace management types
+// Hand-written (not generated from schema.d.ts): the /claude-code/marketplaces admin endpoints
+// are not yet reflected in the OpenAPI spec this dashboard was built against.
+export interface MarketplaceSource {
+  id: string;
+  name: string;
+  display_name?: string;
+  source_type: string;
+  source_ref: string;
+  branch?: string;
+  enabled: boolean;
+  sync_status: string;
+  sync_error?: string;
+  last_synced_at?: string;
+  plugin_count: number;
+  skipped_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RegisterMarketplaceRequest {
+  source: string;
+  name?: string;
+}
+
+export interface RegisterMarketplaceResponse {
+  status: string;
+  marketplace: MarketplaceSource;
+}
+
+export interface ListMarketplacesResponse {
+  marketplaces: MarketplaceSource[];
+  count: number;
+}
+
+export interface DeleteMarketplaceResponse {
+  status: string;
+  message: string;
+}
+
 // UI-specific types
 export interface CategoryTab {
   key: string;

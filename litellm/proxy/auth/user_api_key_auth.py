@@ -595,13 +595,16 @@ def get_api_key(
         passed_in_key = azure_apim_header
         api_key = azure_apim_header
     elif (
-        RouteChecks.is_generate_content_route(route=route)
+        (
+            RouteChecks.is_generate_content_route(route=route)
+            or RouteChecks.is_claude_code_marketplace_route(route=route)
+        )
         and request is not None
         and _safe_get_request_query_params(request).get("key")
     ):
-        google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
-        passed_in_key = google_auth_key
-        api_key = google_auth_key
+        query_param_key: str = _safe_get_request_query_params(request).get("key") or ""
+        passed_in_key = query_param_key
+        api_key = query_param_key
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:

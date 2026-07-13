@@ -20,13 +20,27 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import ClaudeCodePluginRepository
+from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_authz import (
+    get_allowed_skills,
+)
+from litellm.proxy.auth.user_api_key_auth import (
+    anthropic_api_key_header,
+    api_key_header,
+    azure_api_key_header,
+    azure_apim_header,
+    custom_litellm_key_header,
+    google_ai_studio_api_key_header,
+    user_api_key_auth,
+)
+from litellm.repositories.table_repositories import (
+    ClaudeCodePluginRepository,
+    SkillMarketplaceRepository,
+)
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,
@@ -34,6 +48,34 @@ from litellm.types.proxy.claude_code_endpoints import (
 )
 
 router = APIRouter()
+
+
+async def _optional_user_api_key_auth(
+    request: Request,
+    api_key: str = Security(api_key_header),
+    azure_api_key: str = Security(azure_api_key_header),
+    anthropic_api_key: str | None = Security(anthropic_api_key_header),
+    google_ai_studio_api_key: str | None = Security(google_ai_studio_api_key_header),
+    azure_apim_key: str | None = Security(azure_apim_header),
+    custom_litellm_key: str | None = Security(custom_litellm_key_header),
+) -> UserAPIKeyAuth | None:
+    """
+    Resolve UserAPIKeyAuth if a key is present (header or, for this route,
+    the `key` query param wired up via RouteChecks.is_claude_code_marketplace_route),
+    but never raise - this route must stay accessible with no key at all.
+    """
+    try:
+        return await user_api_key_auth(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header=azure_api_key,
+            anthropic_api_key_header=anthropic_api_key,
+            google_ai_studio_api_key_header=google_ai_studio_api_key,
+            azure_apim_header=azure_apim_key,
+            custom_litellm_key_header=custom_litellm_key,
+        )
+    except (HTTPException, ProxyException):
+        return None
 
 
 async def _get_prisma_client():
@@ -52,13 +94,19 @@ async def _get_prisma_client():
     "/claude-code/marketplace.json",
     tags=["Claude Code Marketplace"],
 )
-async def get_marketplace():
+async def get_marketplace(
+    user_api_key_dict: UserAPIKeyAuth | None = Depends(_optional_user_api_key_auth),  # noqa: B008  # DI idiom
+):
     """
     Serve marketplace.json for Claude Code plugin discovery.
 
     This endpoint is accessed by Claude Code CLI when users run:
     - claude plugin marketplace add <url>
     - claude plugin install <name>@<marketplace>
+
+    No key is required - unauthenticated requests see every enabled plugin.
+    A valid key (header, or `?key=` query param for the CLI) additionally
+    unlocks any plugin whose name is in that key/team/org's allowed_skills.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
@@ -72,7 +120,31 @@ async def get_marketplace():
     try:
         prisma_client = await _get_prisma_client()
 
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        allowed_skills: frozenset[str] = (
+            await get_allowed_skills(user_api_key_dict, prisma_client) if user_api_key_dict is not None else frozenset()
+        )
+        where = (
+            {"OR": [{"enabled": True}, {"name": {"in": list(allowed_skills)}}]} if allowed_skills else {"enabled": True}
+        )
+
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
+
+        # A per-skill grant (allowed_skills) is a standing entry on a
+        # key/team/org's object_permission - it isn't cleared just because an
+        # admin later disables the marketplace that owned the skill. Without
+        # this, a disabled marketplace's skills stay reachable forever by
+        # anyone previously granted one by name. Plugins with no
+        # marketplace_id (hand-registered) are unaffected.
+        marketplace_ids = {p.marketplace_id for p in plugins if p.marketplace_id}
+        if marketplace_ids:
+            disabled_marketplace_ids = {
+                m.id
+                for m in await SkillMarketplaceRepository(prisma_client).table.find_many(
+                    where={"id": {"in": list(marketplace_ids)}, "enabled": False}
+                )
+            }
+            if disabled_marketplace_ids:
+                plugins = [p for p in plugins if p.marketplace_id not in disabled_marketplace_ids]
 
         plugin_list = []
         for plugin in plugins:

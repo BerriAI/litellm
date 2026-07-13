@@ -5960,6 +5960,8 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="policies"):
             await self._init_policies_in_db(prisma_client=prisma_client)
 
+        await self._init_skill_marketplace_backfill_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
@@ -6445,6 +6447,18 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_tool_policy_in_db - {}".format(str(e))
+            )
+
+    async def _init_skill_marketplace_backfill_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace_backfill import (
+            backfill_default_skill_marketplace,
+        )
+
+        try:
+            await backfill_default_skill_marketplace(prisma_client=prisma_client)
+        except Exception as e:  # noqa: BLE001  # startup backfill must never block proxy boot
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_skill_marketplace_backfill_in_db - {}".format(str(e))
             )
 
     async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):

@@ -25386,6 +25386,8 @@ export interface components {
             agent_access_groups?: string[] | null;
             /** Agents */
             agents?: string[] | null;
+            /** Allowed Skills */
+            allowed_skills?: string[] | null;
             /** Blocked Tools */
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
@@ -25422,6 +25424,8 @@ export interface components {
              * @default []
              */
             agents: string[] | null;
+            /** Allowed Skills */
+            allowed_skills?: string[] | null;
             /**
              * Blocked Tools
              * @default []

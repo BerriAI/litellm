@@ -2,9 +2,10 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+from typing_extensions import Annotated
 
 
 class PluginAuthor(BaseModel):
@@ -122,3 +123,71 @@ class MarketplaceResponse(BaseModel):
     name: str = Field(..., description="Marketplace identifier")
     owner: PluginOwner = Field(..., description="Marketplace owner")
     plugins: List[MarketplacePluginEntry] = Field(default_factory=list, description="Available plugins")
+
+
+# --- Multi-marketplace import (LiteLLM_SkillMarketplaceTable) ---
+
+MarketplaceSourceType = Literal["claude_marketplace_json", "claude_plugin_json", "skills_dir", "managed"]
+
+
+class GithubSource(BaseModel):
+    source: Literal["github"] = "github"
+    repo: str = Field(..., description="'org/repo'")
+
+
+class UrlSource(BaseModel):
+    source: Literal["url"] = "url"
+    url: str
+
+
+class GitSubdirSource(BaseModel):
+    source: Literal["git-subdir"] = "git-subdir"
+    url: str
+    path: str
+
+
+PluginSourceConfig = Annotated[
+    Union[GithubSource, UrlSource, GitSubdirSource],
+    Field(discriminator="source"),
+]
+
+
+class RegisterMarketplaceRequest(BaseModel):
+    """Request body for importing an external Claude Code marketplace."""
+
+    source: str = Field(
+        ...,
+        description=("'org/repo' shorthand, a github/gitlab/bitbucket URL, or a direct URL to a marketplace.json file"),
+    )
+    name: Optional[str] = Field(
+        None, description="Marketplace slug to register under. Defaults to a slug derived from the source."
+    )
+
+
+class MarketplaceSourceResponse(BaseModel):
+    """A registered marketplace source and its current sync state."""
+
+    id: str
+    name: str
+    display_name: Optional[str] = None
+    source_type: MarketplaceSourceType
+    source_ref: Optional[str] = None
+    branch: Optional[str] = None
+    enabled: bool
+    sync_status: str
+    sync_error: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    plugin_count: Optional[int] = None
+    skipped_count: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ListMarketplacesResponse(BaseModel):
+    marketplaces: List[MarketplaceSourceResponse]
+    count: int
+
+
+class SyncMarketplaceResponse(BaseModel):
+    status: str
+    marketplace: MarketplaceSourceResponse

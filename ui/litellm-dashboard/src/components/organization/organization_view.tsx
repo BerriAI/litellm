@@ -12,6 +12,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
+import SkillPermissionsPicker from "../claude_code_plugins/SkillPermissionsPicker";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -139,7 +140,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
 
       // Handle object_permission updates
-      if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
+      if (
+        values.vector_stores !== undefined ||
+        values.mcp_servers_and_groups !== undefined ||
+        values.allowed_skills !== undefined
+      ) {
         updateData.object_permission = {
           ...orgData?.object_permission,
           vector_stores: values.vector_stores || [],
@@ -156,6 +161,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           if (accessGroups && accessGroups.length > 0) {
             updateData.object_permission.mcp_access_groups = accessGroups;
           }
+        }
+
+        if (values.allowed_skills !== undefined) {
+          updateData.object_permission.allowed_skills = values.allowed_skills || [];
         }
       }
 
@@ -372,6 +381,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         servers: orgData.object_permission?.mcp_servers || [],
                         accessGroups: orgData.object_permission?.mcp_access_groups || [],
                       },
+                      allowed_skills: orgData.object_permission?.allowed_skills || [],
                     }}
                     layout="vertical"
                   >
@@ -435,6 +445,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         value={form.getFieldValue("mcp_servers_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers and access groups"
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="Skills" name="allowed_skills">
+                      <SkillPermissionsPicker
+                        onChange={(skills) => form.setFieldValue("allowed_skills", skills)}
+                        value={form.getFieldValue("allowed_skills")}
+                        accessToken={accessToken || ""}
                       />
                     </Form.Item>
 

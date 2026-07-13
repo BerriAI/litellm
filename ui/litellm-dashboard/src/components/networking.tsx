@@ -27,7 +27,7 @@ import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
-import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { RegisterMarketplaceRequest, SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -213,6 +213,7 @@ export interface Organization {
     mcp_servers: string[];
     mcp_access_groups?: string[];
     vector_stores: string[];
+    allowed_skills?: string[];
   };
 }
 
@@ -7439,6 +7440,78 @@ export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: st
     return data;
   } catch (error) {
     console.error(`Failed to delete plugin "${pluginName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Register (and sync) a new external Claude Code marketplace (admin only)
+ * @param accessToken - Admin access token
+ * @param marketplaceData - Marketplace source to import
+ */
+export const registerClaudeCodeMarketplace = async (
+  accessToken: string,
+  marketplaceData: RegisterMarketplaceRequest,
+) => {
+  try {
+    return await apiClient.post(`/claude-code/marketplaces`, { accessToken, body: marketplaceData });
+  } catch (error) {
+    console.error("Failed to register Claude Code marketplace:", error);
+    throw error;
+  }
+};
+
+/**
+ * List all imported Claude Code marketplaces (admin only)
+ * @param accessToken - Admin access token
+ */
+export const getClaudeCodeMarketplaces = async (accessToken: string) => {
+  try {
+    return await apiClient.get(`/claude-code/marketplaces`, { accessToken });
+  } catch (error) {
+    console.error("Failed to fetch Claude Code marketplaces:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get a single Claude Code marketplace by name (admin only)
+ * @param accessToken - Admin access token
+ * @param marketplaceName - Name of the marketplace
+ */
+export const getClaudeCodeMarketplaceByName = async (accessToken: string, marketplaceName: string) => {
+  try {
+    return await apiClient.get(`/claude-code/marketplaces/${marketplaceName}`, { accessToken });
+  } catch (error) {
+    console.error(`Failed to fetch marketplace "${marketplaceName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Re-sync a Claude Code marketplace (admin only)
+ * @param accessToken - Admin access token
+ * @param marketplaceName - Name of the marketplace to sync
+ */
+export const syncClaudeCodeMarketplace = async (accessToken: string, marketplaceName: string) => {
+  try {
+    return await apiClient.post(`/claude-code/marketplaces/${marketplaceName}/sync`, { accessToken });
+  } catch (error) {
+    console.error(`Failed to sync marketplace "${marketplaceName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a Claude Code marketplace (admin only)
+ * @param accessToken - Admin access token
+ * @param marketplaceName - Name of the marketplace to delete
+ */
+export const deleteClaudeCodeMarketplace = async (accessToken: string, marketplaceName: string) => {
+  try {
+    return await apiClient.delete(`/claude-code/marketplaces/${marketplaceName}`, { accessToken });
+  } catch (error) {
+    console.error(`Failed to delete marketplace "${marketplaceName}":`, error);
     throw error;
   }
 };

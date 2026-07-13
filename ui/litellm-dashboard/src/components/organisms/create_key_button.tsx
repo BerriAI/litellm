@@ -37,6 +37,7 @@ import {
   hasAllModelsSentinel,
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
+import SkillPermissionsPicker from "../claude_code_plugins/SkillPermissionsPicker";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -521,6 +522,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_agents_and_groups;
+      }
+
+      // Transform allowed_skills into object_permission format
+      if (formValues.allowed_skills && formValues.allowed_skills.length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.allowed_skills = formValues.allowed_skills;
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_skills;
       }
 
       // Add model_aliases if any are defined
@@ -1531,6 +1542,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           value={form.getFieldValue("allowed_agents_and_groups")}
                           accessToken={accessToken}
                           placeholder="Select agents or access groups (optional)"
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Skills</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Skills{" "}
+                            <Tooltip title="Select which imported marketplace skills this key can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_skills"
+                        help="Select skills this key can access. Public skills are always accessible without a grant"
+                      >
+                        <SkillPermissionsPicker
+                          onChange={(skills) => form.setFieldValue("allowed_skills", skills)}
+                          value={form.getFieldValue("allowed_skills")}
+                          accessToken={accessToken}
                         />
                       </Form.Item>
                     </AccordionBody>

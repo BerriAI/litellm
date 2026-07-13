@@ -41,6 +41,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
+import SkillPermissionsPicker from "../claude_code_plugins/SkillPermissionsPicker";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
@@ -127,6 +128,7 @@ export interface TeamData {
       agents?: string[];
       agent_access_groups?: string[];
       search_tools?: string[];
+      allowed_skills?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -609,6 +611,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.object_permission.search_tools = values.object_permission_search_tools;
       }
 
+      // Handle skill grants
+      if (values.allowed_skills !== undefined) {
+        updateData.object_permission.allowed_skills = values.allowed_skills || [];
+      }
+      delete values.allowed_skills;
+
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
@@ -994,6 +1002,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       access_group_ids: info.access_group_ids || [],
                       default_team_member_models: info.default_team_member_models || [],
                       allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
+                      allowed_skills: info.object_permission?.allowed_skills || [],
                     }}
                     layout="vertical"
                   >
@@ -1390,6 +1399,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         value={form.getFieldValue("agents_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select agents or access groups (optional)"
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="Skills" name="allowed_skills">
+                      <SkillPermissionsPicker
+                        onChange={(skills) => form.setFieldValue("allowed_skills", skills)}
+                        value={form.getFieldValue("allowed_skills")}
+                        accessToken={accessToken || ""}
                       />
                     </Form.Item>
 

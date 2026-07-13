@@ -719,6 +719,7 @@ _EXPECTED_CUSTOMER = {
         "blocked_tools": [],
         "search_tools": [],
         "mcp_tool_search_enabled": None,
+        "allowed_skills": None,
     },
 }
 
