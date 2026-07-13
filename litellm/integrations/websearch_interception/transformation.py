@@ -59,8 +59,75 @@ class WebSearchTransformation:
         # Parse non-streaming response based on format
         if response_format == "openai":
             return WebSearchTransformation._detect_from_openai_response(response)
+        elif response_format == "responses":
+            return WebSearchTransformation._detect_from_responses_response(response)
         else:
             return WebSearchTransformation._detect_from_non_streaming_response(response)
+
+    @staticmethod
+    def _detect_from_responses_response(
+        response: Any,
+    ) -> tuple[bool, list[dict]]:
+        """Parse a Responses API response for ``litellm_web_search`` function calls.
+
+        After pre-request conversion the native web search tool is replaced by a
+        ``litellm_web_search`` function tool, so the model emits ``function_call``
+        items in ``response.output`` instead of a native ``web_search_call``.
+        """
+        if isinstance(response, dict):
+            output = response.get("output", [])
+        else:
+            output = getattr(response, "output", None) or []
+
+        if not isinstance(output, list):
+            return False, []
+
+        tool_calls: list[dict] = []
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                item_name = item.get("name")
+                call_id = item.get("call_id")
+                arguments = item.get("arguments", "")
+            else:
+                item_type = getattr(item, "type", None)
+                item_name = getattr(item, "name", None)
+                call_id = getattr(item, "call_id", None)
+                arguments = getattr(item, "arguments", "")
+
+            if item_type != "function_call" or item_name not in (
+                LITELLM_WEB_SEARCH_TOOL_NAME,
+                "web_search",
+            ):
+                continue
+
+            if isinstance(arguments, str):
+                try:
+                    parsed_input = json.loads(arguments) if arguments else {}
+                except json.JSONDecodeError:
+                    verbose_logger.warning(
+                        f"WebSearchInterception: Failed to parse function_call arguments: {arguments}"
+                    )
+                    parsed_input = {}
+            elif isinstance(arguments, dict):
+                parsed_input = arguments
+            else:
+                parsed_input = {}
+
+            arguments_str = arguments if isinstance(arguments, str) else json.dumps(parsed_input)
+            tool_calls.append(
+                {
+                    "id": call_id,
+                    "call_id": call_id,
+                    "type": "function_call",
+                    "name": item_name,
+                    "arguments": arguments_str,
+                    "input": parsed_input,
+                }
+            )
+            verbose_logger.debug(f"WebSearchInterception: Found {item_name} function_call with call_id={call_id}")
+
+        return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def _detect_from_non_streaming_response(
