@@ -107,7 +107,7 @@ export interface TeamData {
     budget_reset_at: string | null;
     model_id: string | null;
     litellm_model_table: {
-      model_aliases: Record<string, string>;
+      model_aliases: Record<string, string> | null;
     } | null;
     created_at: string;
     access_group_ids?: string[];
