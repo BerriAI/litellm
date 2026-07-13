@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          ref: litellm_internal_staging
           persist-credentials: false
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -40,4 +41,4 @@ jobs:
           gh pr create --title "Update model_prices_and_context_window.json file" \
             --body "Automated update for model_prices_and_context_window.json" \
             --head "${BRANCH_NAME}" \
-            --base main
+            --base litellm_internal_staging
