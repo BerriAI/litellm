@@ -53,7 +53,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         return LlmProviders.BEDROCK
 
     @classmethod
-    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> Optional[str]:
+    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> str | None:
         if not object_key.startswith(BEDROCK_MANAGED_S3_BATCH_PREFIX):
             return None
         model_part = object_key[len(BEDROCK_MANAGED_S3_BATCH_PREFIX) :]
@@ -63,7 +63,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         return model_part[: match.start()]
 
     @classmethod
-    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: str | None) -> bool:
         """
         Returns True if `input_file_id` is a raw s3:// Bedrock batch input file (i.e. not a
         LiteLLM-managed unified file id) whose object key embeds the model name in the
