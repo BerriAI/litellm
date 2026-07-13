@@ -166,7 +166,15 @@ services:
         target: /app/config.yaml
     command: ["--config", "/app/config.yaml", "--port", "4000"]
 
-# throwaway db 
+  mcp-stub:
+    build: ./mcp/stub
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8765), timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+# throwaway db
   db:
     image: postgres:16
     environment:

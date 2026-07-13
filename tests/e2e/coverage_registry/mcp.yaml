@@ -79,6 +79,14 @@
   assertions: [succeeds]
   source: "rest_endpoints.py:305-334"
   rationale: No upstream auth required; demo servers
+- id: mcp.call_tool.api_key.caps_concurrency
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [caps_concurrency]
+  source: "mcp_server_manager.py:3751"
+  rationale: Per-server max_concurrent_requests semaphore bounds in-flight upstream tool calls; excess calls queue
 - id: mcp.get_prompt.api_key.succeeds
   module: mcp
   tier: P1

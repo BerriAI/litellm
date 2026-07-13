@@ -95,6 +95,31 @@ class KeyInfoResponse(BaseModel):
     info: KeyInfo
 
 
+# ---------- mcp servers ----------
+
+
+class McpServerCreateBody(BaseModel):
+    """POST /v1/mcp/server. `allow_all_keys` opts the server out of per-key
+    object_permission grants so any virtual key on the proxy may use it."""
+
+    alias: str
+    url: str
+    transport: str = "http"
+    allow_all_keys: bool = True
+    max_concurrent_requests: int | None = None
+
+
+class McpServerInfo(BaseModel):
+    """Response of POST /v1/mcp/server and GET /v1/mcp/server/{server_id}."""
+
+    server_id: str
+    alias: str | None = None
+    url: str | None = None
+    transport: str | None = None
+    allow_all_keys: bool | None = None
+    max_concurrent_requests: int | None = None
+
+
 # ---------- customers ----------
 
 

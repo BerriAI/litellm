@@ -13,6 +13,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
+- `mcp/` - the MCP gateway: server registration via `/v1/mcp/server`, tool listing/calling over the streamable-http protocol under both auth headers, and per-server enforcement such as `max_concurrent_requests`; `stub/` holds the deterministic upstream MCP server the compose stack runs for it
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
@@ -107,7 +108,7 @@ MCPs - endpoint features with the protocol op as the variant
 mcp.<operation>.<auth_family>.<assertion>
   operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
   auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
+  assertion   : succeeds | denied_without_permission | caps_concurrency
   e.g.  mcp.call_tool.oauth.succeeds
 ```
 

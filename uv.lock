@@ -3926,6 +3926,7 @@ dev = [
     { name = "vcrpy" },
 ]
 e2e-dev = [
+    { name = "mcp" },
     { name = "playwright" },
     { name = "websockets" },
 ]
@@ -4101,6 +4102,7 @@ dev = [
     { name = "vcrpy", specifier = "==8.2.1" },
 ]
 e2e-dev = [
+    { name = "mcp", specifier = ">=1.26.0,<2.0" },
     { name = "playwright", specifier = "==1.61.0" },
     { name = "websockets", specifier = ">=15.0.1,<16.0" },
 ]
