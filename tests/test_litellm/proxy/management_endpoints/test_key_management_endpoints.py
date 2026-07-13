@@ -39,6 +39,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,
     _process_single_key_update,
     _save_deleted_verification_token_records,
+    _team_key_operation_team_member_check,
     _transform_verification_tokens_to_deleted_records,
     _validate_caller_can_change_key_team,
     _validate_max_budget,
@@ -2395,6 +2396,61 @@ async def test_validate_key_team_change_with_member_permissions():
                         team_table=mock_team,
                         route=KeyManagementRoutes.KEY_UPDATE.value,
                     )
+
+
+def test_team_key_operation_allows_self_key_generate_without_permission():
+    from litellm.proxy._types import KeyManagementRoutes
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        team_alias="Team 1",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+        team_member_permissions=[],
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+    ) as mock_has_perms:
+        result = _team_key_operation_team_member_check(
+            assigned_user_id="user-1",
+            team_table=team,
+            user_api_key_dict=user_api_key_dict,
+            team_key_generation={"allowed_team_member_roles": ["admin", "user"]},
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        assert result is True
+        mock_has_perms.assert_not_called()
+
+
+def test_team_key_operation_requires_permission_for_service_account_generate():
+    from litellm.proxy._types import KeyManagementRoutes, ProxyErrorTypes
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        team_alias="Team 1",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+        team_member_permissions=[],
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _team_key_operation_team_member_check(
+            assigned_user_id=None,
+            team_table=team,
+            user_api_key_dict=user_api_key_dict,
+            team_key_generation={"allowed_team_member_roles": ["admin", "user"]},
+            route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
+        )
+    assert exc_info.value.type == ProxyErrorTypes.team_member_permission_error.value
 
 
 @pytest.mark.asyncio

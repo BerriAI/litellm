@@ -366,6 +366,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const requiresExplicitTeam = (teams?.length ?? 0) > 1 || keyOwner === "service_account";
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models") || requiresExplicitTeam;
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
+  const isNonAdminSelfKey = userRole !== "Admin" && keyOwner === "you";
+  const hasSoleTeam = (teams?.length ?? 0) === 1;
+  const isTeamFieldLocked = selectedProjectId !== null || (isNonAdminSelfKey && hasSoleTeam);
+  const teamAllowClear = !userHasTeams && !isNonAdminSelfKey;
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
@@ -628,6 +632,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   }, [teams, selectedProjectId, projects]);
 
+  useEffect(() => {
+    if (!isNonAdminSelfKey || !teams || teams.length !== 1) return;
+    const soleTeam = teams[0];
+    if (selectedCreateKeyTeam?.team_id !== soleTeam.team_id) {
+      setSelectedCreateKeyTeam(soleTeam);
+    }
+    form.setFieldValue("team_id", soleTeam.team_id);
+    if (soleTeam.organization_id) {
+      setSelectedOrganizationId(soleTeam.organization_id);
+      form.setFieldValue("organization_id", soleTeam.organization_id);
+    }
+  }, [isNonAdminSelfKey, teams, selectedCreateKeyTeam?.team_id, form]);
+
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
     setNewlyCreatedUserId(userId);
@@ -832,9 +849,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               help={requiresExplicitTeam ? "required" : ""}
             >
               <TeamDropdown
-                disabled={selectedProjectId !== null}
+                disabled={isTeamFieldLocked}
                 organizationId={selectedOrganizationId}
-                allowClear={!userHasTeams}
+                allowClear={teamAllowClear}
                 onTeamSelect={(team) => {
                   setSelectedCreateKeyTeam(team);
                   setSelectedProjectId(null);
@@ -848,8 +865,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     form.setFieldValue("organization_id", undefined);
                   }
                 }}
-              />
-            </Form.Item>
+              />            </Form.Item>
             {enableProjectsUI && (
               <Form.Item
                 label={
