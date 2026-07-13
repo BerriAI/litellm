@@ -15,8 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
+import inspect
+
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
@@ -1493,6 +1496,57 @@ async def test_generate_service_account_works_with_team_id():
             litellm_changed_by=None,
             team_table=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_throttle_rejected_for_non_admin():
+    """Security regression: a non-admin creating a key must not be able to set
+    throttle_on_budget_exceeded=true, which would let the new key keep spending
+    past an admin-imposed per-key budget ceiling instead of hard-blocking. The
+    /key/update gate does not cover generate, so generate needs its own admin
+    check. Only the enable value is gated, so this must 403."""
+    mock_prisma_client = AsyncMock()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(throttle_on_budget_exceeded=True),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can enable throttle_on_budget_exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_throttle_allowed_for_admin():
+    """A proxy admin may create a key with throttle_on_budget_exceeded=true; the
+    generate admin gate must let the admin through to key creation."""
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_generate_key.return_value = {
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "admin",
+            "team_id": None,
+        }
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(throttle_on_budget_exceeded=True),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert mock_generate_key.called
 
 
 @pytest.mark.asyncio
@@ -8969,7 +9023,7 @@ class TestValidateKeyAliasFormat:
         litellm.enable_key_alias_format_validation = False
 
     def test_validation_skipped_when_flag_disabled(self):
-        """When enable_key_alias_format_validation is False (default), no validation occurs."""
+        """When enable_key_alias_format_validation is False (default), no charset/length validation occurs."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -8979,6 +9033,33 @@ class TestValidateKeyAliasFormat:
         _validate_key_alias_format("")
         _validate_key_alias_format("!invalid!")
         _validate_key_alias_format("a" * 256)
+
+    @pytest.mark.parametrize(
+        "unsafe_alias",
+        [
+            "../../../other-app/creds",
+            "litellm/../../secret",
+            "foo\n- !grant\n  role: !!admin\n  member: attacker",
+            "foo\rbar",
+            "foo\x00bar",
+        ],
+    )
+    def test_validate_key_alias_format_rejects_traversal_and_control_chars_even_when_flag_disabled(
+        self, unsafe_alias
+    ):
+        """
+        Regression test: this check must reject an invalid key_alias unconditionally,
+        even when enable_key_alias_format_validation (the separate, opt-in charset
+        rule) is disabled.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format(unsafe_alias)
+        assert str(exc.value.code) == "400"
+        assert "Invalid key_alias" in str(exc.value.message)
 
     def test_validate_key_alias_format_valid(self):
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -9570,6 +9651,165 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     result = await update_key_fn(
         request=mock_request,
         data=UpdateKeyRequest(key=test_hashed_token, key_alias="my-alias"),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_throttle_on_budget_exceeded_rejected_for_internal_user(
+    monkeypatch,
+):
+    """Security regression: throttle_on_budget_exceeded turns an admin-imposed
+    hard budget block into a soft throttle that keeps spending past max_budget,
+    so it is a budget-enforcement change. A non-admin key owner (same setup that
+    is allowed to change non-budget fields via the caller_is_creator shortcut)
+    must NOT be able to self-opt-in to it; it has to route through the admin-only
+    _check_key_admin_access and return 403. Without treating the flag as a budget
+    change this update would succeed, letting the owner bypass their own cap."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    # Owner of the key (created_by == user_id) so caller_is_creator is True.
+    # This is exactly the setup that is allowed to change non-budget fields;
+    # the throttle flag must still be rejected.
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_existing_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(
+                key=test_hashed_token,
+                throttle_on_budget_exceeded=True,
+            ),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can enable throttle_on_budget_exceeded" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_key_throttle_unchanged_allows_non_budget_edit_for_internal_user(
+    monkeypatch,
+):
+    """A non-admin owner editing a non-budget field must not be blocked just
+    because the UI resends throttle_on_budget_exceeded unchanged (the edit form
+    always includes it). Only the transition to enabled is admin-gated, so an
+    unchanged False here leaves the key owner's non-budget edit working."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.created_by = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = None
+    mock_existing_key.models = []
+    mock_existing_key.metadata = {"throttle_on_budget_exceeded": False}
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_updated_key = MagicMock()
+    mock_updated_key.token = test_hashed_token
+    mock_updated_key.key_alias = "my-alias"
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.update_data = AsyncMock(return_value=mock_updated_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_existing_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", lambda token: test_hashed_token)
+
+    async def _noop(**kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        _noop,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
+        _noop,
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+    )
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(
+            key=test_hashed_token,
+            key_alias="my-alias",
+            throttle_on_budget_exceeded=False,
+        ),
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=None,
     )
@@ -14270,3 +14510,284 @@ async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_g
     assert int(exc.value.code) == 403
     assert "permissions" in str(exc.value.message)
     assert "Enterprise" not in str(exc.value.message)
+
+
+def test_generate_key_helper_fn_accepts_per_tag_rate_limits():
+    """
+    Regression: new_user / SSO sign-in forward NewUserRequest fields to
+    generate_key_helper_fn via `**data_json`. The per-tag limit field must be
+    an accepted kwarg, otherwise user creation 500s with
+    "generate_key_helper_fn() got an unexpected keyword argument 'tag_rpm_limit'".
+    """
+    params = inspect.signature(generate_key_helper_fn).parameters
+    assert "tag_rpm_limit" in params
+
+    # The field exists on the request model that new_user forwards via **data_json.
+    assert "tag_rpm_limit" in NewUserRequest.model_fields
+
+    # Binding the per-tag kwarg must not raise an unexpected-keyword TypeError.
+    inspect.signature(generate_key_helper_fn).bind_partial(
+        request_type="user",
+        tag_rpm_limit={"cell-1": 5},
+    )
+
+
+def _find_expires_clauses(node):
+    """Recursively collect every value keyed 'expires' anywhere in a Prisma where dict."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "expires":
+                found.append(value)
+            else:
+                found.extend(_find_expires_clauses(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_find_expires_clauses(item))
+    return found
+
+
+def test_build_expires_where_clause_expired_shape():
+    """'expired' must exclude never-expiring (NULL) keys and match expires < now."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_where_clause,
+    )
+
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert _build_expires_where_clause("expired", now) == {
+        "AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]
+    }
+
+
+def test_build_expires_where_clause_active_shape():
+    """'active' must include never-expiring (NULL) keys and match expires >= now."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_where_clause,
+    )
+
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert _build_expires_where_clause("active", now) == {
+        "OR": [{"expires": None}, {"expires": {"gte": now}}]
+    }
+
+
+def test_build_key_filter_conditions_expired_applies_lt_clause():
+    """expires_filter='expired' ANDs in a not-NULL + lt(now) constraint."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="expired",
+    )
+
+    clauses = _find_expires_clauses(where)
+    assert {"not": None} in clauses
+    lt_clauses = [c for c in clauses if isinstance(c, dict) and "lt" in c]
+    assert len(lt_clauses) == 1
+    assert "gte" not in str(clauses)
+
+
+def test_build_key_filter_conditions_active_applies_gte_and_null():
+    """expires_filter='active' ANDs in a NULL-or-gte(now) constraint."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="active",
+    )
+
+    clauses = _find_expires_clauses(where)
+    assert None in clauses
+    gte_clauses = [c for c in clauses if isinstance(c, dict) and "gte" in c]
+    assert len(gte_clauses) == 1
+    assert "lt" not in str(clauses)
+
+
+def test_build_key_filter_conditions_no_expires_filter_omits_clause():
+    """Default (no expires_filter) must not add any expires constraint — preserves existing callers."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+    )
+
+    assert _find_expires_clauses(where) == []
+
+
+def test_build_key_filter_conditions_invalid_expires_filter_omits_clause():
+    """An unrecognized expires_filter value is ignored, not applied blindly."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="garbage",
+    )
+
+    assert _find_expires_clauses(where) == []
+
+
+def test_build_key_filter_conditions_expires_now_is_call_time_utc():
+    """The lt(now) boundary is computed at call time as a tz-aware UTC datetime."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    before = datetime.now(timezone.utc)
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="expired",
+    )
+    after = datetime.now(timezone.utc)
+
+    lt_values = [c["lt"] for c in _find_expires_clauses(where) if isinstance(c, dict) and "lt" in c]
+    assert len(lt_values) == 1
+    now_value = lt_values[0]
+    assert now_value.tzinfo is not None
+    assert now_value.utcoffset().total_seconds() == 0
+    assert before <= now_value <= after
+
+
+@pytest.mark.asyncio
+async def test_list_keys_rejects_invalid_expires():
+    """A typo'd expires value must 400, never silently fall back to returning all keys."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ProxyException) as exc_info:
+            await list_keys(
+                request=Mock(),
+                user_api_key_dict=mock_user_api_key_dict,
+                status=None,
+                expires="expred",
+            )
+
+    assert exc_info.value.code == "400"
+    assert "Invalid expires value" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_value, expected_forward",
+    [("expired", "expired"), ("active", "active"), (None, None)],
+)
+async def test_list_keys_forwards_expires_filter(expires_value, expected_forward):
+    """list_keys forwards a valid/None expires value verbatim to _list_key_helper as expires_filter."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_email="admin@example.com",
+        teams=[],
+        organization_memberships=[],
+    )
+    mock_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_helper,
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=mock_user_api_key_dict,
+            status=None,
+            expires=expires_value,
+        )
+
+    mock_helper.assert_called_once()
+    assert mock_helper.call_args.kwargs["expires_filter"] == expected_forward
+
+
+@pytest.mark.asyncio
+async def test_list_keys_without_expires_param_forwards_none():
+    """Existing callers that never pass `expires` must not 400 and must forward expires_filter=None."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_email="admin@example.com",
+        teams=[],
+        organization_memberships=[],
+    )
+    mock_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_helper,
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=mock_user_api_key_dict,
+            status=None,
+        )
+
+    mock_helper.assert_called_once()
+    assert mock_helper.call_args.kwargs["expires_filter"] is None

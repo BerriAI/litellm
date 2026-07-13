@@ -2004,6 +2004,11 @@ async def _user_api_key_auth_builder(
 
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
+            # budget_throttle_pct is excluded from model_dump (it must not leak
+            # into serialized responses), so carry the request-scoped decision
+            # forward by hand to the auth object the rate limiter receives.
+            if valid_token.budget_throttle_pct is not None:
+                valid_token_dict["budget_throttle_pct"] = valid_token.budget_throttle_pct
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)

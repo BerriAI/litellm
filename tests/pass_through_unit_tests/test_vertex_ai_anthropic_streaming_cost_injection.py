@@ -57,6 +57,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
         # Setup logging object with model info
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
@@ -135,6 +136,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_disabled():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
@@ -196,6 +198,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_no_usage_chunk():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
@@ -250,6 +253,7 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         # Test model extraction from request body

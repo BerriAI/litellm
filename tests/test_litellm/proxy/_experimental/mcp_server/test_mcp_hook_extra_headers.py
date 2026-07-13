@@ -43,17 +43,13 @@ class TestConvertMcpHookResponseToKwargs:
     def test_extracts_modified_arguments(self):
         original = {"arguments": {"old": "value"}}
         response = {"modified_arguments": {"new": "value"}}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(response, original)
         assert result["arguments"] == {"new": "value"}
 
     def test_extracts_extra_headers(self):
         original = {"arguments": {"key": "val"}}
         response = {"extra_headers": {"Authorization": "Bearer signed-jwt"}}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(response, original)
         assert result["extra_headers"] == {"Authorization": "Bearer signed-jwt"}
 
     def test_extracts_both_arguments_and_headers(self):
@@ -62,9 +58,7 @@ class TestConvertMcpHookResponseToKwargs:
             "modified_arguments": {"new": "value"},
             "extra_headers": {"X-Custom": "header-val"},
         }
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(response, original)
         assert result["arguments"] == {"new": "value"}
         assert result["extra_headers"] == {"X-Custom": "header-val"}
 
@@ -72,9 +66,7 @@ class TestConvertMcpHookResponseToKwargs:
         """Backward compat: hooks that only return modified_arguments still work."""
         original = {"arguments": {"key": "val"}}
         response = {"modified_arguments": {"key": "new_val"}}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(response, original)
         assert "extra_headers" not in result
         assert result["arguments"] == {"key": "new_val"}
 
@@ -82,9 +74,7 @@ class TestConvertMcpHookResponseToKwargs:
         """Empty dict for extra_headers is falsy and should not be set."""
         original = {"arguments": {"key": "val"}}
         response = {"extra_headers": {}}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(response, original)
         assert "extra_headers" not in result
 
 
@@ -107,18 +97,10 @@ class TestPreCallToolCheckReturnsHeaders:
         server = self._make_server()
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            return_value={"model": "fake"}
-        )
-        proxy_logging.pre_call_hook = AsyncMock(
-            return_value={"modified_arguments": {"key": "val"}}
-        )
-        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
-            return_value={"arguments": {"key": "val"}}
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
+        proxy_logging.pre_call_hook = AsyncMock(return_value={"modified_arguments": {"key": "val"}})
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(return_value={"arguments": {"key": "val"}})
 
         with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
             with patch.object(
@@ -146,15 +128,9 @@ class TestPreCallToolCheckReturnsHeaders:
         hook_headers = {"Authorization": "Bearer signed-jwt", "X-Trace-Id": "abc123"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            return_value={"model": "fake"}
-        )
-        proxy_logging.pre_call_hook = AsyncMock(
-            return_value={"extra_headers": hook_headers}
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
+        proxy_logging.pre_call_hook = AsyncMock(return_value={"extra_headers": hook_headers})
         proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
             return_value={"arguments": {"key": "val"}, "extra_headers": hook_headers}
         )
@@ -183,12 +159,8 @@ class TestPreCallToolCheckReturnsHeaders:
         server = self._make_server()
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            return_value={"model": "fake"}
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
 
         with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
@@ -219,18 +191,10 @@ class TestPreCallToolCheckReturnsHeaders:
         modified_args = {"key": "modified", "extra": "added"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            return_value={"model": "fake"}
-        )
-        proxy_logging.pre_call_hook = AsyncMock(
-            return_value={"modified_arguments": modified_args}
-        )
-        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
-            return_value={"arguments": modified_args}
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
+        proxy_logging.pre_call_hook = AsyncMock(return_value={"modified_arguments": modified_args})
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(return_value={"arguments": modified_args})
 
         with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
             with patch.object(
@@ -260,12 +224,8 @@ class TestPreCallToolCheckReturnsHeaders:
         hook_headers = {"Authorization": "Bearer jwt"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            return_value={"model": "fake"}
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value={"dummy": True})
         proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
             return_value={"arguments": modified_args, "extra_headers": hook_headers}
@@ -345,9 +305,7 @@ class TestCallToolFlowsHookHeaders:
 
                         mock_call.assert_called_once()
                         call_kwargs = mock_call.call_args
-                        assert (
-                            call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
-                        )
+                        assert call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
 
     @pytest.mark.asyncio
     async def test_no_hook_headers_when_no_proxy_logging(self):
@@ -434,9 +392,7 @@ class TestCallToolFlowsHookHeaders:
             spec_path="/path/to/spec.yaml",
         )
 
-        with patch.object(
-            manager, "_get_mcp_server_from_tool_name", return_value=server
-        ):
+        with patch.object(manager, "_get_mcp_server_from_tool_name", return_value=server):
             with patch.object(
                 manager,
                 "pre_call_tool_check",
@@ -467,10 +423,7 @@ class TestCallToolFlowsHookHeaders:
                                 proxy_logging_obj=proxy_logging,
                             )
                             mock_logger.warning.assert_called_once()
-                            assert (
-                                "header injection is not supported"
-                                in mock_logger.warning.call_args[0][0]
-                            )
+                            assert "header injection is not supported" in mock_logger.warning.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_openapi_server_no_error_without_hook_headers(self):
@@ -486,9 +439,7 @@ class TestCallToolFlowsHookHeaders:
             spec_path="/path/to/spec.yaml",
         )
 
-        with patch.object(
-            manager, "_get_mcp_server_from_tool_name", return_value=server
-        ):
+        with patch.object(manager, "_get_mcp_server_from_tool_name", return_value=server):
             with patch.object(
                 manager,
                 "pre_call_tool_check",
@@ -539,25 +490,19 @@ class TestHookHeaderMergePriority:
     async def test_hook_headers_override_static_headers(self):
         """Hook headers should take precedence over static_headers."""
         manager = MCPServerManager()
-        server = self._make_server(
-            static_headers={"Authorization": "Bearer static-token", "X-Static": "yes"}
-        )
+        server = self._make_server(static_headers={"Authorization": "Bearer static-token", "X-Static": "yes"})
 
         hook_headers = {"Authorization": "Bearer hook-signed-jwt"}
 
         captured_extra_headers: Dict[str, Any] = {}
 
-        async def fake_create_mcp_client(
-            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
-        ):
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(
-            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
-        ):
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
             with patch.object(manager, "_build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
@@ -587,17 +532,13 @@ class TestHookHeaderMergePriority:
 
         captured_extra_headers: Dict[str, Any] = {}
 
-        async def fake_create_mcp_client(
-            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
-        ):
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(
-            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
-        ):
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
             with patch.object(manager, "_build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
@@ -633,17 +574,13 @@ class TestHookHeaderMergePriority:
 
         captured_extra_headers: Dict[str, Any] = {}
 
-        async def fake_create_mcp_client(
-            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
-        ):
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(
-            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
-        ):
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
             with patch.object(manager, "_build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
@@ -689,17 +626,13 @@ class TestHookHeaderMergePriority:
 
         captured_extra_headers: Dict[str, Any] = {}
 
-        async def fake_create_mcp_client(
-            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
-        ):
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(
-            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
-        ):
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
             with patch.object(manager, "_build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
@@ -737,17 +670,13 @@ class TestHookHeaderMergePriority:
 
         captured_extra_headers: Dict[str, Any] = {}
 
-        async def fake_create_mcp_client(
-            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
-        ):
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(
-            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
-        ):
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
             with patch.object(manager, "_build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
@@ -822,9 +751,7 @@ class TestMcpRateLimitServerNameSurfacing:
         request_obj.tool_name = "list_repos"
         request_obj.arguments = {"org": "acme"}
 
-        result = self.proxy_logging._convert_mcp_to_llm_format(
-            request_obj, {"mcp_rate_limit_server_name": "github"}
-        )
+        result = self.proxy_logging._convert_mcp_to_llm_format(request_obj, {"mcp_rate_limit_server_name": "github"})
 
         assert result["mcp_server_name"] == "github"
 
@@ -861,16 +788,10 @@ class TestMcpRateLimitServerNameSurfacing:
             return {"model": "fake"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
-        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
-            return_value=MagicMock()
-        )
-        proxy_logging._convert_mcp_to_llm_format = MagicMock(
-            side_effect=capture_convert
-        )
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(side_effect=capture_convert)
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
-        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
-            return_value={"arguments": {}}
-        )
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(return_value={"arguments": {}})
 
         with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
             with patch.object(
@@ -889,3 +810,226 @@ class TestMcpRateLimitServerNameSurfacing:
                     )
 
         assert captured["kwargs"]["mcp_rate_limit_server_name"] == "gh"
+
+
+class TestOpenApiByokCallTool:
+    @pytest.mark.asyncio
+    async def test_call_tool_openapi_byok_injects_request_auth_contextvar(self):
+        """Playground/responses call call_tool directly; BYOK must reach OpenAPI handlers."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-openapi",
+            name="firecrawl_byok_test",
+            server_name="firecrawl_byok_test",
+            url="https://api.firecrawl.dev",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            spec_path="https://example.com/openapi.json",
+            is_byok=True,
+        )
+        user_auth = UserAPIKeyAuth(user_id="default_user_id", api_key="sk-dashboard")
+        captured_auth: dict[str, Optional[str]] = {}
+
+        async def fake_openapi_handler(_server, _name, _arguments):
+            captured_auth["value"] = _request_auth_header.get()
+            return MagicMock()
+
+        with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager._resolve_byok_mcp_auth_header",
+                new=AsyncMock(return_value="fc-test-key"),
+            ):
+                with patch.object(
+                    manager,
+                    "_call_openapi_tool_handler",
+                    side_effect=fake_openapi_handler,
+                ):
+                    await manager.call_tool(
+                        server_name=server.server_name,
+                        name="scrapeandextractfromurl",
+                        arguments={"body": {"url": "https://example.com"}},
+                        user_api_key_auth=user_auth,
+                    )
+
+        assert captured_auth["value"] == "ApiKey fc-test-key"
+
+
+class TestFormatByokOpenapiAuthHeader:
+    def _server(self, auth_type):
+        return MCPServer(
+            server_id="s1",
+            name="s1",
+            server_name="s1",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+        )
+
+    def test_api_key_auth_type(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _format_byok_openapi_auth_header,
+        )
+
+        assert _format_byok_openapi_auth_header(self._server(MCPAuth.api_key), "secret") == "ApiKey secret"
+
+    def test_basic_auth_type(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _format_byok_openapi_auth_header,
+        )
+
+        assert _format_byok_openapi_auth_header(self._server(MCPAuth.basic), "secret") == "Basic secret"
+
+    def test_defaults_to_bearer(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _format_byok_openapi_auth_header,
+        )
+
+        assert _format_byok_openapi_auth_header(self._server(MCPAuth.oauth2), "secret") == "Bearer secret"
+
+
+class TestOpenapiForwardedExtraHeaders:
+    def _server(self, extra_headers):
+        return MCPServer(
+            server_id="s1",
+            name="s1",
+            server_name="s1",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            extra_headers=extra_headers,
+        )
+
+    def test_returns_none_without_extra_headers_config(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(None)
+        assert _openapi_forwarded_extra_headers(server, {"X-Custom": "v"}, None) is None
+
+    def test_returns_none_without_raw_headers(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(["X-Custom"])
+        assert _openapi_forwarded_extra_headers(server, None, None) is None
+
+    def test_forwards_configured_header_case_insensitively(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(["X-Custom"])
+        result = _openapi_forwarded_extra_headers(server, {"x-custom": "v"}, None)
+        assert result == {"X-Custom": "v"}
+
+    def test_returns_none_when_no_configured_header_is_present(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(["X-Missing"])
+        assert _openapi_forwarded_extra_headers(server, {"x-custom": "v"}, None) is None
+
+    def test_skips_authorization_when_caller_header_must_be_stripped(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(["Authorization"])
+        server.auth_type = MCPAuth.oauth2_token_exchange
+        result = _openapi_forwarded_extra_headers(server, {"authorization": "Bearer caller-token"}, None)
+        assert result is None
+
+    def test_skips_non_string_header_entries(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _openapi_forwarded_extra_headers,
+        )
+
+        server = self._server(["X-Custom"])
+        server.extra_headers = [123, "X-Custom"]  # simulate malformed legacy config data
+        result = _openapi_forwarded_extra_headers(server, {"x-custom": "v"}, None)
+        assert result == {"X-Custom": "v"}
+
+
+class TestResolveByokMcpAuthHeader:
+    def _server(self, is_byok):
+        return MCPServer(
+            server_id="s1",
+            name="s1",
+            server_name="s1",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            is_byok=is_byok,
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_byok_server_passes_header_through_unchanged(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _resolve_byok_mcp_auth_header,
+        )
+
+        server = self._server(is_byok=False)
+        result = await _resolve_byok_mcp_auth_header(server, None, "caller-header")
+        assert result == "caller-header"
+
+    @pytest.mark.asyncio
+    async def test_byok_server_uses_stored_credential_when_no_header_supplied(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _resolve_byok_mcp_auth_header,
+        )
+
+        server = self._server(is_byok=True)
+        user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            new=AsyncMock(return_value="stored-cred"),
+        ):
+            result = await _resolve_byok_mcp_auth_header(server, user_auth, None)
+
+        assert result == "stored-cred"
+
+    @pytest.mark.asyncio
+    async def test_byok_server_raises_401_when_no_credential_stored(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _resolve_byok_mcp_auth_header,
+        )
+
+        server = self._server(is_byok=True)
+        user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            new=AsyncMock(return_value=None),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _resolve_byok_mcp_auth_header(server, user_auth, None)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail["error"] == "byok_auth_required"
+
+    @pytest.mark.asyncio
+    async def test_byok_server_checks_credential_and_keeps_caller_header_when_supplied(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _resolve_byok_mcp_auth_header,
+        )
+
+        server = self._server(is_byok=True)
+        user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
+        check_mock = AsyncMock(return_value=None)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._check_byok_credential",
+            new=check_mock,
+        ):
+            result = await _resolve_byok_mcp_auth_header(server, user_auth, "caller-header")
+
+        check_mock.assert_awaited_once_with(server, user_auth)
+        assert result == "caller-header"

@@ -7,7 +7,7 @@ import traceback
 from base64 import b64encode
 from datetime import datetime
 from itertools import groupby
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -389,18 +389,24 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
-        Handle non-streaming HTTP requests
+        Handle non-SSE HTTP requests
 
-        Handles special cases when GET requests, multipart/form-data requests, and generic httpx requests
+        Handles special cases when GET requests, multipart/form-data requests, and generic httpx requests.
+
+        GET and generic requests are sent with httpx stream semantics so the caller can
+        decide from the response headers whether to buffer the body (JSON, inspected for
+        logging/guardrails) or relay it to the client without materializing it in memory
+        (LIT-4009: large batch results files must not be buffered in proxy RSS).
         """
         if request.method == "GET":
-            response = await async_client.request(
-                method=request.method,
-                url=url,
+            get_request = async_client.build_request(
+                request.method,
+                url,
                 headers=headers,
                 params=requested_query_params,
             )
-        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True and forward_multipart:
+            return await async_client.send(get_request, stream=True)
+        if HttpPassThroughEndpointHelpers.is_multipart(request) is True and forward_multipart:
             # Forward multipart via make_multipart_http_request even when _parsed_body is
             # non-empty (pass_through_request always injects litellm_logging_obj, etc.).
             # forward_multipart is False when custom_body was supplied (JSON body despite
@@ -412,16 +418,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 headers=headers,
                 requested_query_params=requested_query_params,
             )
-        else:
-            # Generic httpx method
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                json=_parsed_body,
-            )
-        return response
+        generic_request = async_client.build_request(
+            request.method,
+            url,
+            headers=headers,
+            params=requested_query_params,
+            json=_parsed_body,
+        )
+        return await async_client.send(generic_request, stream=True)
 
     @staticmethod
     def is_multipart(request: Request) -> bool:
@@ -820,21 +824,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
 
-        # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
-            # Determine what to merge based on settings
-            request_params = dict(request.query_params) if merge_query_params else {}
-
-            # Create a new URL with the merged query params
-            url = url.copy_with(
-                query=urlencode(
-                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
-                        existing_url=url,
-                        request_query_params=request_params,
-                        default_query_params=default_query_params,
-                    )
-                ).encode("ascii")
-            )
+        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -952,9 +942,6 @@ async def pass_through_request(
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
-        # combine url with query params for logging
-        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
-
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
         # provider IDs before forwarding upstream.  Gated by feature flag and
@@ -1023,6 +1010,20 @@ async def pass_through_request(
                     request.url.path,
                     request.method,
                 )
+
+        # Apply default query parameters if provided, regardless of merge_query_params setting
+        if default_query_params or merge_query_params:
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=requested_query_params,
+                        default_query_params=default_query_params,
+                    )
+                ).encode("ascii")
+            )
+            requested_query_params = None
 
         ## PASSTHROUGH MANAGED LIST (DB-only response) ##
         # For GET /v1/files and GET /v1/batches passthrough routes, serve the
@@ -1164,13 +1165,14 @@ async def pass_through_request(
         if state_raw_body is not None:
             # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
             # to be forwarded so the signature/Content-Length stay valid.
-            response = await async_client.request(
-                method=request.method,
-                url=url,
+            raw_body_request = async_client.build_request(
+                request.method,
+                url,
                 headers=headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
+            response = await async_client.send(raw_body_request, stream=True)
         else:
             response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
                 request=request,
@@ -1224,6 +1226,40 @@ async def pass_through_request(
                 ),
                 headers=_response_headers,
                 status_code=response.status_code,
+            )
+
+        if not _should_buffer_passthrough_response(response):
+            relay_custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                call_id=litellm_call_id,
+                model_id=None,
+                cache_key=None,
+                api_base=str(url._uri_reference),
+            )
+            relay_callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if relay_callback_headers:
+                relay_custom_headers.update(relay_callback_headers)
+
+            return StreamingResponse(
+                _relay_passthrough_response_bytes(
+                    response=response,
+                    request_body=_parsed_body or {},
+                    url_route=str(url),
+                    start_time=start_time,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                    success_handler_kwargs=kwargs,
+                ),
+                status_code=response.status_code,
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=response.headers,
+                    custom_headers=relay_custom_headers,
+                ),
             )
 
         content = await response.aread()
@@ -2212,6 +2248,70 @@ def _is_streaming_response(response: httpx.Response) -> bool:
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
+
+
+def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
+    """
+    Decide from the response headers whether the body must be read into memory.
+
+    JSON bodies (and upstream errors) stay buffered: spend logging, guardrails and
+    managed-id rewriting inspect them, and they are small in practice. Everything
+    else (jsonl batch results, octet-stream files, ...) is relayed to the client
+    chunk by chunk so a large body is never resident in full (LIT-4009). A missing
+    content-type is buffered because the body cannot be classified.
+    """
+    if response.status_code >= 400:
+        return True
+    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    return media_type in ("", "application/json") or media_type.endswith("+json")
+
+
+async def _relay_passthrough_response_bytes(
+    response: httpx.Response,
+    request_body: dict,
+    url_route: str,
+    start_time: datetime,
+    logging_obj: LiteLLMLoggingObj,
+    custom_llm_provider: Optional[str],
+    success_handler_kwargs: dict,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Yield upstream bytes to the client without accumulating them, then fire the
+    passthrough success handler with response_body=None (uninspected body). The
+    finally block also runs on client disconnect (GeneratorExit) so partial
+    downloads still produce a spend-log row, mirroring chunk_processor; a
+    disconnect additionally logs a warning with the number of bytes relayed so
+    partial deliveries are distinguishable from complete ones in proxy logs.
+    """
+    bytes_relayed = 0
+    upstream_fully_relayed = False
+    try:
+        async for chunk in response.aiter_bytes():
+            bytes_relayed += len(chunk)
+            yield chunk
+        upstream_fully_relayed = True
+    finally:
+        if not upstream_fully_relayed:
+            verbose_proxy_logger.warning(
+                f"Passthrough stream for {url_route} ended before upstream body was fully relayed; "
+                f"{bytes_relayed} bytes were sent to the client"
+            )
+        await response.aclose()
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                httpx_response=response,
+                response_body=None,
+                url_route=url_route,
+                result="",
+                start_time=start_time,
+                end_time=datetime.now(),
+                logging_obj=logging_obj,
+                cache_hit=False,
+                request_body=request_body,
+                custom_llm_provider=custom_llm_provider,
+                **success_handler_kwargs,
+            )
+        )
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: dict) -> Optional[str]:

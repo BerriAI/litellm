@@ -4097,11 +4097,22 @@ class PrismaClient:
             raise e
 
     def _get_engine_pid(self) -> int:
+        """Get the PID of the writer's engine subprocess, or 0 if unavailable.
+
+        Must never raise: prisma's ``_engine`` property raises
+        ``ClientNotConnectedError`` on a disconnected client, and an exception
+        escaping from the reconnect path would leave it unable to recover.
+        """
         try:
-            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            prisma_obj = self.writer_db._original_prisma
+            if prisma_obj.is_connected() is not True:
+                return 0
+            engine = prisma_obj._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                return process.pid
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
         except (AttributeError, TypeError):
             pass
         return 0

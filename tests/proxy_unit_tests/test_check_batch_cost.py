@@ -398,6 +398,72 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
+    async def test_cost_tracking_failure_leaves_job_unprocessed(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """LIT-4008 regression: when fetching a completed batch's results fails
+        (e.g. Anthropic rejecting a msgbatch_ id on the Files API), the job must
+        NOT be marked complete/batch_processed. Pre-fix the $0 spend row was
+        written and batch_processed=True made it permanent; the failure must
+        instead leave the row untouched so the next poll retries, without
+        aborting the poll cycle.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-anthropic-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "msgbatch_01WA5hdsa2Xx8w4zyPjV1frs"
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test", "custom_llm_provider": "anthropic"}
+        )
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,msgbatch_01WA5hdsa2Xx8w4zyPjV1frs;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="msgbatch_01WA5hdsa2Xx8w4zyPjV1frs",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                side_effect=Exception("File id must have `file_` prefix."),
+            ),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 0
+        ), "a failed cost tracking attempt must not mark the job processed"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
     async def test_terminal_status_marks_job_processed(
         self,

@@ -1,6 +1,7 @@
 import { Tag } from "antd";
 import { ColumnsType } from "antd/es/table";
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { SearchTool } from "./types";
 
 export const searchToolColumns = (
@@ -20,14 +21,7 @@ export const searchToolColumns = (
         return <span className="text-xs">-</span>;
       }
 
-      return (
-        <button
-          onClick={() => onView(tool.search_tool_id!)}
-          className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left cursor-pointer max-w-40"
-        >
-          <span className="truncate block">{tool.search_tool_id}</span>
-        </button>
-      );
+      return <IdCell value={tool.search_tool_id} onClick={onView} />;
     },
   },
   {
@@ -52,7 +46,7 @@ export const searchToolColumns = (
     dataIndex: "created_at",
     key: "created_at",
     render: (_, tool) => {
-      return <span className="text-xs">{tool.created_at ? new Date(tool.created_at).toLocaleDateString() : "-"}</span>;
+      return <DateCell value={tool.created_at} precision="date" />;
     },
   },
   {
@@ -60,7 +54,7 @@ export const searchToolColumns = (
     dataIndex: "updated_at",
     key: "updated_at",
     render: (_, tool) => {
-      return <span className="text-xs">{tool.updated_at ? new Date(tool.updated_at).toLocaleDateString() : "-"}</span>;
+      return <DateCell value={tool.updated_at} precision="date" />;
     },
   },
   {

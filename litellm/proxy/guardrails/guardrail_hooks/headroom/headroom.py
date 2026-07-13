@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -208,6 +208,13 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_base: str | None = None,
@@ -237,6 +244,7 @@ class HeadroomGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
         )
 
     def _should_bypass(self, request_data: dict) -> bool:
@@ -282,7 +290,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
-    ) -> tuple[list[dict[str, object]], bool]:
+    ) -> tuple[list[dict[str, object]], bool, dict[str, object]]:
         payload: dict[str, object] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -294,62 +302,94 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except httpx.HTTPStatusError as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": e.response.status_code, "body": e.response.text},
-            ), False
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service unreachable",
-                {"detail": str(e)},
-            ), False
-        if raw_response is None:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned no response",
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": e.response.status_code, "body": e.response.text},
+                ),
+                False,
                 {},
-            ), False
+            )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service unreachable",
+                    {"detail": str(e)},
+                ),
+                False,
+                {},
+            )
+        if raw_response is None:
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned no response",
+                    {},
+                ),
+                False,
+                {},
+            )
         response: HttpxResponse = raw_response
 
         if response.status_code != 200:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": response.status_code, "body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": response.status_code, "body": response.text},
+                ),
+                False,
+                {},
+            )
 
         try:
             body: object = response.json()
         except ValueError:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned non-JSON response",
-                {"body": response.text[:500]},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned non-JSON response",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
         if not _is_str_object_dict(body):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned unexpected response shape",
-                {"body": response.text[:500]},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned unexpected response shape",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
 
         compressed_messages = body.get("messages")
         if not _is_object_list(compressed_messages):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service response missing 'messages'",
-                {"body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service response missing 'messages'",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned empty message list",
-                {"body": response.text},
-            ), False
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned empty message list",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
@@ -357,7 +397,19 @@ class HeadroomGuardrail(CustomGuardrail):
             body.get("tokens_after", "?"),
             body.get("compression_ratio", 0),
         )
-        return filtered, True
+
+        stats = {
+            key: body[key]
+            for key in (
+                "tokens_before",
+                "tokens_after",
+                "tokens_saved",
+                "compression_ratio",
+                "transforms_applied",
+            )
+            if key in body
+        }
+        return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
         params: dict[str, str] = {}
@@ -421,13 +473,25 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         model = self.headroom_model or request_data.get("model")
-        compressed, compression_succeeded = await self._call_compress(
+        start_time = time.time()
+        compressed, compression_succeeded, stats = await self._call_compress(
             messages=messages,
             model=model if isinstance(model, str) else None,
         )
+        end_time = time.time()
 
         if not compression_succeeded:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=stats,
+            request_data=request_data,
+            guardrail_status="success",
+            guardrail_provider="headroom",
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
 
         hashes = extract_hashes_from_messages(compressed)
         if not hashes:

@@ -1,5 +1,5 @@
 "use client";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
@@ -59,14 +59,7 @@ export function DeletedKeysTable({
       header: "Key ID",
       size: 150,
       maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => <IdCell value={info.getValue() as string} variant="plain" />,
     },
     {
       id: "key_alias",
@@ -100,9 +93,7 @@ export function DeletedKeysTable({
       header: "Spend (USD)",
       size: 100,
       maxSize: 140,
-      cell: (info) => (
-        <span className="block max-w-[140px]">{formatNumberWithCommas(info.getValue() as number, 4)}</span>
-      ),
+      cell: (info) => <MoneyCell value={info.getValue() as number} decimals={4} />,
     },
     {
       id: "max_budget",
@@ -110,14 +101,9 @@ export function DeletedKeysTable({
       header: "Budget (USD)",
       size: 110,
       maxSize: 150,
-      cell: (info) => {
-        const maxBudget = info.getValue() as number | null;
-        return (
-          <span className="block max-w-[150px]">
-            {maxBudget === null ? "Unlimited" : `$${formatNumberWithCommas(maxBudget)}`}
-          </span>
-        );
-      },
+      cell: (info) => (
+        <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+      ),
     },
     {
       id: "user_email",
@@ -140,14 +126,7 @@ export function DeletedKeysTable({
       header: "User ID",
       size: 120,
       maxSize: 200,
-      cell: (info) => {
-        const userId = info.getValue() as string | null;
-        return (
-          <Tooltip title={userId || undefined}>
-            <span className="truncate block max-w-[200px]">{userId || "-"}</span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => <IdCell value={info.getValue() as string | null} variant="plain" />,
     },
     {
       id: "created_at",
@@ -155,12 +134,7 @@ export function DeletedKeysTable({
       header: "Created At",
       size: 120,
       maxSize: 140,
-      cell: (info) => {
-        const value = info.getValue();
-        return (
-          <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
-        );
-      },
+      cell: (info) => <DateCell value={info.getValue() as string | null | undefined} precision="date" />,
     },
     {
       id: "created_by",
@@ -183,10 +157,9 @@ export function DeletedKeysTable({
       header: "Deleted At",
       size: 120,
       maxSize: 140,
-      cell: (info) => {
-        const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
-      },
+      cell: (info) => (
+        <DateCell value={(info.row.original as any).deleted_at as string | null | undefined} precision="date" />
+      ),
     },
     {
       id: "deleted_by",

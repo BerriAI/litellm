@@ -214,6 +214,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
+    itpm: Optional[int] = None
+    otpm: Optional[int] = None
     timeout: Optional[Union[float, str, httpx.Timeout]] = None  # if str, pass in as os.environ/
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
@@ -359,6 +361,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    itpm: Optional[int]
+    otpm: Optional[int]
     order: Optional[int]
     weight: Optional[int]
     max_parallel_requests: Optional[int]
@@ -552,6 +556,8 @@ class ModelGroupInfo(BaseModel):
     ] = Field(default="chat")
     tpm: Optional[int] = None
     rpm: Optional[int] = None
+    itpm: Optional[int] = None
+    otpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
@@ -749,6 +755,8 @@ class RoutingStrategy(enum.Enum):
 class RouterCacheEnum(enum.Enum):
     TPM = "global_router:{id}:{model}:tpm:{current_minute}"
     RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
+    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
 class GenericBudgetWindowDetails(BaseModel):

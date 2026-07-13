@@ -4,6 +4,7 @@
 # before `git commit`; it inspects your staged files and runs only the matching
 # gating CI checks, so a clean run means a green CI lint:
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
+#   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -25,6 +26,7 @@ staged_match() { printf '%s\n' "$staged" | grep -E "$1" || true; }
 # scripts-only commit can't turn it red; scope the trigger there to skip the slow
 # make lint when it couldn't catch anything.
 litellm_py_files=$(staged_match '^litellm/.*\.py$')
+e2e_py_files=$(staged_match '^tests/e2e/.*\.py$')
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
@@ -75,11 +77,11 @@ EOF
             npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_rel[@]}" || rc=1
         fi
         # Whole-folder lint budgets, exactly as the frontend-lint job runs them: the
-        # counts and the committed metrics file are not diff-scoped, so a local pass
-        # here means the budget step will pass in CI too.
+        # counts are not diff-scoped, so a local pass here means the budget step will
+        # pass in CI too.
         report=$(mktemp)
         npx eslint . -f json -o "$report" || true
-        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json --check eslint-metrics.json || rc=1
+        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
         rm -f "$report"
         exit $rc
     )
@@ -98,6 +100,11 @@ if [ -n "$litellm_py_files" ]; then
         printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
             || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
     fi
+fi
+
+if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
+    echo "pre-commit: type-checking tests/e2e (make lint-e2e-basedpyright)"
+    make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make pre-commit." >&2; status=1; }
 fi
 
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then

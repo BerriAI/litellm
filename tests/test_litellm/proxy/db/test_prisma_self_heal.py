@@ -20,7 +20,7 @@ def mock_prisma_binary():
     """Mock prisma.Prisma to avoid requiring generated Prisma binaries for unit tests."""
     mock_module = MagicMock()
     with patch.dict(sys.modules, {"prisma": mock_module}):
-        yield
+        yield mock_module
 
 
 @pytest.fixture
@@ -513,6 +513,43 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     # The flag must STILL be True so the next attempt re-enters the heavy
     # branch instead of silently demoting to the lightweight path.
     assert client._engine_confirmed_dead is True
+
+
+@pytest.mark.asyncio
+async def test_heavy_reconnect_recovers_from_disconnected_prisma_client(
+    mock_proxy_logging, mock_prisma_binary, disconnected_prisma
+):
+    """Once the active Prisma client is in the disconnected state, every DB
+    call raises ClientNotConnectedError. The heavy reconnect path is the only
+    way out, so it must not re-raise that same error while inspecting the
+    broken client; otherwise `recreate_prisma_client` fails before it can
+    build a replacement and the proxy loops on failed reconnects forever.
+
+    The full real reconnect path (attempt_db_reconnect -> _run_reconnect_cycle
+    -> recreate_prisma_client) must succeed from that wedged state.
+    """
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db._original_prisma = disconnected_prisma
+    client._engine_confirmed_dead = True
+    client._start_engine_watcher = AsyncMock()
+
+    replacement = MagicMock()
+    replacement.connect = AsyncMock()
+    mock_prisma_binary.Prisma.return_value = replacement
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        result = await client.attempt_db_reconnect(
+            reason="unit_test_disconnected_client",
+            force=True,
+        )
+
+    assert result is True
+    assert client.db._original_prisma is replacement
+    replacement.connect.assert_awaited_once()
+    assert client._consecutive_reconnect_failures == 0
+    assert client._engine_confirmed_dead is False
 
 
 @pytest.mark.asyncio
