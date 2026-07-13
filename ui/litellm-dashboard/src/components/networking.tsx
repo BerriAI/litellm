@@ -6650,6 +6650,9 @@ export const testMCPToolsListRequest = async (
     };
     if (accessToken) {
       headers["x-litellm-api-key"] = accessToken;
+      if (globalLitellmHeaderName.toLowerCase() !== "authorization") {
+        headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+      }
     }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
