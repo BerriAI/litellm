@@ -2,7 +2,7 @@
 //!
 //! A single chokepoint for releasing the GIL around blocking work. Every
 //! blocking call in the bridge goes through [`release_gil`] instead of calling
-//! `Python::allow_threads` directly, so the release count stays accurate and we
+//! `Python::detach` directly, so the release count stays accurate and we
 //! have one place to extend later (timing histograms, per-call labels, etc.).
 
 use std::sync::atomic::{AtomicU64, Ordering};
