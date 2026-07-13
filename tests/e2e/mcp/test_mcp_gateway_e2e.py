@@ -29,6 +29,8 @@ control and the equality assertion fail.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from e2e_config import MCP_STUB_URL, unique_marker
@@ -109,6 +111,12 @@ class TestMcpServerMaxConcurrency:
     def test_max_concurrent_requests_caps_in_flight_upstream_calls(
         self, client: McpClient, resources: ResourceManager, scoped_key: str
     ) -> None:
+        """Two servers against the same stub: one capped at MAX_CONCURRENT, one
+        uncapped control. The tools/list polls are the settle step; they hold
+        until the just-created records are servable on the gateway (and the
+        fresh key has cleared the auth cache) so the bursts measure the
+        semaphore, not propagation. Each burst is BURST simultaneous slow_echo
+        calls, one per thread, each over its own MCP session."""
         auth = McpAuth(header_name="x-litellm-api-key", key=scoped_key)
 
         capped_alias = f"e2emcpcap{unique_marker()}"
@@ -133,15 +141,19 @@ class TestMcpServerMaxConcurrency:
         _ = client.poll_tool_names(control_alias, auth)
 
         capped_marker = unique_marker()
-        capped_results = client.burst_call_tool(
-            capped_alias,
-            auth,
-            f"{capped_alias}-slow_echo",
-            tuple(
-                {"text": "capped", "marker": capped_marker, "sleep_seconds": SLOW_CALL_SECONDS}
+        with ThreadPoolExecutor(max_workers=BURST) as pool:
+            futures = [
+                pool.submit(
+                    client.call_tool,
+                    capped_alias,
+                    auth,
+                    f"{capped_alias}-slow_echo",
+                    {"text": "capped", "marker": capped_marker, "sleep_seconds": SLOW_CALL_SECONDS},
+                )
                 for _ in range(BURST)
-            ),
-        )
+            ]
+            capped_results = [future.result() for future in futures]
+
         assert len(capped_results) == BURST
         assert all(result.is_error is False and result.text == "capped" for result in capped_results), (
             f"queued calls must all still succeed under the cap: {capped_results}"
@@ -155,15 +167,19 @@ class TestMcpServerMaxConcurrency:
         )
 
         control_marker = unique_marker()
-        control_results = client.burst_call_tool(
-            control_alias,
-            auth,
-            f"{control_alias}-slow_echo",
-            tuple(
-                {"text": "control", "marker": control_marker, "sleep_seconds": SLOW_CALL_SECONDS}
+        with ThreadPoolExecutor(max_workers=BURST) as pool:
+            futures = [
+                pool.submit(
+                    client.call_tool,
+                    control_alias,
+                    auth,
+                    f"{control_alias}-slow_echo",
+                    {"text": "control", "marker": control_marker, "sleep_seconds": SLOW_CALL_SECONDS},
+                )
                 for _ in range(BURST)
-            ),
-        )
+            ]
+            control_results = [future.result() for future in futures]
+
         assert all(result.is_error is False and result.text == "control" for result in control_results)
 
         control_stats = client.stub_stats(control_alias, auth, f"{control_alias}-stats", control_marker)

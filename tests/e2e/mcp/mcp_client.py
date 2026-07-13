@@ -179,25 +179,9 @@ class McpClient:
         )
 
     def call_tool(self, alias: str, auth: McpAuth, tool: str, arguments: ToolArguments) -> McpToolText:
+        """One tools/call over its own fresh MCP session, so concurrent callers
+        behave like independent clients."""
         return asyncio.run(_call_tool(_mcp_url(alias), auth.headers(), tool, arguments))
-
-    def burst_call_tool(
-        self,
-        alias: str,
-        auth: McpAuth,
-        tool: str,
-        arguments_per_call: tuple[ToolArguments, ...],
-    ) -> tuple[McpToolText, ...]:
-        """Fire every call at once, each over its own MCP session, like N
-        independent clients hitting the gateway simultaneously."""
-
-        async def _burst() -> tuple[McpToolText, ...]:
-            url = _mcp_url(alias)
-            headers = auth.headers()
-            results = await asyncio.gather(*(_call_tool(url, headers, tool, args) for args in arguments_per_call))
-            return tuple(results)
-
-        return asyncio.run(_burst())
 
     def stub_stats(self, alias: str, auth: McpAuth, stats_tool: str, marker: str) -> StubToolStats:
         outcome = self.call_tool(alias, auth, stats_tool, {"marker": marker})
