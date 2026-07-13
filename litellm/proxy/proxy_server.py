@@ -11887,6 +11887,21 @@ async def model_info_v2(
             sort_by=sortBy,
         )
 
+    # Enforce RBAC: non-admin users should only see their accessible models.
+    # This specifically prevents information disclosure on the read-only
+    # /v2/model/info endpoint by overriding any caller-supplied
+    # user_models_only=False. Write endpoints (key/model management) have
+    # separate RBAC guards. Operators can observe this enforcement via debug
+    # logging.
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        verbose_proxy_logger.debug(
+            "RBAC enforcement on /v2/model/info: restricting user '%s' "
+            "(role=%s) to user_models_only=True",
+            user_api_key_dict.user_id,
+            user_api_key_dict.user_role,
+        )
+        user_models_only = True
+
     if user_models_only:
         all_models = await non_admin_all_models(
             all_models=all_models,
