@@ -303,6 +303,38 @@ describe("DataTable loading", () => {
     // per-column widths differ instead of every cell sharing one fixed width
     expect(new Set(bars.map((bar) => bar.className)).size).toBeGreaterThan(1);
   });
+
+  it("renders shape-specific skeletons for badge, chips, and meter columns", () => {
+    const columns: ColumnDef<Person, unknown>[] = [
+      { id: "badge", header: "Badge", meta: { skeleton: "badge" }, cell: () => null },
+      { id: "chips", header: "Chips", meta: { skeleton: "chips" }, cell: () => null },
+      { id: "meter", header: "Meter", meta: { skeleton: "meter" }, cell: () => null },
+    ];
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={columns} isLoading />);
+
+    const firstRow = screen.getAllByTestId("skeleton-row").at(0);
+    const cells = Array.from(firstRow?.querySelectorAll("td") ?? []);
+    const barsIn = (cell: Element | undefined) => cell?.querySelectorAll('[data-slot="skeleton"]').length ?? 0;
+
+    // badge = a single pill, chips = three pills, meter = value bar + track bar
+    expect(barsIn(cells[0])).toBe(1);
+    expect(cells[0]?.querySelector('[data-slot="skeleton"]')?.className).toContain("rounded-full");
+    expect(barsIn(cells[1])).toBe(3);
+    expect(barsIn(cells[2])).toBe(2);
+  });
+
+  it("uses a column's renderSkeleton override when provided", () => {
+    const columns: ColumnDef<Person, unknown>[] = [
+      {
+        id: "custom",
+        header: "Custom",
+        meta: { renderSkeleton: () => <div data-testid="custom-skeleton">loading</div> },
+        cell: () => null,
+      },
+    ];
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={columns} isLoading />);
+    expect(screen.getAllByTestId("custom-skeleton").length).toBeGreaterThan(0);
+  });
 });
 
 describe("DataTable column visibility", () => {
