@@ -525,7 +525,7 @@ class TestPerformRedaction:
         assert redacted_response.choices[0].message.content == "redacted-by-litellm"
 
     def test_redact_provider_specific_fields(self):
-        """Test that reasoning_content in provider_specific_fields is properly redacted."""
+        """The reasoning key inside provider_specific_fields is replaced with the redacted string."""
         result = {
             "choices": [
                 litellm.Choices(
@@ -543,3 +543,34 @@ class TestPerformRedaction:
 
         choice = redacted["choices"][0]
         assert choice.message.provider_specific_fields["reasoning"] == "redacted-by-litellm"
+
+    def test_redact_provider_specific_fields_nested_reasoning_keys(self):
+        """Regression: Anthropic (thinking_blocks) and Bedrock (reasoningContent,
+        reasoningContentBlocks) nest generated reasoning inside provider_specific_fields;
+        leaving them intact leaks reasoning to logging callbacks despite turn_off_message_logging."""
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "message content",
+                        "role": "assistant",
+                        "provider_specific_fields": {
+                            "thinking_blocks": [
+                                {"type": "thinking", "thinking": "secret chain of thought"}
+                            ],
+                            "reasoningContent": {"reasoningText": {"text": "secret bedrock reasoning"}},
+                            "reasoningContentBlocks": [
+                                {"reasoningText": {"text": "secret bedrock reasoning"}}
+                            ],
+                        },
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        psf = redacted["choices"][0]["message"]["provider_specific_fields"]
+        assert psf["thinking_blocks"] is None
+        assert psf["reasoningContent"] is None
+        assert psf["reasoningContentBlocks"] is None

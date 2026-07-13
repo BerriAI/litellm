@@ -42,13 +42,19 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
-def _redact_provider_specific_fields(fields: dict | None, redacted_str: str):
-    """Redact sensitive message-like fields within provider_specific_fields."""
+def _redact_provider_specific_fields(fields: dict | None, redacted_str: str) -> None:
+    """Redact generated reasoning nested in provider_specific_fields.
+
+    Providers mirror model reasoning here under their own names: Anthropic uses
+    thinking_blocks, Bedrock uses reasoningContent / reasoningContentBlocks."""
     if not isinstance(fields, dict):
         return
     for key in ("content", "reasoning", "reasoning_content"):
-        if key in fields and fields[key] is not None:
+        if fields.get(key) is not None:
             fields[key] = redacted_str
+    for key in ("thinking_blocks", "reasoningContent", "reasoningContentBlocks"):
+        if fields.get(key) is not None:
+            fields[key] = None
 
 
 def _redact_choice_content(choice):
@@ -179,9 +185,9 @@ def perform_redaction(model_call_details: dict, result):
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
-    for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-        if model_call_details.get("stream", False) is True and _streaming_key in model_call_details:
-            _streaming_response = model_call_details[_streaming_key]
+    if model_call_details.get("stream", False) is True:
+        for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
+            _streaming_response = model_call_details.get(_streaming_key)
             if _streaming_response is None:
                 continue
             if hasattr(_streaming_response, "choices"):
