@@ -786,8 +786,10 @@ async def test_agentic_plan_ignores_user_supplied_call_id(guardrail: CompresrGua
         kwargs={"litellm_call_id": "victim-tenant-call-id"},
     )
 
-    assert "victim-original" not in plan.request_patch.messages[-1]["content"]
-    assert "not found" in plan.request_patch.messages[-1]["content"]
+    # Attacker's scope resolves nothing, so the loop is vetoed and the victim
+    # original never surfaces.
+    assert plan.run_agentic_loop is False
+    assert plan.request_patch is None
 
 
 @pytest.mark.asyncio
@@ -821,10 +823,11 @@ async def test_recovery_store_partitioned_by_caller_identity(guardrail: Compresr
             logging_obj=_logging_obj_with_key(shared_call_id, "hash-tenant-A"),
         )
 
-    # Tenant B, same call id, different virtual-key hash → different bucket.
+    # Tenant B, same call id, different virtual-key hash → different bucket, so
+    # nothing resolves and the loop is vetoed (Tenant A's original never leaks).
     plan_b = await _plan_for("hash-tenant-B", "call_b")
-    assert TOOL_OUTPUT not in plan_b.request_patch.messages[-1]["content"]
-    assert "not found" in plan_b.request_patch.messages[-1]["content"]
+    assert plan_b.run_agentic_loop is False
+    assert plan_b.request_patch is None
 
     # Tenant A retrieves its own content successfully.
     plan_a = await _plan_for("hash-tenant-A", "call_a")
@@ -1120,9 +1123,79 @@ async def test_agentic_plan_rejects_hash_from_other_request(
         kwargs={},
     )
 
-    content = plan.request_patch.messages[-1]["content"]
-    assert "secret" not in content
-    assert "not found" in content
+    # Hash belongs to another caller's scope; the loop is vetoed and the secret
+    # never surfaces.
+    assert plan.run_agentic_loop is False
+    assert plan.request_patch is None
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_vetoed_when_no_recovery_state(guardrail: CompresrGuardrail):
+    # A caller-defined compresr_retrieve tool with no stored original must not
+    # trigger an extra provider round-trip.
+    hash_value = "f" * 24
+    response = _make_openai_response_with_tool_call(COMPRESR_RETRIEVE_TOOL_NAME, {"hash": hash_value}, tool_id="call_x")
+    plan = await guardrail.async_build_agentic_loop_plan(
+        tools={"tool_calls": [_retrieve_tool_call(hash_value, "call_x")]},
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "q"}],
+        response=response,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={},
+        logging_obj=_logging_obj("call-id-1"),
+        stream=False,
+        kwargs={},
+    )
+    assert plan.run_agentic_loop is False
+    assert plan.request_patch is None
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_dedupes_repeated_retrievals(guardrail: CompresrGuardrail):
+    # Retrieving the same marker many times expands the original once; repeats
+    # get a short marker (no follow-up amplification).
+    hash_value = "a" * 24
+    guardrail._store_originals(_scoped_store_key(_logging_obj("call-id-1")), {hash_value: TOOL_OUTPUT})
+    calls = [(COMPRESR_RETRIEVE_TOOL_NAME, {"hash": hash_value}, f"call_{i}") for i in range(5)]
+    plan = await guardrail.async_build_agentic_loop_plan(
+        tools={"tool_calls": [_retrieve_tool_call(hash_value, f"call_{i}") for i in range(5)]},
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "q"}],
+        response=_make_openai_response_with_tool_calls(calls),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={},
+        logging_obj=_logging_obj("call-id-1"),
+        stream=False,
+        kwargs={},
+    )
+    tool_results = [m for m in plan.request_patch.messages if m.get("role") == "tool"]
+    assert len(tool_results) == 5
+    assert sum(1 for m in tool_results if m["content"] == TOOL_OUTPUT) == 1
+    assert all("already retrieved" in m["content"] for m in tool_results if m["content"] != TOOL_OUTPUT)
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_caps_retrieval_count(guardrail: CompresrGuardrail):
+    # Beyond _MAX_RETRIEVALS_PER_LOOP retrievals, extra calls get a bounded marker.
+    n = 10
+    hashes = [f"{i:024x}" for i in range(n)]
+    guardrail._store_originals(_scoped_store_key(_logging_obj("call-id-1")), {h: f"original-{h}" for h in hashes})
+    calls = [(COMPRESR_RETRIEVE_TOOL_NAME, {"hash": h}, f"call_{i}") for i, h in enumerate(hashes)]
+    plan = await guardrail.async_build_agentic_loop_plan(
+        tools={"tool_calls": [_retrieve_tool_call(h, f"call_{i}") for i, h in enumerate(hashes)]},
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "q"}],
+        response=_make_openai_response_with_tool_calls(calls),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={},
+        logging_obj=_logging_obj("call-id-1"),
+        stream=False,
+        kwargs={},
+    )
+    tool_results = [m for m in plan.request_patch.messages if m.get("role") == "tool"]
+    assert len(tool_results) == n
+    over_limit = [m for m in tool_results if "retrieval limit reached" in m["content"]]
+    assert len(over_limit) == n - 8  # only the first 8 expand
 
 
 def test_display_hash_strips_control_characters():
@@ -1795,6 +1868,8 @@ async def test_max_tokens_zero_from_optional_params_wins_over_kwargs():
     # max_tokens=0 from optional_params fell through to kwargs["max_tokens"].
     # Must use `is not None`.
     guardrail = _make_guardrail()
+    hash_value = "deadbeef"
+    guardrail._store_originals(_scoped_store_key(_logging_obj("call-1")), {hash_value: TOOL_OUTPUT})
     response = MagicMock()
     response.content = [{"type": "tool_use", "id": "toolu_1"}]
     plan = await guardrail.async_build_agentic_loop_plan(
@@ -1804,7 +1879,7 @@ async def test_max_tokens_zero_from_optional_params_wins_over_kwargs():
                     "id": "toolu_1",
                     "type": "function",
                     "name": COMPRESR_RETRIEVE_TOOL_NAME,
-                    "arguments": {"hash": "deadbeef"},
+                    "arguments": {"hash": hash_value},
                 }
             ]
         },
