@@ -6,8 +6,11 @@ Tests cover:
 - x-headroom-bypass: true header causes guardrail to skip compression
 - missing or empty messages are passed through unchanged
 - response-type input is passed through unchanged
-- /v1/compress HTTP error raises HTTPException
+- /v1/compress HTTP error raises HTTPException (fail_closed, the default)
 - /v1/compress returning malformed JSON raises HTTPException
+- /v1/compress non-2xx surfaces as httpx.HTTPStatusError (raise_for_status),
+  not a status_code check on the returned response -- both are handled
+- unreachable_fallback="fail_open" forwards the request uncompressed instead of raising
 - CCR: headroom_retrieve tool injected when compressed messages contain hashes
 - CCR: async_should_run_agentic_loop returns True when response has headroom_retrieve tool calls
 - CCR: async_build_agentic_loop_plan calls retrieve endpoint and builds follow-up messages
@@ -20,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import HTTPException
+
+import litellm
 
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
@@ -806,6 +811,244 @@ async def test_apply_guardrail_transport_error_raises():
     assert "unreachable" in str(exc_info.value.detail)
 
 
+def _make_http_status_error(status: int, body: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", f"{FAKE_API_BASE}/v1/compress")
+    response = httpx.Response(status, request=request, text=body)
+    return httpx.HTTPStatusError(
+        f"Server error '{status}' for url",
+        request=request,
+        response=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_status_error_raises():
+    """Regression test: litellm's async httpx client calls raise_for_status()
+    internally, so a non-2xx /v1/compress response surfaces as
+    httpx.HTTPStatusError, not as a returned MagicMock with status_code set.
+    A prior version of _call_compress only checked response.status_code and
+    never caught this exception, so it went unhandled instead of blocking
+    the request per fail_closed policy."""
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_status_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_transport_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ConnectError("Connection refused"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    mock_response = _make_compress_response([], status=500)
+    mock_response.text = "Internal Server Error"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_non_json_response_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.side_effect = ValueError("not JSON")
+    mock_response.text = "<!DOCTYPE html><html>not json</html>"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_missing_messages_key_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"tokens_before": 100, "tokens_after": 10}
+    mock_response.text = "{}"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_empty_compressed_messages_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "messages": ["not-a-dict", 42, None],
+        "tokens_before": 1000,
+        "tokens_after": 0,
+        "compression_ratio": 0,
+    }
+    mock_response.text = "{}"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fail_open_does_not_register_hashes_from_original_messages():
+    """When compression fails with fail_open, user-supplied messages that
+    happen to contain hash-shaped strings must NOT cause those hashes to be
+    registered as valid for CCR retrieval. Otherwise an attacker can plant a
+    hash= string in their prompt, trigger a compression failure, and have
+    that hash honored by a later headroom_retrieve tool call."""
+    messages_with_fake_hash = [
+        {"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me"},
+    ]
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=messages_with_fake_hash,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ConnectError("Connection refused"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == messages_with_fake_hash
+    assert not has_headroom_retrieve_tool(result.get("tools") or [])
+    assert not guardrail._issued_hashes_by_call_id
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_missing_messages_key_raises():
     guardrail = _make_guardrail()
@@ -873,6 +1116,16 @@ async def test_apply_guardrail_empty_compressed_messages_raises():
 def test_init_raises_without_api_base():
     with pytest.raises(ValueError, match="API base URL"):
         HeadroomGuardrail(api_base=None)
+
+
+def test_init_defaults_to_fail_closed():
+    guardrail = _make_guardrail()
+    assert guardrail.unreachable_fallback == "fail_closed"
+
+
+def test_init_rejects_invalid_unreachable_fallback_value():
+    guardrail = _make_guardrail(unreachable_fallback="not-a-real-mode")
+    assert guardrail.unreachable_fallback == "fail_closed"
 
 
 def test_bypass_header_case_insensitive():
@@ -1059,3 +1312,61 @@ async def test_async_should_run_agentic_loop_detects_responses_api_output_format
     assert should_run is True
     assert len(ctx["tool_calls"]) == 1
     assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_litellm_timeout_raises_when_fail_closed():
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=litellm.Timeout(
+            message="Connection timed out after 10 seconds.",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert "unreachable" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=litellm.Timeout(
+            message="Connection timed out after 10 seconds.",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES

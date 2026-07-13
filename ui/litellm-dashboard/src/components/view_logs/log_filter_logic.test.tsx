@@ -218,6 +218,7 @@ describe("useLogFilterLogic", () => {
       { filterKey: "Team ID", paramName: "team_id", value: "team-a" },
       { filterKey: "Key Hash", paramName: "api_key", value: "key-x" },
       { filterKey: "Request ID", paramName: "request_id", value: "req-xyz" },
+      { filterKey: "Session ID", paramName: "session_id", value: "sess-42" },
       { filterKey: "User ID", paramName: "user_id", value: "user-123" },
       { filterKey: "End User", paramName: "end_user", value: "user-a" },
       { filterKey: "Status", paramName: "status_filter", value: "error" },

@@ -110,14 +110,11 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         <Form
           form={form}
           onFinish={async (values) => {
-            console.log("🔥 Form onFinish triggered with values:", values);
             await handleOk().then(() => {
               setTeamAdminSelectedTeam(null);
             });
           }}
-          onFinishFailed={(errorInfo) => {
-            console.log("💥 Form onFinishFailed triggered:", errorInfo);
-          }}
+          onFinishFailed={(errorInfo) => {}}
           labelCol={{ span: 10 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -260,7 +257,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 >
                   {({ getFieldValue }) => {
                     const credentialName = getFieldValue("litellm_credential_name");
-                    console.log("🔑 Credential Name Changed:", credentialName);
                     // Only show provider specific fields if no credentials selected
                     if (!credentialName) {
                       return (

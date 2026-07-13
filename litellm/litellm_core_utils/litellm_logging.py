@@ -1530,6 +1530,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aembedding.value, False) is not True
             and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
+            and litellm_params.get(CallTypes.allm_passthrough_route.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:

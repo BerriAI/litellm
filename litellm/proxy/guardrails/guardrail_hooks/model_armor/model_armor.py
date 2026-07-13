@@ -39,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    CallTypes,
     CallTypesLiteral,
     Choices,
     GuardrailStatus,
@@ -59,6 +60,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     - Post-call sanitization (sanitizeModelResponse)
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]
+
     def __init__(
         self,
         template_id: Optional[str] = None,
@@ -75,6 +86,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
             ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         # Initialize parent classes first
         super().__init__(**kwargs)
@@ -477,6 +489,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         event_type = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
@@ -574,6 +588,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         event_type = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 

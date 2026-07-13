@@ -2940,3 +2940,127 @@ def test_accumulated_responses_are_redactable_as_a_list():
     assert "secret-one" not in blob
     assert "secret-two" not in blob
     assert blob.count("[REDACTED]") == 2
+
+
+def _mcp_synthetic_data(tool_name: str = "send_email", arguments: dict = None):
+    """Mirror ProxyLogging._convert_mcp_to_llm_format: an MCP tool call rendered as a
+    synthetic user message so the existing prompt-scanning path can inspect it."""
+    if arguments is None:
+        arguments = {"to": "user@example.com", "body": "some content"}
+    return {
+        "model": "mcp-tool-call",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Tool: {tool_name}\nArguments: {arguments}",
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+        "mcp_tool_name": tool_name,
+        "mcp_arguments": arguments,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_mcp_tool_call_when_configured_for_pre_mcp_call():
+    """A guardrail configured with mode `pre_mcp_call` must scan MCP tool calls.
+
+    Regression: async_pre_call_hook hardcoded its event-type gate to `pre_call`, so a
+    `pre_mcp_call` guardrail's own inner should_run_guardrail check returned False for an
+    MCP call (call_type=call_mcp_tool) and the scan was skipped entirely -- letting
+    sensitive content in tool arguments through unscanned. The gate must remap
+    call_mcp_tool -> pre_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call():
+    """A `pre_mcp_call` guardrail must NOT scan ordinary chat completions -- the remap is
+    scoped to MCP calls, so a `completion` call_type still fails the gate and is skipped."""
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_scans_mcp_tool_call_when_configured_for_during_mcp_call():
+    """A guardrail configured with mode `during_mcp_call` must scan MCP tool calls.
+
+    Regression: async_moderation_hook hardcoded its event-type gate to `during_call`, so a
+    `during_mcp_call` guardrail skipped MCP calls (call_type=call_mcp_tool). The gate must
+    remap call_mcp_tool -> during_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_skips_chat_traffic_when_configured_for_during_mcp_call():
+    """A `during_mcp_call` guardrail must NOT scan ordinary chat completions."""
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()

@@ -379,6 +379,7 @@ budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
 default_soft_budget: float = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
+budget_exceeded_throttle_percentage: Optional[float] = None
 forward_traceparent_to_llm_provider: bool = False
 
 

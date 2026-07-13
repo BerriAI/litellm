@@ -39,6 +39,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}
+    budget_fallbacks: dict[str, list[str]] = {}
     soft_budget_cooldown: bool = False
     blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None

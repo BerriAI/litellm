@@ -77,7 +77,6 @@ export const teamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list teams:", error);
@@ -225,7 +224,6 @@ const deletedTeamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/team/list?status=deleted API Response:", data);
 
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array

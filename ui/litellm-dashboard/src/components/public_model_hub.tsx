@@ -206,7 +206,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setLoading(true);
           const _modelHubData = await modelHubPublicModelsCall();
-          console.log("ModelHubData:", _modelHubData);
           setModelHubData(Array.isArray(_modelHubData) ? _modelHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public model data", error);
@@ -220,7 +219,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setAgentLoading(true);
           const _agentHubData = await agentHubPublicModelsCall();
-          console.log("AgentHubData:", _agentHubData);
           setAgentHubData(Array.isArray(_agentHubData) ? _agentHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public agent data", error);
@@ -233,7 +231,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setMcpLoading(true);
           const _mcpHubData = await mcpHubPublicServersCall();
-          console.log("MCPHubData:", _mcpHubData);
           setMcpHubData(Array.isArray(_mcpHubData) ? _mcpHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public MCP server data", error);
@@ -244,7 +241,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
       const fetchPublicModelHubInfo = async () => {
         const publicModelHubInfo = await getPublicModelHubInfo();
-        console.log("Public Model Hub Info:", publicModelHubInfo);
         setPageTitle(publicModelHubInfo.docs_title);
         setCustomDocsDescription(publicModelHubInfo.custom_docs_description);
         setLitellmVersion(publicModelHubInfo.litellm_version);

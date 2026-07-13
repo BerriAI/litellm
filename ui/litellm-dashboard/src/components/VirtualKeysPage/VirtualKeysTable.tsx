@@ -4,6 +4,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
@@ -13,20 +14,10 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
+import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
+import { Button as AntButton, Popover, Skeleton, Typography } from "antd";
+import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import React, { useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
@@ -74,7 +65,7 @@ export function VirtualKeysTable() {
     pageSize: 50,
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
-  const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
+  const [debouncedFilters] = useDebouncedValue(filters, { wait: DEBOUNCE_WAIT_MS });
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -145,23 +136,7 @@ export function VirtualKeysTable() {
         header: "Key ID",
         size: 100,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
-              >
-                {value ?? "-"}
-              </Button>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <IdCell value={info.getValue() as string} onClick={() => setSelectedKey(info.row.original)} />,
       },
       {
         id: "key_alias",
@@ -187,22 +162,14 @@ export function VirtualKeysTable() {
         cell: ({ row }) => {
           const key = row.original;
           if (key.blocked !== true) {
-            return (
-              <Tag color="green" data-testid={`key-status-${key.token_id}`}>
-                Active
-              </Tag>
-            );
+            return <StatusBadge tone="success" label="Active" dataTestId={`key-status-${key.token_id}`} />;
           }
           const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
           const reason = isScimBlocked
             ? "Blocked by SCIM (external identity provider deactivated or deleted the owning user)."
             : "Blocked. Requests using this key will be rejected with 401.";
           return (
-            <Tooltip title={reason}>
-              <Tag color="red" data-testid={`key-status-${key.token_id}`}>
-                Blocked
-              </Tag>
-            </Tooltip>
+            <StatusBadge tone="error" label="Blocked" tooltip={reason} dataTestId={`key-status-${key.token_id}`} />
           );
         },
       },
@@ -323,10 +290,7 @@ export function VirtualKeysTable() {
         header: "Created At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "-";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
       },
       {
         id: "created_by",
@@ -394,10 +358,7 @@ export function VirtualKeysTable() {
         header: "Updated At",
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "last_active",
@@ -415,16 +376,7 @@ export function VirtualKeysTable() {
         ),
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          if (!value) return "Unknown";
-          const date = new Date(value as string);
-          return (
-            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
-              <span>{date.toLocaleDateString()}</span>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
       },
       {
         id: "expires",
@@ -432,10 +384,7 @@ export function VirtualKeysTable() {
         header: "Expires",
         size: 120,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
         id: "spend",
@@ -443,7 +392,7 @@ export function VirtualKeysTable() {
         header: "Spend (USD)",
         size: 100,
         enableSorting: true,
-        cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
+        cell: (info) => <MoneyCell value={info.getValue() as number} decimals={4} />,
       },
       {
         id: "max_budget",
@@ -470,10 +419,7 @@ export function VirtualKeysTable() {
         header: "Budget Reset",
         size: 130,
         enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleString() : "Never";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
       },
       {
         id: "models",
@@ -633,7 +579,7 @@ export function VirtualKeysTable() {
     },
     {
       name: "Key Hash",
-      label: "Key Hash",
+      label: "Key ID",
       isSearchable: false,
     },
   ];

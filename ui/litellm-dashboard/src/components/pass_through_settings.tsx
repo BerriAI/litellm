@@ -7,6 +7,7 @@ import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
 import { ColumnDef } from "@tanstack/react-table";
+import { IdCell, StatusBadge } from "@/components/shared/table_cells";
 import { Eye, EyeOff } from "lucide-react";
 import NotificationsManager from "./molecules/notifications_manager";
 
@@ -136,16 +137,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     {
       header: "ID",
       accessorKey: "id",
-      cell: (info: any) => (
-        <Tooltip title={info.row.original.id}>
-          <div
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-            onClick={() => info.row.original.id && setSelectedEndpointId(info.row.original.id)}
-          >
-            {info.row.original.id}
-          </div>
-        </Tooltip>
-      ),
+      cell: (info: any) => <IdCell value={info.row.original.id} onClick={setSelectedEndpointId} />,
     },
     {
       header: "Path",
@@ -192,7 +184,9 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
         </div>
       ),
       accessorKey: "auth",
-      cell: (info: any) => <Badge color={info.getValue() ? "green" : "gray"}>{info.getValue() ? "Yes" : "No"}</Badge>,
+      cell: (info: any) => (
+        <StatusBadge tone={info.getValue() ? "success" : "neutral"} label={info.getValue() ? "Yes" : "No"} />
+      ),
     },
     {
       header: "Headers",
@@ -228,8 +222,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   // If a specific endpoint is selected, show the info view
   if (selectedEndpointId) {
     // Find the endpoint by ID to get the endpoint data for the info view
-    console.log("selectedEndpointId", selectedEndpointId);
-    console.log("generalSettings", generalSettings);
     const selectedEndpoint = generalSettings.find((endpoint) => endpoint.id === selectedEndpointId);
 
     if (!selectedEndpoint) {
@@ -265,8 +257,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       <DataTable
         data={generalSettings}
         columns={columns}
-        renderSubComponent={() => <div></div>}
-        getRowCanExpand={() => false}
         isLoading={false}
         noDataMessage="No pass-through endpoints configured"
       />

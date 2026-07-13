@@ -1618,6 +1618,14 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str] = None,
         user_api_key_org_id: Optional[str] = None,
     ):
+        if (
+            isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
+        ):
+            return
+
         _metadata = litellm_params.get("metadata") or {}
         _team_spend = _metadata.get("user_api_key_team_spend", None)
         _team_max_budget = _metadata.get("user_api_key_team_max_budget", None)
@@ -2043,6 +2051,43 @@ class PrometheusLogger(CustomLogger):
 
         return False
 
+    @staticmethod
+    def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
+        """
+        Best-effort provider for the client-side failure path.
+
+        A request can fail before a deployment is resolved, so the provider is
+        not always known. Prefer the resolved ``custom_llm_provider`` on
+        ``litellm_params``, then any provider recovered onto a partial
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
+        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``openai``) since the proxy's failure ``request_data`` usually carries
+        only the client-supplied model. Return ``None`` when it cannot be
+        determined so the label emits empty rather than a guess.
+        """
+        litellm_params = request_data.get("litellm_params") or {}
+        provider = litellm_params.get("custom_llm_provider")
+        if provider:
+            return provider
+        standard_logging_object = request_data.get("standard_logging_object") or {}
+        provider = standard_logging_object.get("custom_llm_provider")
+        if provider:
+            return provider
+        model = litellm_params.get("model") or request_data.get("model")
+        if not model:
+            return None
+        try:
+            return litellm.get_llm_provider(model=model)[1] or None
+        except litellm.exceptions.BadRequestError:
+            return None
+        except Exception as e:  # noqa: BLE001 - metrics labeling must never break request/failure handling
+            verbose_logger.debug(
+                "prometheus: unexpected error inferring api_provider from model=%s: %s",
+                model,
+                e,
+            )
+            return None
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -2078,6 +2123,7 @@ class PrometheusLogger(CustomLogger):
             _metadata = request_data.get("metadata", {}) or {}
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
+            api_provider = self._extract_api_provider_from_request_data(request_data)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2099,6 +2145,7 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)
@@ -3293,6 +3340,9 @@ class PrometheusLogger(CustomLogger):
             - looks up team info from db if not available in metadata
         - Set team budget metrics
         """
+        if isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric):
+            return
+
         if user_api_team:
             team_object = await self._assemble_team_object(
                 team_id=user_api_team,
@@ -3414,6 +3464,9 @@ class PrometheusLogger(CustomLogger):
         - Fetches org info via cache (get_org_object)
         - Sets org budget metrics
         """
+        if isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric):
+            return
+
         if not org_id:
             return
 
@@ -3543,6 +3596,9 @@ class PrometheusLogger(CustomLogger):
         key_max_budget: Optional[float],
         key_spend: Optional[float],
     ):
+        if isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric):
+            return
+
         if user_api_key:
             user_api_key_dict = await self._assemble_key_object(
                 user_api_key=user_api_key,
@@ -3580,6 +3636,7 @@ class PrometheusLogger(CustomLogger):
                     hashed_token=user_api_key_dict.token,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    check_cache_only=True,
                 )
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
@@ -3602,6 +3659,9 @@ class PrometheusLogger(CustomLogger):
             - looks up user info from db if not available in metadata
         - Set user budget metrics
         """
+        if isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric):
+            return
+
         if user_id:
             user_object = await self._assemble_user_object(
                 user_id=user_id,

@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
 import anyio
+import httpx
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -56,7 +57,11 @@ from litellm.proxy._experimental.mcp_server.elicitation_handler import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
+from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    MCPPerUserTokenCache,
+    mcp_per_user_token_cache,
+    resolve_mcp_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     Ok,
@@ -64,15 +69,25 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_token_exchange_challenge,
     raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    InvalidatableOAuthTokenStore,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
+    build_token_exchanger,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    PassthroughConfig,
+    ServerSpec,
+    TokenExchangeConfig,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -105,10 +120,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPStdioConfig
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
@@ -160,6 +175,16 @@ _user_env_vars_cache: dict[tuple[str, str], tuple[dict[str, str], float]] = {}
 _USER_ENV_VARS_CACHE_TTL = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 
+# Auth types whose upstream OAuth endpoints (protected-resource + authorization-server metadata) the
+# gateway discovers from the upstream itself: interactive oauth2 and the two client-forwarded modes.
+# OBO/M2M endpoint discovery is decided separately via _obo_needs_endpoint_discovery. Shared by the
+# config-YAML and DB server loaders so the two paths cannot drift on which modes trigger discovery.
+_UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
+    MCPAuth.oauth2,
+    MCPAuth.true_passthrough,
+    MCPAuth.oauth_delegate,
+)
+
 
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
     """Drop a cached entry after the user stores or clears their env var values
@@ -206,7 +231,18 @@ def _should_strip_caller_authorization(
       pass-through cold-start case (RFC 9728) the bearer in
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
+    - **oauth_delegate servers**: admission always runs and there is no
+      anonymous path, so the caller's separate ``Authorization`` is
+      forwarded only when a distinct ``x-litellm-api-key`` carried
+      admission. Without that header the ``Authorization`` *was* the
+      admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
+      session token whose ``api_key`` is ``None`` — and must never reach
+      the upstream, so it is stripped regardless of the ``api_key`` value.
     """
+    if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        # OBO: the inbound Authorization is the subject token. It is exchanged at the IdP and only the
+        # exchanged token is sent upstream, so the raw caller bearer must never be forwarded.
+        return True
     if mcp_server.has_client_credentials:
         return True
     if mcp_server.auth_type == MCPAuth.oauth2 and to_server_spec(mcp_server) is not None:
@@ -215,11 +251,13 @@ def _should_strip_caller_authorization(
         # upstream — it would override another user's stored credential. Delegate and
         # pass-through return None from to_server_spec and keep forwarding the bearer.
         return True
-    if not mcp_server.is_oauth_passthrough:
+    if not (mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate):
         return False
 
     normalized_raw_headers = {str(k).lower(): v for k, v in (raw_headers or {}).items() if isinstance(k, str)}
     has_explicit_litellm_admission_header = normalized_raw_headers.get("x-litellm-api-key") is not None
+    if mcp_server.is_oauth_delegate:
+        return not has_explicit_litellm_admission_header
     admission_consumed_authorization_as_litellm_key = (
         user_api_key_auth is not None
         and bool(getattr(user_api_key_auth, "api_key", None))
@@ -240,6 +278,159 @@ def _without_authorization(
         return None
     filtered = {k: v for k, v in headers.items() if k.lower() != "authorization"}
     return filtered or None
+
+
+def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    if mcp_server.auth_type == MCPAuth.api_key:
+        return f"ApiKey {mcp_auth_header}"
+    if mcp_server.auth_type == MCPAuth.basic:
+        return f"Basic {mcp_auth_header}"
+    return f"Bearer {mcp_auth_header}"
+
+
+def _openapi_forwarded_extra_headers(
+    mcp_server: MCPServer,
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Optional[dict[str, str]]:
+    if not mcp_server.extra_headers or not raw_headers:
+        return None
+    normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
+    skip_caller_authorization = _should_strip_caller_authorization(
+        mcp_server=mcp_server,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+    )
+    forwarded: dict[str, str] = {}
+    for header_name in mcp_server.extra_headers:
+        if not isinstance(header_name, str):
+            continue
+        if skip_caller_authorization and header_name.lower() == "authorization":
+            continue
+        value = normalized_raw.get(header_name.lower())
+        if value is not None:
+            forwarded[header_name] = value
+    return forwarded or None
+
+
+async def _resolve_byok_mcp_auth_header(
+    mcp_server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+    mcp_auth_header: Optional[str],
+) -> Optional[str]:
+    """Resolve BYOK credential for tool calls that bypass ``execute_mcp_tool``."""
+    if not mcp_server.is_byok:
+        return mcp_auth_header
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        _check_byok_credential,
+        _get_byok_credential,
+    )
+
+    if not mcp_auth_header:
+        byok_cred = await _get_byok_credential(mcp_server, user_api_key_auth)
+        if byok_cred is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "byok_auth_required",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": (
+                        "No stored credential found for this BYOK server. "
+                        "Complete the OAuth authorization flow to provide your API key."
+                    ),
+                },
+                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+            )
+        return byok_cred
+
+    await _check_byok_credential(mcp_server, user_api_key_auth)
+    return mcp_auth_header
+
+
+def _client_forwarded_authorization_headers(
+    mcp_server: MCPServer,
+    oauth2_headers: Optional[dict[str, str]],
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Optional[dict[str, str]]:
+    """Egress headers for the client-forwarded-token modes (``true_passthrough`` / ``oauth_delegate``).
+
+    Forwards the caller's ``Authorization`` to the upstream, stripped when
+    ``_should_strip_caller_authorization`` says it was consumed as the LiteLLM admission key. Shared by
+    ``_call_regular_mcp_tool`` and ``server.py``'s ``_prepare_mcp_server_headers`` so the two egress
+    paths cannot drift, mirroring the ``_should_strip_caller_authorization`` split.
+    """
+    extra_headers = oauth2_headers.copy() if oauth2_headers else None
+    if extra_headers and _should_strip_caller_authorization(
+        mcp_server=mcp_server,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+    ):
+        return _without_authorization(extra_headers)
+    return extra_headers
+
+
+def _take_forwarded_authorization(
+    headers: Optional[dict[str, str]],
+) -> tuple[Optional[str], Optional[dict[str, str]]]:
+    """Pop the ``Authorization`` value out of ``headers`` (case-insensitive), returning it with the
+    remaining headers, so the passthrough resolver arm is the single Authorization source rather than
+    the header also riding in ``extra_headers`` (which the resolved auth would then defer to)."""
+    if not headers:
+        return None, headers
+    value = next((v for k, v in headers.items() if k.lower() == "authorization"), None)
+    return value, _without_authorization(headers)
+
+
+def _passthrough_token_from_mcp_auth_header(
+    mcp_auth_header: Optional[Union[str, dict[str, str]]],
+) -> Optional[str]:
+    """The caller's per-server upstream credential for a passthrough-mode server, or None.
+
+    Sourced from ``x-mcp-{alias}-authorization`` (string or per-header dict form) or the deprecated
+    global ``x-mcp-auth`` fallback. Per-server headers are the multi-server shape: they bind one
+    token to one server, so an aggregate scope with several passthrough-mode servers never replays
+    a single credential across upstreams. The value is forwarded verbatim, so it must be the full
+    header value (e.g. ``Bearer <upstream-token>``)."""
+    if isinstance(mcp_auth_header, str):
+        return mcp_auth_header or None
+    if isinstance(mcp_auth_header, dict):
+        return next((v for k, v in mcp_auth_header.items() if k.lower() == "authorization"), None)
+    return None
+
+
+def _consumes_caller_authorization(server: MCPServer) -> bool:
+    """True when this server's egress forwards the caller's request-wide ``Authorization`` upstream:
+    the client-forwarded token modes, legacy OAuth pass-through, and legacy upstream-delegated
+    interactive oauth2. An unstamped oauth2 row (flow column not yet backfilled) reads as a consumer,
+    which errs toward suppression — the fail-safe direction."""
+    if server.is_true_passthrough or server.is_oauth_delegate or server.is_oauth_passthrough:
+        return True
+    return (
+        server.auth_type == MCPAuth.oauth2
+        and getattr(server, "delegate_auth_to_upstream", False) is True
+        and not server.has_client_credentials
+    )
+
+
+def _caller_authorization_fans_out(
+    server: MCPServer,
+    scope_servers: Optional[list[MCPServer]],
+) -> bool:
+    """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
+    listing fan-out would replay one credential against multiple upstreams: another server in the
+    scope also consumes it (RFC 9700 cross-resource replay). ``scope_servers`` is None for
+    explicitly-addressed operations (tool call, get_prompt, read_resource, single-server routes),
+    where the client named the one target and the gateway is not choosing recipients."""
+    if scope_servers is None:
+        return False
+    return any(
+        other is not None and other.server_id != server.server_id and _consumes_caller_authorization(other)
+        for other in scope_servers
+    )
 
 
 def _extract_upstream_auth_failure(
@@ -501,6 +692,21 @@ class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
     @staticmethod
+    def _explicit_oauth2_flow(
+        oauth2_flow: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """DB rows persist their flow (write-time stamps plus the startup backfill) and
+        config servers must declare it (validated at load), so both builds read the
+        value verbatim: unknown or null resolves to None, which
+        ``needs_user_oauth_token`` already treats as interactive. Field-shape inference
+        survives only in the request-time security helpers (``effective_oauth2_flow`` /
+        ``resolve_oauth2_flow_for_request``).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
+        return None
+
+    @staticmethod
     def _resolve_oauth2_flow(
         *,
         auth_type: Optional[MCPAuthType],
@@ -510,11 +716,18 @@ class MCPServerManager:
         client_id: Optional[str],
         client_secret: Optional[str],
     ) -> Optional[Literal["client_credentials", "authorization_code"]]:
-        """Infer oauth2_flow for legacy records that omit the field.
+        """Infer oauth2_flow from field shape when the value is omitted.
 
-        DB rows created before oauth2_flow support may have OAuth2 client
-        credentials + token_url but a null oauth2_flow. Treat these as M2M,
-        unless authorization_url is present (interactive OAuth).
+        SECURITY-SENSITIVE: this is the shape-inference engine both request-time security
+        helpers delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
+        Always access it through ``effective_oauth2_flow`` (boolean/enum decisions) or
+        ``resolve_oauth2_flow_for_request`` (the egress object backstop), which are the single
+        choke points for request-time resolution; do not call it directly from security sites
+        and do not weaken its M2M-shape branch without accounting for those callers. DB rows
+        are stamped at write time and by the startup backfill, config servers must declare
+        oauth2_flow (validated at load), and both builds read the value verbatim via
+        ``_explicit_oauth2_flow``. Delete this whole request-time layer only once the backstop
+        warning stays silent in production.
         """
         if oauth2_flow in ("client_credentials", "authorization_code"):
             return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
@@ -529,9 +742,76 @@ class MCPServerManager:
             return "client_credentials"
         return None
 
-    def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
+    @staticmethod
+    def effective_oauth2_flow(server: "MCPServer") -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """The oauth2_flow a security decision must use for ``server`` this request.
+
+        Column-first, shape-fallback: a stamped row returns its explicit value; an
+        unstamped (null) row whose fields carry the M2M shape resolves to
+        ``client_credentials`` so it is treated as M2M and fails closed. Every
+        security-sensitive reader (anonymous-delegate allowlist and gate, egress flow
+        resolution) goes through this one helper rather than reading the bare
+        ``has_client_credentials`` column, which is unreliable for null rows.
+        """
+        return MCPServerManager._resolve_oauth2_flow(
+            auth_type=server.auth_type,
+            oauth2_flow=server.oauth2_flow,
+            token_url=server.token_url,
+            authorization_url=server.authorization_url,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
+
+    @staticmethod
+    def resolve_oauth2_flow_for_request(server: "MCPServer") -> "MCPServer":
+        """Return ``server`` with its effective oauth2_flow applied, for egress paths.
+
+        A stamped row is returned unchanged (its effective flow equals the stored value).
+        An unstamped M2M-shape row is returned as a per-request copy carrying
+        ``oauth2_flow=client_credentials`` so downstream ``has_client_credentials`` /
+        ``needs_user_oauth_token`` compute correctly and the stored client credentials are
+        used instead of forwarding the caller's Authorization. Use this at every point that
+        resolves an allowed server id into an ``MCPServer`` for a tool call or listing.
+        """
+        effective = MCPServerManager.effective_oauth2_flow(server)
+        if effective is None or effective == server.oauth2_flow:
+            return server
+        verbose_logger.warning(
+            "MCP server %s has no persisted oauth2_flow but matches the %s shape; using the "
+            "inferred flow for this request. The startup backfill leaves this ambiguous M2M "
+            "shape unstamped on purpose, so it will NOT self-heal: set oauth2_flow explicitly "
+            "in the dashboard or via PUT /v1/mcp/server (client_credentials for M2M, or "
+            "authorization_code after an interactive sign-in).",
+            server.server_id,
+            effective,
+        )
+        return server.model_copy(update={"oauth2_flow": effective})
+
+    @staticmethod
+    def _obo_needs_endpoint_discovery(
+        auth_type: Optional[MCPAuthType],
+        token_exchange_endpoint: Optional[str],
+        token_url: Optional[str],
+    ) -> bool:
+        """An ``oauth2_token_exchange`` server with no configured token endpoint can have it
+        discovered (RFC 9728 -> RFC 8414) the same way the ``oauth2`` flow already does; an explicitly
+        configured ``token_exchange_endpoint``/``token_url`` wins and skips the discovery round-trip.
+        """
+        return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
+
+    def __init__(
+        self,
+        cred_provider: Optional[UpstreamCredentialProvider] = None,
+        per_user_oauth_token_store: Optional[InvalidatableOAuthTokenStore] = None,
+        per_user_token_cache: Optional[MCPPerUserTokenCache] = None,
+    ):
+        self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
+            self.get_mcp_server_by_id
+        )
+        self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
+            oauth_token_store=self._per_user_oauth_token_store,
+            token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -554,8 +834,10 @@ class MCPServerManager:
         # Per-server outbound tool-call concurrency limiters, lazily created from
         # each server's max_concurrent_requests. Keyed by server_id so the cap
         # survives the registry atomic-swap on config reload; a missing key means
-        # the server has no configured limit.
-        self._server_call_semaphores: dict[str, asyncio.Semaphore] = {}
+        # the server has no configured limit. The limit is cached alongside the
+        # semaphore so an edited limit rebuilds it instead of keeping the old cap
+        # until restart.
+        self._server_call_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
         self.tool_name_to_mcp_server_name_mapping: dict[str, str] = {}
         """
         {
@@ -717,14 +999,27 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
+            if server_url and (
+                auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+                or self._obo_needs_endpoint_discovery(
+                    auth_type,
+                    server_config.get("token_exchange_endpoint"),
+                    server_config.get("token_url"),
+                )
+            ):
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
+                    allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
                 )
             else:
                 mcp_oauth_metadata = None
 
-            resolved_scopes = server_config.get("scopes") or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+            # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
+            # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
+            # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
+            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
+                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+            )
             resolved_authorization_url = server_config.get("authorization_url") or (
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
@@ -734,6 +1029,38 @@ class MCPServerManager:
             resolved_registration_url = server_config.get("registration_url") or (
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
+
+            config_oauth2_flow = server_config.get("oauth2_flow", None)
+            if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
+                "client_credentials",
+                "authorization_code",
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': auth_type oauth2 "
+                    f"requires an explicit oauth2_flow (got {config_oauth2_flow!r}). Set "
+                    "oauth2_flow: client_credentials for machine-to-machine servers (the proxy mints "
+                    "a shared token at token_url using client_id/client_secret, no user interaction) "
+                    "or oauth2_flow: authorization_code for interactive servers (per-user tokens via "
+                    "browser sign-in, including delegate_auth_to_upstream)."
+                )
+
+            config_dcr_bridge = server_config.get("dcr_bridge", None)
+            if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
+                    f"must be a boolean (got {config_dcr_bridge!r})."
+                )
+            if config_dcr_bridge and auth_type not in (
+                MCPAuth.true_passthrough,
+                MCPAuth.oauth_delegate,
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge is only "
+                    f"supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+                    "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded "
+                    "token modes; interactive oauth2 servers already run the gateway "
+                    "authorization-code flow."
+                )
 
             new_server = MCPServer(
                 server_id=server_id,
@@ -748,14 +1075,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=self._resolve_oauth2_flow(
-                    auth_type=auth_type,
-                    oauth2_flow=server_config.get("oauth2_flow", None),
-                    token_url=resolved_token_url,
-                    authorization_url=resolved_authorization_url,
-                    client_id=server_config.get("client_id", None),
-                    client_secret=server_config.get("client_secret", None),
-                ),
+                oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -777,6 +1097,7 @@ class MCPServerManager:
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
+                dcr_bridge=config_dcr_bridge,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -791,8 +1112,9 @@ class MCPServerManager:
                 audience=server_config.get("audience", None),
                 subject_token_type=server_config.get(
                     "subject_token_type",
-                    "urn:ietf:params:oauth:token-type:access_token",
+                    DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
@@ -1097,9 +1419,20 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        needs_discovery = bool(server_url) and auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url
+        needs_discovery = bool(server_url) and (
+            (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not mcp_server.authorization_url)
+            or self._obo_needs_endpoint_discovery(
+                auth_type,
+                mcp_server.token_exchange_endpoint
+                or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
+                mcp_server.token_url,
+            )
+        )
         mcp_oauth_metadata = (
-            await self._descovery_metadata(server_url=server_url)  # type: ignore[arg-type]
+            await self._descovery_metadata(
+                server_url=server_url,  # type: ignore[arg-type]
+                allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+            )
             if needs_discovery
             else None
         )
@@ -1122,15 +1455,7 @@ class MCPServerManager:
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=self._resolve_oauth2_flow(
-                auth_type=auth_type,
-                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
-                token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-                authorization_url=mcp_server.authorization_url
-                or getattr(mcp_oauth_metadata, "authorization_url", None),
-                client_id=client_id_value or getattr(mcp_server, "client_id", None),
-                client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
-            ),
+            oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
@@ -1148,6 +1473,7 @@ class MCPServerManager:
             available_on_public_internet=bool(getattr(mcp_server, "available_on_public_internet", True)),
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
+            dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -1165,16 +1491,63 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
-            # Token Exchange (OBO) fields — read from credentials JSON blob
-            token_exchange_endpoint=(credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-            audience=(credentials_dict.get("audience") if credentials_dict else None),
-            subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
-            or "urn:ietf:params:oauth:token-type:access_token",
+            # Token exchange (OBO) fields: dedicated columns, with the credentials blob as a
+            # back-compat fallback for servers persisted before the columns existed.
+            token_exchange_endpoint=mcp_server.token_exchange_endpoint
+            or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
+            audience=mcp_server.audience or (credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=mcp_server.subject_token_type
+            or (credentials_dict.get("subject_token_type") if credentials_dict else None)
+            or DEFAULT_SUBJECT_TOKEN_TYPE,
+            token_exchange_profile=mcp_server.token_exchange_profile
+            or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
+            or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        await self._persist_discovered_obo_token_url(
+            server_id=mcp_server.server_id,
+            auth_type=auth_type,
+            existing_token_url=mcp_server.token_url,
+            discovered_token_url=new_server.token_url,
+        )
         return new_server
+
+    async def _persist_discovered_obo_token_url(
+        self,
+        *,
+        server_id: str,
+        auth_type: Optional[MCPAuthType],
+        existing_token_url: Optional[str],
+        discovered_token_url: Optional[str],
+    ) -> None:
+        """Write a freshly discovered OBO token endpoint back onto the DB row.
+
+        ``build_mcp_server_from_table`` resolves ``token_url`` via RFC 9728 -> RFC 8414 for an
+        ``oauth2_token_exchange`` server that has none configured, but that resolved value otherwise
+        lives only on the returned in-memory object; the row keeps ``token_url=None`` so every rebuild
+        re-runs discovery, and a transient upstream outage during a rebuild leaves the server with no
+        endpoint until discovery next succeeds. Persisting it makes ``_obo_needs_endpoint_discovery``
+        return False on the next build. Fires at most once per server (skipped once the row has a
+        value), and is best-effort: a write failure just means discovery runs again next time.
+        """
+        if auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        if existing_token_url or not discovered_token_url:
+            return
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            return
+        try:
+            await MCPServerRepository(prisma_client).table.update(
+                where={"server_id": server_id},
+                data={"token_url": discovered_token_url},
+            )
+            verbose_logger.debug("Persisted discovered OBO token_url for MCP server %s", server_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
+            verbose_logger.warning("Failed to persist discovered OBO token_url for MCP server %s: %s", server_id, exc)
 
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
@@ -1391,12 +1764,18 @@ class MCPServerManager:
                 delegate_server_ids = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if getattr(server, "auth_type", None) == MCPAuth.oauth2
-                    and getattr(server, "delegate_auth_to_upstream", False) is True
-                    # M2M servers must not be exposed anonymously: an
-                    # unauthenticated caller would get LiteLLM to proxy tool
-                    # calls using its stored client_credentials.
-                    and not server.has_client_credentials
+                    if (
+                        getattr(server, "auth_type", None) == MCPAuth.oauth2
+                        and getattr(server, "delegate_auth_to_upstream", False) is True
+                        # M2M servers must not be exposed anonymously: an
+                        # unauthenticated caller would get LiteLLM to proxy tool
+                        # calls using its stored client_credentials. Resolve the flow
+                        # rather than reading has_client_credentials so an unstamped
+                        # M2M-shape row (null column, verbatim-read as non-M2M) still
+                        # fails closed here, matching the anonymous-delegate auth gate.
+                        and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+                    )
+                    or getattr(server, "auth_type", None) == MCPAuth.true_passthrough
                 ]
                 combined_servers.update(delegate_server_ids)
 
@@ -1668,6 +2047,21 @@ class MCPServerManager:
             return auth_value
         return None
 
+    def _obo_subject_token(
+        self,
+        server: MCPServer,
+        raw_headers: Optional[dict[str, str]],
+    ) -> Optional[str]:
+        """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
+
+        Prompts/resources discovery and reads on a token_exchange server must exchange the caller's
+        token like the tools paths do, not connect with no credential. Other modes never read the
+        inbound bearer, so return None to avoid forwarding it.
+        """
+        if server.auth_type != MCPAuth.oauth2_token_exchange:
+            return None
+        return self._extract_bearer_token(None, raw_headers)
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1858,6 +2252,93 @@ class MCPServerManager:
         _write_user_env_vars_cache(user_id, server.server_id, values)
         return values
 
+    async def _resolve_v2_auth(
+        self,
+        *,
+        server: MCPServer,
+        spec: ServerSpec,
+        provider: UpstreamCredentialProvider,
+        subject_token: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        extra_headers: Optional[dict[str, str]],
+    ) -> tuple[Optional[httpx.Auth], Optional[dict[str, str]]]:
+        """Resolve a v2-owned server's upstream credential into ``(resolved_auth, extra_headers)``.
+
+        On a missing/rejected per-user credential this raises the mode's discovery challenge
+        (authorization_code's browser-OAuth 401, token_exchange's RFC 9728 challenge) or maps any
+        other ``CredError`` onto its public HTTP status; it never returns an error as a value.
+        """
+        match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(auth):
+                # NoOpAuth has no header_name and so never conflicts.
+                header_name = getattr(auth, "header_name", None)
+                conflicts = bool(
+                    header_name and extra_headers and any(key.lower() == header_name.lower() for key in extra_headers)
+                )
+                if not conflicts:
+                    return auth, extra_headers
+                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
+                    # The resolver owns the per-user credential here (token_exchange's exchanged
+                    # token, authorization_code's stored token). It is authoritative: a guardrail such
+                    # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
+                    # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
+                    # exchanged token and rejects it). Drop the conflicting header so the resolved
+                    # token reaches upstream.
+                    return auth, _without_authorization(extra_headers)
+                # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
+                # header or static_headers) is intentional and wins; v1 applies those last.
+                return None, extra_headers
+            case Error(err):
+                if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
+                    # authorization_code's missing per-user token -> the per-server browser-OAuth
+                    # challenge, built here where the full MCPServer is in hand.
+                    raise_user_oauth_challenge(server, root_path=get_server_root_path())
+                if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
+                    # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
+                    # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
+                    # 401. No gateway-side browser flow. An IdP step-up rejection (Entra Conditional
+                    # Access) threads its claims blob into the challenge for the client to satisfy.
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
+                raise_public(err)
+
+    async def preflight_token_exchange(
+        self,
+        server: MCPServer,
+        oauth2_headers: Optional[dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """Run the OBO exchange for a caller-supplied subject at the transport edge.
+
+        Single-server routes call this before the MCP session opens, where an HTTP status and
+        ``WWW-Authenticate`` still reach the client. A rejected subject raises the RFC 9728
+        challenge and any other ``CredError`` maps onto its public HTTP status, so an exchange
+        failure surfaces as a failure instead of the session continuing into an empty tool list.
+        A successful exchange is cached by the exchanger, so the session's list/call reuses it.
+        """
+        if server.auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        subject_token = self._extract_bearer_token(oauth2_headers, None)
+        if not subject_token:
+            return
+        spec = to_server_spec(server)
+        if spec is None or not isinstance(spec.config, TokenExchangeConfig):
+            return
+        match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(_):
+                return
+            case Error(err):
+                if err.tag == "unauthorized":
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
+                raise_public(err)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -1892,11 +2373,18 @@ class MCPServerManager:
         spec = None if transport == MCPTransport.stdio else to_server_spec(server)
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
-        # so it wins - except for authorization_code, whose per-user token the v2 resolver owns. A
-        # caller must not be able to substitute another user's stored credential, so we keep the v2
-        # spec and ignore the override there; the REST tools preview supplies its not-yet-persisted
-        # token through the resolver (cred_provider), never this path.
-        if spec is not None and mcp_auth_header and not isinstance(spec.config, AuthorizationCodeConfig):
+        # so it wins - except for the modes the v2 resolver owns per-caller (authorization_code's
+        # stored token, token_exchange's RFC 8693 minted token, and the passthrough modes'
+        # forwarded caller token). A caller must not be able to substitute another user's stored
+        # credential, nor silently disable the OBO exchange and forward an arbitrary bearer
+        # upstream, so we keep the v2 spec and ignore the override for these; the REST tools
+        # preview supplies its not-yet-persisted token through the resolver (cred_provider),
+        # never this path.
+        if (
+            spec is not None
+            and mcp_auth_header
+            and not isinstance(spec.config, (AuthorizationCodeConfig, PassthroughConfig, TokenExchangeConfig))
+        ):
             spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token) if spec is None else None
@@ -1962,26 +2450,20 @@ class MCPServerManager:
             server_url = server.url or ""
 
             if spec is not None:
-                match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
-                    case Ok(auth):
-                        resolved_auth = auth
-                        # Do not override an Authorization already supplied via extra_headers
-                        # (a guardrail hook such as the JWT signer, static_headers, or a
-                        # forwarded caller header): v1 applies those last, so they win. NoOpAuth
-                        # has no header_name and so never skips.
-                        header_name = getattr(resolved_auth, "header_name", None)
-                        if (
-                            header_name
-                            and extra_headers
-                            and any(key.lower() == header_name.lower() for key in extra_headers)
-                        ):
-                            resolved_auth = None
-                    case Error(err):
-                        if err.tag == "unauthorized":
-                            # The arm signals a missing per-user token semantically; raise the
-                            # per-server OAuth challenge here, where the full MCPServer is in hand.
-                            raise_user_oauth_challenge(server)
-                        raise_public(err)
+                inbound_token = subject_token
+                if isinstance(spec.config, PassthroughConfig):
+                    inbound_token, extra_headers = _take_forwarded_authorization(extra_headers)
+                    per_server_token = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
+                    if per_server_token is not None:
+                        inbound_token = per_server_token
+                resolved_auth, extra_headers = await self._resolve_v2_auth(
+                    server=server,
+                    spec=spec,
+                    provider=provider,
+                    subject_token=inbound_token,
+                    user_api_key_auth=user_api_key_auth,
+                    extra_headers=extra_headers,
+                )
                 return MCPClient(
                     server_url=server_url,
                     transport_type=transport,
@@ -2026,6 +2508,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        oauth2_headers: Optional[dict[str, str]] = None,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -2099,11 +2582,21 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
+            # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
+            # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
+            # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
+            subject_token = (
+                self._extract_bearer_token(oauth2_headers, raw_headers)
+                if server.auth_type == MCPAuth.oauth2_token_exchange
+                else None
+            )
+
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
 
@@ -2137,18 +2630,29 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
-        except MCPUpstreamAuthError:
+        except MCPUpstreamAuthError as upstream_auth_error:
             # Pass-through 401 must surface to single-server routes so the
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
+            if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
+                raise MCPUpstreamAuthError(
+                    status_code=upstream_auth_error.status_code,
+                    www_authenticate=None,
+                    server_name=upstream_auth_error.server_name,
+                ) from upstream_auth_error
             raise
         except HTTPException as e:
-            headers = e.headers or {}
-            www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
-            if e.status_code == 401 and www_authenticate is not None:
+            # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
+            # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
+            # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
+            # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
+            # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
+            if e.status_code in (401, 403):
+                headers = e.headers or {}
+                challenge_header = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
                 raise MCPUpstreamAuthError(
-                    status_code=401,
-                    www_authenticate=www_authenticate,
+                    status_code=e.status_code,
+                    www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
@@ -2188,12 +2692,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             prompts = await client.list_prompts()
@@ -2228,12 +2734,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             resources = await client.list_resources()
@@ -2268,12 +2776,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             resource_templates = await client.list_resource_templates()
@@ -2307,12 +2817,14 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
+        subject_token = self._obo_subject_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         return await client.read_resource(url)
@@ -2337,12 +2849,14 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
+        subject_token = self._obo_subject_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         get_prompt_request_params = GetPromptRequestParams(
@@ -2395,8 +2909,17 @@ class MCPServerManager:
     async def _descovery_metadata(
         self,
         server_url: str,
+        *,
+        allow_origin_fallback: bool = True,
     ) -> Optional[MCPOAuthMetadata]:
-        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
+        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery).
+
+        ``allow_origin_fallback`` controls the last-resort guess that treats the resource server's own
+        origin as its authorization server when nothing is advertised. The browser ``oauth2`` flow keeps
+        it (a human sees the redirect), but token_exchange (OBO) sets it False so the gateway never
+        exchanges a subject token against an endpoint it inferred rather than one explicitly configured
+        or authoritatively advertised via RFC 9728 / RFC 8414.
+        """
 
         try:
             client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -2446,7 +2969,7 @@ class MCPServerManager:
                 ) = await self._attempt_well_known_discovery(server_url)
 
             metadata = None
-            if not authorization_servers:
+            if allow_origin_fallback and not authorization_servers:
                 try:
                     parsed_url = urlparse(server_url)
                     if parsed_url.scheme and parsed_url.netloc:
@@ -2608,6 +3131,14 @@ class MCPServerManager:
                 continue
 
             scopes = self._extract_scopes(data.get("scopes_supported"))
+            verbose_logger.debug(
+                "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
+                "token_endpoint_auth_methods_supported=%s",
+                url,
+                data.get("issuer"),
+                data.get("grant_types_supported"),
+                data.get("token_endpoint_auth_methods_supported"),
+            )
             metadata = MCPOAuthMetadata(
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),
@@ -3221,10 +3752,11 @@ class MCPServerManager:
         limit = mcp_server.max_concurrent_requests
         if limit is None or limit <= 0:
             return None
-        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(limit)
-            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        cached = self._server_call_semaphores.get(mcp_server.server_id)
+        if cached is not None and cached[0] == limit:
+            return cached[1]
+        semaphore = asyncio.Semaphore(limit)
+        self._server_call_semaphores[mcp_server.server_id] = (limit, semaphore)
         return semaphore
 
     @asynccontextmanager
@@ -3235,6 +3767,46 @@ class MCPServerManager:
             return
         async with semaphore:
             yield
+
+    async def _obo_call_tool_with_retry(
+        self,
+        *,
+        client: MCPClient,
+        call_tool_params: MCPCallToolRequestParams,
+        host_progress_callback: Optional[Callable],
+        mcp_server: MCPServer,
+        server_auth_header: str | dict[str, str] | None,
+        extra_headers: Optional[dict[str, str]],
+        stdio_env: Optional[dict[str, str]],
+        subject_token: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> CallToolResult:
+        """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
+
+        The exchanged token is baked into the client at build time, so the retry invalidates the
+        cached exchange and rebuilds the client (which re-exchanges). One retry only: a non-auth
+        failure or a second auth failure degrades to the normal ``isError`` result, and a re-exchange
+        that now fails surfaces its own 401 challenge from ``_create_mcp_client``.
+        """
+        try:
+            return await client.call_tool(
+                call_tool_params, host_progress_callback=host_progress_callback, raise_on_error=True
+            )
+        except Exception as exc:
+            if _extract_upstream_auth_failure(exc) is None:
+                return MCPClient.error_tool_result(exc)
+            spec = to_server_spec(mcp_server)
+            if spec is not None:
+                await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
+            retry_client = await self._create_mcp_client(
+                server=mcp_server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+            return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
 
     async def _call_regular_mcp_tool(
         self,
@@ -3317,6 +3889,13 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
+        elif mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+            extra_headers = _client_forwarded_authorization_headers(
+                mcp_server=mcp_server,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -3394,11 +3973,74 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        async def _call_tool_via_client(client, params):
-            async with self._limit_outbound_concurrency(mcp_server):
-                return await client.call_tool(params, host_progress_callback=host_progress_callback)
+        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange and subject_token:
+            # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
+            # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
+            # single call below.
+            async def _obo_call_tool_limited():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._obo_call_tool_with_retry(
+                        client=client,
+                        call_tool_params=call_tool_params,
+                        host_progress_callback=host_progress_callback,
+                        mcp_server=mcp_server,
+                        server_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        stdio_env=stdio_env,
+                        subject_token=subject_token,
+                        user_api_key_auth=user_api_key_auth,
+                    )
 
-        tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
+            tool_call_coro = _obo_call_tool_limited()
+        else:
+            # Scoped to the two client-forwarded token modes this stack introduced; legacy
+            # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
+            # added here even though the list path still relays for it.
+            relays_upstream_auth = mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate
+            server_label = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
+
+            async def _call_tool_via_client(client, params):
+                async with self._limit_outbound_concurrency(mcp_server):
+                    if not relays_upstream_auth:
+                        return await client.call_tool(params, host_progress_callback=host_progress_callback)
+                    # The client-forwarded modes carry the caller's own upstream token, so an upstream
+                    # 401 (expired/invalid token) is the caller's to resolve: relay it as
+                    # MCPUpstreamAuthError so single-server REST callers turn it into a 401 +
+                    # WWW-Authenticate and re-run the upstream OAuth flow. Only 401 is a re-auth signal
+                    # (mirrors the list path and MCPUpstreamAuthError's contract); a 403 is a genuine
+                    # authorization failure that re-auth won't fix, so it takes the non-auth branch and
+                    # stays a visible warning. raise_on_error only re-raises transport failures
+                    # (tool-level isError results are still returned normally); a non-auth failure keeps
+                    # the same isError degradation the default path produces.
+                    try:
+                        return await client.call_tool(
+                            params, host_progress_callback=host_progress_callback, raise_on_error=True
+                        )
+                    except Exception as e:
+                        auth_info = _extract_upstream_auth_failure(e)
+                        if auth_info is None or auth_info[0] != 401:
+                            # A genuine (non-auth or 403-forbidden) upstream/transport failure.
+                            # raise_on_error demoted the client-layer log to debug, so surface it here at
+                            # warning level to keep the outage visible; the caller still gets the graceful
+                            # isError result the default masking path would have produced. Log the
+                            # exception type only, never str(e), which for an httpx error embeds the
+                            # upstream URL (a credential can hide in it).
+                            verbose_logger.warning(
+                                "Pass-through MCP tool call failed against %s (non-auth, %s)",
+                                server_label,
+                                type(e).__name__,
+                            )
+                            return client.error_tool_result(e)
+                        _, www_authenticate = auth_info
+                        raise MCPUpstreamAuthError(
+                            status_code=401,
+                            www_authenticate=www_authenticate,
+                            server_name=server_label,
+                        ) from e
+
+            tool_call_coro = _call_tool_via_client(client, call_tool_params)
+
+        tasks.append(asyncio.create_task(tool_call_coro))
 
         _timeout = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
@@ -3482,6 +4124,28 @@ class MCPServerManager:
         if spec is None:
             return False
         return await self._cred_provider.has_user_token(to_subject(user_api_key_auth, None), spec)
+
+    async def invalidate_user_oauth_token_cache(self, user_id: str, server_id: str) -> None:
+        """Drop every cached token for ``(user_id, server_id)`` after the credential row changes
+        (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
+        cache, so the next resolve reads the new row instead of serving the replaced token until its
+        cache TTL, whichever path resolves it. This is the single invalidation point for per-user
+        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
+        failure is logged, never raised, because the DB write already succeeded and the TTL remains
+        the backstop.
+        """
+        try:
+            await self._per_user_oauth_token_store.invalidate(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to invalidate cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
+        try:
+            await self._per_user_token_cache.delete(user_id, server_id)
+        except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop
+            verbose_logger.warning(
+                "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
+            )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,
@@ -3573,6 +4237,15 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        # Resolved before any hook runs so a missing BYOK credential (401) never
+        # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
+        # recorded against a call that ultimately fails.
+        mcp_auth_header = await _resolve_byok_mcp_auth_header(
+            mcp_server,
+            user_api_key_auth,
+            mcp_auth_header,
+        )
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3619,9 +4292,25 @@ class MCPServerManager:
                     server_name,
                 )
 
+            auth_header_value = (
+                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            )
+            forwarded_headers = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+
             async def _call_openapi_via_handler():
-                async with self._limit_outbound_concurrency(mcp_server):
-                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                    _request_auth_header,
+                    _request_extra_headers,
+                )
+
+                auth_token = _request_auth_header.set(auth_header_value)
+                extra_token = _request_extra_headers.set(forwarded_headers)
+                try:
+                    async with self._limit_outbound_concurrency(mcp_server):
+                        return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                finally:
+                    _request_auth_header.reset(auth_token)
+                    _request_extra_headers.reset(extra_token)
 
             tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
@@ -4177,6 +4866,12 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
+            dcr_bridge=server.dcr_bridge,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4265,6 +4960,8 @@ class MCPServerManager:
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
+            tool_name_to_display_name=server.tool_name_to_display_name,
+            tool_name_to_description=server.tool_name_to_description,
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
@@ -4278,10 +4975,16 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
+            dcr_bridge=server.dcr_bridge,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
