@@ -3532,3 +3532,39 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
     assert result == {}
     find_many.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_update_single_user_non_admin_cannot_modify_team_id(mocker):
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_user = mocker.MagicMock()
+    mock_user.model_dump.return_value = {
+        "user_id": "alice",
+        "user_email": "alice@example.com",
+        "teams": ["team-1"],
+        "user_role": LitellmUserRoles.INTERNAL_USER.value,
+    }
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=mock_user
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    data = UpdateUserRequest(user_id="alice", team_id=None)
+    caller = UserAPIKeyAuth(
+        user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(
+            user_request=data, user_api_key_dict=caller
+        )
+    assert exc_info.value.status_code == 403
+    assert "cannot modify team_id" in str(exc_info.value.detail)
+

@@ -16,6 +16,7 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
+  allowClear?: boolean;
 }
 
 const SCROLL_THRESHOLD = 0.8;
@@ -28,6 +29,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
+  allowClear = true,
 }) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
@@ -82,7 +84,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       value={value || undefined}
       onChange={handleChange}
       disabled={disabled}
-      allowClear
+      allowClear={allowClear}
       filterOption={false}
       onSearch={handleSearch}
       searchValue={searchInput}

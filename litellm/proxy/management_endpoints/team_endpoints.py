@@ -2627,6 +2627,24 @@ def _cleanup_members_with_roles(
     return is_member_in_team, new_team_members
 
 
+def _reject_non_admin_team_self_removal(
+    data: TeamMemberDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    is_self_removal = (data.user_id is not None and data.user_id == user_api_key_dict.user_id) or (
+        data.user_email is not None
+        and user_api_key_dict.user_email is not None
+        and data.user_email == user_api_key_dict.user_email
+    )
+    if is_self_removal:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Users cannot remove themselves from a team."},
+        )
+
+
 @router.post(
     "/team/member_delete",
     tags=["team management"],
@@ -2694,6 +2712,8 @@ async def team_member_delete(
                 )
             },
         )
+
+    _reject_non_admin_team_self_removal(data=data, user_api_key_dict=user_api_key_dict)
 
     ## DELETE MEMBER FROM TEAM
     is_member_in_team, new_team_members = _cleanup_members_with_roles(
@@ -3701,9 +3721,7 @@ async def _build_model_max_budget_usage_for_member_me(
     if model_max_budget_limiter is None:
         return None
 
-    team_model_max_budget = (
-        team_table.model_max_budget if isinstance(team_table.model_max_budget, dict) else None
-    )
+    team_model_max_budget = team_table.model_max_budget if isinstance(team_table.model_max_budget, dict) else None
     team_member_model_max_budget: Optional[dict] = None
     if effective_budget is not None and isinstance(effective_budget.model_max_budget, dict):
         if len(effective_budget.model_max_budget) > 0:
@@ -3850,7 +3868,9 @@ async def team_member_me(
         user_email=user_email,
         spend=membership.spend,
         total_spend=membership.total_spend,
-        budget_id=membership.budget_id if membership.budget_id is not None else getattr(effective_budget, "budget_id", None),
+        budget_id=membership.budget_id
+        if membership.budget_id is not None
+        else getattr(effective_budget, "budget_id", None),
         litellm_budget_table=effective_budget,
         model_max_budget_usage=model_max_budget_usage,
         using_team_default_budget=using_team_default_budget,

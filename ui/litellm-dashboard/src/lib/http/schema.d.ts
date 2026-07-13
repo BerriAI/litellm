@@ -31026,6 +31026,10 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Model Max Budget Usage */
+            model_max_budget_usage?: {
+                [key: string]: unknown;
+            } | null;
             /** Role */
             role?: string | null;
             /**
@@ -31046,6 +31050,11 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+            /**
+             * Using Team Default Budget
+             * @default false
+             */
+            using_team_default_budget: boolean;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -33015,6 +33024,10 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limit */
+            budget_limit?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */

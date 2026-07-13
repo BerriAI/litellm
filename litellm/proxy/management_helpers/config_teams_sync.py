@@ -134,7 +134,6 @@ async def sync_config_teams(
         verbose_proxy_logger.warning("Skipping config teams sync: no database connected")
         return ()
 
-    from litellm.proxy.management_endpoints.team_endpoints import new_team, update_team
     from litellm.repositories.team_repository import TeamRepository
 
     model_list_budgets = extract_model_list_budgets(model_list)
@@ -245,8 +244,6 @@ async def _sync_one_config_team(
         entry.team_alias,
     )
     return existing.team_id
-
-
 
 
 async def apply_team_member_budget_to_sa_key(

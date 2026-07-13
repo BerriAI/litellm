@@ -362,8 +362,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
 
-  // Check if team selection is required
-  const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
+  const userHasTeams = (teams?.length ?? 0) > 0;
+  const requiresExplicitTeam = (teams?.length ?? 0) > 1 || keyOwner === "service_account";
+  const isTeamSelectionRequired = modelsToPick.includes("no-default-models") || requiresExplicitTeam;
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -821,15 +822,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               className="mt-4"
               rules={[
                 {
-                  required: keyOwner === "service_account",
-                  message: "Please select a team for the service account",
+                  required: requiresExplicitTeam,
+                  message:
+                    keyOwner === "service_account"
+                      ? "Please select a team for the service account"
+                      : "Please select a team for this key",
                 },
               ]}
-              help={keyOwner === "service_account" ? "required" : ""}
+              help={requiresExplicitTeam ? "required" : ""}
             >
               <TeamDropdown
                 disabled={selectedProjectId !== null}
                 organizationId={selectedOrganizationId}
+                allowClear={!userHasTeams}
                 onTeamSelect={(team) => {
                   setSelectedCreateKeyTeam(team);
                   setSelectedProjectId(null);

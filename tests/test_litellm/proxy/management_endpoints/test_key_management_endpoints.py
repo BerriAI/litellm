@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _process_single_key_update,
     _save_deleted_verification_token_records,
     _transform_verification_tokens_to_deleted_records,
+    _validate_caller_can_change_key_team,
     _validate_max_budget,
     _validate_reset_spend_value,
     _validate_update_key_data,
@@ -9948,6 +9949,98 @@ class TestLIT1884KeyGenerateValidation:
         mock_get_team.assert_awaited()
 
     @pytest.mark.asyncio
+    async def test_internal_user_generate_key_auto_assigns_user_team(self):
+        """
+        When an internal_user with exactly one team calls /key/generate
+        without team_id, the key should inherit that team.
+        """
+        data = GenerateKeyRequest(key_alias="test-alias")
+        assert data.team_id is None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        mock_user = MagicMock()
+        mock_user.teams = ["team-from-membership"]
+
+        mock_team = MagicMock()
+        mock_team.team_id = "team-from-membership"
+        mock_team.model_max_budget = None
+        mock_team.team_member_permissions = None
+        mock_team.members_with_roles = [
+            MagicMock(user_id="internal-user-123", role="admin")
+        ]
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.UserRepository"
+            ) as mock_user_repo,
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new_callable=AsyncMock,
+                return_value=mock_team,
+            ) as mock_get_team,
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch("litellm.key_generation_settings", None),
+        ):
+            mock_user_repo.return_value.table.find_unique = AsyncMock(
+                return_value=mock_user
+            )
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
+        assert data.team_id == "team-from-membership"
+        mock_get_team.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_internal_user_generate_key_requires_team_when_multiple(self):
+        """
+        When an internal_user belongs to multiple teams and omits team_id,
+        /key/generate should reject the request.
+        """
+        data = GenerateKeyRequest(key_alias="test-alias")
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        mock_user = MagicMock()
+        mock_user.teams = ["team-a", "team-b"]
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.UserRepository"
+            ) as mock_user_repo,
+            patch("litellm.key_generation_settings", None),
+        ):
+            mock_user_repo.return_value.table.find_unique = AsyncMock(
+                return_value=mock_user
+            )
+            with pytest.raises(ProxyException) as exc_info:
+                await generate_key_fn(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+            assert str(exc_info.value.code) == "400"
+            assert "multiple teams" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
     async def test_internal_user_generate_key_invalid_team_id_rejected(self):
         """
         When an internal_user provides a non-existent team_id,
@@ -10014,15 +10107,15 @@ class TestLIT1884KeyGenerateValidation:
                 "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
                 new_callable=AsyncMock,
                 return_value=MagicMock(),
-            ),
+            ) as mock_helper,
         ):
-            # Should NOT raise — admin bypasses team validation
-            result = await generate_key_fn(
+            await generate_key_fn(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=None,
             )
-            assert result is not None
+            mock_helper.assert_awaited()
+
 
     @pytest.mark.asyncio
     async def test_admin_generate_key_no_user_id_not_auto_assigned(self):
@@ -10101,6 +10194,7 @@ class TestLIT1884KeyGenerateValidation:
             assert result is True
 
 
+
 class TestLIT1884KeyUpdateValidation:
     """Tests for LIT-1884: internal users should not be able to update keys to remove user_id or set invalid team."""
 
@@ -10132,6 +10226,52 @@ class TestLIT1884KeyUpdateValidation:
             )
         assert exc_info.value.status_code == 403
         assert "cannot remove the user_id" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_internal_user_cannot_remove_team_id(self):
+        data = UpdateKeyRequest(key="sk-test-key", team_id=None)
+        existing_key_row = MagicMock()
+        existing_key_row.user_id = "internal-user-123"
+        existing_key_row.token = "hashed_token"
+        existing_key_row.team_id = "team-abc"
+        existing_key_row.created_by = "internal-user-123"
+        existing_key_row.organization_id = None
+        existing_key_row.project_id = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc_info.value.status_code == 403
+        assert "cannot remove the team_id" in str(exc_info.value.detail)
+
+    def test_validate_caller_can_change_key_team_blocks_clear(self):
+        data = UpdateKeyRequest(key="sk-test-key", team_id="")
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-abc"
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_caller_can_change_key_team(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=user_api_key_dict,
+            )
+        assert exc_info.value.status_code == 403
+
 
     @pytest.mark.asyncio
     async def test_internal_user_cannot_set_invalid_team_id(self):
