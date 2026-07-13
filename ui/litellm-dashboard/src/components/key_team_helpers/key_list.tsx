@@ -12,8 +12,10 @@ export interface Team {
   rpm_limit: number | null;
   organization_id: string;
   created_at: string;
+  updated_at?: string | null;
   keys: KeyResponse[];
   keys_count?: number;
+  members_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
