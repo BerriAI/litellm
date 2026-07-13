@@ -318,8 +318,7 @@ def _chars_from_input_list(items: list) -> int:
             elif isinstance(content, str):
                 total += len(content)
             else:
-                text = item.get("text", "")
-                total += len(text) if isinstance(text, str) else 0
+                total += _chars_from_content_block(item)
         else:
             total += len(str(item))
     return total
