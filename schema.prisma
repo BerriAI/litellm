@@ -30,7 +30,28 @@ model LiteLLM_BudgetTable {
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
-  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
+}
+
+// Admin-registered PTU reservations: flat prepaid cost for a (team, model) window
+model LiteLLM_PTUReservation {
+  id                 String    @id @default(uuid())
+  team_id            String
+  model              String
+  cost_source        String    @default("manual")
+  ptu_count          Int?
+  cost_per_ptu       Float?
+  azure_resource_id  String?
+  effective_from     DateTime
+  effective_to       DateTime?
+  created_by         String
+  created_at         DateTime  @default(now()) @map("created_at")
+  updated_by         String
+  updated_at         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([team_id, model, effective_from])
+  @@index([cost_source, azure_resource_id])
+  @@index([effective_from, effective_to])
 }
 
 // Models on proxy
