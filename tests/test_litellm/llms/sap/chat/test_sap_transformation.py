@@ -36,9 +36,7 @@ class TestGeminiThinkingNormalization:
         out = normalize(raw)
         msg = out["choices"][0]["message"]
         assert msg["reasoning_content"] == "let me think"
-        assert msg["thinking_blocks"] == [
-            {"type": "thinking", "thinking": "let me think", "signature": "sig-abc"}
-        ]
+        assert msg["thinking_blocks"] == [{"type": "thinking", "thinking": "let me think", "signature": "sig-abc"}]
 
     def test_multiple_thought_blocks_joined(self, normalize):
         raw = {
@@ -60,11 +58,7 @@ class TestGeminiThinkingNormalization:
         assert len(msg["thinking_blocks"]) == 2
 
     def test_string_reasoning_content_untouched(self, normalize):
-        raw = {
-            "choices": [
-                {"message": {"reasoning_content": "plain string", "content": "hi"}}
-            ]
-        }
+        raw = {"choices": [{"message": {"reasoning_content": "plain string", "content": "hi"}}]}
         out = normalize(raw)
         assert out["choices"][0]["message"]["reasoning_content"] == "plain string"
         assert "thinking_blocks" not in out["choices"][0]["message"]
@@ -89,9 +83,7 @@ class TestGeminiThinkingNormalization:
                     "message": {
                         "role": "assistant",
                         "content": None,
-                        "reasoning_content": [
-                            {"thought": "thinking...", "signature": "abc"}
-                        ],
+                        "reasoning_content": [{"thought": "thinking...", "signature": "abc"}],
                         "tool_calls": [
                             {
                                 "id": "c1",
@@ -122,9 +114,7 @@ class TestGeminiThinkingNormalization:
                     "message": {
                         "role": "assistant",
                         "content": None,
-                        "reasoning_content": [
-                            {"thought": "I need to call a tool", "signature": "sig-xyz"}
-                        ],
+                        "reasoning_content": [{"thought": "I need to call a tool", "signature": "sig-xyz"}],
                         "tool_calls": [
                             {
                                 "id": "c2",
@@ -164,9 +154,7 @@ class TestReasoningParamSupport:
         assert "thinking" in params
 
     def test_reasoning_params_included_for_anthropic_claude37(self, mock_config):
-        params = mock_config.get_supported_openai_params(
-            "anthropic--claude-3-7-sonnet-20250219"
-        )
+        params = mock_config.get_supported_openai_params("anthropic--claude-3-7-sonnet-20250219")
         assert "reasoning_effort" in params
         assert "thinking" in params
 
@@ -192,17 +180,13 @@ class TestReasoningParamSupport:
         assert "reasoning_effort" not in params
         assert "thinking" not in params
 
-    def test_reasoning_params_excluded_for_model_starting_with_o_but_not_o_series(
-        self, mock_config
-    ):
+    def test_reasoning_params_excluded_for_model_starting_with_o_but_not_o_series(self, mock_config):
         params = mock_config.get_supported_openai_params("oceanai-model")
         assert "reasoning_effort" not in params
         assert "thinking" not in params
 
     def test_reasoning_params_excluded_for_mistralai(self, mock_config):
-        params = mock_config.get_supported_openai_params(
-            "mistralai--mistral-large-instruct"
-        )
+        params = mock_config.get_supported_openai_params("mistralai--mistral-large-instruct")
         assert "reasoning_effort" not in params
         assert "thinking" not in params
 
@@ -214,9 +198,7 @@ class TestReasoningParamSupport:
             litellm_params={},
             headers={},
         )
-        model_params = result["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert model_params["reasoning_effort"] == "low"
 
     def test_thinking_reaches_model_params(self, mock_config):
@@ -228,9 +210,7 @@ class TestReasoningParamSupport:
             litellm_params={},
             headers={},
         )
-        model_params = result["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert model_params["thinking"] == thinking
 
 
@@ -265,9 +245,7 @@ class TestSAPTransformationIntegration:
 
         result = mock_config.transform_request(model, messages, optional_params, {}, {})
 
-        model_params = result["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
         assert "temperature" in model_params
         assert "frequency_penalty" in model_params
@@ -275,18 +253,16 @@ class TestSAPTransformationIntegration:
         assert "model_version" not in model_params
         assert "tools" not in model_params
 
-        model_version = result["config"]["modules"]["prompt_templating"]["model"][
-            "version"
-        ]
+        model_version = result["config"]["modules"]["prompt_templating"]["model"]["version"]
         assert model_version == "v1.5"
 
         prompt = result["config"]["modules"]["prompt_templating"]["prompt"]
         if "tools" in prompt:
             assert isinstance(prompt["tools"], list)
             for tool in prompt["tools"]:
-                assert (
-                    tool["function"]["parameters"]["type"] == "object"
-                ), "SAP API requires parameters.type == 'object'"
+                assert tool["function"]["parameters"]["type"] == "object", (
+                    "SAP API requires parameters.type == 'object'"
+                )
                 assert "properties" in tool["function"]["parameters"]
 
     def test_transform_request_parameter_handling_robustness(self, mock_config):
@@ -327,33 +303,25 @@ class TestSAPTransformationIntegration:
 
         for i, test_case in enumerate(test_cases):
             filtered_params = {
-                k: v
-                for k, v in test_case["params"].items()
-                if k not in {"tools", "model_version", "deployment_url"}
+                k: v for k, v in test_case["params"].items() if k not in {"tools", "model_version", "deployment_url"}
             }
 
             for expected_param in test_case["expected_in_model"]:
-                assert (
-                    expected_param in filtered_params
-                ), f"Case {i + 1}: {expected_param} should be in model params"
+                assert expected_param in filtered_params, f"Case {i + 1}: {expected_param} should be in model params"
 
             for excluded_param in test_case["expected_excluded"]:
-                assert (
-                    excluded_param not in filtered_params
-                ), f"Case {i + 1}: {excluded_param} should be excluded from model params"
+                assert excluded_param not in filtered_params, (
+                    f"Case {i + 1}: {excluded_param} should be excluded from model params"
+                )
 
-            result = mock_config.transform_request(
-                model, messages, test_case["params"], {}, {}
-            )
+            result = mock_config.transform_request(model, messages, test_case["params"], {}, {})
             if result and "config" in result:
-                model_params = result["config"]["modules"]["prompt_templating"][
-                    "model"
-                ]["params"]
+                model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
                 for excluded_param in test_case["expected_excluded"]:
-                    assert (
-                        excluded_param not in model_params
-                    ), f"Case {i + 1}: {excluded_param} should not be in actual model params"
+                    assert excluded_param not in model_params, (
+                        f"Case {i + 1}: {excluded_param} should not be in actual model params"
+                    )
 
     def test_config_transform_with_response_format_json_object(self, mock_config):
         expected_dict = {
@@ -376,9 +344,7 @@ class TestSAPTransformationIntegration:
         }
         config = mock_config.transform_request(
             model="gpt-4o",
-            messages=[
-                {"role": "user", "content": "First man on the moon, answer in json"}
-            ],
+            messages=[{"role": "user", "content": "First man on the moon, answer in json"}],
             optional_params={
                 "response_format": {"type": "json_object"},
                 "deployment_url": "shouldn't be in results",
@@ -420,9 +386,7 @@ class TestSAPTransformationIntegration:
 
         config = mock_config.transform_request(
             model="gpt-4o",
-            messages=[
-                {"role": "user", "content": "First man on the moon, answer in json"}
-            ],
+            messages=[{"role": "user", "content": "First man on the moon, answer in json"}],
             optional_params={
                 "response_format": expected_response_format,
                 "deployment_url": "shouldn't be in results",
@@ -430,27 +394,15 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={},
         )
-        assert (
-            config["config"]["modules"]["prompt_templating"]["prompt"][
-                "response_format"
-            ]
-            == expected_response_format
-        )
-        assert (
-            len(config["config"]["modules"]["prompt_templating"]["model"]["params"])
-            == 0
-        )
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["response_format"] == expected_response_format
+        assert len(config["config"]["modules"]["prompt_templating"]["model"]["params"]) == 0
 
     def test_config_transform_with_stream(self, mock_config):
         expected_dict = {
             "config": {
                 "modules": {
                     "prompt_templating": {
-                        "prompt": {
-                            "template": [
-                                {"role": "user", "content": "Hello, how are you?"}
-                            ]
-                        },
+                        "prompt": {"template": [{"role": "user", "content": "Hello, how are you?"}]},
                         "model": {
                             "name": "anthropic--claude-4-sonnet",
                             "params": {},
@@ -488,9 +440,7 @@ class TestSAPTransformationIntegration:
             headers={},
         )
 
-        assert config["config"]["modules"]["prompt_templating"]["prompt"][
-            "defaults"
-        ] == {"user_query": "default value"}
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] == {"user_query": "default value"}
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_placeholder_values(self, mock_config):
@@ -554,14 +504,8 @@ class TestSAPTransformationIntegration:
         assert config["placeholder_values"] == placeholder_values
         modules = config["config"]["modules"]
         assert modules["grounding"]["type"] == "document_grounding_service"
-        assert (
-            modules["grounding"]["config"]["placeholders"]["output"]
-            == "grounding_response"
-        )
-        assert (
-            modules["grounding"]["config"]["filters"][0]["data_repository_type"]
-            == "vector"
-        )
+        assert modules["grounding"]["config"]["placeholders"]["output"] == "grounding_response"
+        assert modules["grounding"]["config"]["filters"][0]["data_repository_type"] == "vector"
         assert modules["prompt_templating"]["model"]["params"] == {}
 
     def test_grounding_search_config_rejects_both_count_fields(self, mock_config):
@@ -673,10 +617,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert (
-            "For using SAP Filtering Module you must provide at least one property"
-            in str(exc_info.value)
-        )
+        assert "For using SAP Filtering Module you must provide at least one property" in str(exc_info.value)
 
     def test_sap_masking(self, mock_config):
         masking_config = {
@@ -740,9 +681,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert "must set exactly one of: 'providers' or 'masking_providers'" in str(
-            exc_info.value
-        )
+        assert "must set exactly one of: 'providers' or 'masking_providers'" in str(exc_info.value)
 
     def test_masking_providers_deprecated_emits_warning(self, mock_config):
         masking_config = {
@@ -764,8 +703,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
         assert any(
-            issubclass(warning.category, DeprecationWarning)
-            and "masking_providers" in str(warning.message)
+            issubclass(warning.category, DeprecationWarning) and "masking_providers" in str(warning.message)
             for warning in w
         ), "Expected DeprecationWarning for 'masking_providers'"
 
@@ -804,10 +742,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert (
-            "TranslationModuleConfig requires at least one of 'input' or 'output'"
-            in str(exc_info.value)
-        )
+        assert "TranslationModuleConfig requires at least one of 'input' or 'output'" in str(exc_info.value)
 
     def test_sap_multiple_modules(self, mock_config):
         translation_config = {
@@ -842,31 +777,12 @@ class TestSAPTransformationIntegration:
             assert translation["input"]["config"]["source_language"] == "en-US"
             assert translation["input"]["config"]["target_language"] == "de-DE"
             assert translation["output"]["config"]["target_language"] == "fr-FR"
+            assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
             assert (
-                config["config"]["modules"][1]["prompt_templating"]["model"]["name"]
-                == "gpt-5"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["name"]
-                == "gpt-4o"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["params"]
-                == {}
-            )
-            assert (
-                config["config"]["modules"][1]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
+                config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"]
                 == "Hello world!"
             )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
-                == "Hello."
-            )
-            assert (
-                config["config"]["modules"][1]["translation"]["input"]["type"]
-                == "sap_document_translation"
-            )
+            assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
+            assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"

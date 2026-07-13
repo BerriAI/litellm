@@ -2,22 +2,22 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+from functools import cached_property
 from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    FrozenSet,
+    Iterator,
     List,
     Optional,
-    Union,
-    Dict,
     Tuple,
-    Any,
     TYPE_CHECKING,
-    Iterator,
-    AsyncIterator,
-    FrozenSet,
+    Union,
 )
-from functools import cached_property
-import litellm
-import httpx
 
+import httpx
+import litellm
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -32,6 +32,11 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
+from .handler import (
+    AsyncSAPStreamIterator,
+    GenAIHubOrchestrationError,
+    SAPStreamIterator,
+)
 from .models import (
     ChatCompletionTool,
     OrchestrationRequest,
@@ -42,11 +47,50 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
-from .handler import (
-    GenAIHubOrchestrationError,
-    AsyncSAPStreamIterator,
-    SAPStreamIterator,
+
+_SAP_VENDOR_PREFIXES = (
+    "anthropic--",
+    "amazon--",
+    "cohere--",
+    "mistralai--",
+    "nvidia--",
+    "alephalpha--",
 )
+
+
+def _vendor(model: str) -> str:
+    for prefix in _SAP_VENDOR_PREFIXES:
+        if model.startswith(prefix):
+            return prefix[:-2]  # strip trailing "--"
+    return ""
+
+
+def _canonical_model_name(model: str) -> str:
+    prefix = _vendor(model)
+    return model[len(prefix) + 2 :] if prefix else model
+
+
+def _sap_supports_reasoning_effort(model: str) -> bool:
+    vendor = _vendor(model)
+    if vendor == "anthropic":
+        canonical = _canonical_model_name(model)
+        return canonical.startswith("claude-4") or canonical.startswith("claude-3-7")
+    if vendor:
+        return False
+    # no vendor prefix: bare model names from Azure OpenAI / OpenAI on SAP
+    # o-series (o1, o3, o4-mini, …) and gpt-5* family both support reasoning_effort
+    canonical = model
+    if len(canonical) > 1 and canonical[0] == "o" and canonical[1].isdigit():
+        return True
+    return canonical == "gpt-5" or canonical.startswith("gpt-5-") or canonical.startswith("gpt-5.")
+
+
+def _sap_supports_thinking(model: str) -> bool:
+    vendor = _vendor(model)
+    if vendor == "cohere":
+        return "reasoning" in _canonical_model_name(model)
+    return _sap_supports_reasoning_effort(model)
+
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: FrozenSet[str] = frozenset(
@@ -120,6 +164,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     tools: Optional[list] = None
     tool_choice: Optional[Union[str, dict]] = None  #
     model_version: str = "latest"
+    reasoning_effort: str | dict | None = (
+        None  # pep604 style intentional: ruff-strict-budget forbids new Optional[...] violations
+    )
+    thinking: dict | None = None  # same
 
     def __init__(
         self,
@@ -223,6 +271,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "response_format",
             "timeout",
         ]
+        if _sap_supports_reasoning_effort(model):
+            params.append("reasoning_effort")
+        if _sap_supports_thinking(model):
+            params.append("thinking")
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
             model.startswith("amazon")
@@ -409,9 +461,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 if isinstance(item, dict)
             ]
             msg["thinking_blocks"] = thinking_blocks
-            msg["reasoning_content"] = "\n".join(
-                b["thinking"] for b in thinking_blocks if b["thinking"]
-            ) or None
+            msg["reasoning_content"] = "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
         return raw
 
     def transform_response(
