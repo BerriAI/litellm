@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -140,7 +141,15 @@ export const getTeamTableColumns = ({
     {
       id: "team_alias",
       accessorKey: "team_alias",
-      meta: { title: "Team", skeleton: "twoLine" },
+      meta: {
+        title: "Team",
+        renderSkeleton: () => (
+          <div className="flex flex-col gap-2 py-1">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-3.5 w-24 opacity-65" />
+          </div>
+        ),
+      },
       header: ({ column }) => <DataTableSortHeader column={column} title="Team" variant="header-cycle" />,
       size: 260,
       enableSorting: true,
@@ -178,7 +187,16 @@ export const getTeamTableColumns = ({
     },
     {
       id: "resources",
-      meta: { title: "Resources", skeleton: "chips" },
+      meta: {
+        title: "Resources",
+        renderSkeleton: () => (
+          <div className="flex items-center gap-1.5">
+            <Skeleton className="h-6 w-12 rounded-md" />
+            <Skeleton className="h-6 w-12 rounded-md" />
+            <Skeleton className="h-6 w-12 rounded-md opacity-65" />
+          </div>
+        ),
+      },
       header: "Resources",
       size: 210,
       enableSorting: false,
@@ -220,7 +238,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "rate_limits",
-      meta: { title: "Rate Limits" },
+      meta: { title: "Rate Limits", skeleton: "twoLine" },
       header: "Rate Limits",
       size: 140,
       enableSorting: false,
