@@ -644,6 +644,10 @@ async def test_get_resources_from_mcp_servers_success():
     mock_allowed.assert_awaited_once()
     assert mock_headers.call_count == 2
     assert mock_manager.get_resources_from_server.await_count == 2
+    assert all(
+        call.kwargs["user_api_key_auth"] is user_api_key_auth
+        for call in mock_manager.get_resources_from_server.await_args_list
+    )
     assert {resource.name for resource in resources} == {
         "resource_a",
         "resource_b",
@@ -702,7 +706,36 @@ async def test_get_resource_templates_from_mcp_servers_success():
     mock_allowed.assert_awaited_once()
     mock_headers.assert_called_once()
     mock_manager.get_resource_templates_from_server.assert_awaited_once()
+    assert mock_manager.get_resource_templates_from_server.await_args.kwargs["user_api_key_auth"] is user_api_key_auth
     assert [template.name for template in templates] == ["template"]
+
+
+@pytest.mark.asyncio
+async def test_resource_listing_passes_user_auth_to_oauth_resolver():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="user")
+    server = MCPServer(
+        server_id="oauth-server",
+        name="oauth-server",
+        transport=MCPTransport.http,
+        url="https://example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+    )
+    client = MagicMock()
+    client.list_resources = AsyncMock(return_value=[])
+    client.list_resource_templates = AsyncMock(return_value=[])
+
+    with patch.object(manager, "_create_mcp_client", AsyncMock(return_value=client)) as create_client:
+        await manager.get_resources_from_server(server, user_api_key_auth=user_api_key_auth)
+        assert create_client.await_args.kwargs["user_api_key_auth"] is user_api_key_auth
+
+        create_client.reset_mock()
+        await manager.get_resource_templates_from_server(server, user_api_key_auth=user_api_key_auth)
+        assert create_client.await_args.kwargs["user_api_key_auth"] is user_api_key_auth
 
 
 @pytest.mark.asyncio
