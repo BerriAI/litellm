@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy.management_endpoints.usage_endpoints.scoped_data import (
+from litellm.proxy.management_endpoints.dashboard_ai.scoped_data import (
     AdminScope,
     ScopedUsageDataProvider,
     UserScope,

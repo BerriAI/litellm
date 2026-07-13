@@ -42,7 +42,7 @@ class AdminScope:
     """Global view. ``caller_user_id`` is the admin's own id (may be None) and
     is not used to filter; admins may optionally pass an explicit user filter."""
 
-    caller_user_id: Optional[str]
+    caller_user_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +55,7 @@ class UserScope:
 AiChatScope = Union[AdminScope, UserScope]
 
 
-def _parse_csv(raw: Optional[str]) -> Optional[List[str]]:
+def _parse_csv(raw: str | None) -> List[str] | None:
     if not raw:
         return None
     return [t.strip() for t in raw.split(",") if t.strip()]
@@ -73,7 +73,7 @@ class ScopedUsageDataProvider:
         return isinstance(self._scope, AdminScope)
 
     async def usage(
-        self, start_date: str, end_date: str, user_id_filter: Optional[str]
+        self, start_date: str, end_date: str, user_id_filter: str | None
     ) -> SpendAnalyticsPaginatedResponse:
         scope = self._scope
         effective_user_id = scope.user_id if isinstance(scope, UserScope) else user_id_filter
@@ -93,13 +93,13 @@ class ScopedUsageDataProvider:
             api_key=None,
         )
 
-    async def team(self, start_date: str, end_date: str, team_ids: Optional[str]) -> SpendAnalyticsPaginatedResponse:
+    async def team(self, start_date: str, end_date: str, team_ids: str | None) -> SpendAnalyticsPaginatedResponse:
         self._require_admin("team usage")
         return await self._paginated(
             TABLE_DAILY_TEAM_SPEND, ENTITY_FIELD_TEAM, _parse_csv(team_ids), start_date, end_date
         )
 
-    async def tag(self, start_date: str, end_date: str, tags: Optional[str]) -> SpendAnalyticsPaginatedResponse:
+    async def tag(self, start_date: str, end_date: str, tags: str | None) -> SpendAnalyticsPaginatedResponse:
         self._require_admin("tag usage")
         return await self._paginated(TABLE_DAILY_TAG_SPEND, ENTITY_FIELD_TAG, _parse_csv(tags), start_date, end_date)
 
@@ -111,7 +111,7 @@ class ScopedUsageDataProvider:
         self,
         table_name: str,
         entity_id_field: str,
-        entity_id: Optional[List[str]],
+        entity_id: List[str] | None,
         start_date: str,
         end_date: str,
     ) -> SpendAnalyticsPaginatedResponse:

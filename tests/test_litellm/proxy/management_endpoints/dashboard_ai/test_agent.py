@@ -20,17 +20,17 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.proxy.management_endpoints.usage_endpoints import agent as agent_mod
-from litellm.proxy.management_endpoints.usage_endpoints.agent import (
+from litellm.proxy.management_endpoints.dashboard_ai import agent as agent_mod
+from litellm.proxy.management_endpoints.dashboard_ai.agent import (
     LLMCallError,
     ModelNotConfigured,
     RouterUnavailable,
     _error_event,
     resolve_model,
-    stream_usage_ai_chat,
+    stream_dashboard_ai_chat,
     tools_for_role,
 )
-from litellm.proxy.management_endpoints.usage_endpoints.scoped_data import (
+from litellm.proxy.management_endpoints.dashboard_ai.scoped_data import (
     AdminScope,
     ScopedUsageDataProvider,
     UserScope,
@@ -98,7 +98,7 @@ async def _collect(provider, messages, model, router):
     ):
         mock_agg.return_value = _usage_response_mock()
         events = []
-        async for raw in stream_usage_ai_chat(provider=provider, messages=messages, model=model):
+        async for raw in stream_dashboard_ai_chat(provider=provider, messages=messages, model=model):
             events.append(json.loads(raw.replace("data: ", "").strip()))
         return events, mock_agg
 
@@ -184,7 +184,7 @@ class TestMultiRoundLoop:
             mock_paginated.return_value = _usage_response_mock()
             events = [
                 json.loads(raw.replace("data: ", "").strip())
-                async for raw in stream_usage_ai_chat(
+                async for raw in stream_dashboard_ai_chat(
                     provider=provider, messages=[{"role": "user", "content": "q"}], model="m"
                 )
             ]
@@ -224,7 +224,7 @@ class TestErrorPaths:
         ):
             events = [
                 json.loads(raw.replace("data: ", "").strip())
-                async for raw in stream_usage_ai_chat(
+                async for raw in stream_dashboard_ai_chat(
                     provider=provider, messages=[{"role": "user", "content": "q"}], model=None
                 )
             ]
@@ -240,7 +240,7 @@ class TestErrorPaths:
         with patch.object(agent_mod, "_require_router", side_effect=agent_mod._RouterUnavailableError()):
             events = [
                 json.loads(raw.replace("data: ", "").strip())
-                async for raw in stream_usage_ai_chat(
+                async for raw in stream_dashboard_ai_chat(
                     provider=provider, messages=[{"role": "user", "content": "q"}], model="m"
                 )
             ]
@@ -257,7 +257,7 @@ class TestErrorPaths:
         with patch.object(agent_mod, "_require_router", return_value=broken_router):
             events = [
                 json.loads(raw.replace("data: ", "").strip())
-                async for raw in stream_usage_ai_chat(
+                async for raw in stream_dashboard_ai_chat(
                     provider=provider, messages=[{"role": "user", "content": "q"}], model="m"
                 )
             ]

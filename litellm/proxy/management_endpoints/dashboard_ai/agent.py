@@ -10,13 +10,18 @@ rate-limited, and guardrailed like any other proxy request.
 import json
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Set, Union, cast
+from typing import Any, AsyncIterator, Dict, List, Literal, Set, Union, cast
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.management_endpoints.dashboard_ai.scoped_data import (
+    ScopedUsageDataProvider,
+    summarise_entity_data,
+    summarise_usage_data,
+)
 from litellm.router import Router
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -24,11 +29,6 @@ from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
-)
-from litellm.proxy.management_endpoints.usage_endpoints.scoped_data import (
-    ScopedUsageDataProvider,
-    summarise_entity_data,
-    summarise_usage_data,
 )
 
 USAGE_AI_TEMPERATURE = 0.2
@@ -127,7 +127,7 @@ def _require_router() -> Router:
     return llm_router
 
 
-def _assembled_message(chunks: List[object]) -> Optional[Message]:
+def _assembled_message(chunks: List[object]) -> Message | None:
     """Reassemble streamed chunks into a single message (content + tool_calls)."""
     built = litellm.stream_chunk_builder(chunks)
     if not isinstance(built, ModelResponse) or not built.choices:
@@ -136,7 +136,7 @@ def _assembled_message(chunks: List[object]) -> Optional[Message]:
     return choice.message if isinstance(choice, Choices) else None  # pyright: ignore[reportUnnecessaryIsInstance]  # choices[0] can be StreamingChoices at runtime
 
 
-def resolve_model(requested: Optional[str]) -> Union[str, ModelNotConfigured]:
+def resolve_model(requested: str | None) -> Union[str, ModelNotConfigured]:
     """Resolve the model group to use: explicit request wins, then the
     configured ``usage_ai_model`` setting, else an actionable error value."""
     explicit = (requested or "").strip()
@@ -145,7 +145,7 @@ def resolve_model(requested: Optional[str]) -> Union[str, ModelNotConfigured]:
 
     from litellm.proxy.proxy_server import general_settings
 
-    configured = TypeAdapter(Optional[str]).validate_python(general_settings.get(USAGE_AI_MODEL_SETTING))
+    configured = TypeAdapter(str | None).validate_python(general_settings.get(USAGE_AI_MODEL_SETTING))
     stripped = (configured or "").strip()
     return stripped or ModelNotConfigured()
 
@@ -235,19 +235,19 @@ _TOOL_LABELS = {
 class _UsageArgs(BaseModel):
     start_date: str
     end_date: str
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 class _TeamArgs(BaseModel):
     start_date: str
     end_date: str
-    team_ids: Optional[str] = None
+    team_ids: str | None = None
 
 
 class _TagArgs(BaseModel):
     start_date: str
     end_date: str
-    tags: Optional[str] = None
+    tags: str | None = None
 
 
 async def _dispatch_tool(name: str, raw_args: Dict[str, Any], provider: ScopedUsageDataProvider) -> str:
@@ -341,10 +341,10 @@ async def _run_tool_call(
     convo.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
 
-async def stream_usage_ai_chat(
+async def stream_dashboard_ai_chat(
     provider: ScopedUsageDataProvider,
     messages: List[Dict[str, str]],
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status -> tool_call -> chunk -> done (or a single error)."""
     resolved = resolve_model(model)

@@ -1,10 +1,10 @@
 """
-USAGE AI CHAT ENDPOINT
+DASHBOARD AI CHAT ENDPOINT
 
-/usage/ai/chat - Stream AI chat responses about usage data
+/dashboard/ai/chat - Stream AI chat responses about usage data
 """
 
-from typing import List, Literal, Optional
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -21,18 +21,18 @@ class ChatMessage(BaseModel):
     content: str
 
 
-class UsageAIChatRequest(BaseModel):
+class DashboardAIChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
-    model: Optional[str] = Field(default=None, description="Model group to use for AI chat")
+    model: str | None = Field(default=None, description="Model group to use for AI chat")
 
 
 @router.post(
-    "/usage/ai/chat",
+    "/dashboard/ai/chat",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def usage_ai_chat(
-    data: UsageAIChatRequest,
+async def dashboard_ai_chat(
+    data: DashboardAIChatRequest,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -47,10 +47,10 @@ async def usage_ai_chat(
     from litellm.proxy.management_endpoints.common_utils import (
         require_caller_user_id_for_non_admin,
     )
-    from litellm.proxy.management_endpoints.usage_endpoints.agent import (
-        stream_usage_ai_chat,
+    from litellm.proxy.management_endpoints.dashboard_ai.agent import (
+        stream_dashboard_ai_chat,
     )
-    from litellm.proxy.management_endpoints.usage_endpoints.scoped_data import (
+    from litellm.proxy.management_endpoints.dashboard_ai.scoped_data import (
         AdminScope,
         ScopedUsageDataProvider,
         UserScope,
@@ -66,7 +66,7 @@ async def usage_ai_chat(
     messages = [{"role": m.role, "content": m.content} for m in data.messages]
 
     return StreamingResponse(
-        stream_usage_ai_chat(provider=provider, messages=messages, model=data.model),
+        stream_dashboard_ai_chat(provider=provider, messages=messages, model=data.model),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
