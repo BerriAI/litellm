@@ -280,6 +280,34 @@ it("sorts by the backend key_alias field (not the column label) when the Key hea
   });
 });
 
+it("sorts by the backend max_budget field when 'Budget descending' is chosen from the Spend / Budget menu", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+
+  await user.click(screen.getByTestId("sort-trigger-spend"));
+  await user.click(await screen.findByText("Budget descending"));
+
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ sortBy: "max_budget", sortOrder: "desc" }),
+    );
+  });
+});
+
+it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+
+  await user.click(screen.getByTestId("sort-trigger-spend"));
+  await user.click(await screen.findByText("Spend ascending"));
+
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "spend", sortOrder: "asc" }));
+  });
+});
+
 it("should open KeyInfoView when clicking the key cell", async () => {
   renderWithProviders(<VirtualKeysTable />);
 

@@ -26,6 +26,12 @@ interface SearchSelectProps {
   className?: string;
 }
 
+const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return option.label.toLowerCase().includes(q) || (option.sublabel?.toLowerCase().includes(q) ?? false);
+};
+
 export function SearchSelect({
   options,
   value,
@@ -44,11 +50,7 @@ export function SearchSelect({
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
-      filter={(item: SearchSelectOption, query: string) => {
-        const q = query.trim().toLowerCase();
-        if (!q) return true;
-        return item.label.toLowerCase().includes(q) || (item.sublabel?.toLowerCase().includes(q) ?? false);
-      }}
+      filter={matchesQuery}
       disabled={disabled}
     >
       <ComboboxInput

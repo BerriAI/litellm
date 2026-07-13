@@ -5,7 +5,7 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DataTable } from "./DataTable";
-import { DataTableSortHeader } from "./DataTableSortHeader";
+import { DataTableMultiSortHeader, DataTableSortHeader } from "./DataTableSortHeader";
 import { DataTableViewOptions } from "./DataTableViewOptions";
 
 interface Person {
@@ -51,6 +51,24 @@ const dropdownSortColumns: ColumnDef<Person, unknown>[] = [
   {
     accessorKey: "name",
     header: ({ column }) => <DataTableSortHeader column={column} title="Name" variant="dropdown-tristate" />,
+    cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+  },
+];
+
+const multiSortColumns: ColumnDef<Person, unknown>[] = [
+  {
+    id: "spend",
+    accessorKey: "name",
+    header: ({ table }) => (
+      <DataTableMultiSortHeader
+        table={table}
+        title="Spend / Budget"
+        fields={[
+          { id: "spend", label: "Spend" },
+          { id: "max_budget", label: "Budget" },
+        ]}
+      />
+    ),
     cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
   },
 ];
@@ -164,6 +182,60 @@ describe("DataTable sorting", () => {
     await user.click(screen.getByTestId("sort-trigger-name"));
     await user.click(await screen.findByText("Reset"));
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
+  });
+
+  it("multi-sort header emits the chosen field id (not the column id) as the sort key", async () => {
+    const user = userEvent.setup();
+    const onSortingChange = vi.fn();
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={multiSortColumns}
+        sortingMode="server"
+        sorting={[]}
+        onSortingChange={onSortingChange}
+      />,
+    );
+
+    await user.click(screen.getByTestId("sort-trigger-spend"));
+    await user.click(await screen.findByText("Budget descending"));
+    expect(onSortingChange).toHaveBeenLastCalledWith([{ id: "max_budget", desc: true }]);
+
+    await user.click(screen.getByTestId("sort-trigger-spend"));
+    await user.click(await screen.findByText("Spend ascending"));
+    expect(onSortingChange).toHaveBeenLastCalledWith([{ id: "spend", desc: false }]);
+  });
+
+  it("multi-sort header reflects the active field and direction, and Reset clears it", async () => {
+    const user = userEvent.setup();
+    const onSortingChange = vi.fn();
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={multiSortColumns}
+        sortingMode="server"
+        sorting={[{ id: "max_budget", desc: true }]}
+        onSortingChange={onSortingChange}
+      />,
+    );
+
+    await user.click(screen.getByTestId("sort-trigger-spend"));
+    // The header trigger shows the active (descending) indicator while sorted by a field it owns.
+    expect(screen.getByTestId("sort-trigger-spend").querySelector("[data-sort-indicator='desc']")).not.toBeNull();
+
+    await user.click(await screen.findByText("Reset"));
+    expect(onSortingChange).toHaveBeenLastCalledWith([]);
+  });
+});
+
+describe("DataTable layout", () => {
+  it("stretches the table to fill the container when resizing is on, so hidden columns leave no right-side gap", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} enableColumnResizing />);
+
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    // width pins the natural column total (horizontal scroll on overflow); minWidth:100% fills the gap on underflow.
+    expect(table?.style.minWidth).toBe("100%");
   });
 });
 
