@@ -8,10 +8,12 @@ Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
 
 from __future__ import annotations
 
+import hashlib
 import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from e2e_http import (
     NoBody,
@@ -49,7 +51,7 @@ from models import (
     OcrBody,
     OcrResponse,
     SpendLogRow,
-    SpendLogs,
+    SpendLogsPage,
     SpendLogsParams,
 )
 from e2e_config import (
@@ -63,6 +65,15 @@ from e2e_config import (
 from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
+
+
+def _hashed_if_raw_key(api_key: str | None) -> str | None:
+    """The v2 spend-logs filter matches the token as stored on the row (a
+    SHA-256 hash), not the raw ``sk-`` key. Mirror the proxy's ``hash_token`` so
+    a raw key filters correctly; an already-hashed value passes through."""
+    if api_key is None or not api_key.startswith("sk-"):
+        return api_key
+    return hashlib.sha256(api_key.encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,17 +254,40 @@ class Gateway:
     # ---- spend read-back ------------------------------------------------
 
     def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
+        """Every spend row matching ``params``, read by paging through the
+        paginated /spend/logs/v2. This replaces the deprecated, unpaginated
+        /spend/logs, which full-table-scans the entire spend history with the
+        heavy message/response columns included and OOM-kills the caller on a
+        large database. v2 needs an explicit window and matches the hashed token
+        the proxy stores, so a bounded default window is filled when the caller
+        gives none and an ``sk-`` key is hashed the way the proxy hashes it."""
+        now = datetime.now(timezone.utc)
+        fmt = "%Y-%m-%d %H:%M:%S"
+        query = params.model_copy(
+            update={
+                "api_key": _hashed_if_raw_key(params.api_key),
+                "start_date": params.start_date or (now - timedelta(days=1)).strftime(fmt),
+                "end_date": params.end_date or (now + timedelta(days=1)).strftime(fmt),
+            }
+        )
+        first = self._spend_logs_page(query, page=1)
+        if first is None:
+            return []
+        rest = (self._spend_logs_page(query, page=page) for page in range(2, first.total_pages + 1))
+        return [*first.data, *(row for page in rest if page is not None for row in page.data)]
+
+    def _spend_logs_page(self, query: SpendLogsParams, *, page: int) -> SpendLogsPage | None:
         result = self.transport.get(
-            "/spend/logs",
+            "/spend/logs/v2",
             headers=self.transport.master,
-            params=params,
-            response_type=SpendLogs,
+            params=query.model_copy(update={"page": page}),
+            response_type=SpendLogsPage,
         )
         match result:
-            case Success(data=logs):
-                return logs.root
+            case Success(data=page_data):
+                return page_data
             case _:
-                return []
+                return None
 
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None

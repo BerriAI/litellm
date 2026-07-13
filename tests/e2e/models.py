@@ -274,6 +274,10 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    page: int = 1
+    page_size: int = 100
 
 
 class SpendLogsPageParams(BaseModel):
