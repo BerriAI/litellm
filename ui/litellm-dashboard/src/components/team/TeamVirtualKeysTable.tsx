@@ -9,6 +9,7 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -43,7 +44,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
-  const [searchQuery] = useDebouncedValue(searchInput, { wait: 300 });
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchInput(value);

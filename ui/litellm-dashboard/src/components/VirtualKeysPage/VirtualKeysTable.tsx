@@ -3,6 +3,7 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -52,7 +53,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
-  const [searchQuery] = useDebouncedValue(searchInput, { wait: 300 });
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
   const getFilterValue = useCallback(
     (columnId: string): string | undefined => {
