@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -2575,6 +2576,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
+                    )
+                    model_call_details = redact_streaming_responses_for_custom_logger(
+                        model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
                     if self.stream is True:
