@@ -712,9 +712,12 @@ async def test_get_resource_templates_from_mcp_servers_success():
 
 @pytest.mark.asyncio
 async def test_resource_listing_passes_user_auth_to_oauth_resolver():
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        MCPServerManager,
-    )
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
 
     manager = MCPServerManager()
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="user")

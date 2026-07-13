@@ -1807,6 +1807,7 @@ class TestMCPServerManager:
             extra_headers=None,
             stdio_env=None,
             subject_token=None,
+            user_api_key_auth=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
