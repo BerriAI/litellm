@@ -67,20 +67,42 @@ typed error, never truncated."""
 _ENVELOPE_JWT_ALGORITHM = "HS256"
 
 
-class EnvelopeIdentity(BaseModel):
-    """The litellm identity the envelope binds the inner grant to.
+EnvelopeSubjectType: TypeAlias = Literal["key_hash", "user_id"]
+"""Discriminator for what litellm principal the envelope binds the grant to.
 
-    ``key_hash`` is the hashed litellm key that authorized the mint, never a raw
-    credential (and the edge rejects a bare hash presented as a bearer). Admission
-    reloads the live key record by it, so the key's current team/org/object-permission
-    restrictions and its revocation state are enforced at use time rather than frozen at
-    mint time. ``server_id`` binds the envelope to one MCP server so it cannot be replayed
-    across a server boundary.
+``key_hash`` is a hashed virtual key (the scripted two-header client mints under the key it
+presents at the token endpoint); ``user_id`` is a litellm user subject (the interactive DCR
+client mints under the SSO-authenticated user, which is the only identity that browser login
+yields). Admission reloads a key record for the first and a user record for the second, then
+runs both through the same live-policy gate, so team/org/budget/revocation enforcement is
+identical either way."""
+
+
+class EnvelopeIdentity(BaseModel):
+    """The litellm principal the envelope binds the inner grant to.
+
+    ``subject`` is the principal identifier and ``subject_type`` says how to resolve it: a
+    hashed litellm key (``key_hash``) or a litellm user id (``user_id``), never a raw
+    credential (and the edge rejects a bare hash or id presented as a bearer). Admission
+    reloads the live record by it, so the principal's current team/org restrictions and its
+    revocation state are enforced at use time rather than frozen at mint time. ``server_id``
+    binds the envelope to one MCP server so it cannot be replayed across a server boundary.
     """
 
     model_config = ConfigDict(frozen=True)
     server_id: str = Field(min_length=1)
-    key_hash: str = Field(min_length=1)
+    subject_type: EnvelopeSubjectType
+    subject: str = Field(min_length=1)
+
+
+def key_hash_identity(server_id: str, key_hash: str) -> EnvelopeIdentity:
+    """The identity for the scripted client that mints under a presented virtual key."""
+    return EnvelopeIdentity(server_id=server_id, subject_type="key_hash", subject=key_hash)
+
+
+def user_identity(server_id: str, user_id: str) -> EnvelopeIdentity:
+    """The identity for the interactive DCR client that mints under its SSO user subject."""
+    return EnvelopeIdentity(server_id=server_id, subject_type="user_id", subject=user_id)
 
 
 class UpstreamTokenGrant(BaseModel):
@@ -200,7 +222,8 @@ class _EnvelopeClaims(BaseModel):
     iat: int
     exp: int
     server_id: str = Field(min_length=1)
-    key_hash: str = Field(min_length=1)
+    subject_type: EnvelopeSubjectType
+    subject: str = Field(min_length=1)
     grant: str = Field(min_length=1)
 
 
@@ -236,7 +259,8 @@ def mint_envelope(
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
         server_id=identity.server_id,
-        key_hash=identity.key_hash,
+        subject_type=identity.subject_type,
+        subject=identity.subject,
         grant=_encrypt_grant_blob(_grant_plaintext(grant), keys.encryption_key),
     )
     token = ENVELOPE_PREFIX + jwt.encode(
@@ -281,7 +305,7 @@ def open_envelope(
     if not isinstance(grant, UpstreamTokenGrant):
         return grant
     return OpenedEnvelope(
-        identity=EnvelopeIdentity(server_id=claims.server_id, key_hash=claims.key_hash),
+        identity=EnvelopeIdentity(server_id=claims.server_id, subject_type=claims.subject_type, subject=claims.subject),
         grant=grant,
     )
 
