@@ -56,7 +56,7 @@ const eslintConfig = [
             {
               group: ["lodash", "lodash/*", "lodash.*"],
               message:
-                "lodash was removed from the dashboard; for debouncing use @tanstack/react-pacer (see src/utils/debounceConstants.ts for the shared wait).",
+                "lodash was removed from the dashboard. For debouncing use @tanstack/react-pacer (shared wait: src/utils/debounceConstants.ts); for other utilities prefer native ES equivalents.",
             },
           ],
         },
