@@ -4274,6 +4274,9 @@ async def test_register_bridge_relay_surfaces_upstream_error_not_500():
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error":"invalid_redirect_uri","error_description":"redirect_uri not allowed"}'
+    error_response.json = MagicMock(
+        return_value={"error": "invalid_redirect_uri", "error_description": "redirect_uri not allowed"}
+    )
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -4320,6 +4323,7 @@ async def test_register_non_bridge_upstream_error_relays_status_not_500():
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error":"invalid_client_metadata"}'
+    error_response.json = MagicMock(return_value={"error": "invalid_client_metadata"})
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -6205,3 +6209,65 @@ async def test_register_relays_rejection_when_http_client_raises():
 
     assert exc.value.status_code == 400
     assert "invalid_client_metadata" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_never_relays_out_of_contract_body_to_client():
+    """These endpoints serve unauthenticated OAuth clients, so a non-RFC6749 upstream body (HTML
+    error page, proxy banner, stack trace) must stay in server logs; the client sees only the
+    upstream status."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(404, text_body="<html>Error 404 stack trace: secret internals</html>")
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 404"}
+
+
+@pytest.mark.asyncio
+async def test_register_never_relays_out_of_contract_body_to_client():
+    """Same trust boundary for DCR: a non-RFC7591 rejection body is logged server-side and the
+    client detail names only the status."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    rejection = httpx.Response(
+        500,
+        text="<html>Tomcat stack trace with internals</html>",
+        request=httpx.Request("POST", "https://idp.example.com/register"),
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Server error '500'", request=rejection.request, response=rejection)
+    )
+
+    oauth2_server = _bridge_server(auth_type=MCPAuth.oauth2, dcr_bridge=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=raising_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=oauth2_server,
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+            )
+
+    assert exc.value.status_code == 500
+    assert str(exc.value.detail) == "upstream registration failed with HTTP 500"
+    assert "Tomcat" not in str(exc.value.detail)
