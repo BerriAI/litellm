@@ -801,6 +801,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         raise ValueError("defer_loading must be a boolean")
                     returned_tool["defer_loading"] = _defer_loading_function  # type: ignore[typeddict-item]
 
+        ## check if eager_input_streaming is set in the tool
+        _eager_input_streaming = tool.get("eager_input_streaming", None)
+        _eager_input_streaming_function = tool.get("function", {}).get("eager_input_streaming", None)
+        if returned_tool is not None:
+            tool_type = returned_tool.get("type", "")
+            if tool_type not in (
+                "tool_search_tool_regex_20251119",
+                "tool_search_tool_bm25_20251119",
+                "computer_20241022",
+                "computer_20250124",
+            ):
+                if _eager_input_streaming is not None:
+                    if not isinstance(_eager_input_streaming, bool):
+                        raise ValueError("eager_input_streaming must be a boolean")
+                    returned_tool["eager_input_streaming"] = _eager_input_streaming  # type: ignore[typeddict-item]
+                elif _eager_input_streaming_function is not None:
+                    if not isinstance(_eager_input_streaming_function, bool):
+                        raise ValueError("eager_input_streaming must be a boolean")
+                    returned_tool["eager_input_streaming"] = _eager_input_streaming_function  # type: ignore[typeddict-item]
+
         ## check if allowed_callers is set in the tool
         _allowed_callers = tool.get("allowed_callers", None)
         _allowed_callers_function = tool.get("function", {}).get("allowed_callers", None)
@@ -1441,25 +1461,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if any(
-                    substring in model
-                    for substring in {
-                        "sonnet-4.5",
-                        "sonnet-4-5",
-                        "opus-4.1",
-                        "opus-4-1",
-                        "opus-4.5",
-                        "opus-4-5",
-                        "opus-4.6",
-                        "opus-4-6",
-                        "opus-4.7",
-                        "opus-4-7",
-                        "sonnet-4.6",
-                        "sonnet-4-6",
-                        "sonnet_4.6",
-                        "sonnet_4_6",
-                    }
-                ):
+                if self._supports_model_capability(model, "supports_output_config"):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
@@ -2042,6 +2044,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Optional[List[Any]] = None
         compaction_blocks: Optional[List[Any]] = None
         for idx, content in enumerate(completion_response["content"]):
+            text_start = len(text_content)
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
@@ -2096,6 +2099,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         {
                             **citation,
                             "supported_text": content.get("text", ""),
+                            "supported_text_start_char_index": text_start,
+                            "supported_text_end_char_index": len(text_content),
                         }
                         for citation in content["citations"]
                     ]

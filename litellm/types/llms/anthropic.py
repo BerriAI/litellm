@@ -50,6 +50,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     defer_loading: bool
+    eager_input_streaming: bool
     allowed_callers: Optional[List[str]]
     input_examples: Optional[List[Dict[str, Any]]]
 
