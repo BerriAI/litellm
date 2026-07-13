@@ -13,6 +13,7 @@ import {
   LinkOutlined,
 } from "@ant-design/icons";
 import { MCPServer } from "./types";
+import { getGlobalLitellmHeaderName } from "@/components/networking";
 
 interface ByokCredentialModalProps {
   server: MCPServer;
@@ -56,7 +57,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ credential: apiKey.trim(), save: saveKey }),
       });
