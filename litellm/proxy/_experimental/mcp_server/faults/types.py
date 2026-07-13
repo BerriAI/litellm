@@ -7,7 +7,7 @@ when an upstream's status and error code are relayed independently.
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TypeAlias
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,8 +33,8 @@ class CallerRejected(BaseModel):
     model_config = ConfigDict(frozen=True)
     tag: Literal["caller_rejected"] = "caller_rejected"
     code: str
-    description: Optional[str] = None
-    error_uri: Optional[str] = None
+    description: str | None = None
+    error_uri: str | None = None
 
 
 class GatewayCredentialsRejected(BaseModel):

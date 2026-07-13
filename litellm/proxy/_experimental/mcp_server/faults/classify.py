@@ -35,7 +35,7 @@ def _safe_json(response: httpx.Response) -> object:
         return None
 
 
-def _bounded_field(value: object) -> "str | None":
+def _bounded_field(value: object) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     return value[:MAX_WIRE_FIELD_CHARS]
