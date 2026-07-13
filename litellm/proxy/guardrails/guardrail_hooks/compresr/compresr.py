@@ -74,6 +74,8 @@ _DEFAULT_MAX_BYTES_PER_CALL = 10 * 1024 * 1024
 # Aggregate ceiling across all recovery-store entries. max_bytes_per_call only
 # bounds a single call; this caps the whole store so many calls cannot exhaust it.
 _MAX_TOTAL_STORE_BYTES = 256 * 1024 * 1024
+# Max compresr_retrieve calls expanded into a single follow-up (repeats deduped).
+_MAX_RETRIEVALS_PER_LOOP = 8
 # The shared HTTP client defaults to a 600s read timeout; that is far too long
 # for an inline, on-request-path guardrail (a hung Compresr backend would pin
 # the request coroutine and a pooled connection for 10 minutes). Bound it so a
@@ -717,20 +719,46 @@ class CompresrGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Compresr: originals-store byte cap hit, evicted hash=%s", key)
         return bounded
 
-    def _retrieve_original(self, store_key: str | None, hash_value: str) -> str:
+    def _retrieve_original(self, store_key: str | None, hash_value: str) -> str | None:
+        """Stored original for a marker hash, or None if not issued for this
+        request (unknown, expired, or from another caller's scope)."""
         if store_key:
             originals, expiry = self._originals_by_call_id.get(store_key, ({}, 0.0))
             if expiry > time.monotonic() and hash_value in originals:
                 return originals[hash_value]
-            # A hash is only honored if it was issued by *this request's own*
-            # compression, scoped by caller identity + call id. Honoring any
-            # hash-shaped string in message text would be forgeable across
-            # requests and across tenants.
             verbose_proxy_logger.warning(
                 "Compresr retrieve: rejecting hash=%s (not issued for this request, or expired)",
                 _display_hash(hash_value),
             )
-        return f"[compresr: hash={_display_hash(hash_value)} not found, expired, or not issued for this request]"
+        return None
+
+    def _resolve_retrievals(
+        self, store_key: str | None, tool_calls: list[dict[str, object]]
+    ) -> tuple[list[tuple[dict[str, object], str]], bool]:
+        """Resolve compresr_retrieve calls to (call, result_text) pairs, deduping
+        repeated hashes and capping the count so the follow-up cannot be amplified.
+        The bool is True iff at least one call resolved to real stored content."""
+        retrieved: list[tuple[dict[str, object], str]] = []
+        seen: set[str] = set()
+        resolved_any = False
+        for idx, tc in enumerate(tool_calls):
+            arguments = tc.get("arguments", {})
+            hash_value = str(arguments.get("hash", "")) if isinstance(arguments, dict) else ""
+            if idx >= _MAX_RETRIEVALS_PER_LOOP:
+                result = "[compresr: retrieval limit reached for this turn]"
+            elif hash_value in seen:
+                result = "[compresr: already retrieved above for this hash]"
+            else:
+                content = self._retrieve_original(store_key, hash_value)
+                if content is None:
+                    result = f"[compresr: hash={_display_hash(hash_value)} not found, expired, or not issued for this request]"
+                else:
+                    seen.add(hash_value)
+                    resolved_any = True
+                    result = content
+            verbose_proxy_logger.debug("Compresr retrieve: hash=%s -> %d chars", _display_hash(hash_value), len(result))
+            retrieved.append((tc, result))
+        return retrieved, resolved_any
 
     async def _call_compress(
         self,
@@ -1086,15 +1114,10 @@ class CompresrGuardrail(CustomGuardrail):
 
         self._prune_originals()
         store_key = _scoped_store_key(logging_obj)
-        retrieved: list[tuple[dict[str, object], str]] = []
-        for tc in tool_calls:
-            arguments = tc.get("arguments", {})
-            hash_value = str(arguments.get("hash", "")) if isinstance(arguments, dict) else ""
-            content = self._retrieve_original(store_key, hash_value)
-            verbose_proxy_logger.debug(
-                "Compresr retrieve: hash=%s -> %d chars", _display_hash(hash_value), len(content)
-            )
-            retrieved.append((tc, content))
+        retrieved, resolved_any = self._resolve_retrievals(store_key, tool_calls)
+        if not resolved_any:
+            # Nothing this guardrail stored resolved; skip the extra provider round-trip.
+            return AgenticLoopPlan(run_agentic_loop=False)
 
         if _is_responses_api_response(response):
             follow_up_messages = list(messages) + _build_responses_followup_items(response, retrieved)
