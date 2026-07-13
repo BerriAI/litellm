@@ -4,7 +4,6 @@ on:
   schedule:
     - cron: "0 0 * * 0" # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,7 +11,7 @@ permissions:
 
 jobs:
   auto_update_price_and_context_window:
-    # if: github.repository == 'BerriAI/litellm'
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
