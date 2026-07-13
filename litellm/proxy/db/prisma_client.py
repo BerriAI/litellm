@@ -23,20 +23,24 @@ class IAMEndpoint:
     """Static parts of an RDS IAM-authenticated Postgres connection.
 
     The IAM token rotates every ~15 minutes; everything else (host, port, user,
-    database name, schema) stays fixed. We capture the static fields once so
-    refresh just regenerates the token and reassembles the URL.
+    database name, and the full query string) stays fixed. Only the credential
+    changes on refresh, so ``query`` captures the entire query string verbatim
+    (``schema``, ``connection_limit``, ``pool_timeout``, ``sslmode``,
+    ``pgbouncer``, and any custom params) and ``build_url`` reattaches it
+    unchanged. Dropping it here previously reset every Prisma pool knob back to
+    the engine default on each refresh.
     """
 
     host: str
     port: str
     user: str
     name: str
-    schema: str | None = None
+    query: str = ""
 
     def build_url(self, token: str) -> str:
         url = f"postgresql://{self.user}:{token}@{self.host}:{self.port}/{self.name}"
-        if self.schema:
-            url += f"?schema={self.schema}"
+        if self.query:
+            url += f"?{self.query}"
         return url
 
 
@@ -44,7 +48,8 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
     """Parse an IAMEndpoint from a Postgres URL.
 
     Used so a reader URL can drive its own IAM refresh without requiring
-    callers to set parallel DATABASE_HOST_READ_REPLICA / etc. env vars.
+    callers to set parallel DATABASE_HOST_READ_REPLICA / etc. env vars. The
+    entire query string is preserved so pool/SSL params survive token rotation.
     """
     parsed = urllib.parse.urlparse(url)
     if not parsed.hostname or not parsed.username:
@@ -53,18 +58,12 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
     if not name:
         raise ValueError("Cannot parse IAM endpoint from URL: missing database name")
     port = str(parsed.port) if parsed.port else "5432"
-    schema: str | None = None
-    if parsed.query:
-        qs = urllib.parse.parse_qs(parsed.query)
-        schema_vals = qs.get("schema")
-        if schema_vals:
-            schema = schema_vals[0]
     return IAMEndpoint(
         host=parsed.hostname,
         port=port,
         user=parsed.username,
         name=name,
-        schema=schema,
+        query=parsed.query,
     )
 
 
@@ -318,16 +317,33 @@ class PrismaWrapper:
             db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
 
             token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
 
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
+            query = self._writer_refresh_query()
+            if query:
+                _db_url += f"?{query}"
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
+
+    def _writer_refresh_query(self) -> str:
+        """Query string to reattach when the writer refreshes its IAM token.
+
+        Prefers the query already on the live URL so pool/SSL params applied at
+        startup (``connection_limit``, ``pool_timeout``, ``sslmode``,
+        ``pgbouncer``, custom params) survive rotation. Falls back to
+        ``DATABASE_SCHEMA`` for the legacy case where only discrete env vars
+        were set and no assembled URL exists yet.
+        """
+        current_url = os.getenv(self._db_url_env_var)
+        if current_url:
+            existing = urllib.parse.urlparse(current_url).query
+            if existing:
+                return existing
+        db_schema = os.getenv("DATABASE_SCHEMA")
+        return f"schema={db_schema}" if db_schema else ""
 
     async def recreate_prisma_client(
         self,
