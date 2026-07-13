@@ -1531,8 +1531,6 @@ async def register_client_with_server(
             status_code=502,
             detail="MCP upstream registration endpoint returned no response",
         )
-    if bridge_relay and response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
 
     token_response = response.json()
 
