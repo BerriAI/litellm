@@ -110,6 +110,55 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     assert body["arguments"] == tool_arguments
 
 
+@pytest.mark.asyncio
+async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
+    """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
+    tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an
+    upstream MCPUpstreamAuthError into an explicit isError result naming the status, not a masked
+    500 or a raw traceback, so the client still learns it must re-authenticate upstream."""
+    try:
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(UserAPIKeyAuth(api_key="test_key", user_id="test_user"))
+
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+        return data
+
+    async def mock_call_mcp_tool(*args, **kwargs):
+        raise MCPUpstreamAuthError(status_code=401, www_authenticate="Bearer", server_name="pt")
+
+    mock_logger = MagicMock()
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            mock_call_mcp_tool,
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                with patch("litellm.proxy._experimental.mcp_server.server.verbose_logger", mock_logger):
+                    result = await mcp_server_tool_call("test_tool", {"param": "value"})
+
+    assert result.isError is True
+    # The dedicated MCPUpstreamAuthError branch (not the generic Exception fallthrough) produces this
+    # specific message and logs at info, never a traceback via verbose_logger.exception.
+    assert "upstream authentication required" in result.content[0].text
+    assert "401" in result.content[0].text
+    exception_calls = [str(c.args[0]) for c in mock_logger.exception.call_args_list if c.args]
+    assert not any("mcp_server_tool_call" in m for m in exception_calls), (
+        "must not log a traceback for the expected re-auth"
+    )
+    info_calls = [str(c.args[0]) for c in mock_logger.info.call_args_list if c.args]
+    assert any("Upstream auth failure" in m for m in info_calls)
+
+
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
@@ -6854,3 +6903,86 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
     resolved = captured_servers["allowed"]
     assert resolved and resolved[0].oauth2_flow == "client_credentials"
     assert resolved[0].has_client_credentials is True
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # only the origin may be logged: userinfo, query, fragment, and the PATH are all stripped,
+        # because hosted MCP servers routinely embed the credential in the path (e.g. /mcp/s/<token>)
+        ("https://user:s3cr3t@mcp.example.com/mcp?token=abcd1234&x=1", "https://mcp.example.com"),
+        ("https://mcp.example.com/mcp#frag", "https://mcp.example.com"),
+        ("https://host:8443/a/b?q=1", "https://host:8443"),
+        ("https://mcp.zapier.com/api/mcp/s/NDgzcret-token/mcp", "https://mcp.zapier.com"),
+        ("https://mcp.notion.com/mcp", "https://mcp.notion.com"),
+        (None, None),
+        ("", None),
+        ("not a url", None),
+        ("http://[::1", None),
+    ],
+)
+def test_redact_mcp_resource_url_strips_credentials(url, expected):
+    """The MCP tool-call log records the upstream resource, so the URL must be redacted to
+    scheme+host+path: userinfo, query string, and fragment (which can carry embedded tokens or
+    secret parameters) must never reach spend-log metadata or logging callbacks."""
+    from litellm.proxy._experimental.mcp_server.server import _redact_mcp_resource_url
+
+    assert _redact_mcp_resource_url(url) == expected
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
+    """A client-forwarded pass-through upstream 401/403 (MCPUpstreamAuthError) is an expected
+    caller-must-reauth signal, not a failed call, so call_mcp_tool must re-raise it WITHOUT firing
+    post_call_failure_hook (which records a failure and can trip LLM exception alerts). The
+    streamable handler downgrades it to an informational isError result afterward."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+    from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mock_server = MCPServer(
+        server_id="server-auth",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=mock_server),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            new_callable=AsyncMock,
+            side_effect=MCPUpstreamAuthError(status_code=401, www_authenticate="Bearer", server_name="test_server"),
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock),
+    ):
+        with pytest.raises(MCPUpstreamAuthError):
+            await call_mcp_tool(
+                name="test_server-any_tool",
+                arguments={"x": 1},
+                user_api_key_auth=user_auth,
+                litellm_call_id="cid",
+            )
+
+    proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
