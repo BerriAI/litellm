@@ -36,4 +36,4 @@ jobs:
             --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
             --base main
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
