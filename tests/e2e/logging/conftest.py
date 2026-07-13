@@ -10,7 +10,14 @@ import os
 
 import pytest
 
-from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
+from logging_client import (
+    LangfuseCreds,
+    LoggingClient,
+    PhoenixCreds,
+    build_logging_client,
+    load_langfuse_creds,
+    load_phoenix_creds,
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -41,3 +48,11 @@ def datadog_creds() -> None:
 def langfuse_creds() -> LangfuseCreds:
     """Require real Langfuse cloud credentials for team callback + trace poll."""
     return load_langfuse_creds()
+
+
+@pytest.fixture(scope="session")
+def phoenix_creds() -> PhoenixCreds:
+    """Arize Phoenix read-back target: the local compose `phoenix` service by
+    default, or PHOENIX_BASE_URL / PHOENIX_PROJECT_NAME / PHOENIX_API_KEY for a
+    deployed instance. An unreachable Phoenix is a hard failure at poll time."""
+    return load_phoenix_creds()

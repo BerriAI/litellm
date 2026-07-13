@@ -149,14 +149,34 @@ class ChatBody(BaseModel):
     guardrails: list[str] | None = None
 
 
+class AnthropicTool(BaseModel):
+    name: str
+    description: str | None = None
+    input_schema: dict[str, object]
+
+
+class AnthropicToolChoice(BaseModel):
+    type: str
+    name: str | None = None
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     max_tokens: int
+    stream: bool | None = None
+    tools: list[AnthropicTool] | None = None
+    tool_choice: AnthropicToolChoice | None = None
+
+
+class AnthropicContentBlock(BaseModel):
+    type: str
+    name: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
     model: str | None = None
+    content: list[AnthropicContentBlock] = []
 
 
 class OutMessage(BaseModel):

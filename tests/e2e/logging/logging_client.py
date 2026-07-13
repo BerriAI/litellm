@@ -35,6 +35,9 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
+    AnthropicTool,
+    AnthropicToolChoice,
     ChatBody,
     ChatMessage,
     ChatResponse,
@@ -73,6 +76,31 @@ WEATHER_TOOL = ChatTool(
         },
     ),
 )
+
+PHOENIX_GENERATION_SPAN = "litellm_request"
+PHOENIX_PROXY_PARENT_SPAN = "litellm_proxy_request"
+_PHOENIX_MAX_PAGES = 20
+
+CLAUDE_CODE_TOOLS = [
+    AnthropicTool(
+        name="Read",
+        description="Read a file from the local filesystem",
+        input_schema={
+            "type": "object",
+            "properties": {"file_path": {"type": "string"}},
+            "required": ["file_path"],
+        },
+    ),
+    AnthropicTool(
+        name="Bash",
+        description="Execute a bash command and return its output",
+        input_schema={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    ),
+]
 
 
 class TeamCallbackBody(BaseModel):
@@ -176,6 +204,61 @@ class LangfuseCreds:
                 )
             ]
         )
+
+
+class PhoenixSpanContext(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    trace_id: str
+    span_id: str
+
+
+class PhoenixSpan(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    context: PhoenixSpanContext
+    parent_id: str | None = None
+    status_code: str
+    attributes: dict[str, JsonValue] = {}
+
+
+class PhoenixSpansPage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    data: list[PhoenixSpan] = []
+    next_cursor: str | None = None
+
+
+class PhoenixSpansParams(BaseModel):
+    limit: int = 100
+    cursor: str | None = None
+    start_time: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PhoenixCreds:
+    base_url: str
+    project: str
+    api_key: str | None
+
+    @property
+    def auth_headers(self) -> AuthHeaders:
+        if self.api_key is None:
+            return AuthHeaders()
+        return AuthHeaders(authorization=f"Bearer {self.api_key}")
+
+
+def load_phoenix_creds() -> PhoenixCreds:
+    """Local compose Phoenix by default (docker-compose.yml `phoenix` service);
+    env overrides point the read-back at a deployed Phoenix instead."""
+    base_url = (os.getenv("PHOENIX_BASE_URL") or "http://localhost:6006").rstrip("/")
+    project = os.getenv("PHOENIX_PROJECT_NAME") or "litellm-e2e"
+    return PhoenixCreds(base_url=base_url, project=project, api_key=os.getenv("PHOENIX_API_KEY"))
+
+
+def phoenix_span_blob(span: PhoenixSpan) -> str:
+    return json.dumps(span.attributes, default=str)
 
 
 def load_langfuse_creds() -> LangfuseCreds:
@@ -455,6 +538,33 @@ class LoggingClient:
             json=body,
         )
 
+    def messages_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        tools: list[AnthropicTool] | None = None,
+        tool_choice: AnthropicToolChoice | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        body = AnthropicMessagesBody(
+            model=model,
+            messages=[ChatMessage(role="user", content=text)],
+            max_tokens=max_tokens,
+            stream=True if stream else None,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        if stream:
+            return self.gateway.transport.stream(
+                "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+            )
+        return self.gateway.transport.send(
+            "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+        )
+
     def scrape_metrics(self) -> str:
         return self.gateway.probe("/metrics", params=NoBody()).body
 
@@ -486,6 +596,70 @@ class LoggingClient:
             if _matches(row):
                 return row
         return None
+
+    def list_phoenix_spans(
+        self,
+        creds: PhoenixCreds,
+        *,
+        since: str | None = None,
+    ) -> list[PhoenixSpan]:
+        """Every span Phoenix holds for the project (paged read of the
+        /v1/projects/{project}/spans REST route), newest window bounded by ``since``."""
+        pages: list[list[PhoenixSpan]] = []
+        cursor: str | None = None
+        for _ in range(_PHOENIX_MAX_PAGES):
+            result = get(
+                URL(f"{creds.base_url}/v1/projects/{creds.project}/spans"),
+                headers=creds.auth_headers,
+                params=PhoenixSpansParams(limit=100, cursor=cursor, start_time=since),
+                response_type=PhoenixSpansPage,
+                timeout=30.0,
+            )
+            match result:
+                case Success(data=page):
+                    pages.append(page.data)
+                    cursor = page.next_cursor
+                    if cursor is None:
+                        break
+                case _:
+                    break
+        return [span for page in pages for span in page]
+
+    def find_phoenix_spans(
+        self,
+        creds: PhoenixCreds,
+        *,
+        marker: str,
+        span_name: str = PHOENIX_GENERATION_SPAN,
+        since: str | None = None,
+    ) -> list[PhoenixSpan]:
+        return [
+            span
+            for span in self.list_phoenix_spans(creds, since=since)
+            if span.name == span_name and marker in phoenix_span_blob(span)
+        ]
+
+    def poll_phoenix_spans(
+        self,
+        creds: PhoenixCreds,
+        *,
+        marker: str,
+        span_name: str = PHOENIX_GENERATION_SPAN,
+        min_count: int = 1,
+        since: str | None = None,
+    ) -> list[PhoenixSpan]:
+        """Poll until at least ``min_count`` spans named ``span_name`` carry
+        ``marker`` in their attributes, or the poll budget runs out."""
+        deadline = time.monotonic() + POLL_TIMEOUT
+        matched: list[PhoenixSpan] = []
+        while time.monotonic() < deadline:
+            matched = self.find_phoenix_spans(
+                creds, marker=marker, span_name=span_name, since=since
+            )
+            if len(matched) >= min_count:
+                return matched
+            time.sleep(POLL_INTERVAL)
+        return matched
 
     def list_langfuse_observations(
         self,
