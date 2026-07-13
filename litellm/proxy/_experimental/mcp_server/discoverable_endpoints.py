@@ -1376,6 +1376,7 @@ async def exchange_token_with_server(
     bridge_mint_ready: _BridgeMintReady | None = None
     bridge_upstream_refresh: SecretStr | None = None
     bridge_upstream_scope: str | None = None
+    refresh_request_scope: str | None = None
     is_bridge = mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge
 
     if grant_type == "refresh_token":
@@ -1404,9 +1405,9 @@ async def exchange_token_with_server(
             "refresh_token": upstream_refresh_token,
             **client_auth.body,
         }
-        effective_scope = scope or bridge_upstream_scope
-        if effective_scope:
-            token_data["scope"] = effective_scope
+        refresh_request_scope = scope or bridge_upstream_scope
+        if refresh_request_scope:
+            token_data["scope"] = refresh_request_scope
     else:
         if not code:
             raise HTTPException(
@@ -1533,6 +1534,8 @@ async def exchange_token_with_server(
     # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
     # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
     if bridge_mint_ready is not None:
+        if refresh_request_scope and isinstance(token_response, dict) and not token_response.get("scope"):
+            token_response = {**token_response, "scope": refresh_request_scope}
         # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
         # OAuth-shaped response as the phase-1 preconditions.
         minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))

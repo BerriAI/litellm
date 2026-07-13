@@ -5012,6 +5012,47 @@ async def test_bridge_refresh_re_requests_the_sealed_scope_when_client_omits_it(
 
 
 @pytest.mark.asyncio
+async def test_bridge_refresh_re_seals_scope_when_upstream_omits_it_so_the_chain_keeps_it():
+    """RFC 6749 5.1 lets an upstream omit scope in a refresh response when it is unchanged. The re-minted
+    refresh envelope must still seal the scope that was requested, otherwise the NEXT refresh loses it and
+    a stricter upstream could narrow the token. The returned refresh envelope carries the scope even though
+    the upstream response had none, and a second refresh off it still re-requests the scope."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        envelope_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        OpenedRefreshEnvelope,
+        open_refresh_envelope,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(
+        server_id=server.server_id, upstream_refresh="UP-1", scope="mcp:read mcp:write"
+    )
+    # the upstream rotates the refresh token but OMITS scope (valid when unchanged)
+    upstream_no_scope = {"access_token": "NEW", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "UP-2"}
+
+    captured: dict = {}
+    r1 = await _refresh_for_bridge_server(server, refresh_env, upstream_no_scope, None, fake_client_out=captured)
+    assert r1.status_code == 200
+    assert captured["client"].post.call_args.kwargs["data"]["scope"] == "mcp:read mcp:write"
+
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    new_env = json.loads(r1.body)["refresh_token"]
+    opened = open_refresh_envelope(new_env, keys, datetime.now(timezone.utc))
+    assert isinstance(opened, OpenedRefreshEnvelope)
+    assert opened.refresh.scope == "mcp:read mcp:write"
+
+    captured2: dict = {}
+    r2 = await _refresh_for_bridge_server(server, new_env, upstream_no_scope, None, fake_client_out=captured2)
+    assert r2.status_code == 200
+    assert captured2["client"].post.call_args.kwargs["data"]["scope"] == "mcp:read mcp:write"
+
+
+@pytest.mark.asyncio
 async def test_bridge_refresh_grant_with_deactivated_user_is_invalid_grant_before_upstream():
     """A user_id-subject refresh envelope whose user has since been deactivated (SCIM offboarding, or
     the user no longer exists) cannot keep refreshing: subject re-validation reports no_active_key and
