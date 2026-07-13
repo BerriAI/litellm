@@ -5047,6 +5047,137 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
         key_reload2.assert_not_awaited()
 
 
+def test_upstream_refresh_credential_expired_refresh_token_is_not_sealed():
+    """An upstream that reports its refresh token already elapsed (refresh_expires_in non-positive) must
+    not be sealed: _upstream_refresh_credential returns None so the exchange degrades to an access-only
+    response, mirroring how the access grant refuses an already-elapsed access token rather than capping a
+    dead token to the full refresh TTL. A live or unspecified lifetime still yields a credential."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _upstream_refresh_credential
+
+    assert _upstream_refresh_credential({"access_token": "A", "refresh_token": "R", "refresh_expires_in": 0}) is None
+    assert _upstream_refresh_credential({"refresh_token": "R", "refresh_expires_in": -5}) is None
+    live = _upstream_refresh_credential({"refresh_token": "R", "refresh_expires_in": 1800})
+    assert live is not None and live.expires_in == 1800
+    unspecified = _upstream_refresh_credential({"refresh_token": "R"})
+    assert unspecified is not None and unspecified.expires_in is None
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
+    """When the sealed upstream refresh token has been revoked or expired at the IdP, the upstream returns
+    400 invalid_grant. The bridge refresh path maps that to an RFC 6749 invalid_grant response so the OAuth
+    client re-runs authorization_code, rather than surfacing the opaque upstream error it cannot act on."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="LIVE-ENVELOPE-REFRESH")
+
+    error_response = MagicMock()
+    error_response.status_code = 400
+    error_response.text = '{"error": "invalid_grant", "error_description": "refresh token expired"}'
+    error_response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
+    )
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=error_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token=refresh_env,
+        )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
+async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_globals):
+    """A key_hash refresh envelope whose key is still active but whose OWNING user was SCIM-deactivated must
+    fail closed to no_active_key, mirroring how admission's _reject_if_admitted_owner_scim_deactivated
+    revokes an offboarded owner's key. Without this, an offboarded user keeps renewing a live key."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    resolved = _ResolvedKey(key_hash="kh", key=MagicMock(user_id="offboarded-owner"))
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            new=AsyncMock(return_value=resolved),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            new=AsyncMock(return_value=MagicMock(metadata={"scim_active": False})),
+        ),
+    ):
+        result = await _revalidate_active_subject(key_hash_identity(server_id="s", key_hash="kh"))
+
+    assert result == "no_active_key"
+
+
+@pytest.mark.asyncio
+async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fails_open(proxy_globals):
+    """The key-owner SCIM gate blocks only an explicit scim_active False: an active owner renews (None), and
+    a missing owner (get_user_object's wrapped ValueError) fails OPEN, since a key may outlive its owner
+    record and a transient blip must not revoke a live key."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+    resolved = _ResolvedKey(key_hash="kh", key=MagicMock(user_id="live-owner"))
+    identity = key_hash_identity(server_id="s", key_hash="kh")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            new=AsyncMock(return_value=resolved),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            new=AsyncMock(return_value=MagicMock(metadata={"scim_active": True})),
+        ),
+    ):
+        assert await _revalidate_active_subject(identity) is None
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            new=AsyncMock(return_value=resolved),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            new=AsyncMock(side_effect=_wrapped_user_lookup_error(Exception())),
+        ),
+    ):
+        assert await _revalidate_active_subject(identity) is None
+
+
 @pytest.mark.asyncio
 async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
     """master_key is validated BEFORE the upstream exchange (in _prepare_bridge_mint), so a
@@ -5857,25 +5988,28 @@ async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_glob
     assert await _resolve_active_litellm_key(request) == "unresolvable"
 
 
+def _wrapped_user_lookup_error(original: BaseException) -> ValueError:
+    """Reproduce get_user_object's real exception contract (litellm/proxy/auth/auth_checks.py): it
+    catches every DB failure in a broad ``except`` and re-raises a bare ``ValueError``, so the original
+    error (a missing-user Exception or a real outage) survives only as ``__context__``. Injecting a raw
+    ConnectionError/Exception instead would exercise a shape production never produces and let a
+    chain-blind outage classifier pass. The wrapping fidelity is pinned by
+    test_get_user_object_wraps_db_outage_as_valueerror_preserving_context in test_auth_checks."""
+    try:
+        raise original
+    except BaseException:
+        try:
+            raise ValueError(f"User doesn't exist in db. Got error - {original}")
+        except ValueError as wrapped:
+            return wrapped
+
+
 @pytest.mark.asyncio
 async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_globals):
     """A user_id refresh envelope whose user has been deleted must fail closed to no_active_key (the
-    refresh path maps it to invalid_grant), not unresolvable/500. get_user_object raises a bare Exception
-    for a missing user, so a missing user must not be misclassified as an opaque gateway fault."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    proxy_globals.user_api_key_cache = UserApiKeyCache()
-    proxy_globals.prisma_client = object()
-
-    with patch("litellm.proxy.auth.auth_checks.get_user_object", new=AsyncMock(side_effect=Exception("no user"))):
-        assert await _reload_active_user_by_id("gone-user") == "no_active_key"
-
-
-@pytest.mark.asyncio
-async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
-    """A transient DB outage while re-validating the user on refresh is a retryable outage, distinct from
-    a missing user, so the refresh path can surface a 503 rather than blaming the caller."""
+    refresh path maps it to invalid_grant), not unresolvable/500. get_user_object catches the missing row
+    and re-raises a bare ValueError, so a missing user must not be misclassified as a DB outage or an
+    opaque gateway fault."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5884,7 +6018,26 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
 
     with patch(
         "litellm.proxy.auth.auth_checks.get_user_object",
-        new=AsyncMock(side_effect=ConnectionError("user database unreachable")),
+        new=AsyncMock(side_effect=_wrapped_user_lookup_error(Exception())),
+    ):
+        assert await _reload_active_user_by_id("gone-user") == "no_active_key"
+
+
+@pytest.mark.asyncio
+async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
+    """A transient DB outage while re-validating the user on refresh is a retryable outage, distinct from
+    a missing user, so the refresh path surfaces "unavailable" (a 503) rather than blaming the caller.
+    get_user_object wraps the outage in a bare ValueError, so this exercises the chain-aware classifier; a
+    raw ConnectionError would falsely pass even a chain-blind check because it is an OSError."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        new=AsyncMock(side_effect=_wrapped_user_lookup_error(ConnectionError("user database unreachable"))),
     ):
         assert await _reload_active_user_by_id("sso-user-7") == "unavailable"
 
