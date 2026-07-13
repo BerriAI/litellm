@@ -27,6 +27,8 @@ jobs:
           uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
       - name: Create Pull Request
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add model_prices_and_context_window.json 
           git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
           gh pr create --title "Update model_prices_and_context_window.json file" \
