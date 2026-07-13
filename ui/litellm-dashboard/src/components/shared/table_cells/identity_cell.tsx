@@ -36,7 +36,10 @@ export function IdentityCell({ title, subtitle, badge, onClick, className, title
       <button
         type="button"
         onClick={onClick}
-        className={cn("group flex w-full items-center gap-2 rounded-md py-1 text-left", className)}
+        className={cn(
+          "group -mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted",
+          className,
+        )}
       >
         {body}
         <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />

@@ -26,12 +26,15 @@ describe("IdentityCell", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("renders a clickable button and fires onClick", async () => {
+  it("renders a clickable button that signals interactivity and fires onClick", async () => {
     const onClick = vi.fn();
     const user = userEvent.setup();
     render(<IdentityCell title="prod-gateway" subtitle="sk-...v0Pw" onClick={onClick} />);
     const button = screen.getByRole("button");
     expect(button.querySelector(".lucide-chevron-right")).not.toBeNull();
+    // The clickable area must read as clickable: a hover background and a pointer cursor.
+    expect(button.className).toContain("hover:bg-muted");
+    expect(button.className).toContain("cursor-pointer");
     await user.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
