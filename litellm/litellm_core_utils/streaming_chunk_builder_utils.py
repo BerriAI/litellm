@@ -601,9 +601,8 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = cast(
-                    Optional[PromptTokensDetailsWrapper],
-                    usage_chunk_dict["prompt_tokens_details"],
+                prompt_tokens_details = self._coalesce_prompt_tokens_details(
+                    prompt_tokens_details, usage_chunk_dict["prompt_tokens_details"]
                 )
 
                 cache_creation_token_details = self._capture_cache_creation_token_details(
@@ -630,6 +629,16 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
         )
+
+    @staticmethod
+    def _coalesce_prompt_tokens_details(
+        current: PromptTokensDetailsWrapper | None,
+        incoming: PromptTokensDetailsWrapper | None,
+    ) -> PromptTokensDetailsWrapper | None:
+        """Last-wins across chunks, but never let a chunk without the breakdown erase one that had it."""
+        if incoming is not None:
+            return cast(Optional[PromptTokensDetailsWrapper], incoming)
+        return current
 
     @staticmethod
     def _capture_cache_creation_token_details(
