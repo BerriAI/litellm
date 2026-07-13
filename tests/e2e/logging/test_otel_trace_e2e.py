@@ -23,7 +23,7 @@ from collections.abc import Callable
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
@@ -222,3 +222,47 @@ class TestOtelTraceCompleteness:
             settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric")
+    def test_responses_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """One successful non-streaming /v1/responses call must export ONE
+        complete OTEL trace: a single root SERVER span ("POST /v1/responses")
+        with auth/db/cost children and the gen-AI CLIENT span in the same tree,
+        exactly one trace for the call at the destination.
+
+        If the trace splits, agentic workloads lose observability at the worst
+        spot: the Responses API is the route agent frameworks increasingly
+        default to, and an orphaned gen-AI span means every agent step appears
+        in the destination with no originating request, no auth identity, and
+        no cost linkage - multi-step runs become untraceable.
+
+        /v1/responses is the newest of the three handlers with its own
+        translation layer; it's exactly where span-anchor plumbing regressions
+        land first, so it needs its own completeness pin rather than inheriting
+        confidence from the older routes (verified: at the pre-fix foil commit
+        1bd603d1ac this route orphans exactly like chat does). The gen-AI span
+        keeps the semconv operation name "chat" even on this surface, so the
+        expected span is "chat <model>", not "responses <model>".
+        """
+        route = "/v1/responses"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-trace-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        genai_span = f"chat {CHEAP_OPENAI_MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span)
