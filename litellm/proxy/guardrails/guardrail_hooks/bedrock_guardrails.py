@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
+from itertools import groupby
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -90,11 +91,29 @@ _CONTENT_TYPE_TO_QUALIFIER: Dict[str, BedrockGuardrailQualifier] = {
 _GROUNDING_SOURCE_TRUSTED_ROLES = frozenset({"system", "developer"})
 
 
+class ContentBlockLocation(NamedTuple):
+    """Structural location of a text block within a message's content, so masking
+    write-back can place replacement text at the exact position extraction read it
+    from instead of re-deriving positions independently (the two must never drift).
+
+    content_index: index into message["content"] when it is a list; None when
+    message["content"] is a bare string (whole-message replacement).
+
+    tool_result_content_index: index into a tool_result's own "content" list;
+    -1 when that "content" is a bare string; None when the item at content_index
+    is not a tool_result (its own text lives directly on it).
+    """
+
+    content_index: int | None
+    tool_result_content_index: int | None
+
+
 class QualifiedTextBlock(NamedTuple):
     """A piece of message text paired with its Bedrock grounding qualifier (if any)."""
 
     text: str
     qualifier: Optional[BedrockGuardrailQualifier]
+    location: ContentBlockLocation | None = None
 
 
 class GuardrailMessageFilterResult(NamedTuple):
@@ -279,27 +298,76 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             bedrock_request = self._create_bedrock_output_content_request(response=response, messages=messages)
         return bedrock_request
 
-    def get_content_items_for_message(self, message: AllMessageValues) -> Optional[List[QualifiedTextBlock]]:
+    def get_content_items_for_message(self, message: AllMessageValues) -> list[QualifiedTextBlock] | None:
         """
         Flatten a message into text blocks, preserving any contextual-grounding
         qualifier carried by the content-block ``type`` (grounding_source / query).
         Untagged text keeps ``qualifier=None`` so the payload is unchanged for
-        callers that do not use grounding.
+        callers that do not use grounding. Each block records the structural
+        ``location`` it was read from, so masking write-back can target the exact
+        same position instead of re-deriving it independently.
         """
         content = message.get("content")
         if content is None:
             return None
-        blocks: List[QualifiedTextBlock] = []
         if isinstance(content, str):
-            blocks.append(QualifiedTextBlock(text=content, qualifier=None))
-        elif isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and "text" in item:
-                    qualifier = _CONTENT_TYPE_TO_QUALIFIER.get(item.get("type", ""))
-                    blocks.append(QualifiedTextBlock(text=item["text"], qualifier=qualifier))
-                elif isinstance(item, str):
-                    blocks.append(QualifiedTextBlock(text=item, qualifier=None))
-        return blocks
+            return [QualifiedTextBlock(text=content, qualifier=None, location=ContentBlockLocation(None, None))]
+        if isinstance(content, list):
+            return [
+                block
+                for content_index, item in enumerate(content)
+                for block in self._get_content_item_text_blocks(item=item, content_index=content_index)
+            ]
+        return []
+
+    def _get_content_item_text_blocks(self, item: Any, content_index: int) -> list[QualifiedTextBlock]:
+        """Extract the text block(s) a single content-list item contributes."""
+        if isinstance(item, dict) and item.get("type") == "tool_result":
+            return self._get_tool_result_text_blocks(item=item, content_index=content_index)
+        if isinstance(item, dict) and "text" in item:
+            qualifier = _CONTENT_TYPE_TO_QUALIFIER.get(item.get("type", ""))
+            return [
+                QualifiedTextBlock(
+                    text=item["text"],
+                    qualifier=qualifier,
+                    location=ContentBlockLocation(content_index, None),
+                )
+            ]
+        if isinstance(item, str):
+            return [QualifiedTextBlock(text=item, qualifier=None, location=ContentBlockLocation(content_index, None))]
+        return []
+
+    def _get_tool_result_text_blocks(self, item: dict, content_index: int) -> list[QualifiedTextBlock]:
+        """
+        Extract text blocks from an Anthropic ``tool_result`` content item.
+
+        A tool_result's own text lives under its ``content`` key (never a top-level
+        ``text`` key), as either a bare string or a list of text/image/document blocks.
+        Every block is forced to ``qualifier=None``: tool_result content is returned by
+        a tool, not authored by the app, so it must never be trusted to supply a
+        grounding_source/query qualifier (see ``_GROUNDING_SOURCE_TRUSTED_ROLES``) --
+        otherwise a malicious tool output could inject fake contextual-grounding evidence.
+        """
+        tool_result_content = item.get("content")
+        if isinstance(tool_result_content, str):
+            return [
+                QualifiedTextBlock(
+                    text=tool_result_content,
+                    qualifier=None,
+                    location=ContentBlockLocation(content_index, -1),
+                )
+            ]
+        if isinstance(tool_result_content, list):
+            return [
+                QualifiedTextBlock(
+                    text=nested_item["text"],
+                    qualifier=None,
+                    location=ContentBlockLocation(content_index, nested_index),
+                )
+                for nested_index, nested_item in enumerate(tool_result_content)
+                if isinstance(nested_item, dict) and "text" in nested_item
+            ]
+        return []
 
     def _build_content_item(self, block: QualifiedTextBlock) -> BedrockContentItem:
         """Build a Bedrock content item, attaching qualifiers only when present."""
@@ -381,6 +449,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         Returns None when the reconstruction does not line up with `texts`
         (the caller must then avoid positional write-back).
+
+        _count_message_texts does not know about text nested inside a
+        tool_result block, so it can undercount the target message relative to
+        get_content_items_for_message (the real, tool_result-aware count). The
+        `total != len(texts)` check alone does not catch every such case: if
+        `texts` was itself built by an equally-undercounting extractor upstream,
+        the totals can still agree. Comparing target_count against the real
+        count closes that gap directly, regardless of what produced `texts`.
         """
         offset = 0
         total = 0
@@ -393,6 +469,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 target_count = count
             total += count
         if total != len(texts) or target_count == 0:
+            return None
+        real_target_count = len(self.get_content_items_for_message(structured_messages[target_index]) or [])
+        if real_target_count != target_count:
             return None
         return offset, target_count
 
@@ -1506,74 +1585,119 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self, messages: List[AllMessageValues], masked_texts: List[str]
     ) -> List[AllMessageValues]:
         """
-        Apply masked texts to message content using index tracking.
+        Apply masked texts to message content.
+
+        Re-derives each message's text blocks via get_content_items_for_message --
+        the same function that built the scan payload -- and writes masked text back
+        using each block's recorded ``location``, instead of a hand-maintained parallel
+        traversal. This is what keeps extraction and write-back from drifting apart.
 
         Args:
             messages: Original messages
-            masked_texts: List of masked text strings from guardrail
+            masked_texts: List of masked text strings from guardrail, in the order
+                get_content_items_for_message produced blocks across ``messages``.
 
         Returns:
             Updated messages with masked content
         """
-        updated_messages = []
+        updated_messages: List[AllMessageValues] = []
         masking_index = 0
 
         for message in messages:
-            new_message = message.copy()
-            content = new_message.get("content")
+            blocks = self.get_content_items_for_message(message=message) or []
+            replacement_texts = [
+                masked_texts[masking_index + i] if masking_index + i < len(masked_texts) else block.text
+                for i, block in enumerate(blocks)
+            ]
+            masking_index += len(blocks)
 
-            # Skip messages with no content
-            if content is None:
-                updated_messages.append(new_message)
-                continue
-
-            # Handle string content
-            if isinstance(content, str):
-                if masking_index < len(masked_texts):
-                    new_message["content"] = masked_texts[masking_index]
-                    masking_index += 1
-            # Handle list content
-            elif isinstance(content, list):
-                new_message["content"], masking_index = self._mask_content_list(
-                    content_list=content,
-                    masked_texts=masked_texts,
-                    masking_index=masking_index,
-                )
-
-            updated_messages.append(new_message)
+            updated_messages.append(
+                self._rebuild_message_with_blocks(message=message, blocks=blocks, replacement_texts=replacement_texts)
+            )
 
         return updated_messages
 
-    def _mask_content_list(
-        self, content_list: List[Any], masked_texts: List[str], masking_index: int
-    ) -> Tuple[List[Any], int]:
-        """
-        Apply masking to a list of content items.
+    def _rebuild_message_with_blocks(
+        self,
+        message: AllMessageValues,
+        blocks: list[QualifiedTextBlock],
+        replacement_texts: list[str],
+    ) -> AllMessageValues:
+        """Rebuild a message's content, replacing each block's text at its location."""
+        new_message = message.copy()
+        content = new_message.get("content")
 
-        Args:
-            content_list: List of content items
-            masked_texts: List of masked text strings
-            starting_index: Starting index in the masked_texts list
+        if isinstance(content, str):
+            new_message["content"] = replacement_texts[0] if replacement_texts else content
+            return new_message
 
-        Returns:
-            Updated content list with masked items
-        """
-        new_content: List[Union[dict, str]] = []
-        for item in content_list:
-            if isinstance(item, dict) and "text" in item:
-                new_item = item.copy()
-                if masking_index < len(masked_texts):
-                    new_item["text"] = masked_texts[masking_index]
-                    masking_index += 1
-                new_content.append(new_item)
-            elif isinstance(item, str):
-                if masking_index < len(masked_texts):
-                    item = masked_texts[masking_index]
-                    masking_index += 1
-                if item is not None:
-                    new_content.append(item)
+        if not isinstance(content, list):
+            return new_message
 
-        return new_content, masking_index
+        entries_by_content_index = self._group_entries_by_content_index(
+            blocks=blocks, replacement_texts=replacement_texts
+        )
+        new_message["content"] = [
+            self._rebuild_content_item(item=item, entries=entries_by_content_index.get(content_index, ()))
+            for content_index, item in enumerate(content)
+        ]
+        return new_message
+
+    @staticmethod
+    def _group_entries_by_content_index(
+        blocks: list[QualifiedTextBlock], replacement_texts: list[str]
+    ) -> dict[int, tuple[tuple[QualifiedTextBlock, str], ...]]:
+        """Group (block, replacement) pairs by the content-list index they belong to,
+        preserving block order within each group. Blocks lacking a content_index
+        (e.g. bare-string message content) are not part of any content list, so
+        they contribute no grouped entries."""
+        located_entries = tuple(
+            (location.content_index, entry)
+            for entry in zip(blocks, replacement_texts)
+            if (location := entry[0].location) is not None and location.content_index is not None
+        )
+        return {
+            content_index: tuple(entry for _, entry in group)
+            for content_index, group in groupby(located_entries, key=lambda located_entry: located_entry[0])
+        }
+
+    def _rebuild_content_item(self, item: Any, entries: tuple[tuple[QualifiedTextBlock, str], ...]) -> Any:
+        """Rebuild a single content-list item, replacing text at the given entries."""
+        if not entries:
+            return item
+        if isinstance(item, str):
+            return entries[0][1]
+        if not isinstance(item, dict):
+            return item
+
+        new_item = item.copy()
+        if item.get("type") == "tool_result":
+            return self._rebuild_tool_result_item(item=new_item, entries=entries)
+        if "text" in new_item:
+            new_item["text"] = entries[0][1]
+        return new_item
+
+    def _rebuild_tool_result_item(self, item: dict, entries: tuple[tuple[QualifiedTextBlock, str], ...]) -> dict:
+        """Replace text inside a tool_result's own ``content`` (string or block list)."""
+        tool_result_content = item.get("content")
+        if isinstance(tool_result_content, str):
+            item["content"] = entries[0][1] if entries else tool_result_content
+            return item
+        if not isinstance(tool_result_content, list):
+            return item
+
+        replacements = {
+            location.tool_result_content_index: replacement
+            for block, replacement in entries
+            if (location := block.location) is not None
+        }
+        item["content"] = [
+            {**nested_item, "text": replacements[nested_index]}
+            if isinstance(nested_item, dict) and nested_index in replacements
+            else nested_item
+            for nested_index, nested_item in enumerate(tool_result_content)
+        ]
+        return item
 
     def _apply_masking_to_response(
         self,
