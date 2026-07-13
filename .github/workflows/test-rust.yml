@@ -73,6 +73,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Run Clippy (python-config feature)
+        run: cargo clippy -p litellm-ai-gateway --all-targets --features python-config --locked -- -D warnings
+
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
