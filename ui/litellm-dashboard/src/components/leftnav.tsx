@@ -40,7 +40,6 @@ import {
   HeartPulse,
   KeyRound,
   LayoutGrid,
-  MessageSquare,
   Network,
   Palette,
   PanelLeftClose,
@@ -87,7 +86,6 @@ interface SidebarProps {
   onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
-  enableChatUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -124,16 +122,6 @@ const menuGroups: MenuGroup[] = [
         label: "Playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
-      },
-      {
-        key: "chat",
-        page: "chat",
-        label: (
-          <span className="flex items-center gap-2">
-            Chat <NewBadge />
-          </span>
-        ),
-        icon: <MessageSquare {...ICON} />,
       },
       {
         key: "models",
@@ -388,7 +376,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
   onToggleCollapsed,
   enabledPagesInternalUsers,
   enableProjectsUI,
-  enableChatUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -443,7 +430,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
           return true;
         }
         if (item.key === "projects" && !enableProjectsUI) return false;
-        if (item.key === "chat" && !enableChatUI) return false;
         if (
           !isAdmin &&
           item.key === "agents" &&
