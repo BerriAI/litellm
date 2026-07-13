@@ -1004,12 +1004,19 @@ def _upstream_token_error_response(response: httpx.Response) -> JSONResponse:
     Only the RFC 6749 §5.2 fields (``error`` / ``error_description`` / ``error_uri``) are relayed,
     each bounded, on the upstream's own 400/401 status; a rejection outside the §5.2 contract
     (no JSON ``error`` field, or a status §5.2 does not define) maps to 502 so a broken upstream
-    is not misattributed to the caller's request."""
+    is not misattributed to the caller's request. Out-of-contract bodies (HTML error pages, proxy
+    banners, stack traces) never cross the trust boundary: these endpoints serve unauthenticated
+    OAuth clients, so the body is logged server-side and the client sees only the upstream status."""
     parsed = _response_json_or_none(response)
     error_code = parsed.get("error") if isinstance(parsed, dict) else None
     if not isinstance(error_code, str) or not error_code:
-        detail = (response.text or response.reason_phrase or "")[:_MAX_UPSTREAM_ERROR_CHARS]
-        return _upstream_token_fault_response(f"upstream token endpoint returned HTTP {response.status_code}: {detail}")
+        verbose_logger.warning(
+            "MCP upstream token endpoint returned HTTP %s with a non-RFC6749 body (first %s chars): %s",
+            response.status_code,
+            _MAX_UPSTREAM_ERROR_CHARS,
+            (response.text or "")[:_MAX_UPSTREAM_ERROR_CHARS],
+        )
+        return _upstream_token_fault_response(f"upstream token endpoint returned HTTP {response.status_code}")
     fields = parsed if isinstance(parsed, dict) else {}
     relayed = {
         key: value[:_MAX_UPSTREAM_ERROR_CHARS]
@@ -1444,15 +1451,25 @@ _MAX_UPSTREAM_ERROR_CHARS = 500
 
 
 def _safe_upstream_error_detail(response: httpx.Response) -> str:
-    """Bounded plaintext summary of an upstream registration failure for the client.
-
-    RFC 7591 error bodies are small JSON objects (``error`` / ``error_description``); relaying the
-    text lets the client read the real reason instead of a bare 500, and the length bound keeps a
-    hostile or oversized upstream body from bloating the gateway response."""
-    body = response.text
-    if not body:
-        return response.reason_phrase or "upstream registration failed"
-    return body[:_MAX_UPSTREAM_ERROR_CHARS]
+    """Client-safe summary of an upstream registration failure: only the RFC 7591 §3.2.2 fields
+    (``error`` / ``error_description``) cross the trust boundary, each bounded, since these endpoints
+    serve unauthenticated OAuth clients. A body outside that contract (HTML error pages, proxy
+    banners, stack traces) is logged server-side and summarized by status so upstream internals are
+    never relayed to callers."""
+    parsed = _response_json_or_none(response)
+    error_code = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error_code, str) and error_code:
+        description = parsed.get("error_description") if isinstance(parsed, dict) else None
+        if isinstance(description, str) and description:
+            return f"{error_code[:_MAX_UPSTREAM_ERROR_CHARS]}: {description[:_MAX_UPSTREAM_ERROR_CHARS]}"
+        return error_code[:_MAX_UPSTREAM_ERROR_CHARS]
+    verbose_logger.warning(
+        "MCP upstream registration endpoint returned HTTP %s with a non-RFC7591 body (first %s chars): %s",
+        response.status_code,
+        _MAX_UPSTREAM_ERROR_CHARS,
+        (response.text or "")[:_MAX_UPSTREAM_ERROR_CHARS],
+    )
+    return f"upstream registration failed with HTTP {response.status_code}"
 
 
 async def register_client_with_server(
