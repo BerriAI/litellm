@@ -29,7 +29,9 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import { KeyIcon, LayersIcon, SearchIcon, UsersIcon } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { AntDLoadingSpinner } from "@/components/ui/AntDLoadingSpinner";
 import { DateCell, IdCell } from "@/components/shared/table_cells";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
@@ -178,7 +180,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     sort_by: "created_at",
     sort_order: "desc",
   });
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isSearching, setIsSearching] = useState(false);
 
   const fetchTeamsV2 = async (
@@ -217,6 +218,19 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       setIsLoading(false);
     }
   };
+
+  const searchDebouncer = useDebouncer(
+    async (value: string) => {
+      try {
+        setFilters((prev) => ({ ...prev, search: value }));
+        setCurrentPage(1);
+        await fetchTeamsV2({ page: 1, search: value });
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    { wait: DEBOUNCE_WAIT_MS },
+  );
 
   useEffect(() => {
     fetchTeamsV2();
@@ -596,17 +610,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   };
 
   const handleSearchChange = (value: string) => {
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setIsSearching(true);
-    searchDebounceRef.current = setTimeout(async () => {
-      try {
-        setFilters((prev) => ({ ...prev, search: value }));
-        setCurrentPage(1);
-        await fetchTeamsV2({ page: 1, search: value });
-      } finally {
-        setIsSearching(false);
-      }
-    }, 300);
+    searchDebouncer.maybeExecute(value);
   };
 
   const handleFilterChange = async (key: keyof FilterState, value: string) => {
@@ -630,7 +635,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   };
 
   const handleFilterReset = () => {
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebouncer.cancel();
     setIsSearching(false);
     const resetFilters: FilterState = {
       search: "",
