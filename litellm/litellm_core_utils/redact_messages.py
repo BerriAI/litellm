@@ -42,6 +42,15 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
+def _redact_provider_specific_fields(fields: dict | None, redacted_str: str):
+    """Redact sensitive message-like fields within provider_specific_fields."""
+    if not isinstance(fields, dict):
+        return
+    for key in ("content", "reasoning", "reasoning_content"):
+        if key in fields and fields[key] is not None:
+            fields[key] = redacted_str
+
+
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
@@ -50,12 +59,16 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        if hasattr(choice.message, "provider_specific_fields") and choice.message.provider_specific_fields:
+            _redact_provider_specific_fields(choice.message.provider_specific_fields, "redacted-by-litellm")
     elif isinstance(choice, litellm.utils.StreamingChoices):
         choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
             choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        if hasattr(choice.delta, "provider_specific_fields") and choice.delta.provider_specific_fields:
+            _redact_provider_specific_fields(choice.delta.provider_specific_fields, "redacted-by-litellm")
 
 
 def _redact_responses_api_output(output_items):
@@ -138,6 +151,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                if "provider_specific_fields" in choice["message"]:
+                    _redact_provider_specific_fields(choice["message"]["provider_specific_fields"], redacted_str)
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
                 if "reasoning_content" in choice["delta"]:
@@ -146,6 +161,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                if "provider_specific_fields" in choice["delta"]:
+                    _redact_provider_specific_fields(choice["delta"]["provider_specific_fields"], redacted_str)
         else:
             _redact_choice_content(choice)
 
@@ -162,17 +179,20 @@ def perform_redaction(model_call_details: dict, result):
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
-    if model_call_details.get("stream", False) is True and "complete_streaming_response" in model_call_details:
-        _streaming_response = model_call_details["complete_streaming_response"]
-        if hasattr(_streaming_response, "choices"):
-            for choice in _streaming_response.choices:
-                _redact_choice_content(choice)
-            redact_vertex_ai_metadata_from_logged_object(_streaming_response)
-        elif hasattr(_streaming_response, "output"):
-            _redact_responses_api_output(_streaming_response.output)
-            # Redact reasoning field in ResponsesAPIResponse
-            if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
-                _streaming_response.reasoning = None
+    for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
+        if model_call_details.get("stream", False) is True and _streaming_key in model_call_details:
+            _streaming_response = model_call_details[_streaming_key]
+            if _streaming_response is None:
+                continue
+            if hasattr(_streaming_response, "choices"):
+                for choice in _streaming_response.choices:
+                    _redact_choice_content(choice)
+                redact_vertex_ai_metadata_from_logged_object(_streaming_response)
+            elif hasattr(_streaming_response, "output"):
+                _redact_responses_api_output(_streaming_response.output)
+                # Redact reasoning field in ResponsesAPIResponse
+                if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
+                    _streaming_response.reasoning = None
 
     # Redact result
     if result is not None:

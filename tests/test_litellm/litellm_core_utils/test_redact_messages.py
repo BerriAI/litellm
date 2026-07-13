@@ -269,6 +269,7 @@ class TestPerformRedaction:
                                 "reasoning_content": "message reasoning",
                                 "thinking_blocks": ["thinking"],
                                 "audio": {"data": "audio"},
+                                "provider_specific_fields": {"reasoning": "message reasoning"},
                             }
                         },
                         {
@@ -277,6 +278,7 @@ class TestPerformRedaction:
                                 "reasoning_content": "delta reasoning",
                                 "thinking_blocks": ["delta thinking"],
                                 "audio": {"data": "audio"},
+                                "provider_specific_fields": {"reasoning": "delta reasoning"},
                             }
                         },
                     ]
@@ -292,12 +294,14 @@ class TestPerformRedaction:
         assert message["reasoning_content"] == "redacted-by-litellm"
         assert message["thinking_blocks"] is None
         assert message["audio"] is None
+        assert message["provider_specific_fields"]["reasoning"] == "redacted-by-litellm"
 
         delta = choices[1]["delta"]
         assert delta["content"] == "redacted-by-litellm"
         assert delta["reasoning_content"] == "redacted-by-litellm"
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
+        assert delta["provider_specific_fields"]["reasoning"] == "redacted-by-litellm"
 
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
@@ -317,6 +321,37 @@ class TestPerformRedaction:
         choice = redacted["choices"][0]
         assert choice.message.content == "redacted-by-litellm"
         assert choice.message.reasoning_content == "redacted-by-litellm"
+
+    def test_redacts_streaming_choices_provider_specific_fields(self):
+        result = {
+            "choices": [
+                litellm.utils.StreamingChoices(
+                    delta=litellm.utils.Delta(
+                        content="delta content",
+                        provider_specific_fields={"reasoning": "delta reasoning"},
+                    )
+                )
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        delta = redacted["choices"][0].delta
+        assert delta.content == "redacted-by-litellm"
+        assert delta.provider_specific_fields["reasoning"] == "redacted-by-litellm"
+
+    def test_redacts_streaming_responses_api_output_and_skips_none(self):
+        response = mock_responses_api_response("sensitive output")
+        model_call_details = {
+            "stream": True,
+            "complete_streaming_response": None,
+            "async_complete_streaming_response": response,
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        redacted = model_call_details["async_complete_streaming_response"]
+        assert redacted.output[0].content[0].text == "redacted-by-litellm"
 
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
@@ -442,3 +477,69 @@ class TestPerformRedaction:
         assert "vertex_ai_url_context_metadata" not in hidden_params
         assert "vertex_ai_safety_ratings" not in hidden_params
         assert "vertex_ai_citation_metadata" not in hidden_params
+
+    def test_redact_async_complete_streaming_response(self):
+        """Test that async_complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "async_complete_streaming_response": response_obj,
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["async_complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redact_complete_streaming_response(self):
+        """Test that complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "complete_streaming_response": response_obj,
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redact_provider_specific_fields(self):
+        """Test that reasoning_content in provider_specific_fields is properly redacted."""
+        result = {
+            "choices": [
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        reasoning_content="message reasoning",
+                        provider_specific_fields={"reasoning": "message reasoning"}
+                    )
+                )
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        choice = redacted["choices"][0]
+        assert choice.message.provider_specific_fields["reasoning"] == "redacted-by-litellm"
