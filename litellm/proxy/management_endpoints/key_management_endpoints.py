@@ -342,7 +342,10 @@ async def _apply_user_team_id_from_membership(
     if target_user_id is None:
         return
 
-    user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": target_user_id})
+    try:
+        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": target_user_id})
+    except TypeError:
+        return
     if user_row is None:
         return
 
