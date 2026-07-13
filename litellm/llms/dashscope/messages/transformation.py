@@ -3,7 +3,7 @@ DashScope Anthropic transformation config - extends AnthropicMessagesConfig for
 DashScope's Anthropic-compatible Messages API.
 """
 
-from typing import Any, List, Optional, Tuple
+from collections.abc import Mapping, Sequence
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -36,15 +36,15 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "dashscope"
 
     @staticmethod
-    def _get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def _get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("DASHSCOPE_API_KEY")
 
     @staticmethod
-    def _get_anthropic_messages_api_base(api_base: Optional[str] = None) -> str:
+    def _get_anthropic_messages_api_base(api_base: str | None = None) -> str:
         if not api_base:
             return DEFAULT_DASHSCOPE_ANTHROPIC_MESSAGES_API_BASE
 
@@ -66,25 +66,25 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        stream: bool | None = None,
     ) -> str:
         return self._get_anthropic_messages_api_base(api_base=api_base)
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: Parent contract updates HTTP headers in place
         model: str,
-        messages: List[Any],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: Parent contract returns mutable HTTP headers
         dynamic_api_key = self._get_api_key(api_key=api_key)
         if dynamic_api_key and "x-api-key" not in headers:
             headers["x-api-key"] = dynamic_api_key
