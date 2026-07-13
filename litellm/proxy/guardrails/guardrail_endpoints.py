@@ -2200,7 +2200,10 @@ async def apply_guardrail(
         "guardrail_name": request.guardrail_name,
         "input": [request.text],
         "messages": request.messages or [],
-        "metadata": {"route": "/apply_guardrail"},
+        "metadata": {
+            **(request.metadata or {}),
+            "route": "/apply_guardrail",
+        },
     }
     litellm_logging_obj = None
     start_time = datetime.now(timezone.utc)
@@ -2232,11 +2235,10 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: dict = {}
-        if request.messages:
-            request_data["messages"] = request.messages
-        if request.metadata is not None:
-            request_data["metadata"] = request.metadata
+        request_data: dict = {
+            **({"messages": request.messages} if request.messages is not None else {}),
+            **({"metadata": data["metadata"]} if request.metadata is not None else {}),
+        }
         _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},

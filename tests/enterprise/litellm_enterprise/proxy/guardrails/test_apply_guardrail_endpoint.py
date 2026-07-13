@@ -206,8 +206,75 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_endpoint_forwards_metadata(mock_proxy_logging_ctx):
-    """Test that apply_guardrail forwards metadata to the guardrail implementation."""
+async def test_apply_guardrail_endpoint_forwards_processed_metadata(
+    mock_proxy_logging_ctx,
+):
+    """Test that apply_guardrail forwards server-processed metadata."""
+    from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
+        ) as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        mock_processor = ProxyBaseLLMRequestProcessing.return_value
+        logging_obj = mock_processor.common_processing_pre_call_logic.return_value[1]
+        processed_metadata = {
+            "forbidden_topics": ["taxes"],
+            "route": "/apply_guardrail",
+            "user_api_key_user_id": "authenticated-user",
+        }
+        mock_processor.common_processing_pre_call_logic.return_value = (
+            {"metadata": processed_metadata},
+            logging_obj,
+        )
+        mock_guardrail = Mock(spec=CustomGuardrail)
+        mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["ok"]})
+        mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+
+        request = ApplyGuardrailRequest(
+            guardrail_name="topic-guardrail",
+            text="What are tax loopholes?",
+            metadata={
+                "forbidden_topics": ["taxes"],
+                "route": "/spoofed-route",
+                "user_api_key_user_id": "spoofed-user",
+            },
+        )
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        response = await apply_guardrail(
+            fastapi_request=Mock(),
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert response.response_text == "ok"
+        ProxyBaseLLMRequestProcessing.assert_called_once_with(
+            data={
+                "guardrail_name": "topic-guardrail",
+                "input": ["What are tax loopholes?"],
+                "messages": [],
+                "metadata": {
+                    "forbidden_topics": ["taxes"],
+                    "route": "/apply_guardrail",
+                    "user_api_key_user_id": "spoofed-user",
+                },
+            }
+        )
+        mock_guardrail.apply_guardrail.assert_called_once_with(
+            inputs={"texts": ["What are tax loopholes?"]},
+            request_data={"metadata": processed_metadata},
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_endpoint_preserves_empty_messages(mock_proxy_logging_ctx):
+    """Test that apply_guardrail preserves an explicitly empty messages list."""
     from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     with (
@@ -220,22 +287,19 @@ async def test_apply_guardrail_endpoint_forwards_metadata(mock_proxy_logging_ctx
         mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["ok"]})
         mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
 
-        request = ApplyGuardrailRequest(
-            guardrail_name="topic-guardrail",
-            text="What are tax loopholes?",
-            metadata={"forbidden_topics": ["taxes"]},
-        )
-        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
-
         response = await apply_guardrail(
             fastapi_request=Mock(),
-            request=request,
-            user_api_key_dict=user_api_key_dict,
+            request=ApplyGuardrailRequest(
+                guardrail_name="test-guardrail",
+                text="Test text",
+                messages=[],
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
         )
 
         assert response.response_text == "ok"
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["What are tax loopholes?"]},
-            request_data={"metadata": {"forbidden_topics": ["taxes"]}},
+            inputs={"texts": ["Test text"]},
+            request_data={"messages": []},
             input_type="request",
         )
