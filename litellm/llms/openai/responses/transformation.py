@@ -20,6 +20,8 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
 
+OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -91,6 +93,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Apply the same validation used by the chat completions path.
         """
         params = dict(response_api_optional_params)
+
+        max_output_tokens = params.get("max_output_tokens")
+        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+            params["max_output_tokens"] = OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
