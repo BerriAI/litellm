@@ -878,7 +878,7 @@ class BaseAWSLLM:
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},
                 },
                 {
-                    "Sid": "MantleLiteLLM",
+                    "Sid": "BedrockMantleLiteLLM",
                     "Effect": "Allow",
                     "Action": [
                         "bedrock-mantle:CreateInference",
