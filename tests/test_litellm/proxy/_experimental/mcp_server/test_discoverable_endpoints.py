@@ -4745,10 +4745,12 @@ async def test_bridge_refresh_grant_with_non_envelope_is_invalid_grant_before_up
 
 
 def _mint_test_refresh_envelope(
-    server_id="bridge_srv", key_hash="hashed-litellm-key-77", upstream_refresh="UPSTREAM-REFRESH", identity=None
+    server_id="bridge_srv", key_hash="hashed-litellm-key-77", upstream_refresh="UPSTREAM-REFRESH", identity=None,
+    scope=None,
 ):
     """Mint a refresh envelope the way the producer does, for driving the refresh_token grant in tests.
-    Defaults to a key_hash subject; pass ``identity`` to seal a specific subject (e.g. a user_id)."""
+    Defaults to a key_hash subject; pass ``identity`` to seal a specific subject (e.g. a user_id), and
+    ``scope`` to seal the scope to re-request on refresh."""
     from datetime import datetime, timezone
 
     from pydantic import SecretStr
@@ -4766,7 +4768,8 @@ def _mint_test_refresh_envelope(
     keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
     identity = identity if identity is not None else key_hash_identity(server_id=server_id, key_hash=key_hash)
     sealed = build_bridge_refresh_token_response(
-        identity, RefreshCredential(refresh_token=SecretStr(upstream_refresh)), keys, datetime.now(timezone.utc)
+        identity, RefreshCredential(refresh_token=SecretStr(upstream_refresh), scope=scope), keys,
+        datetime.now(timezone.utc),
     )
     assert isinstance(sealed, SealedEnvelope)
     return sealed.token.get_secret_value()
@@ -4985,6 +4988,27 @@ async def test_bridge_refresh_grant_renews_a_user_subject_envelope():
     assert opened.identity.subject_type == "user_id"
     assert opened.identity.subject == "sso-user-42"
     assert captured["client"].post.call_args.kwargs["data"]["refresh_token"] == "UP-REFRESH-USER"
+
+
+@pytest.mark.asyncio
+async def test_bridge_refresh_re_requests_the_sealed_scope_when_client_omits_it():
+    """A DCR/MCP client omits scope on the refresh request, so the gateway must re-request the scope sealed
+    at mint; dropping it lets a stricter upstream narrow the renewed token. The upstream POST must carry
+    the sealed scope even though the client sent none. Regression for the dropped sealed refresh scope."""
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    refresh_env = _mint_test_refresh_envelope(
+        server_id=server.server_id, upstream_refresh="UP-REFRESH", scope="read:tools write:tools"
+    )
+    captured: dict = {}
+    response = await _refresh_for_bridge_server(
+        server, refresh_env, {"access_token": "NEW-ACCESS", "token_type": "Bearer", "expires_in": 3600}, None,
+        fake_client_out=captured,
+    )
+
+    assert response.status_code == 200
+    assert captured["client"].post.call_args.kwargs["data"]["scope"] == "read:tools write:tools"
 
 
 @pytest.mark.asyncio

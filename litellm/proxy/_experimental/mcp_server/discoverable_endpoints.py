@@ -1175,13 +1175,17 @@ async def _prepare_bridge_mint(
 
 @dataclass(frozen=True, slots=True)
 class _BridgeRefreshReady:
-    """A validated refresh request: the identity+keys to mint the renewed pair under, and the upstream
-    refresh token (unwrapped from the client's refresh envelope) to exchange with the upstream IdP. The
-    upstream refresh token is a ``SecretStr`` like every other credential in this layer, so a repr or a
-    traceback that captures this value never exposes the raw upstream refresh token in plaintext."""
+    """A validated refresh request: the identity+keys to mint the renewed pair under, the upstream refresh
+    token (unwrapped from the client's refresh envelope) to exchange with the upstream IdP, and the scope
+    sealed alongside it at mint. The upstream refresh token is a ``SecretStr`` like every other credential
+    in this layer, so a repr or a traceback that captures this value never exposes the raw upstream refresh
+    token in plaintext. ``upstream_scope`` carries the originally-granted scope so the renewal re-requests
+    it when the client (a DCR/MCP client that typically omits scope on refresh) sends none, keeping the
+    renewed token's scope stable against an upstream that would otherwise narrow or drop it."""
 
     ready: "_BridgeMintReady"
     upstream_refresh_token: SecretStr
+    upstream_scope: str | None = None
 
 
 def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _BridgeMintError:
@@ -1234,6 +1238,7 @@ async def _prepare_bridge_refresh(
     return _BridgeRefreshReady(
         ready=_BridgeMintReady(identity=opened.identity, keys=keys),
         upstream_refresh_token=opened.refresh.refresh_token,
+        upstream_scope=opened.refresh.scope,
     )
 
 
@@ -1370,6 +1375,7 @@ async def exchange_token_with_server(
     bridge_identity: _BridgeAuthorizationCode | None = None
     bridge_mint_ready: _BridgeMintReady | None = None
     bridge_upstream_refresh: SecretStr | None = None
+    bridge_upstream_scope: str | None = None
     is_bridge = mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge
 
     if grant_type == "refresh_token":
@@ -1382,6 +1388,7 @@ async def exchange_token_with_server(
                 return _bridge_mint_error_response(prepared_refresh)
             bridge_mint_ready = prepared_refresh.ready
             bridge_upstream_refresh = prepared_refresh.upstream_refresh_token
+            bridge_upstream_scope = prepared_refresh.upstream_scope
         # A bridge server sends the unwrapped upstream refresh token recovered from the client's refresh
         # envelope above; every other server sends the client's own refresh token verbatim.
         upstream_refresh_token = (
@@ -1397,8 +1404,9 @@ async def exchange_token_with_server(
             "refresh_token": upstream_refresh_token,
             **client_auth.body,
         }
-        if scope:
-            token_data["scope"] = scope
+        effective_scope = scope or bridge_upstream_scope
+        if effective_scope:
+            token_data["scope"] = effective_scope
     else:
         if not code:
             raise HTTPException(
