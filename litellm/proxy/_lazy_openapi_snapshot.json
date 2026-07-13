@@ -27633,7 +27633,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Model to use for AI chat",
+              "description": "Model group to use for AI chat",
               "title": "Model"
             }
           },
@@ -27681,7 +27681,7 @@
     "paths": {
       "/usage/ai/chat": {
         "post": {
-          "description": "AI chat about usage data. Streams SSE events with the AI response.\nThe AI agent has access to tools that query aggregated daily activity data.",
+          "description": "AI chat about usage data. Streams SSE events with the AI response.\n\nThe agent queries aggregated daily activity data through a provider scoped\nto the caller: admins get a global view, non-admins are restricted to their\nown ``user_id``.",
           "operationId": "usage_ai_chat_usage_ai_chat_post",
           "requestBody": {
             "content": {

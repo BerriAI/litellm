@@ -32610,7 +32610,7 @@ export interface components {
             messages: components["schemas"]["ChatMessage"][];
             /**
              * Model
-             * @description Model to use for AI chat
+             * @description Model group to use for AI chat
              */
             model?: string | null;
         };

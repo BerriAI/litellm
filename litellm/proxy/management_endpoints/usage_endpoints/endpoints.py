@@ -1,5 +1,5 @@
 """
-USAGE AI CHAT ENDPOINTS
+USAGE AI CHAT ENDPOINT
 
 /usage/ai/chat - Stream AI chat responses about usage data
 """
@@ -23,7 +23,7 @@ class ChatMessage(BaseModel):
 
 class UsageAIChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
-    model: Optional[str] = Field(default=None, description="Model to use for AI chat")
+    model: Optional[str] = Field(default=None, description="Model group to use for AI chat")
 
 
 @router.post(
@@ -38,30 +38,35 @@ async def usage_ai_chat(
 ):
     """
     AI chat about usage data. Streams SSE events with the AI response.
-    The AI agent has access to tools that query aggregated daily activity data.
+
+    The agent queries aggregated daily activity data through a provider scoped
+    to the caller: admins get a global view, non-admins are restricted to their
+    own ``user_id``.
     """
+    from litellm.proxy._types import user_api_key_has_admin_view
     from litellm.proxy.management_endpoints.common_utils import (
-        _user_has_admin_view,
         require_caller_user_id_for_non_admin,
     )
-    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+    from litellm.proxy.management_endpoints.usage_endpoints.agent import (
         stream_usage_ai_chat,
     )
+    from litellm.proxy.management_endpoints.usage_endpoints.scoped_data import (
+        AdminScope,
+        ScopedUsageDataProvider,
+        UserScope,
+    )
+    from litellm.proxy.proxy_server import prisma_client
 
-    is_admin = _user_has_admin_view(user_api_key_dict)
-    if is_admin:
-        user_id = user_api_key_dict.user_id
+    if user_api_key_has_admin_view(user_api_key_dict):
+        scope = AdminScope(caller_user_id=user_api_key_dict.user_id)
     else:
-        user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
+        scope = UserScope(user_id=require_caller_user_id_for_non_admin(user_api_key_dict))
+
+    provider = ScopedUsageDataProvider(scope=scope, prisma_client=prisma_client)
     messages = [{"role": m.role, "content": m.content} for m in data.messages]
 
     return StreamingResponse(
-        stream_usage_ai_chat(
-            messages=messages,
-            model=data.model,
-            user_id=user_id,
-            is_admin=is_admin,
-        ),
+        stream_usage_ai_chat(provider=provider, messages=messages, model=data.model),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
