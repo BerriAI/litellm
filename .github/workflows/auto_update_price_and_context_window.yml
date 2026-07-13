@@ -39,9 +39,17 @@ jobs:
           fi
           uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
           git add model_prices_and_context_window.json
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head "${BRANCH_NAME}" \
-            --base "${BASE_BRANCH}"
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
+          fi
+          if gh pr view "${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "PR already exists for ${BRANCH_NAME}."
+          else
+            gh pr create --title "Update model_prices_and_context_window.json file" \
+              --body "Automated update for model_prices_and_context_window.json" \
+              --head "${BRANCH_NAME}" \
+              --base "${BASE_BRANCH}"
+          fi
