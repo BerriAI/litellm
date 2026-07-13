@@ -13,7 +13,6 @@ configs:
         drop_params: true
         num_retries: 3
         request_timeout: 600
-        callbacks: ["arize_phoenix"]
         cache: true
         cache_params:
           type: redis
@@ -88,8 +87,6 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       AZURE_API_BASE: ${AZURE_API_BASE:-}
       AZURE_API_KEY: ${AZURE_API_KEY:-}
-      PHOENIX_COLLECTOR_HTTP_ENDPOINT: http://phoenix:6006/v1/traces
-      PHOENIX_PROJECT_NAME: litellm-e2e
     ports:
       - "4000:4000"
     configs:
@@ -117,8 +114,3 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
-
-  phoenix:
-    image: arizephoenix/phoenix:17.29.0
-    ports:
-      - "6006:6006"
