@@ -698,9 +698,12 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
-    # Provider prompt-caching metrics - track tokens read/written to provider caches
-    litellm_provider_cache_read_input_tokens_metric = _cache_metric_labels
-    litellm_provider_cache_creation_input_tokens_metric = _cache_metric_labels
+    # Provider prompt-caching metrics additionally carry model_group so cache
+    # reads/writes can be split per model group (api_provider is already
+    # inherited from _cache_metric_labels).
+    _provider_cache_metric_labels = _cache_metric_labels + [UserAPIKeyLabelNames.MODEL_GROUP.value]
+    litellm_provider_cache_read_input_tokens_metric = _provider_cache_metric_labels
+    litellm_provider_cache_creation_input_tokens_metric = _provider_cache_metric_labels
 
     # Metrics whose emission paths supply org context (used by get_labels)
     _org_label_metrics: ClassVar[frozenset] = frozenset(
