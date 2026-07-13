@@ -270,6 +270,40 @@ def _reaction_steps(steps: list[dict], content: str) -> list[tuple[int, dict]]:
     ]
 
 
+def test_reconsider_routes_open_prs_to_review_gate() -> None:
+    """`@agent-shin reconsider` on an OPEN PR must run the review gate (label
+    flip) rather than `--reconsider` (which skips non-closed items) — without
+    this branch the advertised "reconsider can change the tag" flow silently
+    does nothing.
+    """
+    steps = _reconsider_steps()
+    run = steps[_index_of_run_step(steps, "triage_with_llm.py")]["run"]
+    assert '"${STATE}" = "open"' in run, (
+        "the reconsider run step must branch on the PR's open/closed state"
+    )
+    assert "--review-gate" in run, (
+        "open-PR reconsiders must invoke the review gate so the label pair flips"
+    )
+    assert "--reconsider" in run, "closed PRs/issues must still use --reconsider"
+
+
+def test_lite_mode_gates_are_exact_string_matches() -> None:
+    """Lite mode must only engage on the EXACT string "lite" — any other value
+    (typos, "Lite", "true") falls through to full behavior, mirroring the
+    fail-safe `= "true"` convention used for AGENT_SHIN_ENABLED. Both the
+    review gate and the reconsider workflow carry the branch.
+    """
+    for workflow_file in ("review_gate.yml", "triage_reconsider.yml"):
+        text = "\n".join(_all_run_blocks(_load_workflow(workflow_file)))
+        assert '"${AGENT_SHIN_MODE:-}" = "lite"' in text, (
+            f"{workflow_file} must select lite mode with an exact-string "
+            'comparison against "lite"'
+        )
+        assert "--notice-only" in text, (
+            f"{workflow_file} must pass --notice-only when AGENT_SHIN_MODE=lite"
+        )
+
+
 class TestReconsiderReactions:
     """The reconsider workflow acknowledges the triggering comment with a 👀
     reaction the moment it accepts the trigger, and a 👍 once the run finishes,

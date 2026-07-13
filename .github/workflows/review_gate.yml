@@ -1,12 +1,19 @@
 name: Agent Shin — review gate
 
-# Keeps the `ready for review` label in sync with whether an external PR
-# currently clears BOTH the LLM rubric AND Greptile's confidence score.
+# Keeps the `ready for review` / `not ready` label pair in sync with whether
+# an external PR currently clears BOTH the LLM rubric AND Greptile's
+# confidence score.
 #
-#   pass            -> add `ready for review` + a "passed / all clear" comment
-#   regress         -> remove the label + a "what's missing" comment (PR stays open)
+#   pass            -> swap to `ready for review` + a "passed / all clear" comment
+#   regress         -> swap to `not ready` + a "what's missing" comment (PR stays open)
 #   fail, <24h old  -> a one-time "what's missing" notice (grace window)
 #   fail, >24h old  -> close + a comment (reopen via `@agent-shin reconsider`)
+#
+# LITE MODE: while the repo variable `AGENT_SHIN_MODE` is the exact string
+# "lite", the close path is replaced by a one-time "closes start in 7 days"
+# notice linking the policy blog post (`AGENT_SHIN_POLICY_URL`). Labels still
+# reconcile. Unset the variable (or set anything else) for the full
+# experience.
 #
 # DRY-RUN BY DEFAULT. Every side effect (label add/remove, comment, close) is
 # gated behind `--close`, which is only added when the repo variable
@@ -85,6 +92,8 @@ jobs:
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
+          AGENT_SHIN_MODE: ${{ vars.AGENT_SHIN_MODE }}
+          AGENT_SHIN_POLICY_URL: ${{ vars.AGENT_SHIN_POLICY_URL }}
           CLOSE_FLAG: ${{ github.event.inputs.close || 'false' }}
           GRACE_DAYS: ${{ github.event.inputs.grace_days || '1' }}
           MIN_GREPTILE_SCORE: ${{ github.event.inputs.min_greptile_score || '4' }}
@@ -92,6 +101,10 @@ jobs:
         run: |
           set -euo pipefail
           COMMON=(--review-gate --grace-days "${GRACE_DAYS}" --min-greptile-score "${MIN_GREPTILE_SCORE}")
+          if [ "${AGENT_SHIN_MODE:-}" = "lite" ]; then
+            COMMON+=(--notice-only)
+            echo "::notice::AGENT_SHIN_MODE=lite -> notice-only (no closes; one-time 7-day notices)."
+          fi
 
           # Fail-safe gating, identical philosophy to the Greptile closer:
           #   - AGENT_SHIN_ENABLED must be the EXACT string "true" to act at all.
