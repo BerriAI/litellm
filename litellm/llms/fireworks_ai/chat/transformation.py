@@ -540,11 +540,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             # (bypassing convert_to_model_response_object). Align with the
             # OpenAI-style contract and the shared converter so agent loops that
             # branch on finish_reason == "tool_calls" execute the tool.
-            if (
-                typed_choice.finish_reason == "stop"
-                and typed_choice.message.tool_calls
-                and len(typed_choice.message.tool_calls) > 0
-            ):
+            if typed_choice.finish_reason == "stop" and typed_choice.message.tool_calls:
                 typed_choice.finish_reason = "tool_calls"
 
         response._hidden_params = {
