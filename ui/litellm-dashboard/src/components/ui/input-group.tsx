@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import { type VariantProps } from "cva";
 
-import { cn } from "@/lib/cva.config";
+import { cn, cva } from "@/lib/cva.config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,23 +22,21 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-const inputGroupAddonVariants = cva(
-  "flex h-auto cursor-text items-center justify-center gap-2 py-1.5 text-sm font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 [&>kbd]:rounded-[calc(var(--radius)-5px)] [&>svg:not([class*='size-'])]:size-4",
-  {
-    variants: {
-      align: {
-        "inline-start": "order-first pl-2 has-[>button]:-ml-1 has-[>kbd]:ml-[-0.15rem]",
-        "inline-end": "order-last pr-2 has-[>button]:-mr-1 has-[>kbd]:mr-[-0.15rem]",
-        "block-start":
-          "order-first w-full justify-start px-2.5 pt-2 group-has-[>input]/input-group:pt-2 [.border-b]:pb-2",
-        "block-end": "order-last w-full justify-start px-2.5 pb-2 group-has-[>input]/input-group:pb-2 [.border-t]:pt-2",
-      },
-    },
-    defaultVariants: {
-      align: "inline-start",
+const inputGroupAddonVariants = cva({
+  base: "flex h-auto cursor-text items-center justify-center gap-2 py-1.5 text-sm font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 [&>kbd]:rounded-[calc(var(--radius)-5px)] [&>svg:not([class*='size-'])]:size-4",
+  variants: {
+    align: {
+      "inline-start": "order-first pl-2 has-[>button]:-ml-1 has-[>kbd]:ml-[-0.15rem]",
+      "inline-end": "order-last pr-2 has-[>button]:-mr-1 has-[>kbd]:mr-[-0.15rem]",
+      "block-start":
+        "order-first w-full justify-start px-2.5 pt-2 group-has-[>input]/input-group:pt-2 [.border-b]:pb-2",
+      "block-end": "order-last w-full justify-start px-2.5 pb-2 group-has-[>input]/input-group:pb-2 [.border-t]:pt-2",
     },
   },
-);
+  defaultVariants: {
+    align: "inline-start",
+  },
+});
 
 function InputGroupAddon({
   className,
@@ -62,7 +60,8 @@ function InputGroupAddon({
   );
 }
 
-const inputGroupButtonVariants = cva("flex items-center gap-2 text-sm shadow-none", {
+const inputGroupButtonVariants = cva({
+  base: "flex items-center gap-2 text-sm shadow-none",
   variants: {
     size: {
       xs: "h-6 gap-1 rounded-[calc(var(--radius)-5px)] px-1.5 [&>svg:not([class*='size-'])]:size-3.5",
