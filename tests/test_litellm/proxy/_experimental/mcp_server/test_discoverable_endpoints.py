@@ -5979,9 +5979,10 @@ def _upstream_token_response(status_code: int, *, json_body: object = None, text
     return httpx.Response(status_code, text=text_body, request=request)
 
 
-async def _exchange_with_upstream_response(upstream_response):
+async def _exchange_with_upstream_response(upstream_response, *, server_client_id="web-client.apps.googleusercontent.com"):
     """Run the raw (non-bridge) authorization_code exchange against a canned upstream token-endpoint
-    response and return what the gateway would hand the client."""
+    response and return what the gateway would hand the client. ``server_client_id=None`` models the
+    caller-supplied-credentials flow (no stored client on the server)."""
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -5998,7 +5999,7 @@ async def _exchange_with_upstream_response(upstream_response):
         alias="gcal",
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
-        client_id="web-client.apps.googleusercontent.com",
+        client_id=server_client_id,
         authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
         token_url="https://oauth2.googleapis.com/token",
     )
@@ -6025,20 +6026,55 @@ async def _exchange_with_upstream_response(upstream_response):
 
 
 @pytest.mark.asyncio
-async def test_token_exchange_relays_upstream_rfc6749_rejection():
-    """The IdP's own RFC 6749 §5.2 rejection is the message the caller needs (e.g. Google refusing a
-    secret-less web client); before the relay the raw HTTPStatusError escaped to the global handler
-    and every upstream rejection surfaced as an opaque 500 Internal server error."""
+async def test_token_exchange_gateway_credential_rejection_is_502_with_gateway_prose():
+    """When the gateway presented the server's stored client credentials and the IdP rejected them
+    (Google refusing a secret-less or unknown client), the fault is the operator's, not the caller's:
+    502 server_error with gateway-authored prose naming the code, and the IdP's own prose stays in
+    server logs. Before the framework this either 500ed raw or relayed provider prose verbatim."""
     response = await _exchange_with_upstream_response(
         _upstream_token_response(
             401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
         )
     )
 
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "invalid_client" in body["error_description"]
+    assert "client_id and client_secret" in body["error_description"]
+    assert "The OAuth client was not found." not in body["error_description"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_caller_supplied_credential_rejection_relays_code():
+    """When the caller supplied the client credentials themselves (no stored client on the server),
+    an invalid_client rejection is theirs to act on: the §5.2 code relays on the 401 that code
+    implies."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+        ),
+        server_client_id=None,
+    )
+
     assert response.status_code == 401
     body = json.loads(response.body)
     assert body == {"error": "invalid_client", "error_description": "The OAuth client was not found."}
-    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_status_derives_from_error_code_not_upstream_status():
+    """An upstream that pairs a caller-fault code with a server-fault status (invalid_grant on a 500)
+    must not produce a contradictory response: status derives from the classified fault, so the
+    caller sees 400 invalid_grant and knows to re-authorize rather than blaming the gateway."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(500, json_body={"error": "invalid_grant", "error_description": "Code expired."})
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body == {"error": "invalid_grant", "error_description": "Code expired."}
 
 
 @pytest.mark.asyncio
@@ -6159,9 +6195,10 @@ async def test_token_exchange_relays_rejection_when_http_client_raises():
             code_verifier="verifier",
         )
 
-    assert response.status_code == 401
+    assert response.status_code == 502
     body = json.loads(response.body)
-    assert body["error"] == "invalid_client"
+    assert body["error"] == "server_error"
+    assert "invalid_client" in body["error_description"]
 
 
 @pytest.mark.asyncio
@@ -6268,6 +6305,27 @@ async def test_register_never_relays_out_of_contract_body_to_client():
                 token_endpoint_auth_method=None,
             )
 
-    assert exc.value.status_code == 500
+    assert exc.value.status_code == 502
     assert str(exc.value.detail) == "upstream registration failed with HTTP 500"
     assert "Tomcat" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
+    """An upstream whose failure body cannot be read (unconsumed stream, lying content-encoding)
+    makes response.text/.json raise; the classifier must stay total so the caller still gets the
+    §5.2-shaped 502 instead of the opaque 500 this change set out to remove."""
+    import httpx
+
+    unreadable = httpx.Response(
+        400,
+        stream=httpx.ByteStream(b"\x1f\x8bnot-actually-gzip"),
+        headers={"content-encoding": "gzip"},
+        request=httpx.Request("POST", "https://oauth2.googleapis.com/token"),
+    )
+
+    response = await _exchange_with_upstream_response(unreadable)
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 400"}
