@@ -52,6 +52,7 @@ def _iter_summary_texts(summary: Any) -> Iterator[str]:
             if isinstance(summary_text, str) and summary_text:
                 yield summary_text
 
+
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
