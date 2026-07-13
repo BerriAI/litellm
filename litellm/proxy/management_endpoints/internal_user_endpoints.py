@@ -446,6 +446,13 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids = cast(Optional[List[str]], data_json.pop("organizations", None))
 
+        if data_json.get("team_id") is None and teams is not None:
+            resolved_team_ids = tuple(
+                team if isinstance(team, str) else team.team_id for team in teams if team is not None
+            )
+            if len(resolved_team_ids) == 1:
+                data_json["team_id"] = resolved_team_ids[0]
+
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
         # Add User to Team and Organization
@@ -1177,6 +1184,20 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+def _reject_non_admin_user_team_id_change(
+    user_request: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if "team_id" not in user_request.model_fields_set:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Non-admin users cannot modify team_id on a user.",
+    )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1216,6 +1237,7 @@ async def _update_single_user_helper(
         )
 
     _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
+    _reject_non_admin_user_team_id_change(user_request, user_api_key_dict)
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))

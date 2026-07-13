@@ -9639,3 +9639,41 @@ async def test_update_team_persists_model_max_budget():
         assert update_data["model_max_budget"]["claude-sonnet-4-6"]["max_budget"] == 20.0
         assert update_data["model_max_budget"]["claude-sonnet-4-6"]["budget_duration"] == "1d"
         assert result["data"].model_max_budget == model_max_budget
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_blocks_self_removal(mock_db_client):
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-self-del"
+    test_user_id = "self-user"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "admin"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id=test_user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id=test_team_id,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+            user_api_key_dict=caller,
+        )
+    assert exc_info.value.status_code == 403
+    assert "cannot remove themselves" in str(exc_info.value.detail)

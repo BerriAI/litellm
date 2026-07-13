@@ -296,6 +296,77 @@ def _key_generation_required_param_check(data: GenerateKeyRequest, required_para
     return True
 
 
+def _user_membership_team_ids(teams: Optional[list[str]]) -> tuple[str, ...]:
+    return tuple(
+        team_id
+        for team_id in (teams or [])
+        if isinstance(team_id, str) and team_id and team_id != UI_SESSION_TOKEN_TEAM_ID
+    )
+
+
+async def _apply_key_generation_ownership_defaults(
+    *,
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    is_proxy_admin: bool,
+) -> None:
+    if not is_proxy_admin and data.user_id is None:
+        data.user_id = user_api_key_dict.user_id
+        verbose_proxy_logger.warning(
+            "key/generate: auto-assigning user_id=%s for non-admin caller",
+            user_api_key_dict.user_id,
+        )
+
+    await _apply_user_team_id_from_membership(
+        data=data,
+        prisma_client=prisma_client,
+    )
+
+    _apply_default_team_id_if_configured(
+        data=data,
+        caller_user_id=user_api_key_dict.user_id,
+        is_proxy_admin=is_proxy_admin,
+    )
+
+
+async def _apply_user_team_id_from_membership(
+    *,
+    data: GenerateKeyRequest,
+    prisma_client: PrismaClient,
+) -> None:
+    if data.team_id is not None and data.team_id != "":
+        return
+    data.team_id = None
+    target_user_id = data.user_id
+    if target_user_id is None:
+        return
+
+    user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": target_user_id})
+    if user_row is None:
+        return
+
+    team_ids = _user_membership_team_ids(getattr(user_row, "teams", None))
+    if len(team_ids) == 0:
+        return
+    if len(team_ids) == 1:
+        data.team_id = team_ids[0]
+        verbose_proxy_logger.info(
+            "key/generate: auto-assigning team_id=%s from user membership for user_id=%s",
+            team_ids[0],
+            target_user_id,
+        )
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"User={target_user_id} belongs to multiple teams. "
+            f"Specify team_id when generating a key. teams={list(team_ids)}"
+        ),
+    )
+
+
 def _apply_default_team_id_if_configured(
     *,
     data: GenerateKeyRequest,
@@ -547,6 +618,27 @@ def _validate_caller_can_change_key_ownership(
         )
 
 
+def _validate_caller_can_change_key_team(
+    data: Optional[BaseModel],
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if data is None:
+        return
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    if "team_id" not in fields_set:
+        return
+    incoming_team_id = getattr(data, "team_id", None)
+    existing_team_id = getattr(existing_key_row, "team_id", None)
+    if (incoming_team_id is None or incoming_team_id == "") and existing_team_id is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the team_id from a key.",
+        )
+
+
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
@@ -617,11 +709,7 @@ def _model_max_budget_is_nonempty(model_max_budget: Optional[dict]) -> bool:
 
 
 def _team_has_model_max_budget(team_table: Optional[LiteLLM_TeamTableCachedObj]) -> bool:
-    return (
-        team_table is not None
-        and team_table.model_max_budget is not None
-        and len(team_table.model_max_budget) > 0
-    )
+    return team_table is not None and team_table.model_max_budget is not None and len(team_table.model_max_budget) > 0
 
 
 def _caller_can_set_key_model_max_budget(
@@ -1689,16 +1777,10 @@ async def generate_key_fn(
             user_api_key_dict.user_role is not None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not _is_proxy_admin and data.user_id is None:
-            data.user_id = user_api_key_dict.user_id
-            verbose_proxy_logger.warning(
-                "key/generate: auto-assigning user_id=%s for non-admin caller",
-                user_api_key_dict.user_id,
-            )
-
-        _apply_default_team_id_if_configured(
+        await _apply_key_generation_ownership_defaults(
             data=data,
-            caller_user_id=user_api_key_dict.user_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
             is_proxy_admin=_is_proxy_admin,
         )
 
@@ -2366,6 +2448,11 @@ async def _validate_update_key_data(
     )
 
     _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _validate_caller_can_change_key_team(
         data=data,
         existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
@@ -4600,6 +4687,11 @@ async def _execute_virtual_key_regeneration(
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
     _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _validate_caller_can_change_key_team(
         data=data,
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
