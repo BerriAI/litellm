@@ -610,12 +610,16 @@ class MCPRequestHandler:
         ``get_allowed_mcp_servers`` does not do off one auth object). The caller's centralized policy
         gate enforces the user's live budget and org state, and a SCIM-deactivated owner fails closed.
 
-        Error handling mirrors the key path's retryable-503 contract, with one deliberate
-        difference: ``get_key_object`` raises a ``ProxyException`` for a missing key, but
-        ``get_user_object`` raises a bare ``Exception`` for a missing user (it does not surface as a
-        ``ProxyException``/``HTTPException``). So a transient DB outage still surfaces as a retryable
-        503 via ``_raise_503_if_db_unavailable``, while a missing user, or any other non-outage
-        resolution failure, fails closed as a 401 rather than propagating as an opaque 500."""
+        Error handling mirrors the key path's retryable-503 contract, but ``get_user_object`` defeats a
+        type-based check: where ``get_key_object`` raises a typed ``ProxyException`` for a missing key
+        and lets a DB outage propagate raw, ``get_user_object`` catches every DB failure and re-raises a
+        bare ``ValueError``, so a missing user and a real outage look identical and the original error
+        survives only as ``__context__``. ``_raise_503_if_db_unavailable`` therefore walks the cause
+        chain: a transient DB outage still surfaces as a retryable 503, while a missing user, or any
+        other non-outage resolution failure, fails closed as a 401 rather than an opaque 500. The
+        object-permission load shares this one boundary, so an outage there is classified the same
+        way (``get_object_permission`` itself swallows a failed load to ``None``, matching how
+        ``get_key_object`` best-effort-loads a key's object permission)."""
         from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -628,25 +632,25 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
             )
+            # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
+            # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
+            # get_object_permission resolver the key and team paths use; no permission logic is duplicated.
+            object_permission = user_object.object_permission if user_object is not None else None
+            if user_object is not None and object_permission is None and user_object.object_permission_id:
+                object_permission = await get_object_permission(
+                    object_permission_id=user_object.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
         except (ProxyException, HTTPException):
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
-        except Exception as e:  # noqa: BLE001  # DB outage -> retryable 503; a missing user (bare Exception) or any other resolution failure -> fail closed 401, never an opaque 500
+        except Exception as e:  # noqa: BLE001  # a DB outage anywhere in the resolution is a retryable 503, not an opaque 500; anything else fails closed as 401
             MCPRequestHandler._raise_503_if_db_unavailable(e)
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
         if user_object is None:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
-        # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
-        # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
-        # get_object_permission resolver the key and team paths use; no permission logic is duplicated.
-        object_permission = user_object.object_permission
-        if user_object.object_permission_id and object_permission is None:
-            object_permission = await get_object_permission(
-                object_permission_id=user_object.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
         return UserAPIKeyAuth(
             user_id=user_object.user_id,
             user_role=user_object.user_role,
@@ -697,10 +701,14 @@ class MCPRequestHandler:
         """Raise a retryable 503 when ``e`` means the auth database is unreachable, else return so the
         caller applies its own fail-closed mapping. A DB outage must not masquerade as an auth failure
         (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
-        which renders a service-unavailable database error as 503 on the standard pipeline."""
+        which renders a service-unavailable database error as 503 on the standard pipeline.
+
+        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself: ``get_user_object``
+        re-raises every DB failure as a bare ``ValueError``, so a type-based check on the top exception
+        would miss a real outage wrapped inside it."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             raise HTTPException(
                 status_code=503,
                 detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
