@@ -157,6 +157,12 @@ class GenericAPILogger(CustomBatchLogger):
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
             )
 
+        # Preserve the raw config headers for cache-identity comparison in
+        # LoggingCallbackManager._add_custom_callback_generic_api_str. self.headers below
+        # is post-processed by _get_headers (it injects a Content-Type header and merges
+        # env/global headers), so comparing it against the raw config headers would never
+        # match and would recreate the logger on every re-resolution.
+        self.source_headers = dict(headers) if isinstance(headers, dict) else headers
         self.headers: Dict = self._get_headers(headers)
         self.endpoint: str = endpoint
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
@@ -184,8 +190,27 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
-        asyncio.create_task(self.periodic_flush())
+        self._flush_task = asyncio.create_task(self._run_periodic_flush())
         self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
+
+    async def _run_periodic_flush(self) -> None:
+        """Run the periodic flush loop; on cancellation, make a best-effort final
+        flush of any buffered logs before exiting. Prevents dropping the last batch
+        when this logger is evicted from the cache and cancelled via shutdown()."""
+        try:
+            await self.periodic_flush()
+        except asyncio.CancelledError:
+            try:
+                await self.flush_queue()
+            except Exception:
+                pass
+            raise
+
+    def shutdown(self) -> None:
+        """Cancel the background flush task. Called by LoggingCallbackManager when this
+        logger is evicted from the cache so its periodic_flush task does not leak."""
+        if not self._flush_task.done():
+            self._flush_task.cancel()
 
     def _get_headers(self, headers: Optional[dict] = None):
         """
