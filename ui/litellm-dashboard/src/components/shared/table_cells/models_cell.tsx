@@ -1,6 +1,6 @@
 "use client";
 
-import { deriveKeyModelScope } from "@/components/key_team_helpers/key_scope";
+import { deriveKeyModelScope } from "@/components/key_scope";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { Badge } from "@/components/ui/badge";
 
