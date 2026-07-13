@@ -906,107 +906,6 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
-    def test_register_pre_routing_alias_overrides(self):
-        """_register_pre_routing_alias_overrides excludes only `model` - every
-        other litellm_param set on the alias, including router-init-only
-        fields like complexity_router_config, is stored so it can be forwarded
-        to whichever deployment a pre-routing hook selects. Those router-init
-        fields never reach a real provider because litellm.completion() itself
-        strips anything in litellm.types.utils.all_litellm_params - see
-        test_router_init_only_params_are_never_sent_to_a_provider."""
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini"},
-                }
-            ]
-        )
-        from litellm.types.router import Deployment, LiteLLM_Params
-
-        deployment = Deployment(
-            model_name="smart-router",
-            litellm_params=LiteLLM_Params(
-                model="auto_router/complexity_router",
-                drop_params=True,
-                complexity_router_default_model="gpt-4o-mini",
-                complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
-            ),
-        )
-        router._register_pre_routing_alias_overrides(deployment=deployment)
-
-        overrides = router.pre_routing_alias_overrides["smart-router"]
-        assert overrides["drop_params"] is True
-        assert "model" not in overrides
-        assert overrides["complexity_router_config"] == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
-        assert overrides["complexity_router_default_model"] == "gpt-4o-mini"
-
-    def test_register_pre_routing_alias_overrides_forwards_deployment_management_fields(
-        self,
-    ):
-        """Deployment-management fields (tpm/rpm/weight/tags/max_budget/...) live on
-        the same LiteLLM_Params object as drop_params/cache_control_injection_points.
-        _register_pre_routing_alias_overrides forwards them too - only `model` is
-        excluded here. They're kept out of the real provider request by
-        litellm.completion()'s own all_litellm_params filtering, not by the router."""
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini"},
-                }
-            ]
-        )
-        from litellm.types.router import Deployment, LiteLLM_Params
-
-        deployment = Deployment(
-            model_name="smart-router",
-            litellm_params=LiteLLM_Params(
-                model="auto_router/complexity_router",
-                drop_params=True,
-                tpm=1000,
-                rpm=10,
-                weight=2,
-                tags=["prod"],
-                max_budget=100.0,
-                budget_duration="30d",
-                use_in_pass_through=True,
-                litellm_credential_name="my-cred",
-                complexity_router_default_model="gpt-4o-mini",
-            ),
-        )
-        router._register_pre_routing_alias_overrides(deployment=deployment)
-
-        overrides = router.pre_routing_alias_overrides["smart-router"]
-        assert overrides["tpm"] == 1000
-        assert overrides["rpm"] == 10
-        assert overrides["weight"] == 2
-        assert overrides["max_budget"] == 100.0
-        assert "model" not in overrides
-
-    def test_register_pre_routing_alias_overrides_skips_empty(self):
-        """A deployment with only `model` set (no other non-default litellm_params)
-        registers nothing - there's nothing left to forward once model is excluded."""
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini"},
-                }
-            ]
-        )
-        from litellm.types.router import Deployment, LiteLLM_Params
-
-        deployment = Deployment(
-            model_name="bare-router",
-            litellm_params=LiteLLM_Params(
-                model="auto_router/complexity_router",
-            ),
-        )
-        router._register_pre_routing_alias_overrides(deployment=deployment)
-
-        assert "bare-router" not in router.pre_routing_alias_overrides
-
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
             model_list=[
@@ -1583,11 +1482,12 @@ class TestRouterPreRoutingAliasOverrides:
         assert result is None
         assert request_kwargs == {}
 
-    def test_adaptive_router_alias_overrides_survive_reload(self):
-        """set_model_list() (e.g. /config/reload) clears pre_routing_alias_overrides
-        every time, but _finalize_adaptive_router_if_configured() skips rebuilding an
-        AdaptiveRouter that already exists - the alias's overrides must still get
-        re-registered on that skip path, not just on first init."""
+    @pytest.mark.asyncio
+    async def test_adaptive_router_alias_overrides_survive_reload(self):
+        """Alias litellm_params are read fresh from self.model_list at request
+        time (not cached at init), so a set_model_list() reload (e.g.
+        /config/reload) - which rebuilds self.model_list but leaves an
+        already-built AdaptiveRouter alone - can't leave them stale."""
         model_list = [
             {
                 "model_name": "smart-router",
@@ -1603,12 +1503,17 @@ class TestRouterPreRoutingAliasOverrides:
             },
         ]
         router = Router(model_list=model_list)
-        assert router.pre_routing_alias_overrides["smart-router"]["drop_params"] is True
-
         router.set_model_list(model_list)
-
         assert "smart-router" in router.adaptive_routers
-        assert router.pre_routing_alias_overrides["smart-router"]["drop_params"] is True
+
+        request_kwargs: Dict = {}
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs["drop_params"] is True
 
 
 class TestAdaptiveSoftFloors:
