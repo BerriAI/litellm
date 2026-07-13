@@ -23,10 +23,20 @@ fn release_profile_block(manifest: &str) -> String {
         .split_once("[profile.release]")
         .map(|(_, rest)| rest)
         .expect("workspace Cargo.toml should declare [profile.release]");
-    match after_header.find("\n[") {
-        Some(next_section) => after_header[..next_section].to_string(),
-        None => after_header.to_string(),
-    }
+    let raw_block = match after_header.find("\n[") {
+        Some(next_section) => &after_header[..next_section],
+        None => after_header,
+    };
+
+    // Strip TOML comments (whole-line and trailing) so a commented-out
+    // breadcrumb like `# lto = true` can't satisfy the assertions below
+    // while the real setting has been weakened.
+    raw_block
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
