@@ -7605,13 +7605,13 @@ class Router:
             model_name = entry.get("model_name") if isinstance(entry, dict) else entry.model_name
             if not model_name or not lp:
                 continue
-            if model_name in self.adaptive_routers:
-                continue
             deployment = Deployment(
                 model_name=model_name,
                 litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
+            if model_name in self.adaptive_routers:
+                continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
         for model_name, complexity_router in self.complexity_routers.items():
@@ -10707,56 +10707,39 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        #########################################################
-        # Check if any auto-router should be used
-        #########################################################
-        if model in self.auto_routers:
-            return await self.auto_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        router_strategy = (
+            self.auto_routers.get(model)
+            or self.complexity_routers.get(model)
+            or self.adaptive_routers.get(model)
+            or self.quality_routers.get(model)
+        )
+        if router_strategy is None:
+            return None
 
-        #########################################################
-        # Check if any complexity-router should be used
-        #########################################################
-        if model in self.complexity_routers:
-            return await self.complexity_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
+            model=model,
+            request_kwargs=request_kwargs,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )
 
-        #########################################################
-        # Check if an adaptive-router should be used
-        #########################################################
-        adaptive_router = self.adaptive_routers.get(model)
-        if adaptive_router is not None:
-            return await adaptive_router.async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        # `model` (the alias, e.g. "smart-router") is never the deployment actually
+        # called - apply the alias's own litellm_params (besides `model` itself,
+        # which is just the alias marker) to the request, since the tier/route
+        # deployment the hook selected won't have them. Router-only fields
+        # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
+        # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
+        # not here.
+        if pre_routing_hook_response is not None:
+            alias_index = self.model_name_to_deployment_indices.get(model, [])
+            if alias_index:
+                alias_litellm_params = self.model_list[alias_index[0]].get("litellm_params", {})
+                for key, value in alias_litellm_params.items():
+                    if key != "model" and value is not None:
+                        request_kwargs.setdefault(key, value)
 
-        #########################################################
-        # Check if any quality-router should be used
-        #########################################################
-        if model in self.quality_routers:
-            return await self.quality_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
-
-        return None
+        return pre_routing_hook_response
 
     def get_available_deployment(
         self,
