@@ -30,7 +30,7 @@
     "@base-ui/react": "^1.6.0",
     "@headlessui/tailwindcss": "0.2.2",
     "@heroicons/react": "1.0.6",
-    "@tanstack/react-pacer": "0.2.0",
+    "@tanstack/react-pacer": "0.22.1",
     "@tanstack/react-query": "5.100.7",
     "@tanstack/react-table": "8.21.3",
     "@tremor/react": "3.18.7",
