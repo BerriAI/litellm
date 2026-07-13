@@ -388,6 +388,29 @@ class TestPerformRedaction:
         assert redacted_call.function.arguments == "redacted-by-litellm"
         assert redacted_call.function.name == "get_weather"
 
+    def test_redacts_tool_calls_skips_malformed_entries(self):
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "message content",
+                        "tool_calls": [
+                            "not-a-dict",
+                            {"type": "function"},
+                            {"function": {"name": "safe", "arguments": '{"k": "secret"}'}},
+                        ],
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        tool_calls = redacted["choices"][0]["message"]["tool_calls"]
+        assert tool_calls[0] == "not-a-dict"
+        assert tool_calls[1] == {"type": "function"}
+        assert tool_calls[2]["function"]["arguments"] == "redacted-by-litellm"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
