@@ -30,6 +30,7 @@ class DashboardAIChatRequest(BaseModel):
     "/dashboard/ai/chat",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def dashboard_ai_chat(
     data: DashboardAIChatRequest,

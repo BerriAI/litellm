@@ -3078,30 +3078,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/dashboard/ai/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Dashboard Ai Chat
-         * @description AI chat about usage data. Streams SSE events with the AI response.
-         *
-         *     The agent queries aggregated daily activity data through a provider scoped
-         *     to the caller: admins get a global view, non-admins are restricted to their
-         *     own ``user_id``.
-         */
-        post: operations["dashboard_ai_chat_dashboard_ai_chat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/debug/asyncio-tasks": {
         parameters: {
             query?: never;
@@ -22142,16 +22118,6 @@ export interface components {
             /** Url */
             url: string;
         };
-        /** ChatMessage */
-        ChatMessage: {
-            /** Content */
-            content: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "user" | "assistant";
-        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -23257,19 +23223,6 @@ export interface components {
          * DefaultInternalUserParams
          * @description Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
          */
-        /** DashboardAIChatRequest */
-        DashboardAIChatRequest: {
-            /**
-             * Messages
-             * @description Chat messages (user/assistant history)
-             */
-            messages: components["schemas"]["ChatMessage"][];
-            /**
-             * Model
-             * @description Model group to use for AI chat
-             */
-            model?: string | null;
-        };
         DefaultInternalUserParams: {
             /**
              * Budget Duration
@@ -33685,39 +33638,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    dashboard_ai_chat_dashboard_ai_chat_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DashboardAIChatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     home__get: {
         parameters: {
             query?: never;
