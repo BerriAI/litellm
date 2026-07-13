@@ -1143,7 +1143,7 @@ describe("Teams - LIT-2530 organization stays optional for proxy admin with a si
   });
 });
 
-describe("OldTeams - search debounce", () => {
+describe("Teams - search debounce", () => {
   const emptyTeamList = { teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 };
 
   beforeEach(() => {
@@ -1166,7 +1166,7 @@ describe("OldTeams - search debounce", () => {
   };
 
   it("fires a single search request with the last value only after the wait elapses", async () => {
-    renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await act(async () => {});
     vi.mocked(teamListCall).mockClear();
 
@@ -1191,7 +1191,7 @@ describe("OldTeams - search debounce", () => {
   });
 
   it("does not fire the search request when unmounted mid-wait", async () => {
-    const { unmount } = renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    const { unmount } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await act(async () => {});
     vi.mocked(teamListCall).mockClear();
 
