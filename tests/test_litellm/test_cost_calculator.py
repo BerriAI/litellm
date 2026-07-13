@@ -3122,6 +3122,92 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
     assert completion_cost == pytest.approx(expected_completion)
 
 
+def test_responses_usage_cache_write_tokens_billed_at_cache_creation_rate():
+    """
+    GPT-5.6 reports paid cache writes as input_tokens_details.cache_write_tokens
+    on the Responses API. The Responses->Chat usage transform must map them to
+    cache_creation_tokens so cost calc bills them at
+    cache_creation_input_token_cost (1.25x input) instead of the base rate.
+    """
+    from litellm.responses.utils import ResponseAPILoggingUtils
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+        {
+            "input_tokens": 6429,
+            "output_tokens": 100,
+            "total_tokens": 6529,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 5429},
+        }
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="gpt-5.6-luna",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-5.6-luna",
+        custom_llm_provider="openai",
+    )
+
+    # gpt-5.6-luna: input 1e-06, cache write 1.25e-06, output 6e-06
+    expected = (6429 - 5429) * 1e-06 + 5429 * 1.25e-06 + 100 * 6e-06
+
+    assert cost == pytest.approx(expected)
+
+
+def test_cache_creation_cost_falls_back_to_input_rate_when_unset():
+    """
+    When a model's pricing has no cache_creation_input_token_cost (custom/DB
+    pricing, azure gpt-5.6), cache-write tokens must be billed at the base
+    input rate, not $0.
+    """
+    pt_details = PromptTokensDetailsWrapper(cached_tokens=1000, audio_tokens=0)
+    pt_details.cache_creation_tokens = 500
+
+    usage = Usage(
+        prompt_tokens=4000,
+        completion_tokens=100,
+        total_tokens=4100,
+        prompt_tokens_details=pt_details,
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+        },
+    )
+
+    expected = (
+        (4000 - 1000 - 500) * 0.0000025
+        + 1000 * 0.00000025
+        + 500 * 0.0000025  # write tokens fall back to base input rate
+        + 100 * 0.000015
+    )
+
+    assert cost == pytest.approx(expected)
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — db_spend_update_writer cache token extraction helpers.
 # ---------------------------------------------------------------------------

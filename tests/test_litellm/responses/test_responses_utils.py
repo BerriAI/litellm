@@ -15,7 +15,11 @@ import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    InputTokensDetails,
+    ResponseAPIUsage,
+    ResponsesAPIOptionalRequestParams,
+)
 from litellm.types.utils import Usage
 
 
@@ -460,6 +464,61 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.text_tokens == 20
         assert result.completion_tokens_details.audio_tokens is None
+
+    def test_transform_response_api_usage_maps_cache_write_tokens(self):
+        """cache_write_tokens (GPT-5.6 paid cache writes) maps to cache_creation_input_tokens."""
+        usage = {
+            "input_tokens": 6429,
+            "output_tokens": 100,
+            "total_tokens": 6529,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 5429},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_creation_tokens == 5429
+        assert result._cache_creation_input_tokens == 5429
+        assert result.cache_creation_input_tokens == 5429
+
+    def test_transform_response_api_usage_object_input_maps_cache_write_tokens(self):
+        """cache_write_tokens maps when usage is a ResponseAPIUsage object, not a dict."""
+        usage = ResponseAPIUsage(
+            input_tokens=6429,
+            output_tokens=100,
+            total_tokens=6529,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=0, cache_write_tokens=5429
+            ),
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_creation_tokens == 5429
+        assert result._cache_creation_input_tokens == 5429
+
+    def test_transform_response_api_usage_without_cache_write_tokens_unchanged(self):
+        """Usage without cache_write_tokens stays identical to pre-fix output."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"cached_tokens": 2},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 2
+        assert getattr(result.prompt_tokens_details, "cache_creation_tokens", None) is None
+        assert result._cache_creation_input_tokens == 0
 
 
 class TestResponsesAPIProviderSpecificParams:

@@ -987,10 +987,15 @@ class ResponseAPILoggingUtils:
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        cache_creation_input_tokens: int | None = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
+                cache_creation_input_tokens = response_api_usage.input_tokens_details.get("cache_write_tokens")
                 prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
             else:
+                cache_creation_input_tokens = getattr(
+                    response_api_usage.input_tokens_details, "cache_write_tokens", None
+                )
                 prompt_tokens_details = PromptTokensDetailsWrapper(
                     cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
                     audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
@@ -1013,6 +1018,11 @@ class ResponseAPILoggingUtils:
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **(
+                {"cache_creation_input_tokens": cache_creation_input_tokens}
+                if cache_creation_input_tokens is not None
+                else {}
+            ),
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage
