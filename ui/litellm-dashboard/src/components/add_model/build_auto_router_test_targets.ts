@@ -29,9 +29,11 @@ export const buildAutoRouterTestTargets = ({
   embeddingModel,
 }: BuildAutoRouterTestTargetsParams): AutoRouterTestTarget[] => {
   const groupedByModel = TIER_ORDER.reduce<Record<string, string[]>>((acc, tier) => {
-    const modelGroup = tiers[tier]?.trim();
-    if (!modelGroup) return acc;
-    return { ...acc, [modelGroup]: [...(acc[modelGroup] ?? []), tier] };
+    return (tiers[tier] ?? []).reduce((tierAcc, rawModel) => {
+      const modelGroup = rawModel?.trim();
+      if (!modelGroup) return tierAcc;
+      return { ...tierAcc, [modelGroup]: [...(tierAcc[modelGroup] ?? []), tier] };
+    }, acc);
   }, {});
 
   const tierTargets: AutoRouterTestTarget[] = Object.entries(groupedByModel).map(([modelGroup, labels]) => ({
