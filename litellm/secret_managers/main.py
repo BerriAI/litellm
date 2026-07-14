@@ -126,7 +126,8 @@ def _get_aws_sts_client(region: str) -> "STSClient":
 def _aws_oidc_cache_ttl(expiration: datetime | None) -> int | None:
     if expiration is None:
         return None
-    remaining = int((expiration - datetime.now(timezone.utc)).total_seconds()) - 60
+    aware_expiration = expiration if expiration.tzinfo is not None else expiration.replace(tzinfo=timezone.utc)
+    remaining = int((aware_expiration - datetime.now(timezone.utc)).total_seconds()) - 60
     return remaining if remaining > 0 else None
 
 
@@ -145,12 +146,17 @@ def _get_aws_oidc_token(
     if isinstance(cached_token, str):
         return cached_token
 
+    from botocore.exceptions import ClientError
+
     build_client = sts_client_factory or _get_aws_sts_client
     sts_client = build_client(_resolve_aws_region())
-    response = sts_client.get_web_identity_token(
-        Audience=[oidc_aud],
-        SigningAlgorithm="RS256",
-    )
+    try:
+        response = sts_client.get_web_identity_token(
+            Audience=[oidc_aud],
+            SigningAlgorithm="RS256",
+        )
+    except ClientError as e:
+        raise ValueError(f"AWS OIDC provider failed: {e}") from e
     oidc_token = response["WebIdentityToken"]
 
     ttl = _aws_oidc_cache_ttl(response.get("Expiration"))

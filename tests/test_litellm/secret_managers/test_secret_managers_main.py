@@ -339,6 +339,56 @@ def test_oidc_aws_no_expiration_skips_caching():
     mock_cache.set_cache.assert_not_called()
 
 
+def test_oidc_aws_handles_naive_expiration():
+    """A naive Expiration from boto3 must not crash ttl computation."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.secret_managers.main import _get_aws_oidc_token
+
+    naive_expiration = (datetime.now(timezone.utc) + timedelta(seconds=3600)).replace(tzinfo=None)
+    fake_client = _FakeSTSClient(token="aws_jwt", expiration=naive_expiration)
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        with patch("litellm.secret_managers.main._resolve_aws_region", return_value="us-east-1"):
+            token = _get_aws_oidc_token(
+                oidc_aud="aud",
+                cache_key="oidc/aws/aud",
+                sts_client_factory=Mock(return_value=fake_client),
+            )
+
+    assert token == "aws_jwt"
+    (cache_kwargs,) = mock_cache.set_cache.call_args_list
+    assert 3500 <= cache_kwargs.kwargs["ttl"] <= 3540
+
+
+def test_oidc_aws_wraps_client_error():
+    """A boto3 ClientError is surfaced as a descriptive ValueError."""
+    from botocore.exceptions import ClientError
+
+    from litellm.secret_managers.main import _get_aws_oidc_token
+
+    class _RaisingSTSClient:
+        def get_web_identity_token(self, **kwargs):
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "not authorized"}},
+                "GetWebIdentityToken",
+            )
+
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        with patch("litellm.secret_managers.main._resolve_aws_region", return_value="us-east-1"):
+            with pytest.raises(ValueError, match="AWS OIDC provider failed"):
+                _get_aws_oidc_token(
+                    oidc_aud="aud",
+                    cache_key="oidc/aws/aud",
+                    sts_client_factory=Mock(return_value=_RaisingSTSClient()),
+                )
+
+
 def test_get_aws_sts_client_pins_regional_endpoint():
     from litellm.secret_managers.main import _get_aws_sts_client
 
