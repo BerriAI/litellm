@@ -176,6 +176,9 @@ def get_llm_provider(
 
         model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(model, custom_llm_provider)
 
+        if custom_llm_provider == "bedrock" and model.startswith("bedrock_mantle/"):
+            custom_llm_provider = "bedrock_mantle"
+
         if custom_llm_provider and (
             model.split("/")[0] != custom_llm_provider
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
