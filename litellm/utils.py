@@ -2570,20 +2570,7 @@ def supports_embedding(model: str, custom_llm_provider: str | None = None) -> bo
 
         model_info = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if model_info.get("mode") == "embedding":
-            return True
-
-        # Fallback: the provider-prefixed entry may be missing `mode` while the
-        # bare model-name entry carries the complete metadata (mirrors
-        # _supports_factory's bare-model-key fallback, see #20885).
-        if model_info.get("mode") is None:
-            bare_model_key = _get_model_cost_key(model)
-            if bare_model_key is not None:
-                bare_entry = litellm.model_cost.get(bare_model_key) or {}
-                if bare_entry.get("mode") == "embedding":
-                    return True
-
-        return False
+        return model_info.get("mode") == "embedding"
     except Exception as e:
         verbose_logger.debug(
             f"Model not found or error in checking embedding support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"

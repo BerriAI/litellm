@@ -179,28 +179,6 @@ def test_supports_embedding_false_for_unknown_model():
     assert litellm.supports_embedding(model="non-existent-model-for-embedding-check") is False
 
 
-def test_supports_embedding_bare_model_key_fallback(monkeypatch):
-    prefixed_key = "myprovider/custom-embed"
-    bare_key = "custom-embed"
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            prefixed_key: {"litellm_provider": "myprovider"},
-            bare_key: {"litellm_provider": "myprovider", "mode": "embedding"},
-        },
-    )
-    with (
-        patch.object(litellm, "get_llm_provider", return_value=(bare_key, "myprovider", None, None)),
-        patch.object(
-            litellm.utils,
-            "_get_model_info_helper",
-            return_value={"litellm_provider": "myprovider"},
-        ),
-    ):
-        assert litellm.supports_embedding(model=prefixed_key) is True
-
-
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
