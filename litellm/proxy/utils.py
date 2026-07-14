@@ -4748,6 +4748,41 @@ class PrismaClient:
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
+    def _prisma_wrappers(self) -> tuple[PrismaWrapper, ...]:
+        """Underlying writer (and reader, when read-replica routing is on)
+        wrappers, so callers can inspect their planned-recreate coordination
+        state regardless of routing."""
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return (self.db.writer, self.db.reader)
+        if isinstance(self.db, PrismaWrapper):
+            return (self.db,)
+        return ()
+
+    def _engine_generations(self) -> tuple[int, ...]:
+        return tuple(w._engine_generation for w in self._prisma_wrappers())
+
+    def _is_planned_engine_recreate_error(self, e: Exception, generations_before: tuple[int, ...]) -> bool:
+        """True iff ``e`` is a transient connection error that raced a planned
+        Prisma engine recreate rather than a real DB outage.
+
+        Every `recreate_prisma_client` (RDS IAM token refresh, guarded
+        reconnect) kills the query engine on purpose and holds the wrapper's
+        `_reconnection_lock` while it spawns and connects a replacement, bumping
+        `_engine_generation` on success. A `SELECT 1` probe that races that
+        ~0.5-1s window fails with a connection error that should not surface as
+        a DB exception. We treat the error as planned when a recreate is still
+        in flight (a lock is held) or when the engine generation moved while the
+        probe ran. Real outages persist past the recreate window with the lock
+        free and the generation unchanged, so they are still reported.
+        """
+        if not PrismaDBExceptionHandler.is_database_transport_error(e):
+            return False
+        for wrapper in self._prisma_wrappers():
+            lock = getattr(wrapper, "_reconnection_lock", None)
+            if isinstance(lock, asyncio.Lock) and lock.locked():
+                return True
+        return self._engine_generations() != generations_before
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -4760,6 +4795,7 @@ class PrismaClient:
         Health check endpoint for the prisma client
         """
         start_time = time.time()
+        generations_before = self._engine_generations()
         try:
             sql_query = "SELECT 1"
 
@@ -4770,19 +4806,26 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {str(e)}"
+            error_msg = f"LiteLLM Prisma Client Exception health_check(): {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(
-                    original_exception=e,
-                    duration=_duration,
-                    call_type="health_check",
-                    traceback_str=error_traceback,
+            if self._is_planned_engine_recreate_error(e, generations_before):
+                verbose_proxy_logger.debug(
+                    "health_check: SELECT 1 raced a planned Prisma engine recreate (%s); "
+                    "not reporting as a DB exception.",
+                    str(e),
                 )
-            )
+            else:
+                asyncio.create_task(
+                    self.proxy_logging_obj.failure_handler(
+                        original_exception=e,
+                        duration=_duration,
+                        call_type="health_check",
+                        traceback_str=error_traceback,
+                    )
+                )
             raise e
 
     async def _get_spend_logs_row_count(self) -> int:
