@@ -13,7 +13,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window) and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
-- `logging/` - logging-integration delivery (datadog and friends), including OTEL trace-tree completeness read back from the compose stack's local Jaeger destination
+- `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
