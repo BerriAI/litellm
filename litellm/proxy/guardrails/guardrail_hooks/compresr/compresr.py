@@ -69,6 +69,7 @@ DEFAULT_COMPRESSION_MODEL = "latte_v2"
 DEFAULT_TARGET_COMPRESSION_RATIO = 0.5
 DEFAULT_MIN_CHARS_TO_COMPRESS = 500
 _ORIGINALS_TTL_SECONDS = 15 * 60
+_NO_SCOPE_WARNING_INTERVAL_SECONDS = 15 * 60
 _MAX_TRACKED_CALLS = 256
 _DEFAULT_MAX_BYTES_PER_CALL = 10 * 1024 * 1024
 # Aggregate ceiling across all recovery-store entries. max_bytes_per_call only
@@ -87,10 +88,12 @@ _BLOCKED_METADATA_HOSTS = frozenset(
     {
         "metadata.google.internal",
         "metadata.goog",
+        "metadata.azure.com",
+        "metadata.azure.internal",
     }
 )
 _BLOCKED_METADATA_IPS = frozenset(
-    ipaddress.ip_address(ip) for ip in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200")
+    ipaddress.ip_address(ip) for ip in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200", "168.63.129.16")
 )
 
 
@@ -319,11 +322,25 @@ def has_compresr_retrieve_tool(tools: object) -> bool:
     return has_tool_with_name(tools, COMPRESR_RETRIEVE_TOOL_NAME)
 
 
+def _merge_retrieve_tool(existing_tools: object) -> list[object] | None:
+    """The request's tools plus the retrieve tool, or None when the incoming
+    shape is not a list (leave the caller's tools untouched; markers stay
+    inert text)."""
+    if existing_tools is not None and not isinstance(existing_tools, list):
+        return None
+    retrieve_tool = _build_compresr_retrieve_tool()
+    if existing_tools is None:
+        return [retrieve_tool]
+    if has_compresr_retrieve_tool(existing_tools):
+        return list(existing_tools)
+    return list(existing_tools) + [retrieve_tool]
+
+
 def _extract_compresr_tool_calls(response: object) -> list[dict[str, object]]:
     return [
-        {"id": tc["id"], "type": "function", "name": tc["name"], "arguments": tc["arguments"]}
+        {"id": tc.get("id"), "type": "function", "name": tc.get("name"), "arguments": tc.get("arguments", {})}
         for tc in get_tool_calls_from_response(response)
-        if tc["name"] == COMPRESR_RETRIEVE_TOOL_NAME
+        if tc.get("name") == COMPRESR_RETRIEVE_TOOL_NAME
     ]
 
 
@@ -614,8 +631,9 @@ class CompresrGuardrail(CustomGuardrail):
         self._originals_by_call_id: OrderedDict[str, tuple[dict[str, str], float]] = OrderedDict()
         # Running byte size of the store, kept in sync to enforce the global cap cheaply.
         self._store_total_bytes = 0
-        # One-shot guard so the "recovery skipped, no auth scope" warning fires once.
-        self._warned_no_scope_recovery = False
+        # Rate-limits the "recovery skipped, no auth scope" warning so an ongoing
+        # misconfiguration stays visible without flooding hot-path logs.
+        self._no_scope_warning_expiry = 0.0
         if self.enable_retrieval:
             verbose_proxy_logger.warning(
                 "Compresr: enable_retrieval is on; the recovery store is per-process. "
@@ -1028,10 +1046,10 @@ class CompresrGuardrail(CustomGuardrail):
         store_key = _scoped_store_key(logging_obj)
         scope = _caller_scope(logging_obj)
         recovery_enabled = self.enable_retrieval and store_key is not None and bool(scope)
-        if self.enable_retrieval and not scope and not self._warned_no_scope_recovery:
-            # Surface the silent no-recovery case once (compressed, but no auth
-            # scope to inject the retrieve tool).
-            self._warned_no_scope_recovery = True
+        if self.enable_retrieval and not scope and time.monotonic() >= self._no_scope_warning_expiry:
+            # Surface the silent no-recovery case (compressed, but no auth scope
+            # to inject the retrieve tool), re-warning once per interval.
+            self._no_scope_warning_expiry = time.monotonic() + _NO_SCOPE_WARNING_INTERVAL_SECONDS
             verbose_proxy_logger.warning(
                 "Compresr: enable_retrieval is on but this request has no per-key auth scope; "
                 "compressing without recovery (compresr_retrieve tool not injected). "
@@ -1083,16 +1101,9 @@ class CompresrGuardrail(CustomGuardrail):
 
         self._store_originals(store_key, originals)
 
-        existing_tools = inputs.get("tools")
-        retrieve_tool = _build_compresr_retrieve_tool()
-        if isinstance(existing_tools, list) and not has_compresr_retrieve_tool(existing_tools):
-            merged_tools: list[object] = list(existing_tools) + [retrieve_tool]
-        elif existing_tools is None:
-            merged_tools = [retrieve_tool]
-        else:
-            merged_tools = list(existing_tools) if isinstance(existing_tools, list) else [retrieve_tool]
-
-        compressed_inputs["tools"] = merged_tools
+        merged_tools = _merge_retrieve_tool(inputs.get("tools"))
+        if merged_tools is not None:
+            compressed_inputs["tools"] = merged_tools
         return compressed_inputs  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
 
     async def async_should_run_agentic_loop(

@@ -27,6 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     COMPRESR_RETRIEVE_TOOL_NAME,
     CompresrGuardrail,
     _content_hash,
+    _extract_compresr_tool_calls,
     _scoped_store_key,
     has_compresr_retrieve_tool,
 )
@@ -731,6 +732,9 @@ def test_init_rejects_cloud_metadata_api_base():
         "http://2852039166",  # decimal encoding of 169.254.169.254
         "http://0xa9fea9fe",  # hex encoding
         "http://[::ffff:169.254.169.254]",  # IPv4-mapped IPv6
+        "http://metadata.azure.com",
+        "http://metadata.azure.internal",
+        "http://168.63.129.16",  # Azure WireServer
     ],
 )
 def test_init_rejects_encoded_cloud_metadata_api_base(api_base):
@@ -988,6 +992,40 @@ async def test_existing_tools_preserved_when_injecting(guardrail: CompresrGuardr
     assert existing_tool in tools
     assert has_compresr_retrieve_tool(tools)
     assert len(tools) == 2
+
+
+@pytest.mark.asyncio
+async def test_non_list_tools_left_untouched_when_injecting(guardrail: CompresrGuardrail):
+    # An unexpected non-list tools value must survive unchanged rather than be
+    # clobbered by the injected retrieve tool.
+    odd_tools = {"type": "function", "function": {"name": "my_tool"}}
+    inputs = GenericGuardrailAPIInputs(
+        structured_messages=[dict(m) for m in AGENT_MESSAGES],
+        tools=odd_tools,  # type: ignore[typeddict-item]
+    )
+    mock_post = AsyncMock(return_value=_make_single_compress_response())
+
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+            logging_obj=_logging_obj("call-id-1"),
+        )
+
+    assert result["tools"] is odd_tools
+
+
+def test_extract_compresr_tool_calls_tolerates_missing_keys():
+    # A retrieve call missing id/arguments must not KeyError in the post-call
+    # hook; it extracts with safe defaults and resolves to a rejection later.
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.compresr.compresr.get_tool_calls_from_response",
+        return_value=[{"name": COMPRESR_RETRIEVE_TOOL_NAME}, {"id": "x"}],
+    ):
+        extracted = _extract_compresr_tool_calls(object())
+
+    assert extracted == [{"id": None, "type": "function", "name": COMPRESR_RETRIEVE_TOOL_NAME, "arguments": {}}]
 
 
 # ── agentic loop ──────────────────────────────────────────────────────
@@ -1979,14 +2017,19 @@ async def test_recovery_disabled_when_no_caller_scope():
 
 
 @pytest.mark.asyncio
-async def test_warns_once_when_recovery_skipped_without_scope():
+async def test_warns_once_per_interval_when_recovery_skipped_without_scope():
     # enable_retrieval is on but the request has no per-key auth scope: recovery
-    # is silently skipped, so a call-time warning must surface it (once).
+    # is silently skipped, so a call-time warning must surface it, rate-limited
+    # within the interval but re-arming after it so an ongoing misconfiguration
+    # stays visible.
     guardrail = _make_guardrail()
     logging_obj = MagicMock()
     logging_obj.litellm_call_id = "call-abc"
     logging_obj.model_call_details = {"litellm_params": {"metadata": {}}}
     mock_post = AsyncMock(return_value=_make_single_compress_response())
+
+    def _no_scope_warnings(mock_log):
+        return [c for c in mock_log.warning.call_args_list if "no per-key auth scope" in str(c)]
 
     with patch.object(guardrail.async_handler, "post", mock_post):
         with patch("litellm.proxy.guardrails.guardrail_hooks.compresr.compresr.verbose_proxy_logger") as mock_log:
@@ -1997,6 +2040,13 @@ async def test_warns_once_when_recovery_skipped_without_scope():
                     input_type="request",
                     logging_obj=logging_obj,
                 )
+            assert len(_no_scope_warnings(mock_log)) == 1
 
-    no_scope_warnings = [c for c in mock_log.warning.call_args_list if "no per-key auth scope" in str(c)]
-    assert len(no_scope_warnings) == 1
+            guardrail._no_scope_warning_expiry = 0.0
+            await guardrail.apply_guardrail(
+                inputs=_apply_inputs(AGENT_MESSAGES),
+                request_data={"model": "gpt-4o"},
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+            assert len(_no_scope_warnings(mock_log)) == 2
