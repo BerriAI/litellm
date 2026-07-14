@@ -7361,3 +7361,109 @@ async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
 
     assert exc_info.value.status_code == 500
     assert "DB not connected" in str(exc_info.value.detail)
+
+
+class _SharedFakeRedisCache:
+    """In-memory stand-in for a coordination Redis shared across proxy workers."""
+
+    def __init__(self, store):
+        self._store = store
+
+    def set_cache(self, key, value, **kwargs):
+        self._store[key] = json.dumps(value)
+        return True
+
+    def get_cache(self, key, parent_otel_span=None, **kwargs):
+        raw = self._store.get(key)
+        return None if raw is None else json.loads(raw)
+
+    def delete_cache(self, key):
+        self._store.pop(key, None)
+
+
+class TestCliSsoFlowCoordinationRedis:
+    """
+    Regression for issue #33253: CLI SSO login fails on multi-worker / multi-replica
+    proxies because the pending login flow was stored in the per-worker in-memory
+    ``user_api_key_cache``. ``/sso/cli/start`` and ``/sso/key/generate`` can land on
+    different workers, so the second worker could not see the flow and returned
+    "Invalid CLI login session". The fix routes the flow through the coordination
+    Redis (``redis_usage_cache``) when it exists, falling back to ``user_api_key_cache``.
+    """
+
+    LOGIN_ID = "cli-abcdef012345"
+    FLOW = {"poll_secret_hash": "deadbeef", "sso_complete": False, "session_data": None}
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_persists_flow_to_coordination_redis(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_cache_key,
+            cli_sso_start,
+        )
+
+        store: dict = {}
+        fake_redis = _SharedFakeRedisCache(store)
+        per_worker_cache = MagicMock()
+        per_worker_cache.increment_cache.return_value = 1
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", fake_redis),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", per_worker_cache),
+        ):
+            result = await cli_sso_start(request=mock_request)
+
+        assert _get_cli_sso_flow_cache_key(result["login_id"]) in store
+        per_worker_cache.set_cache.assert_not_called()
+
+    def test_cli_sso_flow_shared_across_workers_via_redis(self):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+            _set_cli_sso_flow,
+        )
+
+        store: dict = {}
+        worker_a = DualCache(redis_cache=_SharedFakeRedisCache(store))
+        worker_b = DualCache(redis_cache=_SharedFakeRedisCache(store))
+
+        _set_cli_sso_flow(login_id=self.LOGIN_ID, cache=worker_a, flow=dict(self.FLOW))
+        retrieved = _get_cli_sso_flow_or_raise(login_id=self.LOGIN_ID, cache=worker_b)
+
+        assert retrieved["poll_secret_hash"] == "deadbeef"
+
+    def test_cli_sso_flow_invisible_to_other_worker_without_redis(self):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+            _set_cli_sso_flow,
+        )
+
+        worker_a = DualCache()
+        worker_b = DualCache()
+
+        _set_cli_sso_flow(login_id=self.LOGIN_ID, cache=worker_a, flow=dict(self.FLOW))
+
+        with pytest.raises(HTTPException) as exc_info:
+            _get_cli_sso_flow_or_raise(login_id=self.LOGIN_ID, cache=worker_b)
+        assert exc_info.value.detail == "Invalid CLI login session"
+
+    def test_cli_sso_flow_cache_prefers_coordination_redis_then_falls_back(self):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.management_endpoints.ui_sso import _cli_sso_flow_cache
+
+        fake_redis = _SharedFakeRedisCache({})
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", fake_redis):
+            selected = _cli_sso_flow_cache()
+        assert isinstance(selected, DualCache)
+        assert selected.redis_cache is fake_redis
+
+        per_worker_cache = DualCache()
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", per_worker_cache),
+        ):
+            assert _cli_sso_flow_cache() is per_worker_cache

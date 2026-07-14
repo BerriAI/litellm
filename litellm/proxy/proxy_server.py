@@ -3634,7 +3634,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the cluster-wide config
-    cache, and (unless explicitly opted out) the virtual-key auth cache.
+    cache, and (only when opted in) the virtual-key auth cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
@@ -3646,18 +3646,16 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
             default_redis_ttl=litellm.default_redis_ttl,
         )
         verbose_proxy_logger.info(
-            "attached Redis to user_api_key_cache; virtual-key lookups and "
-            "short-lived cross-worker state (e.g. CLI SSO login sessions) are "
-            "now shared across all proxy workers. Set "
-            "litellm_settings.enable_redis_auth_cache: false to opt out and "
-            "keep the auth cache per-worker/DB-only."
+            "enable_redis_auth_cache=True: attached Redis to "
+            "user_api_key_cache — virtual-key lookups are now "
+            "shared across all proxy workers."
         )
     else:
         verbose_proxy_logger.info(
-            "enable_redis_auth_cache is set to false: user_api_key_cache "
-            "remains in-memory only (per-worker). Cross-worker features that "
-            "rely on it (e.g. CLI SSO login) will not work on multi-worker "
-            "deployments."
+            "enable_redis_auth_cache is not set: user_api_key_cache "
+            "remains in-memory only (per-worker). Set "
+            "litellm_settings.enable_redis_auth_cache: true to share "
+            "the auth cache across workers and reduce DB load."
         )
     litellm_config_cache.redis_cache = redis_cache
 
@@ -3886,7 +3884,7 @@ class ProxyConfig:
         coordination_redis_cache = _build_redis_usage_cache(coordination_params.model_dump(exclude_none=True))
         _attach_redis_usage_cache(
             coordination_redis_cache,
-            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", True) is not False,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
         )
         verbose_proxy_logger.info(
             "coordination_redis: using a standalone Redis from general_settings "
@@ -3897,7 +3895,7 @@ class ProxyConfig:
     def _init_cache(
         self,
         cache_params: dict,
-        enable_redis_auth_cache: bool = True,
+        enable_redis_auth_cache: bool = False,
     ) -> RedisCache | None:
         """
         Initializes the response cache and resolves the coordination Redis.
@@ -4271,7 +4269,7 @@ class ProxyConfig:
                     _set_redis_usage_cache(
                         self._init_cache(
                             cache_params=cache_params,
-                            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", True) is not False,
+                            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
                         )
                     )
                     if litellm.cache is not None:
@@ -7447,7 +7445,7 @@ class ProxyStartupEvent:
         coordination_redis_cache = _build_redis_usage_cache(coordination_params.model_dump(exclude_none=True))
         _attach_redis_usage_cache(
             coordination_redis_cache,
-            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", True) is not False,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
         )
         if llm_router is not None and llm_router.cache.redis_cache is None:
             llm_router._update_redis_cache(cache=coordination_redis_cache)
