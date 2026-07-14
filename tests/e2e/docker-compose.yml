@@ -75,7 +75,7 @@ services:
       redis:
         condition: service_healthy
       jaeger:
-        condition: service_started
+        condition: service_healthy
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
@@ -132,3 +132,8 @@ services:
     image: jaegertracing/all-in-one:1.62.0
     ports:
       - "16686:16686"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:14269/"]
+      interval: 3s
+      timeout: 3s
+      retries: 20

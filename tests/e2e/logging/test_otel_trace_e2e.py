@@ -77,7 +77,7 @@ def _first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> S
 
 def _parent_ids(span_id: str, trace: JaegerTrace) -> list[str]:
     span = next(s for s in trace.spans if s.span_id == span_id)
-    return [ref.span_id for ref in span.references]
+    return [ref.span_id for ref in span.references if ref.ref_type == "CHILD_OF"]
 
 
 def _chain_reaches(span_id: str, root_id: str, trace: JaegerTrace) -> bool:
@@ -100,6 +100,10 @@ def _assert_complete_trace(hits: list[JaegerTrace], *, route: str, genai_span: s
     """The enforced behavior: the destination holds exactly one trace for the
     call, rooted at the SERVER span, with auth/db/cost children and the gen-AI
     span all connected into that one tree - no dangling parent references."""
+    assert hits, (
+        "no trace for this call arrived at the destination within the deadline "
+        "(nothing tagged with its call id was found)"
+    )
     assert len(hits) == 1, (
         f"expected exactly ONE trace for the call, got {len(hits)}: "
         f"{[(t.trace_id, t.span_names()) for t in hits]} - more than one trace for "
@@ -153,7 +157,7 @@ class TestOtelTraceCompleteness:
     ) -> None:
         """One successful non-streaming /chat/completions call must export ONE
         complete OTEL trace to the admin-owned destination (LIT-3787): a single
-        root SERVER span ("POST /v1/chat/completions") with the auth phase, db
+        root SERVER span ("POST /chat/completions") with the auth phase, db
         lookup, and cost write under it, and the gen-AI CLIENT span ("chat
         <model>") parented into the same tree - exactly one trace for the call,
         no dangling parent references.
@@ -169,7 +173,6 @@ class TestOtelTraceCompleteness:
         for every OpenAI-compatible SDK; trace completeness must hold here
         before anywhere else.
         """
-        # the exact path chat_raw posts to; the root SERVER span is named after it
         route = "/chat/completions"
         _assert_otel_destination_configured(client)
 
@@ -184,7 +187,7 @@ class TestOtelTraceCompleteness:
 
         hits = otel_reader.poll_traces_for_call(
             call_id=outcome.call_id,
-            marker=marker,
             settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+            settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
