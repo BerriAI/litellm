@@ -128,6 +128,21 @@ def _has_client_supplied_mcp_auth(
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
 
 
+MCP_ADMITTED_USER_SUBJECT_METADATA = "mcp_admitted_user_subject"
+"""Marker key stamped into ``UserAPIKeyAuth.metadata`` by ``_reload_admitted_user`` for a
+subject admitted keyless through the gateway session / bridge user path. It is what lets
+``_team_ids_for_mcp_grant`` union the user's teams for exactly those admissions without also
+broadening JWT auth, which produces a structurally identical keyless auth."""
+
+
+def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    """True when this auth is a keyless subject admitted by the gateway session / bridge user
+    path (stamped at admission), as opposed to a JWT or other keyless auth that merely lacks a
+    ``team_id``."""
+    metadata = user_api_key_auth.metadata
+    return isinstance(metadata, dict) and metadata.get(MCP_ADMITTED_USER_SUBJECT_METADATA) is True
+
+
 def _is_aggregate_mcp_scope(route: str, mcp_servers: list[str] | None) -> bool:
     """True when a request targets the aggregate ``/mcp`` endpoint rather than any named
     server. Named targets arrive either through ``x-mcp-servers`` (``mcp_servers``) or a
@@ -811,6 +826,7 @@ class MCPRequestHandler:
             org_id=user_object.organization_id,
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
+            metadata={MCP_ADMITTED_USER_SUBJECT_METADATA: True},
         )
 
     @staticmethod
@@ -1627,16 +1643,17 @@ class MCPRequestHandler:
         """
         Get allowed MCP servers a caller inherits from team membership.
 
-        For a key-based caller the ``team_id`` on the auth is the one team, and the result
-        is that team's grants (byte-identical to before this method learned about multiple
-        teams). For a user-subject caller admitted WITHOUT a key (the gateway DCR session
-        bearer and the bridge user-envelope, which carry a ``user_id`` and no ``api_key`` or
-        ``team_id``), a ``UserAPIKeyAuth`` can only pin one team while the user may belong to
-        many, so the inherited grant is the UNION across every team the user belongs to.
-        Without this a signed-in user would see only servers granted to them directly and
-        none granted through their teams, which is how servers are meant to be shared
-        (assign teams, not individuals). Key-based auth never enters the union branch, so its
-        access is unchanged.
+        For a caller with a ``team_id`` (every key-based caller) the result is that one team's
+        grants, byte-identical to before this method learned about multiple teams. For a
+        subject admitted keyless through the gateway DCR session or bridge user path, a
+        ``UserAPIKeyAuth`` can only pin one team while the user may belong to many, so the
+        inherited grant is the UNION across every team the user belongs to. Without this a
+        signed-in user would see only servers granted to them directly and none granted
+        through their teams, which is how servers are meant to be shared (assign teams, not
+        individuals). The union is gated on the admission marker
+        ``_team_ids_for_mcp_grant`` checks, NOT on ``api_key is None``, so JWT auth (also
+        keyless, also possibly team-less) keeps its prior behavior and is not silently
+        broadened.
         """
         team_ids = await MCPRequestHandler._team_ids_for_mcp_grant(user_api_key_auth)
         if not team_ids:
@@ -1653,16 +1670,20 @@ class MCPRequestHandler:
     async def _team_ids_for_mcp_grant(user_api_key_auth: UserAPIKeyAuth | None) -> list[str]:
         """The team ids whose MCP grants a caller inherits.
 
-        A key-based caller (``api_key`` set) or any caller with an explicit ``team_id`` uses
-        that single team, so key auth is unchanged. Only a keyless user-subject caller (no
-        ``api_key``, no ``team_id``, a ``user_id``) fans out to the user's full team list,
-        resolved once from the live user record. The ``UI_TEAM_ID`` sentinel resolves to no
-        teams exactly as before."""
+        A caller with an explicit ``team_id`` (every key-based caller, and any auth that pins
+        a team) uses that single team, so key auth is byte-identical. The fan-out to the
+        user's full team list happens ONLY for a subject admitted keyless through the gateway
+        session or bridge user path, which ``_reload_admitted_user`` stamps with
+        ``MCP_ADMITTED_USER_SUBJECT_METADATA``. Gating on that positive marker rather than on
+        ``api_key is None`` is deliberate: JWT auth also produces a keyless ``user_id`` auth
+        with no ``team_id``, and it must keep its prior behavior (no team-inherited grants)
+        rather than silently gaining the union across every team the user belongs to. The
+        ``UI_TEAM_ID`` sentinel resolves to no teams exactly as before."""
         if user_api_key_auth is None:
             return []
         if user_api_key_auth.team_id:
             return [] if user_api_key_auth.team_id == UI_TEAM_ID else [user_api_key_auth.team_id]
-        if user_api_key_auth.api_key is not None or not user_api_key_auth.user_id:
+        if not user_api_key_auth.user_id or not _is_mcp_admitted_user_subject(user_api_key_auth):
             return []
         return await MCPRequestHandler._resolve_user_team_ids(user_api_key_auth.user_id, user_api_key_auth)
 
