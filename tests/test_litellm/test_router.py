@@ -5806,3 +5806,92 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     )
 
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+class TestAzureBaseModelFallbackLogging:
+    """When an azure deployment has no base_model but its model name is a known
+    azure key in the cost map, get_router_model_info resolves it via the
+    fallback — so it must not log the per-request 'Could not identify azure
+    model' ERROR. The ERROR must remain for genuinely unmappable deployment
+    names. Issue #33172."""
+
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost_map(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        original_model_cost = litellm.model_cost
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        yield
+        litellm.model_cost = original_model_cost
+
+    def _router_with_azure_deployment(self, deployment_model: str):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": deployment_model,
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {"id": "azure-base-model-test-id"},
+                }
+            ]
+        )
+
+    def test_map_known_deployment_name_resolves_without_error_log(self):
+        router = self._router_with_azure_deployment("azure/gpt-4o")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert not any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), f"unexpected error log: {mock_error.call_args_list}"
+        # the fallback resolution must actually surface the map values
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o"]["max_input_tokens"]
+        assert model_info["input_cost_per_token"] == litellm.model_cost["azure/gpt-4o"]["input_cost_per_token"]
+
+    def test_unmappable_deployment_name_still_logs_error(self):
+        router = self._router_with_azure_deployment("azure/my-custom-deployment-name")
+
+        with patch(
+            "litellm.router.verbose_router_logger.error"
+        ) as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert any(
+            "Could not identify azure model" in str(call)
+            for call in mock_error.call_args_list
+        ), "expected the error log for an unmappable azure deployment name"
+        # unmappable names resolve to a zeroed stub — unchanged behavior
+        assert model_info.get("max_input_tokens") is None
+
+    def test_explicit_base_model_still_wins(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": "azure/some-deployment",
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {
+                        "id": "azure-base-model-test-id",
+                        "base_model": "azure/gpt-4o-mini",
+                    },
+                }
+            ]
+        )
+
+        model_info = router.get_router_model_info(
+            deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+        )
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
