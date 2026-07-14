@@ -249,7 +249,7 @@ class TestAreThereDuplicateTraces:
                 )
             )
 
-        rows = client.gateway.poll_logs_for_key(
+        _ = client.gateway.poll_logs_for_key(
             key,
             min_rows=CLAUDE_CODE_BURST,
             predicate=lambda rs: len(_success_rows(rs)) >= CLAUDE_CODE_BURST,
