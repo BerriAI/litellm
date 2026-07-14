@@ -1,10 +1,12 @@
 import sys
 from types import ModuleType, SimpleNamespace
 
-import pytest
-
 from litellm.proxy import _lazy_openapi_snapshot as snapshot_module
 from litellm.proxy._lazy_openapi_snapshot import (
+    EXIT_CANNOT_VERIFY,
+    EXIT_DRIFTED,
+    EXIT_IN_SYNC,
+    REGEN_COMMAND,
     _normalize_operation_ids,
     _register_lazy_feature,
     check_snapshot,
@@ -170,7 +172,7 @@ class TestCheckSnapshot:
         monkeypatch.setattr(snapshot_module, "generate_snapshot", lambda *, strict=False: fragments)
         monkeypatch.setattr(snapshot_module, "load_snapshot", lambda: dict(fragments))
 
-        assert check_snapshot() == 0
+        assert check_snapshot() == EXIT_IN_SYNC
 
     def test_fails_when_a_fragment_drifted(self, monkeypatch, capsys):
         monkeypatch.setattr(
@@ -184,25 +186,45 @@ class TestCheckSnapshot:
             lambda: {"guardrails": {"paths": {"/old": {}}, "components": {"schemas": {}}}},
         )
 
-        assert check_snapshot() == 1
+        assert check_snapshot() == EXIT_DRIFTED
         assert "guardrails" in capsys.readouterr().err
 
     def test_fails_when_the_file_is_absent(self, monkeypatch):
         monkeypatch.setattr(snapshot_module, "generate_snapshot", lambda *, strict=False: {"a": {"paths": {}}})
         monkeypatch.setattr(snapshot_module, "load_snapshot", lambda: None)
 
-        assert check_snapshot() == 1
+        assert check_snapshot() == EXIT_DRIFTED
 
-    def test_verification_refuses_to_run_on_an_incomplete_regen(self, monkeypatch):
-        """A feature that fails to import would silently look like a deleted fragment."""
+    def test_an_unimportable_feature_is_not_reported_as_drift(self, monkeypatch, capsys):
+        """A skipped feature looks exactly like a deleted fragment, so it gets its own outcome.
+
+        Reporting it as drift would tell you to regenerate a snapshot that is fine, and the
+        regen would then silently drop the missing feature's fragments.
+        """
 
         def _boom(*, strict: bool = False):
             raise RuntimeError("cannot verify the snapshot: mcp_app (ImportError: no module)")
 
         monkeypatch.setattr(snapshot_module, "generate_snapshot", _boom)
 
-        with pytest.raises(RuntimeError, match="cannot verify the snapshot"):
-            check_snapshot()
+        assert check_snapshot() == EXIT_CANNOT_VERIFY
+        assert check_snapshot() != EXIT_DRIFTED
+
+        stderr = capsys.readouterr().err
+        assert "mcp_app" in stderr
+        assert "not snapshot drift" in stderr
+        assert REGEN_COMMAND not in stderr
+
+    def test_main_reports_the_import_failure_instead_of_raising(self, monkeypatch, capsys):
+        """The workflow branches on the exit code, so this must not escape as a traceback."""
+
+        def _boom(*, strict: bool = False):
+            raise RuntimeError("cannot verify the snapshot: mcp_app (ImportError: no module)")
+
+        monkeypatch.setattr(snapshot_module, "generate_snapshot", _boom)
+
+        assert snapshot_module._main(["--check"]) == EXIT_CANNOT_VERIFY
+        assert "mcp_app" in capsys.readouterr().err
 
 
 class TestSerializeSnapshot:

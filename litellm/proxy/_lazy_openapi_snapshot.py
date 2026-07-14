@@ -153,6 +153,10 @@ def generate_snapshot(*, strict: bool = False) -> dict[str, dict]:
 
 REGEN_COMMAND = "python -m litellm.proxy._lazy_openapi_snapshot"
 
+EXIT_IN_SYNC = 0
+EXIT_DRIFTED = 1
+EXIT_CANNOT_VERIFY = 2
+
 
 def serialize_snapshot(fragments: dict[str, dict]) -> str:
     return json.dumps(fragments, indent=2, sort_keys=True) + "\n"
@@ -164,13 +168,30 @@ def drifted_features(committed: dict[str, dict], fresh: dict[str, dict]) -> tupl
 
 
 def check_snapshot() -> int:
-    """Regenerate in memory and compare against the committed file. 0 when in sync."""
-    fresh = generate_snapshot(strict=True)
+    """Regenerate in memory and compare against the committed file.
+
+    Returns EXIT_IN_SYNC, EXIT_DRIFTED, or EXIT_CANNOT_VERIFY. A feature that will not
+    import is reported as its own outcome rather than as drift: the fragments it owns
+    are simply absent from the regen, which is indistinguishable from someone deleting
+    them, so calling it "stale" would send you off to regenerate a file that is fine.
+    """
+    try:
+        fresh = generate_snapshot(strict=True)
+    except RuntimeError as exc:
+        sys.stderr.write(
+            f"cannot verify {SNAPSHOT_FILE.name}: a lazy feature failed to import.\n\n"
+            f"{exc}\n\n"
+            "This is an environment problem, not snapshot drift. Install the extras the\n"
+            "feature needs and re-run; do not regenerate the snapshot from here, or the\n"
+            "missing feature's fragments will be dropped from the committed file.\n"
+        )
+        return EXIT_CANNOT_VERIFY
+
     committed = load_snapshot()
 
     if committed is not None and serialize_snapshot(committed) == serialize_snapshot(fresh):
         sys.stdout.write(f"{SNAPSHOT_FILE.name} is in sync ({len(fresh)} feature fragments).\n")
-        return 0
+        return EXIT_IN_SYNC
 
     drifted = drifted_features(committed or {}, fresh)
     sys.stderr.write(
@@ -182,7 +203,7 @@ def check_snapshot() -> int:
         "then commit the updated litellm/proxy/_lazy_openapi_snapshot.json (and re-run\n"
         "`npm run gen:api` in ui/litellm-dashboard if schema.d.ts changes).\n"
     )
-    return 1
+    return EXIT_DRIFTED
 
 
 def _main(argv: Sequence[str]) -> int:

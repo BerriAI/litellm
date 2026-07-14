@@ -53,7 +53,21 @@ jobs:
 
       - name: Fail if the snapshot is stale
         run: |
-          if ! uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot --check; then
-            echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::Lazy OpenAPI snapshot is out of sync with the proxy routes."
-            exit 1
-          fi
+          set +e
+          uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot --check
+          status=$?
+          set -e
+
+          case "$status" in
+            0)
+              exit 0
+              ;;
+            2)
+              echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::Could not verify the lazy OpenAPI snapshot: a lazy feature failed to import, so the regenerated snapshot would be incomplete. This is a missing dependency in this job, not snapshot drift. See the log for the feature and error."
+              exit 1
+              ;;
+            *)
+              echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::Lazy OpenAPI snapshot is out of sync with the proxy routes. Run 'python -m litellm.proxy._lazy_openapi_snapshot', commit the result, and re-run 'npm run gen:api' if schema.d.ts changes."
+              exit 1
+              ;;
+          esac
