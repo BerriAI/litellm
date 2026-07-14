@@ -14846,6 +14846,7 @@ async def get_config_list(
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
+        "skip_user_budget_on_team_key": {"type": "Boolean"},
     }
 
     return_val = []
