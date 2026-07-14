@@ -9,6 +9,7 @@ sys.path.insert(
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
+    ChatCompletionSession,
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import (
@@ -930,6 +931,183 @@ class TestFunctionCallTransformation:
         function = tool_call.get("function", {})
         assert function.get("name") == "search_web"
         assert function.get("arguments") == '{"query": "attribute objects"}'
+
+    def test_collect_assistant_tool_call_ids_extracts_ids_from_assistant_messages(self):
+        """
+        `_collect_assistant_tool_call_ids` should gather every tool_call id
+        carried by assistant messages, and ignore other roles.
+        """
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+                    {"id": "call_2", "type": "function", "function": {"name": "bar", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "content": "result", "tool_call_id": "call_1"},
+        ]
+
+        ids = LiteLLMCompletionResponsesConfig._collect_assistant_tool_call_ids(messages)
+
+        assert ids == {"call_1", "call_2"}
+
+    def test_collect_assistant_tool_call_ids_ignores_non_assistant_messages(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "content": "x", "tool_call_id": "call_orphan"},
+        ]
+
+        ids = LiteLLMCompletionResponsesConfig._collect_assistant_tool_call_ids(messages)
+
+        assert ids == set()
+
+    def test_collect_assistant_tool_call_ids_empty_for_no_tool_calls(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "just text, no tool calls"},
+        ]
+
+        ids = LiteLLMCompletionResponsesConfig._collect_assistant_tool_call_ids(messages)
+
+        assert ids == set()
+
+    @pytest.mark.asyncio
+    async def test_async_responses_api_session_handler_drops_cache_reconstructed_duplicate_tool_use(self):
+        """
+        Regression test for a residual duplicate-message bug (found while adding
+        an integration test for https://github.com/BerriAI/litellm/pull/33219).
+
+        When `previous_response_id` is used, the DB-backed session may already
+        supply the assistant message for a given tool_call_id. Separately, when
+        the new follow-up input is a *bare* `function_call_output` for that same
+        id (e.g. the MCP follow-up call, per PR #33219), transforming it
+        reconstructs a synthetic assistant `tool_calls` message from the
+        same-process, in-memory `TOOL_CALLS_CACHE` (see
+        `_transform_responses_api_tool_call_output_to_chat_completion_message`)
+        -- with no awareness of what the session already provided.
+
+        Concatenating `session_messages + _messages` therefore produces two
+        back-to-back assistant messages for the same tool_use id, with the real
+        `tool_result` immediately after only the second one. Anthropic rejects
+        this with: "tool_use ids were found without tool_result blocks
+        immediately after".
+
+        `async_responses_api_session_handler` must drop the redundant,
+        cache-reconstructed assistant message so the tool_result stays
+        immediately adjacent to the (single) real assistant tool_use message.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses.litellm_completion_transformation.session_handler import (
+            ResponsesSessionHandler,
+        )
+
+        tool_call_id = "call_dedupe_regression"
+
+        TOOL_CALLS_CACHE.set_cache(
+            key=tool_call_id,
+            value=ChatCompletionMessageToolCall(
+                id=tool_call_id,
+                type="function",
+                function=Function(name="search_docs", arguments="{}"),
+            ),
+        )
+
+        fake_session = ChatCompletionSession(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "search the docs"},
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id=tool_call_id,
+                            type="function",
+                            function=Function(name="search_docs", arguments="{}"),
+                        )
+                    ],
+                ),
+            ],
+            litellm_session_id="session-x",
+        )
+
+        # The new follow-up input is a bare function_call_output (the shape the
+        # MCP handler sends per the PR #33219 fix), already transformed into
+        # chat completion messages - this reproduces the TOOL_CALLS_CACHE
+        # reconstruction described above.
+        new_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": "search results",
+                }
+            ],
+            responses_api_request={},
+        )
+        # Sanity check: the cache reconstruction fired, so `new_messages` alone
+        # already contains the synthetic duplicate assistant message.
+        assert len(new_messages) == 2
+        assert new_messages[0].get("role") == "assistant"
+
+        litellm_completion_request = {
+            "model": "claude-haiku-4-5",
+            "messages": new_messages,
+        }
+
+        try:
+            with patch.object(
+                ResponsesSessionHandler,
+                "get_chat_completion_message_history_for_previous_response_id",
+                new_callable=AsyncMock,
+                return_value=fake_session,
+            ):
+                result = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                    previous_response_id="resp_prev",
+                    litellm_completion_request=litellm_completion_request,
+                )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        combined = result["messages"]
+
+        def _role(m):
+            return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+
+        def _tool_call_ids(m):
+            tool_calls = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+            ids = []
+            for tc in tool_calls or []:
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tc_id:
+                    ids.append(tc_id)
+            return ids
+
+        assistant_indices = [i for i, m in enumerate(combined) if _role(m) == "assistant" and tool_call_id in _tool_call_ids(m)]
+
+        assert len(assistant_indices) == 1, (
+            f"Expected exactly one assistant message for tool_call_id={tool_call_id!r} "
+            f"after dedup, found {len(assistant_indices)}. Messages: {combined}"
+        )
+
+        tool_use_idx = assistant_indices[0]
+        assert tool_use_idx + 1 < len(combined), "No message follows the assistant tool_use message"
+        next_message = combined[tool_use_idx + 1]
+        assert _role(next_message) == "tool", (
+            f"Expected the tool_result to immediately follow the assistant tool_use "
+            f"message, got role={_role(next_message)!r}. Messages: {combined}"
+        )
+        tool_call_id_on_result = (
+            next_message.get("tool_call_id")
+            if isinstance(next_message, dict)
+            else getattr(next_message, "tool_call_id", None)
+        )
+        assert tool_call_id_on_result == tool_call_id
 
 
 class TestToolChoiceTransformation:

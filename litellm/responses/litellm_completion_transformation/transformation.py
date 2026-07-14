@@ -330,6 +330,35 @@ class LiteLLMCompletionResponsesConfig:
         # Store original _messages before combining for safety check
         original_new_messages = _messages.copy() if _messages else []
 
+        # Fix: Avoid duplicate assistant tool_use messages when the session (DB)
+        # already supplies the assistant message for a given tool_call_id.
+        #
+        # `_messages` is built independently from the new follow-up input (e.g.
+        # a bare `function_call_output` for an MCP/tool follow-up call). When
+        # transforming a lone `function_call_output`, `TOOL_CALLS_CACHE` (a
+        # same-process, in-memory cache populated when the original tool_call
+        # was first returned) is used to reconstruct a synthetic assistant
+        # `tool_calls` message so the tool result isn't orphaned - see
+        # `_transform_responses_api_tool_call_output_to_chat_completion_message`.
+        #
+        # That reconstruction has no visibility into `session_messages` (the
+        # conversation history reconstructed from the spend-logs DB for
+        # `previous_response_id`). If the DB session *also* already contains
+        # the assistant message for that same tool_call_id, concatenating the
+        # two produces two back-to-back assistant messages for the same
+        # tool_use id, with the real `tool_result` immediately after only the
+        # *second* one - which Anthropic rejects with: "tool_use ids were
+        # found without tool_result blocks immediately after".
+        #
+        # Drop the redundant assistant message(s) from `_messages` whose
+        # tool_call_id already appears in `session_messages` before combining.
+        existing_tool_call_ids = LiteLLMCompletionResponsesConfig._collect_assistant_tool_call_ids(session_messages)
+        if existing_tool_call_ids:
+            _messages = LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
+                tool_call_output_messages=_messages,
+                existing_tool_call_ids=existing_tool_call_ids,
+            )
+
         combined_messages = session_messages + _messages
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
@@ -485,6 +514,34 @@ class LiteLLMCompletionResponsesConfig:
 
                 messages.extend(chat_completion_messages)
         return messages
+
+    @staticmethod
+    def _collect_assistant_tool_call_ids(
+        messages: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+            | Message
+        ],
+    ) -> set[str]:
+        """Collect every tool_call id carried by assistant messages in ``messages``.
+
+        Used to detect when a follow-up call's new messages would re-introduce
+        a tool_use/tool_call id that is already present in the reconstructed
+        session (DB) history, so the duplicate can be dropped before the two
+        message lists are concatenated.
+        """
+        tool_call_ids: set[str] = set()
+        for message in messages:
+            role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+            if role != "assistant":
+                continue
+            for tool_call in LiteLLMCompletionResponsesConfig._get_tool_calls_list(message):
+                tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
+                if tool_call_id:
+                    tool_call_ids.add(str(tool_call_id))
+        return tool_call_ids
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(

@@ -1034,6 +1034,249 @@ async def test_streaming_responses_api_with_mcp_tools(
 
 
 @pytest.mark.asyncio
+async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messages():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/16361 (non-streaming).
+
+    For non-OpenAI-native models (e.g. Anthropic), `previous_response_id` is handled by
+    litellm's own chat-completion bridge: it fetches prior conversation history from the
+    spend-logs "session" and prepends it ahead of the new follow-up input (see
+    ``LiteLLMCompletionResponsesConfig.async_responses_api_session_handler``:
+    ``combined_messages = session_messages + _messages``).
+
+    If the non-streaming MCP follow-up call *also* sends a self-contained input (original
+    messages + assistant tool_use + tool result) *in addition to* `previous_response_id`,
+    the assistant `tool_use` message coming from the reconstructed session ends up
+    immediately followed by a *duplicate* system/user message instead of the
+    `tool_result` -- which Anthropic rejects with:
+
+        "tool_use ids were found without tool_result blocks immediately after"
+
+    This test mocks the DB-backed session reconstruction (``ResponsesSessionHandler``)
+    and the underlying ``litellm.acompletion`` call to capture the *actual* messages
+    list sent for the follow-up call, and asserts that the assistant message carrying
+    the tool_use/tool_call is immediately followed by its tool_result, with no
+    duplicated assistant/tool_use entries in between.
+    """
+    from litellm.responses.litellm_completion_transformation.session_handler import (
+        ResponsesSessionHandler,
+    )
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        ChatCompletionSession,
+    )
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Choices,
+        Function,
+        Message,
+        ModelResponse,
+    )
+
+    tool_call_id = "toolu_01test_regression"
+
+    # ------------------------------------------------------------------
+    # 1. Mock MCP tool discovery + execution (no real MCP server needed)
+    # ------------------------------------------------------------------
+    mock_mcp_tool = type(
+        "MCPTool",
+        (),
+        {
+            "name": "search_docs",
+            "description": "Search documentation",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    )()
+
+    async def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth, **kwargs):
+        results = []
+        for tool_call in tool_calls:
+            call_id = None
+            if isinstance(tool_call, dict):
+                call_id = tool_call.get("call_id") or tool_call.get("id")
+            else:
+                call_id = getattr(tool_call, "call_id", None) or getattr(
+                    tool_call, "id", None
+                )
+            if call_id:
+                results.append(
+                    {"tool_call_id": call_id, "result": "search results here"}
+                )
+        return results
+
+    # ------------------------------------------------------------------
+    # 2. Mock the DB-backed session reconstruction to simulate that the
+    #    *first* call was already logged, ending in the assistant message
+    #    with the tool_use/tool_call.
+    # ------------------------------------------------------------------
+    fake_session = ChatCompletionSession(
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "search the docs for auth info"},
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionMessageToolCall(
+                        id=tool_call_id,
+                        type="function",
+                        function=Function(name="search_docs", arguments="{}"),
+                    )
+                ],
+            ),
+        ],
+        litellm_session_id="session-regression-test",
+    )
+
+    # ------------------------------------------------------------------
+    # 3. Mock the underlying provider call. Call #1 returns a tool_use;
+    #    call #2 (the follow-up) is captured for assertions.
+    # ------------------------------------------------------------------
+    initial_response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id=tool_call_id,
+                            type="function",
+                            function=Function(name="search_docs", arguments="{}"),
+                        )
+                    ],
+                ),
+            )
+        ]
+    )
+    final_response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content="Here is what I found."),
+            )
+        ]
+    )
+
+    captured_follow_up_kwargs: dict = {}
+    call_count = {"n": 0}
+
+    async def mock_acompletion_side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return initial_response
+        captured_follow_up_kwargs.update(kwargs)
+        return final_response
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "_get_mcp_tools_from_manager",
+            new_callable=AsyncMock,
+            return_value=([mock_mcp_tool], ["litellm_proxy"]),
+        ),
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "_execute_tool_calls",
+            new_callable=AsyncMock,
+            side_effect=mock_execute_tool_calls_side_effect,
+        ),
+        patch.object(
+            ResponsesSessionHandler,
+            "get_chat_completion_message_history_for_previous_response_id",
+            new_callable=AsyncMock,
+            return_value=fake_session,
+        ),
+        patch(
+            "litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=mock_acompletion_side_effect,
+        ),
+    ):
+        mcp_tool_config = cast(
+            Any,
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            },
+        )
+
+        await litellm.aresponses(
+            model="claude-haiku-4-5",
+            tools=[mcp_tool_config],
+            tool_choice="required",
+            input=[
+                {
+                    "role": "user",
+                    "type": "message",
+                    "content": "search the docs for auth info",
+                }
+            ],
+            stream=False,
+        )
+
+    assert (
+        call_count["n"] == 2
+    ), f"Expected exactly 2 acompletion calls (initial + follow-up), got {call_count['n']}"
+    assert captured_follow_up_kwargs, "Follow-up acompletion call was never captured"
+
+    follow_up_messages = captured_follow_up_kwargs.get("messages") or []
+    assert follow_up_messages, "Follow-up call must include messages"
+
+    def _get(msg, key, default=None):
+        if isinstance(msg, dict):
+            return msg.get(key, default)
+        return getattr(msg, key, default)
+
+    def _tool_call_ids(msg):
+        tool_calls = _get(msg, "tool_calls")
+        if not tool_calls:
+            return []
+        ids = []
+        for tc in tool_calls:
+            tc_id = _get(tc, "id")
+            if tc_id:
+                ids.append(tc_id)
+        return ids
+
+    # No duplicated assistant/tool_use entries for the same tool_call id.
+    assistant_tool_use_indices = [
+        i
+        for i, m in enumerate(follow_up_messages)
+        if _get(m, "role") == "assistant" and tool_call_id in _tool_call_ids(m)
+    ]
+    assert len(assistant_tool_use_indices) == 1, (
+        f"Expected exactly one assistant message carrying tool_call id={tool_call_id!r}, "
+        f"found {len(assistant_tool_use_indices)}. Messages: {follow_up_messages}"
+    )
+
+    # The tool_use message must be immediately followed by its tool_result
+    # (Anthropic's ordering contract: 'tool_use ids were found without
+    # tool_result blocks immediately after').
+    tool_use_idx = assistant_tool_use_indices[0]
+    assert tool_use_idx + 1 < len(follow_up_messages), (
+        "Assistant tool_use message is the last message; no tool_result follows it. "
+        f"Messages: {follow_up_messages}"
+    )
+    next_message = follow_up_messages[tool_use_idx + 1]
+    assert _get(next_message, "role") == "tool", (
+        f"Expected a 'tool' role message immediately after the assistant tool_use "
+        f"message, got role={_get(next_message, 'role')!r}. This is exactly the "
+        f"ordering Anthropic rejects with: 'tool_use ids were found without "
+        f"tool_result blocks immediately after'. Messages: {follow_up_messages}"
+    )
+    assert _get(next_message, "tool_call_id") == tool_call_id, (
+        f"tool_result's tool_call_id must match the tool_use id={tool_call_id!r}, "
+        f"got {_get(next_message, 'tool_call_id')!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_mcp_parameter_preparation_helpers():
     """
     Test the new parameter preparation helper methods for clean MCP handling.
