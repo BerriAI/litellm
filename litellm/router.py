@@ -7847,6 +7847,29 @@ class Router:
             len(config.available_models),
         )
 
+    def _remove_deployment_from_strategy_registries(self, model_name: str) -> None:
+        """
+        Drop a model_name's strategy-router registration (auto / complexity /
+        adaptive / quality) when its deployment is removed from the router.
+
+        Every `init_*_router_deployment` raises "already exists" when the
+        model_name is still registered, so a removal path that cleans
+        `model_list` but not these registries makes the deployment
+        un-re-addable: the re-add dies before `_add_model_to_list_and_index_map`
+        (swallowed under `ignore_invalid_deployments`), the row disappears from
+        `/v1/models` & `/model/info`, and the stale registry object keeps
+        serving requests with its old config. See issue #33168.
+
+        Safe for regular deployments: they are never in these registries, so
+        the pops are no-ops. Strategy deployments are unique per model_name
+        (the init functions enforce this), so popping by name cannot orphan a
+        sibling deployment.
+        """
+        self.auto_routers.pop(model_name, None)
+        self.complexity_routers.pop(model_name, None)
+        self.adaptive_routers.pop(model_name, None)
+        self.quality_routers.pop(model_name, None)
+
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
         Check if the deployment is a quality-router deployment.
@@ -8387,6 +8410,13 @@ class Router:
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        # de-register any strategy router (auto/complexity/
+                        # adaptive/quality) tied to the removed deployment, so
+                        # the add_deployment below can re-register it instead
+                        # of dying on the init functions' "already exists"
+                        # check (which silently delists the model under
+                        # ignore_invalid_deployments). See issue #33168.
+                        self._remove_deployment_from_strategy_registries(model_name=_deployment_on_router.model_name)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -8420,6 +8450,14 @@ class Router:
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
+                # de-register any strategy router tied to this deployment —
+                # otherwise it keeps serving the deleted model as a ghost and
+                # blocks any future re-add under the same name (issue #33168)
+                _removed_model_name = (
+                    item.get("model_name") if isinstance(item, dict) else getattr(item, "model_name", None)
+                )
+                if _removed_model_name:
+                    self._remove_deployment_from_strategy_registries(model_name=_removed_model_name)
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
