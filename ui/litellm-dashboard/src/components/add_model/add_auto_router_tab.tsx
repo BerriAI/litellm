@@ -157,6 +157,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       return;
     }
 
+    if (!form.getFieldValue("auto_router_embedding_model")) {
+      NotificationManager.fromBackend("Please select an Embedding Model");
+      return;
+    }
+
     if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
       NotificationManager.fromBackend("Please configure at least one route for the auto router");
       return;
@@ -346,18 +351,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               </Form.Item>
 
               <Form.Item
+                rules={[{ required: true, message: "Embedding model is required" }]}
                 label="Embedding Model"
                 name="auto_router_embedding_model"
-                tooltip="Optional: embedding model to use for semantic routing decisions"
+                tooltip="Embedding model to use for semantic routing decisions"
                 labelCol={{ span: 10 }}
                 labelAlign="left"
               >
                 <AntdSelect
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   options={modelGroupOptions}
                   style={{ width: "100%" }}
                   showSearch
-                  allowClear
                 />
               </Form.Item>
             </>
