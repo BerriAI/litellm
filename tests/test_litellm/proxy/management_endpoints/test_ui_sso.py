@@ -7361,3 +7361,24 @@ async def test_auth_callback_without_oauth_error_proceeds_to_normal_flow():
 
     assert exc_info.value.status_code == 500
     assert "DB not connected" in str(exc_info.value.detail)
+
+
+class TestSameOriginReturnPath:
+    """The same-origin relative return_to arm added for the MCP gateway DCR authorize
+    round-trip: only strictly relative paths qualify, so login can never redirect the
+    browser off the gateway origin."""
+
+    def test_accepts_relative_paths(self):
+        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+
+        assert _is_same_origin_return_path("/authorize?client_id=llm_dcrc_x&state=s") is True
+        assert _is_same_origin_return_path("/some_server/authorize") is True
+
+    def test_rejects_absolute_protocol_relative_and_backslash_paths(self):
+        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+
+        assert _is_same_origin_return_path("https://evil.example.com/authorize") is False
+        assert _is_same_origin_return_path("//evil.example.com/authorize") is False
+        assert _is_same_origin_return_path("/\\evil.example.com") is False
+        assert _is_same_origin_return_path("javascript:alert(1)") is False
+        assert _is_same_origin_return_path("") is False
