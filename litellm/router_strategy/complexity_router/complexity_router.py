@@ -492,11 +492,13 @@ class ComplexityRouter(CustomLogger):
             context = await plugin.run(context)
 
         if not context.candidate_models:
-            if self.config.default_model:
-                return self.config.default_model
+            # A plugin narrowing a tier to zero candidates is a policy decision (e.g. no
+            # model this tenant's budget allows) -- falling back to default_model here
+            # (which was never checked against the plugins) would let that policy be
+            # silently bypassed. Raise instead, matching the Router-level plugin
+            # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(
-                f"No candidate models left for tier {tier_key} after routing-plugin filtering, "
-                "and no default_model configured"
+                f"No candidate models left for tier {tier_key} after routing-plugin filtering"
             )
         return self._pick_from_tier_value(context.candidate_models, tier_key)
 

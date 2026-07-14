@@ -2736,7 +2736,12 @@ class TestRoutingPlugins:
         assert result.model == "gpt-4o-nano"
 
     @pytest.mark.asyncio
-    async def test_plugin_narrowing_to_zero_falls_back_to_default_model(self, mock_router_instance):
+    async def test_plugin_narrowing_to_zero_raises_even_with_default_model_configured(self, mock_router_instance):
+        """Regression: default_model must never be used as an escape hatch around a
+        plugin's narrowing decision -- it was never checked against the plugins, so
+        falling back to it would let a tenant/budget policy be silently bypassed.
+        Reported by Veria AI on PR #33251."""
+
         class BlockEverything:
             async def run(self, context):
                 context.candidate_models = []
@@ -2751,13 +2756,12 @@ class TestRoutingPlugins:
                 "plugins": [BlockEverything()],
             },
         )
-        result = await router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=[{"role": "user", "content": "hi"}],
-        )
-        assert result is not None
-        assert result.model == "gpt-4o-fallback"
+        with pytest.raises(ValueError, match="No candidate models left for tier"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hi"}],
+            )
 
     @pytest.mark.asyncio
     async def test_plugin_narrowing_to_zero_without_default_model_raises(self, mock_router_instance):
@@ -2883,4 +2887,3 @@ class TestRoutingPlugins:
         assert first.model == "gpt-4o-mini"
         assert second.model == "gpt-4o-mini"
         assert spy.call_count == 2
-        assert result.model == "gpt-4o-mini"
