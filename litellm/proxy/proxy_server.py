@@ -210,7 +210,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import litellm
 import litellm._redis
@@ -10663,15 +10663,29 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             Optional[CustomHuggingfaceTokenizer],
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
+    try:
+        _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
-    tokenizer_used = str(_tokenizer_used["type"])
-    total_tokens = token_counter(
-        model=model_to_use,
-        text=prompt,
-        messages=messages,
-        custom_tokenizer=_tokenizer_used,  # type: ignore
-    )
+        tokenizer_used = str(_tokenizer_used["type"])
+        loop = asyncio.get_running_loop()
+        total_tokens = await loop.run_in_executor(
+            None,
+            partial(
+                token_counter,
+                model=model_to_use,
+                text=prompt,
+                messages=messages,
+                custom_tokenizer=_tokenizer_used,  # type: ignore
+            ),
+        )
+    except (ValueError, TypeError):
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.token_counter(): could not tokenize the provided messages/prompt"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid request: could not tokenize the provided messages/prompt"},
+        )
     return TokenCountResponse(
         total_tokens=total_tokens,
         request_model=request.model,

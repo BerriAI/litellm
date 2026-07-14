@@ -2,6 +2,7 @@
 # 1. Generate a Key, and use it to make a call
 
 
+import asyncio
 import json
 import logging
 import os
@@ -1364,3 +1365,86 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_proxy_token_counter_malformed_content_returns_400():
+    """`/utils/token_counter` maps malformed message content to 400, not 500.
+
+    A content block that survives Pydantic but breaks the tokenizer used to
+    raise an unhandled ValueError (surfaced as a 500). It must now be a 400
+    whose body does not leak internal exception text.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": [123]}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "subscriptable" not in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
+async def test_proxy_token_counter_offloads_to_executor():
+    """The CPU-bound count runs off the event loop via run_in_executor."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    setattr(proxy_server, "llm_router", None)
+
+    loop = asyncio.get_running_loop()
+    real_run_in_executor = loop.run_in_executor
+    calls = []
+
+    def spy_run_in_executor(executor, func, *args):
+        calls.append(func)
+        return real_run_in_executor(executor, func, *args)
+
+    with patch.object(loop, "run_in_executor", side_effect=spy_run_in_executor):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert response.total_tokens > 0
+    assert len(calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_malformed_messages_returns_400():
+    """`/v1/messages/count_tokens` no longer reflects internal errors as 500.
+
+    `messages=[123]` fails TokenCountRequest validation; previously the raw
+    error was echoed at status 500. It must now be a 400 with no internal text.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    mock_request = MagicMock(spec=Request)
+    mock_user_api_key_dict = MagicMock()
+
+    async def mock_read_request_body(request):
+        return {"model": "claude-3-sonnet-20240229", "messages": [123]}
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "validation error" not in detail.lower()
+        assert "TokenCountRequest" not in detail
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body

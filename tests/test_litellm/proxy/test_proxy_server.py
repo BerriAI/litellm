@@ -9686,3 +9686,85 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_token_counter_malformed_message_returns_400_without_reflection():
+    """`/utils/token_counter` must map a malformed message payload to HTTP 400.
+
+    A content block that survives Pydantic validation but breaks the tokenizer
+    (e.g. a bare int inside `content`) used to raise an unhandled ValueError,
+    which FastAPI surfaces as a 500. It should now be a 400 whose body does not
+    leak the internal exception text or a traceback.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": [123]}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "int" not in detail
+    assert "subscriptable" not in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
+async def test_token_counter_wellformed_message_still_counts():
+    """A well-formed request must still return a positive token count."""
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello world"}],
+        )
+    )
+
+    assert response.total_tokens > 0
+    assert response.request_model == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_token_counter_offloads_counting_to_executor():
+    """The synchronous, CPU-bound count must run off the event loop.
+
+    We spy on the running loop's `run_in_executor` and assert the handler
+    dispatches the count through it rather than blocking the loop inline.
+    """
+    loop = asyncio.get_running_loop()
+    real_run_in_executor = loop.run_in_executor
+    calls = []
+
+    def spy_run_in_executor(executor, func, *args):
+        calls.append(func)
+        return real_run_in_executor(executor, func, *args)
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch.object(loop, "run_in_executor", side_effect=spy_run_in_executor):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert response.total_tokens > 0
+    assert len(calls) >= 1

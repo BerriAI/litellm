@@ -302,11 +302,17 @@ async def count_tokens(
             status_code=status_code,
             detail=detail,
         )
+    except (ValueError, TypeError):
+        verbose_proxy_logger.exception("litellm.proxy.anthropic_endpoints.count_tokens(): invalid request payload")
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid request: could not tokenize the provided messages"},
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
         )
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
+        raise HTTPException(status_code=500, detail={"error": "Internal server error"})
 
 
 @router.post(

@@ -233,3 +233,105 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+class TestCountTokensErrorHandling:
+    """`/v1/messages/count_tokens` must not leak internal errors on bad input."""
+
+    @pytest.mark.asyncio
+    async def test_malformed_messages_returns_400_without_reflection(self):
+        """A malformed messages payload should map to 400, not a reflected 500.
+
+        `messages=[123]` fails TokenCountRequest validation; previously the
+        terminal `except Exception` echoed the raw internal error at status 500.
+        It must now be a 400 whose body carries no internal exception text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [123],
+            }
+
+        with patch.object(ep, "_read_request_body", new=mock_read_request_body):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "validation error" not in detail.lower()
+        assert "TokenCountRequest" not in detail
+        assert "pydantic" not in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_malformed_content_block_returns_400_without_reflection(self):
+        """A content block that breaks the tokenizer must surface as 400.
+
+        The internal proxy token_counter now raises HTTPException(400) for such
+        input; the wrapper's `except HTTPException: raise` passes it through so
+        the client never sees the raw ValueError text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": [123]}],
+            }
+
+        with patch.object(ep, "_read_request_body", new=mock_read_request_body):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "subscriptable" not in detail
+        assert "Traceback" not in detail
+
+    @pytest.mark.asyncio
+    async def test_wellformed_request_still_counts(self):
+        """A valid request must still return the Anthropic-shaped token count."""
+        from fastapi import Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.types.utils import TokenCountResponse
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello Claude!"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            return TokenCountResponse(
+                total_tokens=15,
+                request_model="claude-3-sonnet-20240229",
+                model_used="claude-3-sonnet-20240229",
+                tokenizer_type="openai_tokenizer",
+            )
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            response = await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert response == {"input_tokens": 15}
