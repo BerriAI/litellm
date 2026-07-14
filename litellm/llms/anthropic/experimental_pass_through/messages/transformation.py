@@ -391,6 +391,36 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return thinking
         return {**thinking, "budget_tokens": max_tokens - 1}
 
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str, optional_params: dict, custom_llm_provider: str
+    ) -> None:
+        """Anthropic rejects any ``temperature`` other than 1 while extended thinking
+        is enabled ("temperature may only be set to 1 when thinking is enabled").
+
+        Clients like Claude Code send ``thinking``/``output_config.effort`` together
+        with a pinned ``temperature`` (e.g. the safety classifier uses ``temperature=0``
+        for determinism). When the request lands on a non-adaptive model, the effort
+        interface is reshaped above into legacy ``thinking={type: enabled}`` (or kept
+        as ``output_config.effort`` on Opus 4.5), and the leftover ``temperature`` would
+        400. Preserving the thinking the caller asked for wins over an unhonorable
+        sampling value (Anthropic forces ``temperature=1`` under thinking regardless),
+        so drop it and let the API default apply.
+
+        Adaptive models (4.6+) own this natively and are left untouched.
+        """
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        temperature = optional_params.get("temperature")
+        if temperature is None or temperature == 1:
+            return
+        thinking = optional_params.get("thinking")
+        output_config = optional_params.get("output_config")
+        thinking_enabled = isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        effort_enabled = isinstance(output_config, dict) and output_config.get("effort") is not None
+        if thinking_enabled or effort_enabled:
+            optional_params.pop("temperature", None)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -428,6 +458,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
+            custom_llm_provider=self._resolved_provider,
+        )
+
+        self._drop_incompatible_temperature_for_thinking(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
         )
 
