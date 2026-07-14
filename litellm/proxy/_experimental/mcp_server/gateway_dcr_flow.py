@@ -26,8 +26,8 @@ this track) and then walks the flow implemented here:
    :mod:`.outbound_credentials.session_token`, re-validating that the litellm user is
    still active first; the ``refresh_token`` grant rotates the pair the same way.
 
-Nothing here stores state server-side except the single-use code guard (a TTL cache
-entry). Every sealed value is authenticated encryption over the proxy salt/master key
+Nothing here stores state server-side except the single-use claims on the connect flow
+and the auth code (TTL cache entries). Every sealed value is authenticated encryption over the proxy salt/master key
 family, opened totally (bad input maps to an OAuth error, never a raise), and every
 identity is a stable reference re-validated live at mint, refresh, and (in the admission
 PR) tool-call time. Upstream server credentials never appear anywhere in this flow; they
