@@ -10574,10 +10574,10 @@ async def _try_provider_token_count(
 _token_count_semaphore = asyncio.Semaphore(TOKEN_COUNTER_MAX_CONCURRENCY)
 
 
-def _count_request_string_chars(*fields: Any) -> int:
+def _count_request_string_chars(*fields: object) -> int:
     """Sum the length of every string leaf in the given token-count request fields."""
     total = 0
-    stack: List[Any] = [field for field in fields if field is not None]
+    stack: list[object] = [field for field in fields if field is not None]
     while stack:
         node = stack.pop()
         if isinstance(node, str):
