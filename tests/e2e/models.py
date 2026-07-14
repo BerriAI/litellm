@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel, model_validator
 
 # ---------- keys ----------
 
@@ -254,6 +254,16 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
+
+    @model_validator(mode="after")
+    def require_filter(self) -> SpendLogsParams:
+        if self.request_id is None and self.api_key is None:
+            raise ValueError(
+                "unfiltered /spend/logs returns the entire spend table and OOMs the "
+                "runner on long-lived environments; filter by request_id or api_key, "
+                "or use Gateway.spend_logs_window for a bounded /spend/logs/v2 read"
+            )
+        return self
 
 
 class SpendLogsPageParams(BaseModel):
