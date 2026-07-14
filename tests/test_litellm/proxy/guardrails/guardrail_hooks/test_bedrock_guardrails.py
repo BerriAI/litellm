@@ -3277,7 +3277,13 @@ async def test_chat_completion_modify_response_exception_streaming_logging_obj_n
 
 
 class TestBedrockOnlyScanNewMessages:
-    """Bedrock pre_call hook honors only_scan_new_messages: scans only the per-session diff."""
+    """Bedrock apply_guardrail honors only_scan_new_messages: scans only the per-session diff.
+
+    apply_guardrail is the path the proxy actually runs for Bedrock (via the unified
+    guardrail interface), so these tests exercise it directly rather than the legacy
+    async_pre_call_hook. Each test uses a unique session id to isolate the process-wide
+    incremental cache.
+    """
 
     def _guardrail(self):
         return BedrockGuardrail(
@@ -3291,23 +3297,16 @@ class TestBedrockOnlyScanNewMessages:
     @pytest.mark.asyncio
     async def test_second_turn_scans_only_new_messages(self):
         guardrail = self._guardrail()
-        cache = DualCache()
-        user_api_key_dict = UserAPIKeyAuth()
+        session = {"litellm_session_id": "sess-bedrock-diff"}
         bedrock_none = {"action": "NONE", "output": [], "outputs": []}
 
         with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = bedrock_none
 
-            turn1 = {
-                "model": "anthropic/claude-3-5-sonnet",
-                "messages": [
-                    {"role": "system", "content": "be helpful"},
-                    {"role": "user", "content": "first question"},
-                ],
-                "litellm_session_id": "sess-bedrock-1",
-            }
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict, cache=cache, data=turn1, call_type="completion"
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["be helpful", "first question"]},
+                request_data=session,
+                input_type="request",
             )
             assert mock_api.call_count == 1
             first_scanned = mock_api.call_args.kwargs["messages"]
@@ -3315,68 +3314,69 @@ class TestBedrockOnlyScanNewMessages:
 
             mock_api.reset_mock()
 
-            turn2 = {
-                "model": "anthropic/claude-3-5-sonnet",
-                "messages": [
-                    {"role": "system", "content": "be helpful"},
-                    {"role": "user", "content": "first question"},
-                    {"role": "assistant", "content": "first answer"},
-                    {"role": "user", "content": "second question"},
-                ],
-                "litellm_session_id": "sess-bedrock-1",
-            }
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict, cache=cache, data=turn2, call_type="completion"
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["be helpful", "first question", "first answer", "second question"]},
+                request_data=session,
+                input_type="request",
             )
             assert mock_api.call_count == 1
             second_scanned = mock_api.call_args.kwargs["messages"]
             assert [m["content"] for m in second_scanned] == ["first answer", "second question"]
-            assert len(turn2["messages"]) == 4
 
     @pytest.mark.asyncio
     async def test_identical_resend_skips_api_call(self):
         guardrail = self._guardrail()
-        cache = DualCache()
-        user_api_key_dict = UserAPIKeyAuth()
+        session = {"litellm_session_id": "sess-bedrock-resend"}
 
         with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
-            data = {
-                "model": "anthropic/claude-3-5-sonnet",
-                "messages": [{"role": "user", "content": "only question"}],
-                "litellm_session_id": "sess-bedrock-2",
-            }
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict, cache=cache, data=dict(data), call_type="completion"
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["only question"]}, request_data=session, input_type="request"
             )
             assert mock_api.call_count == 1
 
             mock_api.reset_mock()
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict, cache=cache, data=dict(data), call_type="completion"
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["only question"]}, request_data=session, input_type="request"
             )
             mock_api.assert_not_called()
+            assert result["texts"] == ["only question"]
 
     @pytest.mark.asyncio
     async def test_no_session_id_scans_full_context(self):
         guardrail = self._guardrail()
-        cache = DualCache()
-        user_api_key_dict = UserAPIKeyAuth()
 
         with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
-            data = {
-                "model": "anthropic/claude-3-5-sonnet",
-                "messages": [
-                    {"role": "user", "content": "q1"},
-                    {"role": "assistant", "content": "a1"},
-                    {"role": "user", "content": "q2"},
-                ],
-                "metadata": {},
-            }
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict, cache=cache, data=data, call_type="completion"
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1", "a1", "q2"]},
+                request_data={"metadata": {}},
+                input_type="request",
             )
             assert mock_api.call_count == 1
             scanned = mock_api.call_args.kwargs["messages"]
             assert [m["content"] for m in scanned] == ["q1", "a1", "q2"]
+
+    @pytest.mark.asyncio
+    async def test_blocked_turn_is_rescanned_on_retry(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-blocked"}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.side_effect = HTTPException(status_code=400, detail="blocked")
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["blocked prompt"]}, request_data=session, input_type="request"
+                )
+
+            mock_api.reset_mock()
+            mock_api.side_effect = None
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["blocked prompt"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            scanned = mock_api.call_args.kwargs["messages"]
+            assert [m["content"] for m in scanned] == ["blocked prompt"]

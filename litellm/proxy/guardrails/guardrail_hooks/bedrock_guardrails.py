@@ -1172,20 +1172,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug("No messages found for call_type, skipping guardrail")
             return data
 
-        scan_messages = await self.filter_new_messages_for_session(
-            messages=new_messages,
-            request_data=data,
-            cache=cache,
-        )
-        incremental_scan = scan_messages is not None
-        if incremental_scan and not scan_messages:
-            verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
-            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-            return data
-
-        messages_to_scan = scan_messages if incremental_scan else new_messages
-
-        filter_result = self._prepare_guardrail_messages_for_role(messages=messages_to_scan)
+        filter_result = self._prepare_guardrail_messages_for_role(messages=new_messages)
 
         filtered_messages = filter_result.payload_messages
         if not filtered_messages:
@@ -1209,18 +1196,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        if not incremental_scan:
-            updated_subset = self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=filtered_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
-            data["messages"] = self._merge_filtered_messages(
-                original_messages=filter_result.original_messages or new_messages,
-                updated_target_messages=updated_subset,
-                target_indices=filter_result.target_indices,
-            )
-
-        await self.mark_messages_scanned(messages=new_messages, request_data=data, cache=cache)
+        updated_subset = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=filtered_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
+        )
+        data["messages"] = self._merge_filtered_messages(
+            original_messages=filter_result.original_messages or new_messages,
+            updated_target_messages=updated_subset,
+            target_indices=filter_result.target_indices,
+        )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -1651,6 +1635,48 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         masking_index += 1
                         verbose_proxy_logger.debug("Applied masking to choice text content")
 
+    async def _apply_incremental_request_scan(
+        self,
+        texts: list[str],
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+    ) -> Optional["GenericGuardrailAPIInputs"]:
+        """Scan only the text segments not already seen earlier in this session.
+
+        Returns ``None`` when incremental scanning is inactive (feature off, no
+        session id, masking enabled, or cache unavailable), telling the caller to
+        run the normal full scan. Otherwise scans only the new segments, skips the
+        Bedrock call entirely when nothing is new, and never writes masked content
+        back (incremental mode is for blocking/detection guardrails only).
+        """
+        from litellm.integrations.custom_guardrail import dc as guardrail_dual_cache
+
+        new_texts = await self.filter_new_texts_for_session(
+            texts=texts,
+            request_data=request_data,
+            cache=guardrail_dual_cache,
+        )
+        if new_texts is None:
+            return None
+
+        if not new_texts:
+            verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
+            return inputs
+
+        await self.make_bedrock_api_request(
+            source="INPUT",
+            messages=[ChatCompletionUserMessage(role="user", content=text) for text in new_texts],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.pre_call,
+        )
+
+        await self.mark_texts_scanned(
+            texts=texts,
+            request_data=request_data,
+            cache=guardrail_dual_cache,
+        )
+        return inputs
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -1681,6 +1707,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts = inputs.get("texts") or []
         try:
             verbose_proxy_logger.debug(f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)")
+
+            if input_type == "request":
+                incremental_result = await self._apply_incremental_request_scan(
+                    texts=texts,
+                    inputs=inputs,
+                    request_data=request_data,
+                )
+                if incremental_result is not None:
+                    return incremental_result
 
             masked_texts = []
 
