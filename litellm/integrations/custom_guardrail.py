@@ -523,8 +523,12 @@ class CustomGuardrail(CustomLogger):
             return self
         try:
             from litellm.proxy.utils import unified_guardrail
-        except ImportError:
-            return self
+        except ImportError as e:
+            raise ImportError(
+                f"Guardrail {self.guardrail_name or type(self).__name__} implements apply_guardrail, which needs "
+                "the litellm proxy dependencies to run at the deployment level. "
+                "Install them with: pip install 'litellm[proxy]'"
+            ) from e
         return unified_guardrail
 
     async def async_pre_call_deployment_hook(

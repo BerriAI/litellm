@@ -1697,3 +1697,22 @@ class TestApplyGuardrailStyleDeploymentDispatch:
 
         assert guardrail.apply_called is False
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_proxy_extras_missing(self):
+        import sys
+        from unittest.mock import patch
+
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "flagged content"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.utils": None}):
+            with pytest.raises(ImportError, match="litellm\\[proxy\\]"):
+                await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is False
