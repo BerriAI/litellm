@@ -10583,6 +10583,7 @@ def _count_request_string_chars(*fields: object) -> int:
         if isinstance(node, str):
             total += len(node)
         elif isinstance(node, dict):
+            stack.extend(node.keys())
             stack.extend(node.values())
         elif isinstance(node, (list, tuple)):
             stack.extend(node)

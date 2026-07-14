@@ -9832,6 +9832,46 @@ async def test_token_counter_oversized_payload_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_token_counter_oversized_dict_key_returns_400():
+    """An oversized string hidden in a dict KEY must also trip the size cap.
+
+    Dict keys (e.g. property names in a tool JSON schema) are tokenized just
+    like values, so counting only `dict.values()` would let a caller bypass
+    the cap while still consuming the full tokenization cost.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_key = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {oversized_key: {"type": "string"}},
+                            },
+                        },
+                    }
+                ],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
 async def test_token_counter_saturated_concurrency_returns_429():
     """When the tokenization concurrency bound is saturated, excess requests get 429.
 
