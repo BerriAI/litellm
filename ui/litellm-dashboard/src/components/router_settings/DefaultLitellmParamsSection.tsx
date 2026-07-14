@@ -3,6 +3,7 @@ import { Input, Switch } from "antd";
 import CacheControlInjectionPointsEditor, {
   CacheControlInjectionPoint,
 } from "../shared/cache_control_injection_points_editor";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface DefaultLitellmParamsSectionProps {
   value: { [key: string]: any };
@@ -20,6 +21,7 @@ const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = 
 
   const [otherParamsText, setOtherParamsText] = React.useState(() => JSON.stringify(otherParams, null, 2));
   const [showCacheControl, setShowCacheControl] = React.useState((cache_control_injection_points?.length ?? 0) > 0);
+  const [hasInvalidJson, setHasInvalidJson] = React.useState(false);
 
   const parseOtherParams = (): { [key: string]: any } => {
     try {
@@ -32,9 +34,11 @@ const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = 
   const handleOtherParamsBlur = () => {
     try {
       const parsed = JSON.parse(otherParamsText || "{}");
+      setHasInvalidJson(false);
       onChange({ ...parsed, cache_control_injection_points });
     } catch (error) {
-      console.error("Error parsing default_litellm_params JSON:", error);
+      setHasInvalidJson(true);
+      NotificationsManager.warning(`Default LiteLLM Params is not valid JSON, change not saved: ${error}`);
     }
   };
 
@@ -57,8 +61,12 @@ const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = 
         <p className="text-xs text-gray-500 mt-0.5 mb-2">{meta?.field_description || ""}</p>
         <Input.TextArea
           value={otherParamsText}
-          onChange={(e) => setOtherParamsText(e.target.value)}
+          onChange={(e) => {
+            setOtherParamsText(e.target.value);
+            setHasInvalidJson(false);
+          }}
           onBlur={handleOtherParamsBlur}
+          status={hasInvalidJson ? "error" : undefined}
           autoSize={{ minRows: 2 }}
           className="font-mono text-sm w-full"
         />

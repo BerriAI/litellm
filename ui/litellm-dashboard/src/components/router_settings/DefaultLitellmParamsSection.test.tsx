@@ -78,7 +78,7 @@ describe("DefaultLitellmParamsSection", () => {
     expect(onChange).toHaveBeenCalledWith({ timeout: 60, cache_control_injection_points: [{ location: "message" }] });
   });
 
-  it("should not call onChange with invalid JSON left in the textarea on blur", async () => {
+  it("should not call onChange and should flag the field as invalid when the textarea has invalid JSON on blur", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<DefaultLitellmParamsSection value={{ timeout: 30 }} routerFieldsMetadata={{}} onChange={onChange} />);
@@ -89,5 +89,23 @@ describe("DefaultLitellmParamsSection", () => {
     await user.tab();
 
     expect(onChange).not.toHaveBeenCalled();
+    expect(textarea).toHaveClass("ant-input-status-error");
+  });
+
+  it("should clear the invalid state once the textarea is edited again", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<DefaultLitellmParamsSection value={{ timeout: 30 }} routerFieldsMetadata={{}} onChange={onChange} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.clear(textarea);
+    await user.type(textarea, "not json");
+    await user.tab();
+    expect(textarea).toHaveClass("ant-input-status-error");
+
+    await user.click(textarea);
+    await user.type(textarea, "{{}}");
+
+    expect(textarea).not.toHaveClass("ant-input-status-error");
   });
 });
