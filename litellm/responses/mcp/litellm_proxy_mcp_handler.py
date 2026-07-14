@@ -1005,15 +1005,25 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_input: List[Any],
         model: str,
         all_tools: Optional[List[Any]],
-        response_id: str,
         **call_params: Any,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
-        """Make follow-up response API call with tool results."""
+        """Make follow-up response API call with tool results.
+
+        Intentionally does NOT pass ``previous_response_id``: ``_create_follow_up_input``
+        already builds a fully self-contained input (original input + assistant
+        tool_use + tool_result), so also passing ``previous_response_id`` would make
+        litellm's session handler prepend the same history again from the spend-logs
+        DB, producing duplicate/malformed messages - e.g. an assistant `tool_use`
+        message immediately followed by a duplicate system/user message instead of
+        its `tool_result`, which Anthropic rejects with: "tool_use ids were found
+        without tool_result blocks immediately after" (see
+        https://github.com/BerriAI/litellm/issues/16361). The streaming MCP iterator
+        was fixed the same way - see `mcp_streaming_iterator.py`.
+        """
         return await aresponses(
             input=follow_up_input,
             model=model,
             tools=all_tools,  # Keep tools for potential future calls
-            previous_response_id=response_id,  # Link to previous response
             **call_params,
         )
 
