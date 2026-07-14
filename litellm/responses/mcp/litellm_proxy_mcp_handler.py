@@ -924,8 +924,8 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _build_tool_result_items(
-        tool_results: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        tool_results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Build ``function_call_output`` items from tool results."""
         return [
             {
@@ -939,9 +939,9 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _build_self_contained_follow_up_input(
         response: ResponsesAPIResponse,
-        tool_results: List[Dict[str, Any]],
+        tool_results: list[dict[str, Any]],
         original_input: Any = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Build a fully self-contained follow-up input (no session handler).
 
         This is used by the streaming MCP iterator path where
@@ -949,7 +949,7 @@ class LiteLLM_Proxy_MCP_Handler:
         must include the original messages, assistant response, function
         calls, and tool results.
         """
-        follow_up_input: List[Any] = []
+        follow_up_input: list[Any] = []
 
         # Add original user input if available to maintain conversation context
         if original_input:
@@ -961,8 +961,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 follow_up_input.append(original_input)
 
         # Add the assistant message with function calls
-        assistant_message_content: List[Any] = []
-        function_calls: List[Dict[str, Any]] = []
+        assistant_message_content: list[Any] = []
+        function_calls: list[dict[str, Any]] = []
 
         for output_item in response.output:
             if not isinstance(output_item, dict) and hasattr(output_item, "model_dump"):
@@ -1009,19 +1009,17 @@ class LiteLLM_Proxy_MCP_Handler:
             follow_up_input.append(function_call)
 
         # Add tool results (function call outputs)
-        follow_up_input.extend(
-            LiteLLM_Proxy_MCP_Handler._build_tool_result_items(tool_results)
-        )
+        follow_up_input.extend(LiteLLM_Proxy_MCP_Handler._build_tool_result_items(tool_results))
 
         return follow_up_input
 
     @staticmethod
     def _create_follow_up_input(
         response: ResponsesAPIResponse,
-        tool_results: List[Dict[str, Any]],
+        tool_results: list[dict[str, Any]],
         original_input: Any = None,
         previous_response_id: str | None = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Create follow-up input with tool results in proper format.
 
         When ``previous_response_id`` is provided the session handler will
