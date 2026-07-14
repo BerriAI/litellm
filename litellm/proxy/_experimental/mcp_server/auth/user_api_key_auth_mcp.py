@@ -375,8 +375,7 @@ class MCPRequestHandler:
                 route=request_route,
             )
         elif (
-            is_mcp_gateway_dcr_enabled()
-            and _is_aggregate_mcp_scope(request_route, mcp_servers)
+            _is_aggregate_mcp_scope(request_route, mcp_servers)
             and oauth2_headers
             and is_session_bearer_shaped(oauth2_headers["Authorization"])
         ):
@@ -701,8 +700,8 @@ class MCPRequestHandler:
             case SessionBearerInvalid():
                 raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
             case NotSessionBearer():
-                # is_session_bearer_shaped gated entry, so a non-session bearer here means a
-                # session-shaped-but-empty value; fail closed with the same challenge.
+                # Unreachable: the arm is entered only for an is_session_bearer_shaped
+                # value. Kept for match exhaustiveness and fails closed regardless.
                 raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
             case _:
                 assert_never(result)
@@ -752,12 +751,15 @@ class MCPRequestHandler:
 
         The DCR client authenticates via SSO at the bridged authorize, which yields a user
         subject rather than a virtual key, so the envelope admits under the user's own
-        identity: the reloaded ``user_id`` and the user's own MCP object permission ride on the
-        returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers`` the key path uses then
-        computes which servers the user may reach, so the user's litellm MCP grants and access groups
-        gate the request exactly as a key's do. Only the user's OWN object permission is bound: a
-        ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams, so
-        team-inherited MCP grants for a user are a follow-up (they need a many-teams union
+        identity: the reloaded ``user_id``, the user's own MCP object permission, and the user's
+        ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers``
+        the key path uses then computes which servers the user may reach, so the user's litellm MCP
+        grants and access groups gate the request exactly as a key's do. Binding ``org_id`` keeps the
+        org-level MCP ceiling in force for this admission rather than silently skipping it; a user's
+        primary organization is used, so a user who spans organizations is capped conservatively (the
+        ceiling can only narrow the result, never broaden it). Only the user's OWN object permission is
+        bound: a ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams,
+        so team-inherited MCP grants for a user are a follow-up (they need a many-teams union
         ``get_allowed_mcp_servers`` does not do off one auth object). The caller's centralized policy
         gate enforces the user's live budget and org state, and a SCIM-deactivated owner fails closed.
 
@@ -805,6 +807,7 @@ class MCPRequestHandler:
         return UserAPIKeyAuth(
             user_id=user_object.user_id,
             user_role=user_object.user_role,
+            org_id=user_object.organization_id,
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
         )
