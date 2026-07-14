@@ -21,6 +21,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/jwks.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jwks Json
+         * @description JSON Web Key Set endpoint.
+         *
+         *     Returns the RSA public key used by MCPJWTSigner to sign outbound MCP tokens.
+         *     MCP servers and gateways use this endpoint to verify liteLLM-issued JWTs.
+         *
+         *     Returns an empty key set if MCPJWTSigner is not configured.
+         */
+        get: operations["jwks_json__well_known_jwks_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -30,6 +55,188 @@ export interface paths {
         };
         /** Get Ui Config */
         get: operations["get_ui_config__well_known_litellm_ui_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Authorization Server Mcp
+         * @description OAuth authorization server discovery endpoint.
+         *
+         *     Supports both legacy pattern (/{server_name}) and root endpoint.
+         */
+        get: operations["oauth_authorization_server_mcp__well_known_oauth_authorization_server_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Authorization Server Mcp Standard
+         * @description OAuth authorization server discovery endpoint using standard MCP URL pattern.
+         *
+         *     Standard pattern: /mcp/{server_name}
+         *     Discovery path: /.well-known/oauth-authorization-server/mcp/{server_name}
+         */
+        get: operations["oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server/{mcp_server_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Authorization Server Mcp
+         * @description OAuth authorization server discovery endpoint.
+         *
+         *     Supports both legacy pattern (/{server_name}) and root endpoint.
+         */
+        get: operations["oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Authorization Server Legacy
+         * @description OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
+         */
+        get: operations["oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Protected Resource Mcp
+         * @description OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
+         *
+         *     Legacy pattern: /{server_name}/mcp
+         *     Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
+         *
+         *     This endpoint is kept for backward compatibility. New integrations should
+         *     use the standard MCP pattern (/mcp/{server_name}) instead.
+         */
+        get: operations["oauth_protected_resource_mcp__well_known_oauth_protected_resource_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Protected Resource Mcp Standard
+         * @description OAuth protected resource discovery endpoint using standard MCP URL pattern.
+         *
+         *     Standard pattern: /mcp/{server_name}
+         *     Discovery path: /.well-known/oauth-protected-resource/mcp/{server_name}
+         *
+         *     This endpoint is compliant with MCP specification and works with standard
+         *     MCP clients like mcp-inspector and VSCode Copilot.
+         */
+        get: operations["oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Protected Resource Mcp
+         * @description OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
+         *
+         *     Legacy pattern: /{server_name}/mcp
+         *     Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
+         *
+         *     This endpoint is kept for backward compatibility. New integrations should
+         *     use the standard MCP pattern (/mcp/{server_name}) instead.
+         */
+        get: operations["oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/openid-configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Openid Configuration */
+        get: operations["openid_configuration__well_known_openid_configuration_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -760,6 +967,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize */
+        get: operations["authorize_authorize_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -1313,6 +1537,37 @@ export interface paths {
          *     to verify the credentials work without affecting global state.
          */
         post: operations["test_cache_connection_cache_settings_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Callback
+         * @description OAuth 2.0 authorization response handler for MCP loopback clients.
+         *
+         *     Accepts either:
+         *
+         *     - A successful authorization response (``code`` + ``state``), which is
+         *       forwarded back to the validated client ``redirect_uri`` with the
+         *       original (un-wrapped) ``state``.
+         *     - An error response (``error``[+``error_description``/``error_uri``]), per
+         *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
+         *       ``redirect_uri``, the error params are propagated back to the client so
+         *       its OAuth library can surface them. Otherwise we render an HTML error
+         *       page so the user is not left on an opaque 422 / blank screen.
+         */
+        get: operations["callback_callback_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -11121,6 +11376,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Client */
+        post: operations["register_client_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reload/anthropic_beta_headers": {
         parameters: {
             query?: never;
@@ -14174,6 +14446,32 @@ export interface paths {
          *     API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
          */
         post: operations["run_thread_threads__thread_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Token Endpoint
+         * @description Accept the authorization code from client and exchange it for OAuth token.
+         *     Supports PKCE flow by forwarding code_verifier to upstream provider.
+         *
+         *     1. Call the token endpoint with PKCE parameters
+         *     2. Store the user's token in the db - and generate a LiteLLM virtual key
+         *     3. Return the token
+         *     4. Return a virtual key in this response
+         */
+        post: operations["token_endpoint_token_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -18108,6 +18406,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/vector_store/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Vector Stores
+         * @description List all available vector stores with optional filtering and pagination.
+         *     Combines both in-memory vector stores and those stored in the database.
+         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *
+         *     Parameters:
+         *     - page: int - Page number for pagination (default: 1)
+         *     - page_size: int - Number of items per page (default: 100)
+         */
+        get: operations["list_vector_stores_v1_vector_store_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/vector_stores": {
         parameters: {
             query?: never;
@@ -19305,34 +19629,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/vector_store/": {
+    "/vector_store/delete": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** vector_store_management */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Vector Store
+         * @description Delete a vector store from both database and in-memory registry.
+         *
+         *     Parameters:
+         *     - vector_store_id: str - ID of the vector store to delete
+         */
+        post: operations["delete_vector_store_vector_store_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vector_store/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
+        get?: never;
+        put?: never;
+        /**
+         * Get Vector Store Info
+         * @description Return a single vector store's details
+         */
+        post: operations["get_vector_store_info_vector_store_info_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vector_store/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Vector Stores
+         * @description List all available vector stores with optional filtering and pagination.
+         *     Combines both in-memory vector stores and those stored in the database.
+         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *
+         *     Parameters:
+         *     - page: int - Page number for pagination (default: 1)
+         *     - page_size: int - Number of items per page (default: 100)
+         */
+        get: operations["list_vector_stores_vector_store_list_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vector_store/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Vector Store
+         * @description Create a new vector store.
+         *
+         *     Parameters:
+         *     - vector_store_id: str - Unique identifier for the vector store
+         *     - custom_llm_provider: str - Provider of the vector store
+         *     - vector_store_name: Optional[str] - Name of the vector store
+         *     - vector_store_description: Optional[str] - Description of the vector store
+         *     - vector_store_metadata: Optional[Dict] - Additional metadata for the vector store
+         */
+        post: operations["new_vector_store_vector_store_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vector_store/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Vector Store
+         * @description Update vector store details in both database and in-memory registry.
+         *     The updated data is immediately synchronized to the in-memory registry.
+         */
+        post: operations["update_vector_store_vector_store_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21227,6 +21634,25 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             };
+        };
+        /** Body_token_endpoint_token_post */
+        Body_token_endpoint_token_post: {
+            /** Client Id */
+            client_id: string;
+            /** Client Secret */
+            client_secret?: string | null;
+            /** Code */
+            code?: string;
+            /** Code Verifier */
+            code_verifier?: string;
+            /** Grant Type */
+            grant_type: string;
+            /** Redirect Uri */
+            redirect_uri?: string;
+            /** Refresh Token */
+            refresh_token?: string | null;
+            /** Scope */
+            scope?: string | null;
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
@@ -25301,6 +25727,86 @@ export interface components {
             updated_by?: string | null;
             /** Url */
             url?: string | null;
+        };
+        /**
+         * LiteLLM_ManagedVectorStore
+         * @description LiteLLM managed vector store object - this is is the object stored in the database
+         */
+        LiteLLM_ManagedVectorStore: {
+            /** Created At */
+            created_at?: string | null;
+            /** Custom Llm Provider */
+            custom_llm_provider?: string;
+            /** Litellm Credential Name */
+            litellm_credential_name?: string | null;
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** Vector Store Description */
+            vector_store_description?: string | null;
+            /** Vector Store Id */
+            vector_store_id?: string;
+            /** Vector Store Metadata */
+            vector_store_metadata?: {
+                [key: string]: unknown;
+            } | string | null;
+            /** Vector Store Name */
+            vector_store_name?: string | null;
+        };
+        /**
+         * LiteLLM_ManagedVectorStoreListResponse
+         * @description Response format for listing vector stores
+         */
+        LiteLLM_ManagedVectorStoreListResponse: {
+            /** Current Page */
+            current_page?: number | null;
+            /** Data */
+            data?: components["schemas"]["LiteLLM_ManagedVectorStore"][];
+            /**
+             * Object
+             * @constant
+             */
+            object?: "list";
+            /** Total Count */
+            total_count?: number | null;
+            /** Total Pages */
+            total_pages?: number | null;
+        };
+        /** LiteLLM_ManagedVectorStoresTable */
+        LiteLLM_ManagedVectorStoresTable: {
+            /** Created At */
+            created_at?: string | null;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Litellm Credential Name */
+            litellm_credential_name?: string | null;
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** Vector Store Description */
+            vector_store_description?: string | null;
+            /** Vector Store Id */
+            vector_store_id: string;
+            /** Vector Store Metadata */
+            vector_store_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Vector Store Name */
+            vector_store_name?: string | null;
         };
         /** LiteLLM_MemoryRow */
         LiteLLM_MemoryRow: {
@@ -30338,6 +30844,10 @@ export interface components {
             /** Reset To */
             reset_to: number;
         };
+        /** ResponseLiteLLM_ManagedVectorStore */
+        ResponseLiteLLM_ManagedVectorStore: {
+            vector_store?: components["schemas"]["LiteLLM_ManagedVectorStoresTable"];
+        };
         /**
          * ResultCounts
          * @description Result counts for a run
@@ -33444,6 +33954,31 @@ export interface components {
              */
             status?: string | null;
         };
+        /** VectorStoreDeleteRequest */
+        VectorStoreDeleteRequest: {
+            /** Vector Store Id */
+            vector_store_id: string;
+        };
+        /** VectorStoreInfoRequest */
+        VectorStoreInfoRequest: {
+            /** Vector Store Id */
+            vector_store_id: string;
+        };
+        /** VectorStoreUpdateRequest */
+        VectorStoreUpdateRequest: {
+            /** Custom Llm Provider */
+            custom_llm_provider?: string | null;
+            /** Vector Store Description */
+            vector_store_description?: string | null;
+            /** Vector Store Id */
+            vector_store_id: string;
+            /** Vector Store Metadata */
+            vector_store_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Vector Store Name */
+            vector_store_name?: string | null;
+        };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
             /** Name */
@@ -33879,6 +34414,26 @@ export interface operations {
             };
         };
     };
+    jwks_json__well_known_jwks_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_ui_config__well_known_litellm_ui_config_get: {
         parameters: {
             query?: never;
@@ -33895,6 +34450,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UiDiscoveryEndpoints"];
+                };
+            };
+        };
+    };
+    oauth_authorization_server_mcp__well_known_oauth_authorization_server_get: {
+        parameters: {
+            query?: {
+                mcp_server_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_protected_resource_mcp__well_known_oauth_protected_resource_get: {
+        parameters: {
+            query?: {
+                mcp_server_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openid_configuration__well_known_openid_configuration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -34945,6 +35737,44 @@ export interface operations {
             };
         };
     };
+    authorize_authorize_get: {
+        parameters: {
+            query: {
+                redirect_uri: string;
+                client_id?: string | null;
+                state?: string;
+                mcp_server_name?: string | null;
+                code_challenge?: string | null;
+                code_challenge_method?: string | null;
+                response_type?: string | null;
+                scope?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     azure_proxy_route_azure__endpoint__get: {
         parameters: {
             query?: never;
@@ -35881,6 +36711,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CacheTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    callback_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+                error_description?: string | null;
+                error_uri?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -47679,6 +48544,37 @@ export interface operations {
             };
         };
     };
+    register_client_register_post: {
+        parameters: {
+            query?: {
+                mcp_server_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reload_anthropic_beta_headers_reload_anthropic_beta_headers_post: {
         parameters: {
             query?: never;
@@ -51061,6 +51957,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    token_endpoint_token_post: {
+        parameters: {
+            query?: {
+                mcp_server_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_token_endpoint_token_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56585,6 +57516,38 @@ export interface operations {
             };
         };
     };
+    list_vector_stores_v1_vector_store_list_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ManagedVectorStoreListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     vector_store_list_v1_vector_stores_get: {
         parameters: {
             query?: {
@@ -58233,6 +59196,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VantageInitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_vector_store_vector_store_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VectorStoreDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_vector_store_info_vector_store_info_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VectorStoreInfoRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseLiteLLM_ManagedVectorStore"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_vector_stores_vector_store_list_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ManagedVectorStoreListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_vector_store_vector_store_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiteLLM_ManagedVectorStore"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_vector_store_vector_store_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VectorStoreUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

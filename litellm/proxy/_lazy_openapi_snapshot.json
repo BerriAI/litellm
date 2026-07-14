@@ -14869,13 +14869,446 @@
   },
   "mcp_byok_oauth": {
     "components": {
-      "schemas": {}
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
     },
-    "paths": {}
+    "paths": {
+      "/.well-known/oauth-authorization-server": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
+          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp Standard",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
+        "get": {
+          "description": "OAuth authorization server discovery for legacy /{server_name}/mcp pattern.",
+          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Legacy",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-protected-resource/mcp/{server_name}\n\nThis endpoint is compliant with MCP specification and works with standard\nMCP clients like mcp-inspector and VSCode Copilot.",
+          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp Standard",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      }
+    }
   },
   "mcp_discoverable": {
     "components": {
       "schemas": {
+        "Body_token_endpoint_token_post": {
+          "properties": {
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Secret"
+            },
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "code_verifier": {
+              "title": "Code Verifier",
+              "type": "string"
+            },
+            "grant_type": {
+              "title": "Grant Type",
+              "type": "string"
+            },
+            "redirect_uri": {
+              "title": "Redirect Uri",
+              "type": "string"
+            },
+            "refresh_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Token"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          "required": [
+            "grant_type",
+            "client_id"
+          ],
+          "title": "Body_token_endpoint_token_post",
+          "type": "object"
+        },
         "CallbacksByType": {
           "properties": {
             "failure": {
@@ -14907,10 +15340,675 @@
           ],
           "title": "CallbacksByType",
           "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
         }
       }
     },
     "paths": {
+      "/.well-known/jwks.json": {
+        "get": {
+          "description": "JSON Web Key Set endpoint.\n\nReturns the RSA public key used by MCPJWTSigner to sign outbound MCP tokens.\nMCP servers and gateways use this endpoint to verify liteLLM-issued JWTs.\n\nReturns an empty key set if MCPJWTSigner is not configured.",
+          "operationId": "jwks_json__well_known_jwks_json_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Jwks Json",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get_2",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
+          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp Standard",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Mcp",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
+        "get": {
+          "description": "OAuth authorization server discovery for legacy /{server_name}/mcp pattern.",
+          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Authorization Server Legacy",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get_2",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-protected-resource/mcp/{server_name}\n\nThis endpoint is compliant with MCP specification and works with standard\nMCP clients like mcp-inspector and VSCode Copilot.",
+          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "title": "Mcp Server Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp Standard",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
+        "get": {
+          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mcp_server_name",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Mcp",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/openid-configuration": {
+        "get": {
+          "operationId": "openid_configuration__well_known_openid_configuration_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Openid Configuration",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize": {
+        "get": {
+          "operationId": "authorize_authorize_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "title": "Redirect Uri",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "client_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Client Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "State",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge Method"
+              }
+            },
+            {
+              "in": "query",
+              "name": "response_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Response Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "scope",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Scope"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/callback": {
+        "get": {
+          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
+          "operationId": "callback_callback_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "code",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "State"
+              }
+            },
+            {
+              "in": "query",
+              "name": "error",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Error"
+              }
+            },
+            {
+              "in": "query",
+              "name": "error_description",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Error Description"
+              }
+            },
+            {
+              "in": "query",
+              "name": "error_uri",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Error Uri"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Callback",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/callbacks/configs": {
         "get": {
           "description": "Get Available Callback Configurations\n\nReturns the configuration details for all available logging callbacks,\nincluding supported parameters, field types, and descriptions.",
@@ -14958,6 +16056,111 @@
             }
           ],
           "summary": "List Callbacks",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/register": {
+        "post": {
+          "operationId": "register_client_register_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Register Client",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/token": {
+        "post": {
+          "description": "Accept the authorization code from client and exchange it for OAuth token.\nSupports PKCE flow by forwarding code_verifier to upstream provider.\n\n1. Call the token endpoint with PKCE parameters\n2. Store the user's token in the db - and generate a LiteLLM virtual key\n3. Return the token\n4. Return a virtual key in this response",
+          "operationId": "token_endpoint_token_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_token_endpoint_token_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Token Endpoint",
           "tags": [
             "mcp_discoverable"
           ]
@@ -31557,6 +32760,754 @@
           "summary": "Vector Store Search",
           "tags": [
             "vector_store_files"
+          ]
+        }
+      }
+    }
+  },
+  "vector_store_management": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "LiteLLM_ManagedVectorStore": {
+          "description": "LiteLLM managed vector store object - this is is the object stored in the database",
+          "properties": {
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "custom_llm_provider": {
+              "title": "Custom Llm Provider",
+              "type": "string"
+            },
+            "litellm_credential_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Credential Name"
+            },
+            "litellm_params": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Params"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "vector_store_description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Description"
+            },
+            "vector_store_id": {
+              "title": "Vector Store Id",
+              "type": "string"
+            },
+            "vector_store_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Metadata"
+            },
+            "vector_store_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Name"
+            }
+          },
+          "title": "LiteLLM_ManagedVectorStore",
+          "type": "object"
+        },
+        "LiteLLM_ManagedVectorStoreListResponse": {
+          "description": "Response format for listing vector stores",
+          "properties": {
+            "current_page": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Current Page"
+            },
+            "data": {
+              "items": {
+                "$ref": "#/components/schemas/LiteLLM_ManagedVectorStore"
+              },
+              "title": "Data",
+              "type": "array"
+            },
+            "object": {
+              "const": "list",
+              "title": "Object",
+              "type": "string"
+            },
+            "total_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Total Count"
+            },
+            "total_pages": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Total Pages"
+            }
+          },
+          "title": "LiteLLM_ManagedVectorStoreListResponse",
+          "type": "object"
+        },
+        "LiteLLM_ManagedVectorStoresTable": {
+          "properties": {
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "custom_llm_provider": {
+              "title": "Custom Llm Provider",
+              "type": "string"
+            },
+            "litellm_credential_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Credential Name"
+            },
+            "litellm_params": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Params"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "vector_store_description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Description"
+            },
+            "vector_store_id": {
+              "title": "Vector Store Id",
+              "type": "string"
+            },
+            "vector_store_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Metadata"
+            },
+            "vector_store_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Name"
+            }
+          },
+          "required": [
+            "vector_store_id",
+            "custom_llm_provider"
+          ],
+          "title": "LiteLLM_ManagedVectorStoresTable",
+          "type": "object"
+        },
+        "ResponseLiteLLM_ManagedVectorStore": {
+          "properties": {
+            "vector_store": {
+              "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoresTable"
+            }
+          },
+          "title": "ResponseLiteLLM_ManagedVectorStore",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        },
+        "VectorStoreDeleteRequest": {
+          "properties": {
+            "vector_store_id": {
+              "title": "Vector Store Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "vector_store_id"
+          ],
+          "title": "VectorStoreDeleteRequest",
+          "type": "object"
+        },
+        "VectorStoreInfoRequest": {
+          "properties": {
+            "vector_store_id": {
+              "title": "Vector Store Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "vector_store_id"
+          ],
+          "title": "VectorStoreInfoRequest",
+          "type": "object"
+        },
+        "VectorStoreUpdateRequest": {
+          "properties": {
+            "custom_llm_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Custom Llm Provider"
+            },
+            "vector_store_description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Description"
+            },
+            "vector_store_id": {
+              "title": "Vector Store Id",
+              "type": "string"
+            },
+            "vector_store_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Metadata"
+            },
+            "vector_store_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vector Store Name"
+            }
+          },
+          "required": [
+            "vector_store_id"
+          ],
+          "title": "VectorStoreUpdateRequest",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v1/vector_store/list": {
+        "get": {
+          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
+          "operationId": "list_vector_stores_v1_vector_store_list_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "page",
+              "required": false,
+              "schema": {
+                "default": 1,
+                "title": "Page",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page_size",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "title": "Page Size",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoreListResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Vector Stores",
+          "tags": [
+            "vector_store_management"
+          ]
+        }
+      },
+      "/vector_store/delete": {
+        "post": {
+          "description": "Delete a vector store from both database and in-memory registry.\n\nParameters:\n- vector_store_id: str - ID of the vector store to delete",
+          "operationId": "delete_vector_store_vector_store_delete_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStoreDeleteRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Vector Store",
+          "tags": [
+            "vector_store_management"
+          ]
+        }
+      },
+      "/vector_store/info": {
+        "post": {
+          "description": "Return a single vector store's details",
+          "operationId": "get_vector_store_info_vector_store_info_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStoreInfoRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ResponseLiteLLM_ManagedVectorStore"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Vector Store Info",
+          "tags": [
+            "vector_store_management"
+          ]
+        }
+      },
+      "/vector_store/list": {
+        "get": {
+          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
+          "operationId": "list_vector_stores_vector_store_list_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "page",
+              "required": false,
+              "schema": {
+                "default": 1,
+                "title": "Page",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page_size",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "title": "Page Size",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoreListResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Vector Stores",
+          "tags": [
+            "vector_store_management"
+          ]
+        }
+      },
+      "/vector_store/new": {
+        "post": {
+          "description": "Create a new vector store.\n\nParameters:\n- vector_store_id: str - Unique identifier for the vector store\n- custom_llm_provider: str - Provider of the vector store\n- vector_store_name: Optional[str] - Name of the vector store\n- vector_store_description: Optional[str] - Description of the vector store\n- vector_store_metadata: Optional[Dict] - Additional metadata for the vector store",
+          "operationId": "new_vector_store_vector_store_new_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiteLLM_ManagedVectorStore"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "New Vector Store",
+          "tags": [
+            "vector_store_management"
+          ]
+        }
+      },
+      "/vector_store/update": {
+        "post": {
+          "description": "Update vector store details in both database and in-memory registry.\nThe updated data is immediately synchronized to the in-memory registry.",
+          "operationId": "update_vector_store_vector_store_update_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStoreUpdateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Vector Store",
+          "tags": [
+            "vector_store_management"
           ]
         }
       }

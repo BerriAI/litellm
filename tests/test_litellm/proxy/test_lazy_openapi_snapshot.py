@@ -127,19 +127,34 @@ class TestDriftedFeatures:
 
 
 class TestRegisterLazyFeature:
-    def test_skips_a_module_that_is_already_imported(self):
+    def test_skips_a_feature_that_was_already_loaded_before_registration_began(self):
         feature = SimpleNamespace(name="ok", module_path="json", register_fn=lambda app, module: None)
 
-        assert _register_lazy_feature(SimpleNamespace(), feature) is None
+        assert _register_lazy_feature(SimpleNamespace(), feature, frozenset({"json"})) is None
 
-    def test_registers_a_module_that_imports_cleanly(self, monkeypatch):
+    def test_registers_a_module_that_imports_cleanly(self):
         registered = []
         feature = SimpleNamespace(
             name="ok", module_path="json", register_fn=lambda app, module: registered.append(module.__name__)
         )
-        monkeypatch.delitem(sys.modules, "json", raising=False)
 
-        assert _register_lazy_feature(SimpleNamespace(), feature) is None
+        assert _register_lazy_feature(SimpleNamespace(), feature, frozenset()) is None
+        assert registered == ["json"]
+
+    def test_registers_a_module_a_sibling_feature_dragged_into_sys_modules(self):
+        """Regression: importing vector_stores imports vector_store_management as a side effect.
+
+        Gating on live sys.modules treated that as "already registered", so its router was
+        never included, it contributed no routes, and generate_snapshot dropped its whole
+        fragment; POST /vector_store/new and friends disappeared from the OpenAPI spec.
+        """
+        registered = []
+        feature = SimpleNamespace(
+            name="sibling", module_path="json", register_fn=lambda app, module: registered.append(module.__name__)
+        )
+
+        assert "json" in sys.modules  # imported, but nobody registered its routes
+        assert _register_lazy_feature(SimpleNamespace(), feature, preloaded=frozenset()) is None
         assert registered == ["json"]
 
     def test_reports_the_feature_and_error_when_the_module_is_missing(self):
@@ -147,21 +162,23 @@ class TestRegisterLazyFeature:
             name="broken", module_path="litellm_no_such_module", register_fn=lambda app, module: None
         )
 
-        result = _register_lazy_feature(SimpleNamespace(), feature)
+        result = _register_lazy_feature(SimpleNamespace(), feature, frozenset())
 
         assert result is not None
         name, error = result
         assert name == "broken"
         assert "ModuleNotFoundError" in error
 
-    def test_reports_the_error_when_registration_raises(self, monkeypatch):
+    def test_reports_the_error_when_registration_raises(self):
         def _raise(app, module):
             raise ValueError("router blew up")
 
         feature = SimpleNamespace(name="broken", module_path="json", register_fn=_raise)
-        monkeypatch.delitem(sys.modules, "json", raising=False)
 
-        assert _register_lazy_feature(SimpleNamespace(), feature) == ("broken", "ValueError: router blew up")
+        assert _register_lazy_feature(SimpleNamespace(), feature, frozenset()) == (
+            "broken",
+            "ValueError: router blew up",
+        )
 
 
 class TestCheckSnapshot:

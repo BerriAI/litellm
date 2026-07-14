@@ -85,11 +85,19 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
                     break
 
 
-def _register_lazy_feature(app, feat) -> tuple[str, str] | None:
-    """Import and register one lazy feature. Returns (name, error) if it could not be loaded."""
+def _register_lazy_feature(app, feat, preloaded: frozenset) -> tuple[str, str] | None:
+    """Import and register one lazy feature. Returns (name, error) if it could not be loaded.
+
+    `preloaded` is the set of module paths imported before registration began, not live
+    sys.modules. Importing one feature can drag a sibling in as a side effect (loading
+    vector_stores imports vector_store_management), and an imported-but-unregistered
+    module contributes no routes, so its fragment would silently vanish from the
+    snapshot. The runtime loader has the same invariant and tracks it explicitly in
+    app.state.lazy_loaded.
+    """
     import importlib
 
-    if feat.module_path in sys.modules:
+    if feat.module_path in preloaded:
         return None
     try:
         feat.register_fn(app, importlib.import_module(feat.module_path))
@@ -110,8 +118,11 @@ def generate_snapshot(*, strict: bool = False) -> dict[str, dict]:
     from litellm.proxy._lazy_features import LAZY_FEATURES
     from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
+    preloaded = frozenset(sys.modules)
     skipped = tuple(
-        result for result in (_register_lazy_feature(app, feat) for feat in LAZY_FEATURES) if result is not None
+        result
+        for result in (_register_lazy_feature(app, feat, preloaded) for feat in LAZY_FEATURES)
+        if result is not None
     )
     for name, error in skipped:
         sys.stderr.write(f"warning: skip {name}: {error}\n")
