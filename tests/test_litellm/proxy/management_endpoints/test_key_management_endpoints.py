@@ -530,6 +530,56 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, caplog):
+    """Regression for LIT-4356: /key/generate must never emit the raw virtual key
+    to a logger, even for short keys that bypass the regex-based
+    SecretRedactionFilter."""
+    import hashlib
+    import logging
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    mock_prisma_client.db = MagicMock()
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        if kwargs.get("table_name") == "user":
+            return MagicMock(models=[], spend=0)
+        return MagicMock(
+            token="hashed_token_456",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    raw_key = "sk-short-secret"
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await generate_key_fn(
+            data=GenerateKeyRequest(key=raw_key),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="user-1",
+            ),
+        )
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert raw_key not in log_text
+    assert hashlib.sha256(raw_key.encode()).hexdigest() in log_text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field,request_kwargs,expected_in_error",
     [
