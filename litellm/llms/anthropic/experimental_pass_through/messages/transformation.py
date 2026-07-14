@@ -188,11 +188,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400.
+        ``effort='none'`` clears both. Invalid efforts raise a 400. Legacy
+        ``budget_tokens`` is capped below ``max_tokens`` (Anthropic requires
+        ``max_tokens > budget_tokens``) and thinking is dropped when ``max_tokens``
+        can't fit even the minimum budget.
         """
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
@@ -218,7 +223,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("output_config", None)
             return
 
-        optional_params.setdefault("thinking", mapped_thinking)
+        if "thinking" not in optional_params:
+            capped_thinking = AnthropicConfig._cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+            if capped_thinking is not None:
+                optional_params["thinking"] = capped_thinking
+            else:
+                verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
@@ -375,6 +385,36 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else:
                 optional_params.pop("output_config", None)
 
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str, optional_params: dict, custom_llm_provider: str
+    ) -> None:
+        """Anthropic rejects any ``temperature`` other than 1 while extended thinking
+        is enabled ("temperature may only be set to 1 when thinking is enabled").
+
+        Clients like Claude Code send ``thinking``/``output_config.effort`` together
+        with a pinned ``temperature`` (e.g. the safety classifier uses ``temperature=0``
+        for determinism). When the request lands on a non-adaptive model, the effort
+        interface is reshaped above into legacy ``thinking={type: enabled}`` (or kept
+        as ``output_config.effort`` on Opus 4.5), and the leftover ``temperature`` would
+        400. Preserving the thinking the caller asked for wins over an unhonorable
+        sampling value (Anthropic forces ``temperature=1`` under thinking regardless),
+        so drop it and let the API default apply.
+
+        Adaptive models (4.6+) own this natively and are left untouched.
+        """
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        temperature = optional_params.get("temperature")
+        if temperature is None or temperature == 1:
+            return
+        thinking = optional_params.get("thinking")
+        output_config = optional_params.get("output_config")
+        thinking_enabled = isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        effort_enabled = isinstance(output_config, dict) and output_config.get("effort") is not None
+        if thinking_enabled or effort_enabled:
+            optional_params.pop("temperature", None)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -399,6 +439,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
 
@@ -412,6 +453,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
+            custom_llm_provider=self._resolved_provider,
+        )
+
+        self._drop_incompatible_temperature_for_thinking(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
         )
 
