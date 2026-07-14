@@ -19,9 +19,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
     get_litellm_web_search_tool_openai,
+    get_litellm_web_search_tool_responses_api,
     is_anthropic_native_web_search_tool,
     is_web_search_tool,
     is_web_search_tool_chat_completion,
+    is_web_search_tool_responses_api,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
@@ -32,6 +34,7 @@ from litellm.types.integrations.websearch_interception import (
 )
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    RESPONSES_AGENTIC_SURFACE,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -251,13 +254,33 @@ class WebSearchInterceptionLogger(CustomLogger):
         if not tools:
             return None
 
-        # Check if any tool is a web search tool (native or already LiteLLM standard)
-        has_websearch = any(is_web_search_tool(t) for t in tools)
+        # Branch on call surface. Chat Completions tools use the OpenAI-nested
+        # ``{"type": "function", "function": {...}}`` shape. Responses-API tools
+        # are flat (``{"type": "function", "name": "..."}``) and the server-hosted
+        # web search variant is ``{"type": "web_search"}`` — neither of which
+        # ``is_web_search_tool`` matches.
+        if call_type is None:
+            call_type_str = ""
+        else:
+            call_type_str = getattr(call_type, "value", None) or str(call_type)
+        is_responses_api_call = call_type_str in ("aresponses", "responses")
+
+        if is_responses_api_call:
+            tool_predicate = is_web_search_tool_responses_api
+            standard_tool_factory = get_litellm_web_search_tool_responses_api
+        else:
+            tool_predicate = is_web_search_tool
+            standard_tool_factory = get_litellm_web_search_tool_openai
+
+        has_websearch = any(tool_predicate(t) for t in tools)
 
         if not has_websearch:
             return None
 
-        verbose_logger.debug("WebSearchInterception: Converting native web_search tools to LiteLLM standard")
+        verbose_logger.debug(
+            "WebSearchInterception: Converting native web_search tools to LiteLLM standard "
+            f"(call_type={call_type_str or 'unknown'})"
+        )
 
         # If the client sent an Anthropic-native web_search_* tool, mark the
         # request so the agentic loop emits native web_search_tool_result
@@ -270,9 +293,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools = []
         for tool in tools:
-            if is_web_search_tool(tool):
-                # Convert to LiteLLM standard web search tool
-                converted_tool = get_litellm_web_search_tool_openai()
+            if tool_predicate(tool):
+                converted_tool = standard_tool_factory()
                 converted_tools.append(converted_tool)
                 verbose_logger.debug(
                     f"WebSearchInterception: Converted {tool.get('name', 'unknown')} "
@@ -459,6 +481,14 @@ class WebSearchInterceptionLogger(CustomLogger):
                 stream=stream,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
+            )
+
+        if kwargs.get("_agentic_loop_api_surface") == RESPONSES_AGENTIC_SURFACE:
+            return await self._should_run_responses_agentic_loop(
+                response=response,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
             )
 
         verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
@@ -655,6 +685,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 kwargs=kwargs,
             )
 
+        if kwargs.get("_agentic_loop_api_surface") == RESPONSES_AGENTIC_SURFACE:
+            return await self._build_responses_agentic_loop_plan(
+                tools=tools,
+                model=model,
+                messages=messages,
+                response=response,
+                kwargs=kwargs,
+            )
+
         tool_calls = tools["tool_calls"]
         thinking_blocks = tools.get("thinking_blocks", [])
         request_patch, structured_results = await self._build_anthropic_request_patch(
@@ -808,6 +847,107 @@ class WebSearchInterceptionLogger(CustomLogger):
             request_patch=request_patch,
             metadata={"tool_type": "websearch", "response_format": response_format},
         )
+
+    async def _should_run_responses_agentic_loop(
+        self,
+        response: Any,
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+    ) -> tuple[bool, dict]:
+        """Detect ``litellm_web_search`` ``function_call`` items in a Responses-API response."""
+        if self.enabled_providers is not None and custom_llm_provider not in self.enabled_providers:
+            return False, {}
+
+        if not any(is_web_search_tool_responses_api(t) for t in (tools or [])):
+            return False, {}
+
+        should_intercept, tool_calls = WebSearchTransformation.transform_request(
+            response=response,
+            stream=stream,
+            response_format="responses",
+        )
+        if not should_intercept:
+            return False, {}
+
+        return True, {"tool_calls": tool_calls}
+
+    async def _build_responses_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: Any,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        """Run searches and patch ``function_call_output`` items into the Responses-API ``input``.
+
+        The generic ``_execute_responses_agentic_plan`` re-runs the model with
+        the patched input and handles kwargs forwarding, depth/fingerprint
+        bookkeeping, provider prefixing, and provider-param propagation.
+        """
+        tool_calls = tools["tool_calls"]
+
+        # Forward kwargs so per-key/per-team search-tool authorization is
+        # enforced (the auth context rides in litellm_metadata on kwargs).
+        search_tasks = [
+            self._execute_search(query, kwargs=kwargs)
+            if (query := (tool_call.get("input") or {}).get("query"))
+            else self._create_empty_search_result()
+            for tool_call in tool_calls
+        ]
+        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        result_texts = self._search_results_to_texts(search_results)
+
+        follow_up_input: list[dict[str, Any]] = list(messages)
+        first_response_output = (
+            (response.get("output") or []) if isinstance(response, dict) else (getattr(response, "output", None) or [])
+        )
+        for item in first_response_output:
+            follow_up_input.append(item if isinstance(item, dict) else self._dump_output_item(item))
+        for tool_call, result_text in zip(tool_calls, result_texts):
+            follow_up_input.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": tool_call.get("call_id") or tool_call.get("id") or "",
+                    "output": result_text,
+                }
+            )
+
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(model=model, messages=follow_up_input),
+            metadata={"tool_type": "websearch", "response_format": "responses"},
+        )
+
+    @staticmethod
+    def _search_results_to_texts(search_results: list[Any]) -> list[str]:
+        """Coerce gathered search results (``(text, SearchResponse)`` tuples or errors) to text."""
+        texts: list[str] = []
+        for i, result in enumerate(search_results):
+            if isinstance(result, Exception):
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed: {result}")
+                texts.append(f"Search failed: {result}")
+            elif isinstance(result, tuple) and len(result) == 2:
+                text_value = result[0]
+                texts.append(text_value if isinstance(text_value, str) else str(text_value))
+            else:
+                texts.append(str(result))
+        return texts
+
+    @staticmethod
+    def _dump_output_item(item: Any) -> dict[str, Any]:
+        """Best-effort conversion of a Responses-API output item to a dict."""
+        if isinstance(item, dict):
+            return item
+        if hasattr(item, "model_dump"):
+            return item.model_dump()
+        if hasattr(item, "dict"):
+            try:
+                return item.dict()
+            except Exception:
+                pass
+        return dict(getattr(item, "__dict__", {}))
 
     @staticmethod
     def _resolve_max_tokens(

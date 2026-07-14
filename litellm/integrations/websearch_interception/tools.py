@@ -82,6 +82,43 @@ def get_litellm_web_search_tool_openai() -> Dict[str, Any]:
     }
 
 
+def get_litellm_web_search_tool_responses_api() -> dict[str, Any]:
+    """
+    Get the standard LiteLLM web search tool definition in OpenAI Responses API format.
+
+    Responses-API function tools are flat (no nested ``function`` key):
+    ``{"type": "function", "name": "...", "description": "...", "parameters": {...}}``.
+
+    Used by ``WebSearchInterceptionLogger.async_pre_call_deployment_hook`` for
+    Responses-API call types to convert server-hosted ``web_search`` tools
+    (which providers like Bedrock Mantle reject) into a function-typed tool we
+    can intercept and execute server-side.
+    """
+    return {"type": "function", **get_litellm_web_search_tool_openai()["function"]}
+
+
+def is_web_search_tool_responses_api(tool: dict[str, Any]) -> bool:
+    """
+    Check if a tool is a web search tool in OpenAI Responses API shape.
+
+    Detects:
+    - Server-hosted web search:  ``{"type": "web_search"}`` /
+      ``{"type": "web_search_preview"}`` (sent by Codex CLI and the OpenAI SDK
+      when ``web_search`` is enabled).
+    - LiteLLM standard, flat:    ``{"type": "function", "name": "litellm_web_search"}``
+    - Anthropic-native variants: ``{"type": "web_search_*"}`` (forwarded
+      verbatim by some clients).
+    """
+    tool_type = tool.get("type", "")
+    if not isinstance(tool_type, str):
+        return False
+    if tool_type == "web_search" or tool_type.startswith("web_search_"):
+        return True
+    if tool_type == "function" and tool.get("name") == LITELLM_WEB_SEARCH_TOOL_NAME:
+        return True
+    return False
+
+
 def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).

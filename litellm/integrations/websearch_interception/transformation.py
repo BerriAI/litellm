@@ -57,10 +57,77 @@ class WebSearchTransformation:
             return False, []
 
         # Parse non-streaming response based on format
+        if response_format == "responses":
+            return WebSearchTransformation._detect_from_responses_api_response(response)
         if response_format == "openai":
             return WebSearchTransformation._detect_from_openai_response(response)
+        return WebSearchTransformation._detect_from_non_streaming_response(response)
+
+    @staticmethod
+    def _detect_from_responses_api_response(
+        response: Any,
+    ) -> tuple[bool, list[dict]]:
+        """Parse OpenAI Responses-API response for ``litellm_web_search`` function calls.
+
+        The Responses API returns ``output`` as a list of items; tool calls
+        appear as ``{"type": "function_call", "call_id": "...", "name": "...",
+        "arguments": "<json string>"}``. Pre-request conversion replaces all
+        web-search tools with the LiteLLM standard ``litellm_web_search``
+        function tool, so the only name we need to recognize here is the
+        standard one. ``call_id`` is preserved as ``id`` so the agentic loop
+        can pair it with a ``function_call_output`` item.
+        """
+        if isinstance(response, dict):
+            output = response.get("output", []) or []
         else:
-            return WebSearchTransformation._detect_from_non_streaming_response(response)
+            output = getattr(response, "output", None) or []
+
+        tool_calls: list[dict] = []
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                item_name = item.get("name")
+                call_id = item.get("call_id") or item.get("id")
+                arguments = item.get("arguments")
+            else:
+                item_type = getattr(item, "type", None)
+                item_name = getattr(item, "name", None)
+                call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
+                arguments = getattr(item, "arguments", None)
+
+            if item_type != "function_call":
+                continue
+            if item_name != LITELLM_WEB_SEARCH_TOOL_NAME:
+                continue
+
+            if isinstance(arguments, str):
+                try:
+                    parsed_arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    verbose_logger.warning(
+                        f"WebSearchInterception: Failed to parse Responses-API function_call arguments: {arguments}"
+                    )
+                    parsed_arguments = {}
+            elif isinstance(arguments, dict):
+                parsed_arguments = arguments
+            else:
+                parsed_arguments = {}
+
+            tool_calls.append(
+                {
+                    "id": call_id,
+                    "call_id": call_id,
+                    "type": "function_call",
+                    "name": item_name,
+                    "input": parsed_arguments,
+                    "arguments": parsed_arguments,
+                }
+            )
+            verbose_logger.debug(
+                f"WebSearchInterception: Found Responses-API function_call name={item_name} call_id={call_id}"
+            )
+
+        return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def _detect_from_non_streaming_response(

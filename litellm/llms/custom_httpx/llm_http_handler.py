@@ -2657,9 +2657,11 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+
+        converted_stream = litellm_params.get("_code_interpreter_interception_converted_stream") or litellm_params.get(
+            "_websearch_interception_converted_stream"
+        )
+        if converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -2667,6 +2669,7 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
             )
+
         return result
 
     async def async_delete_response_api_handler(
@@ -5020,9 +5023,19 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
+        # Reconstruct ``provider/model`` for the follow-up. ``model`` may be the
+        # bare backend id (the aresponses dispatcher strips the provider), and
+        # ``get_llm_provider`` raises without a prefix. Guard on the provider
+        # prefix specifically (not any ``/``) so a backend id that naturally
+        # contains a slash still gets qualified.
+        followup_model = patch.model or model
+        provider = kwargs.get("custom_llm_provider")
+        if provider and not followup_model.startswith(f"{provider}/"):
+            followup_model = f"{provider}/{followup_model}"
+
         try:
             response = await litellm.aresponses(
-                model=patch.model or model,
+                model=followup_model,
                 input=patch.messages,
                 **optional_params,
                 **kwargs_for_followup,
@@ -5220,6 +5233,13 @@ class BaseLLMHTTPHandler:
         from litellm._logging import verbose_logger
         from litellm.integrations.custom_logger import CustomLogger
 
+        if not self._has_agentic_completion_hook(logging_obj):
+            return None
+
+        kwargs = {
+            **kwargs,
+            "_agentic_loop_api_surface": kwargs.get("_agentic_loop_api_surface") or api_surface,
+        }
         callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
