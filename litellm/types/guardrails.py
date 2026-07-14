@@ -594,6 +594,18 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    only_scan_new_messages: Optional[bool] = Field(
+        default=False,
+        description=(
+            "When True, the guardrail only scans messages that have not already been scanned "
+            "earlier in the same session (identified by litellm_session_id / session_id). "
+            "Message content is hashed per session and cached; only the diff (new or edited "
+            "messages) is sent to the guardrail provider on follow-up calls. Falls back to a "
+            "full scan when the request has no session id or the cache is unavailable. Intended "
+            "for blocking/detection guardrails; not applied when mask_request_content is set."
+        ),
+    )
+
     skip_system_message_in_guardrail: Optional[bool] = Field(
         default=None,
         description=(

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import secrets
 from datetime import datetime
@@ -46,7 +48,10 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import (
+    GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+)
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -113,6 +118,7 @@ class CustomGuardrail(CustomLogger):
         on_sensitive_data: Optional[str] = None,
         sensitive_data_route_to_model: Optional[str] = None,
         sticky_session_routing: bool = True,
+        only_scan_new_messages: bool = False,
         **kwargs,
     ):
         """
@@ -145,6 +151,7 @@ class CustomGuardrail(CustomLogger):
         self.on_sensitive_data: Optional[str] = on_sensitive_data
         self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
+        self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -268,6 +275,100 @@ class CustomGuardrail(CustomLogger):
     def _get_session_id_from_request_data(self, request_data: Dict[str, Any]) -> Optional[str]:
         """Extract session_id from request data."""
         return get_session_id_from_request_data(request_data)
+
+    @staticmethod
+    def _message_content_hash(message: AllMessageValues) -> str:
+        """Stable content hash for a single message.
+
+        Serializes the whole message (role + content + tool calls) so that an
+        edited earlier message produces a different hash and gets re-scanned.
+        """
+        serialized = json.dumps(message, sort_keys=True, default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _scanned_messages_cache_key(self, session_id: str) -> str:
+        return f"guardrail_scanned_messages:{self.guardrail_name}:{session_id}"
+
+    async def filter_new_messages_for_session(
+        self,
+        messages: list[AllMessageValues] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> list[AllMessageValues] | None:
+        """Return only the messages not already scanned earlier in this session.
+
+        Returns ``None`` when incremental scanning is inactive (feature off, no
+        session id, masking enabled, or the cache read failed). ``None`` signals
+        the caller to fall back to a full scan; a returned list (possibly empty)
+        signals the caller to scan only that subset and skip masking write-back.
+        """
+        if not self.only_scan_new_messages or not messages:
+            return None
+
+        if self.mask_request_content or self.mask_response_content:
+            verbose_logger.warning(
+                "Guardrail %s: only_scan_new_messages is not supported with masking; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            verbose_logger.debug(
+                "Guardrail %s: only_scan_new_messages enabled but request has no session id; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        try:
+            cached: object = await cache.async_get_cache(key=self._scanned_messages_cache_key(session_id))
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must fall back to a full scan
+            verbose_logger.warning(
+                "Guardrail %s: failed to read scanned-message cache (%s); scanning full context.",
+                self.guardrail_name,
+                e,
+            )
+            return None
+
+        seen: set[str] = {str(h) for h in cached} if isinstance(cached, list) else set()
+        return [message for message in messages if self._message_content_hash(message) not in seen]
+
+    async def mark_messages_scanned(
+        self,
+        messages: list[AllMessageValues] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> None:
+        """Record the hashes of all messages present on a successful (non-blocked) scan.
+
+        Called only after the guardrail allows the request, so a blocked message is
+        never marked scanned and will be re-checked if the client retries.
+        """
+        if not self.only_scan_new_messages or not messages:
+            return
+        if self.mask_request_content or self.mask_response_content:
+            return
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            return
+
+        cache_key = self._scanned_messages_cache_key(session_id)
+        current_hashes = [self._message_content_hash(message) for message in messages]
+        try:
+            existing: object = await cache.async_get_cache(key=cache_key)
+            existing_hashes: list[str] = [str(h) for h in existing] if isinstance(existing, list) else []
+            merged: list[str] = list(dict.fromkeys(existing_hashes + current_hashes))
+            await cache.async_set_cache(
+                key=cache_key,
+                value=merged,
+                ttl=GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must not block the request
+            verbose_logger.warning(
+                "Guardrail %s: failed to persist scanned-message cache (%s); next call will re-scan.",
+                self.guardrail_name,
+                e,
+            )
 
     def should_route_on_sensitive_data(self) -> bool:
         """

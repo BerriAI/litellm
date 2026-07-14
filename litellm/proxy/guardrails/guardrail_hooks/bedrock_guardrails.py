@@ -1172,7 +1172,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug("No messages found for call_type, skipping guardrail")
             return data
 
-        filter_result = self._prepare_guardrail_messages_for_role(messages=new_messages)
+        scan_messages = await self.filter_new_messages_for_session(
+            messages=new_messages,
+            request_data=data,
+            cache=cache,
+        )
+        incremental_scan = scan_messages is not None
+        if incremental_scan and not scan_messages:
+            verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            return data
+
+        messages_to_scan = scan_messages if incremental_scan else new_messages
+
+        filter_result = self._prepare_guardrail_messages_for_role(messages=messages_to_scan)
 
         filtered_messages = filter_result.payload_messages
         if not filtered_messages:
@@ -1196,15 +1209,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        updated_subset = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=filtered_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
-        )
-        data["messages"] = self._merge_filtered_messages(
-            original_messages=filter_result.original_messages or new_messages,
-            updated_target_messages=updated_subset,
-            target_indices=filter_result.target_indices,
-        )
+        if not incremental_scan:
+            updated_subset = self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=filtered_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
+            data["messages"] = self._merge_filtered_messages(
+                original_messages=filter_result.original_messages or new_messages,
+                updated_target_messages=updated_subset,
+                target_indices=filter_result.target_indices,
+            )
+
+        await self.mark_messages_scanned(messages=new_messages, request_data=data, cache=cache)
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
