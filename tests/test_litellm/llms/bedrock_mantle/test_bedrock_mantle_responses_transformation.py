@@ -373,6 +373,129 @@ class TestBedrockMantleResponsesTools:
         assert "web_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleCodexAdditionalTools:
+    """Codex CLI's "responses lite" wire mode ships tool definitions inside
+    `input` as {"type": "additional_tools", "role": "developer", "tools": [...]}
+    items instead of the top-level `tools` param. api.openai.com accepts that
+    item; Mantle 400s the whole request with "Invalid 'input': value did not
+    match any expected variant" but accepts the same tools at the top level
+    (verified against bedrock-mantle.us-east-2.api.aws with openai.gpt-5.6-sol),
+    so the config must hoist them."""
+
+    _USER_MESSAGE = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Say hi in one word."}],
+    }
+    _DEVELOPER_MESSAGE = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "You are Codex."}],
+    }
+    _CODEX_TOOLS = [
+        {"type": "custom", "name": "exec", "format": {"type": "grammar", "syntax": "lark", "definition": "start: X"}},
+        {"type": "function", "name": "wait", "parameters": {"type": "object"}},
+        {"type": "namespace", "name": "collaboration", "tools": [{"type": "function", "name": "spawn_agent"}]},
+    ]
+
+    def _transform(self, input, params=None):
+        cfg = BedrockMantleResponsesAPIConfig()
+        return cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input=input,
+            response_api_optional_request_params=params if params is not None else {},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def test_additional_tools_item_hoisted_to_top_level_tools(self):
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
+                self._DEVELOPER_MESSAGE,
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._DEVELOPER_MESSAGE, self._USER_MESSAGE]
+        assert body["tools"] == self._CODEX_TOOLS
+
+    def test_hoisted_tools_append_after_existing_tools(self):
+        existing_tool = {"type": "function", "name": "preexisting"}
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
+                self._USER_MESSAGE,
+            ],
+            params={"tools": [existing_tool]},
+        )
+        assert body["tools"] == [existing_tool, *self._CODEX_TOOLS]
+
+    def test_unsupported_hoisted_tool_types_are_dropped(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {"type": "web_search"},
+                        {"type": "function", "name": "wait"},
+                    ],
+                },
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["tools"] == [{"type": "function", "name": "wait"}]
+
+    def test_item_stripped_even_when_no_hoisted_tool_survives(self):
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+        assert "tools" not in body
+
+    def test_multiple_additional_tools_items_merge_in_order(self):
+        first = {"type": "function", "name": "first"}
+        second = {"type": "function", "name": "second"}
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [first]},
+                self._USER_MESSAGE,
+                {"type": "additional_tools", "role": "developer", "tools": [second]},
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+        assert body["tools"] == [first, second]
+
+    def test_string_input_passes_through(self):
+        body = self._transform(input="hello")
+        assert body["input"] == "hello"
+        assert "tools" not in body
+
+    def test_input_without_additional_tools_is_unchanged(self):
+        codex_agentic_items = [
+            self._USER_MESSAGE,
+            {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA=="},
+            {"type": "function_call", "name": "wait", "arguments": "{}", "call_id": "call_1"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"},
+        ]
+        body = self._transform(input=list(codex_agentic_items))
+        assert body["input"] == codex_agentic_items
+        assert "tools" not in body
+
+    def test_malformed_additional_tools_item_without_tools_list_is_stripped(self):
+        body = self._transform(
+            input=[
+                {"type": "additional_tools", "role": "developer"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+        assert "tools" not in body
+
+
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):
         # gpt-5.x advertises /v1/responses in supported_endpoints (capability)
