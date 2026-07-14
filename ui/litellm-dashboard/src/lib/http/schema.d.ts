@@ -32622,6 +32622,15 @@ export interface components {
              */
             model?: string | null;
         };
+        /** UsageChartPoint */
+        UsageChartPoint: {
+            /** Blocked */
+            blocked: number;
+            /** Date */
+            date: string;
+            /** Passed */
+            passed: number;
+        };
         /** UsageDetailResponse */
         UsageDetailResponse: {
             /** Avglatency */
@@ -32640,21 +32649,28 @@ export interface components {
             provider: string;
             /** Requestsevaluated */
             requestsEvaluated: number;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "warning" | "critical";
             /** Time Series */
-            time_series: {
-                [key: string]: unknown;
-            }[];
-            /** Trend */
-            trend: string;
+            time_series: components["schemas"]["UsageTimeSeriesPoint"][];
+            /**
+             * Trend
+             * @enum {string}
+             */
+            trend: "up" | "down" | "stable";
             /** Type */
             type: string;
         };
         /** UsageLogEntry */
         UsageLogEntry: {
-            /** Action */
-            action: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "passed" | "blocked" | "flagged";
             /** Id */
             id: string;
             /** Input Snippet */
@@ -32686,9 +32702,7 @@ export interface components {
         /** UsageOverviewResponse */
         UsageOverviewResponse: {
             /** Chart */
-            chart: {
-                [key: string]: unknown;
-            }[];
+            chart: components["schemas"]["UsageChartPoint"][];
             /** Passrate */
             passRate: number;
             /** Rows */
@@ -32714,12 +32728,29 @@ export interface components {
             provider: string;
             /** Requestsevaluated */
             requestsEvaluated: number;
-            /** Status */
-            status: string;
-            /** Trend */
-            trend: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "warning" | "critical";
+            /**
+             * Trend
+             * @enum {string}
+             */
+            trend: "up" | "down" | "stable";
             /** Type */
             type: string;
+        };
+        /** UsageTimeSeriesPoint */
+        UsageTimeSeriesPoint: {
+            /** Blocked */
+            blocked: number;
+            /** Date */
+            date: string;
+            /** Passed */
+            passed: number;
+            /** Score */
+            score: number | null;
         };
         /**
          * UserAPIKeyAuth

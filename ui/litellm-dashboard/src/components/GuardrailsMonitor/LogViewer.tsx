@@ -6,10 +6,18 @@ import React, { useState } from "react";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
-import type { LogEntry } from "./mockData";
+import type { GuardrailLogAction } from "@/app/(dashboard)/hooks/guardrailsMonitor/useGuardrailUsageLogs";
+
+export interface LogViewerEntry {
+  id: string;
+  timestamp: string;
+  action: GuardrailLogAction;
+  model?: string | null;
+  input_snippet?: string | null;
+}
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
+  GuardrailLogAction,
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
   blocked: {
@@ -37,8 +45,8 @@ const actionConfig: Record<
 
 interface LogViewerProps {
   guardrailName?: string;
-  filterAction?: "all" | "blocked" | "passed" | "flagged";
-  logs?: LogEntry[];
+  filterAction?: "all" | GuardrailLogAction;
+  logs?: LogViewerEntry[];
   logsLoading?: boolean;
   totalLogs?: number;
   accessToken?: string | null;
@@ -65,7 +73,7 @@ export function LogViewer({
   const displayLogs = filteredLogs.slice(0, sampleSize);
   const total = totalLogs ?? logs.length;
   const sampleSizes = [10, 50, 100];
-  const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
+  const filters: Array<"all" | GuardrailLogAction> = ["all", "blocked", "flagged", "passed"];
 
   const startTime = startDate
     ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
@@ -93,7 +101,7 @@ export function LogViewer({
 
   const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
 
-  const handleLogClick = (log: LogEntry) => {
+  const handleLogClick = (log: LogViewerEntry) => {
     setSelectedRequestId(log.id);
     setDrawerOpen(true);
   };
@@ -184,7 +192,7 @@ export function LogViewer({
                     <span className="text-xs text-gray-400">·</span>
                     {log.model && <span className="text-xs text-gray-500">{log.model}</span>}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
+                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? "—"}</p>
                 </div>
                 <DownOutlined className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
               </button>

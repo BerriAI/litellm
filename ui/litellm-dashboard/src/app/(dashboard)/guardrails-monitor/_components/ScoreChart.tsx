@@ -1,13 +1,14 @@
 import React from "react";
 import { BarChart } from "@/components/shared/charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { GuardrailUsageChartPoint } from "@/app/(dashboard)/hooks/guardrailsMonitor/useGuardrailsUsageOverview";
 
 /**
  * Overview chart: Request Outcomes Over Time (passed vs blocked).
  * Stacked bar chart. Data from usage/overview API (chart array).
  */
 interface ScoreChartProps {
-  data?: Array<{ date: string; passed: number; blocked: number }>;
+  data?: GuardrailUsageChartPoint[];
 }
 
 export function ScoreChart({ data }: ScoreChartProps) {

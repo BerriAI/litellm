@@ -5,7 +5,7 @@ GET /guardrails/usage/overview, /guardrails/usage/detail/:id, /guardrails/usage/
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -26,6 +26,20 @@ router = APIRouter()
 
 # --- Response models ---
 
+GuardrailStatus = Literal["healthy", "warning", "critical"]
+GuardrailTrend = Literal["up", "down", "stable"]
+GuardrailAction = Literal["passed", "blocked", "flagged"]
+
+
+class UsageChartPoint(BaseModel):
+    date: str
+    passed: int
+    blocked: int
+
+
+class UsageTimeSeriesPoint(UsageChartPoint):
+    score: float | None
+
 
 class UsageOverviewRow(BaseModel):
     id: str
@@ -36,13 +50,13 @@ class UsageOverviewRow(BaseModel):
     failRate: float
     avgScore: Optional[float]
     avgLatency: Optional[float]
-    status: str  # healthy | warning | critical
-    trend: str  # up | down | stable
+    status: GuardrailStatus
+    trend: GuardrailTrend
 
 
 class UsageOverviewResponse(BaseModel):
     rows: List[UsageOverviewRow]
-    chart: List[Dict[str, Any]]  # [{ date, passed, blocked }]
+    chart: List[UsageChartPoint]
     totalRequests: int
     totalBlocked: int
     passRate: float
@@ -57,16 +71,16 @@ class UsageDetailResponse(BaseModel):
     failRate: float
     avgScore: Optional[float]
     avgLatency: Optional[float]
-    status: str
-    trend: str
+    status: GuardrailStatus
+    trend: GuardrailTrend
     description: Optional[str]
-    time_series: List[Dict[str, Any]]
+    time_series: List[UsageTimeSeriesPoint]
 
 
 class UsageLogEntry(BaseModel):
     id: str
     timestamp: str
-    action: str  # blocked | passed | flagged
+    action: GuardrailAction
     score: Optional[float]
     latency_ms: Optional[float]
     model: Optional[str]
@@ -82,7 +96,7 @@ class UsageLogsResponse(BaseModel):
     page_size: int
 
 
-def _status_from_fail_rate(fail_rate: float) -> str:
+def _status_from_fail_rate(fail_rate: float) -> GuardrailStatus:
     if fail_rate > 15:
         return "critical"
     if fail_rate > 5:
@@ -90,7 +104,7 @@ def _status_from_fail_rate(fail_rate: float) -> str:
     return "healthy"
 
 
-def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
+def _trend_from_comparison(current_fail: float, previous_fail: float) -> GuardrailTrend:
     if previous_fail <= 0:
         return "stable"
     diff = current_fail - previous_fail
@@ -126,7 +140,7 @@ def _prev_fail_rates(metrics_prev: Any, id_attr: str) -> Dict[str, float]:
     return {gid: (100.0 * v["blocked"] / v["req"]) if v["req"] else 0.0 for gid, v in prev_agg_raw.items()}
 
 
-def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
+def _chart_from_metrics(metrics: Any) -> List[UsageChartPoint]:
     chart_by_date: Dict[str, Dict[str, int]] = {}
     for m in metrics:
         d = m.date
@@ -134,7 +148,7 @@ def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
             chart_by_date[d] = {"passed": 0, "blocked": 0}
         chart_by_date[d]["passed"] += int(m.passed_count or 0)
         chart_by_date[d]["blocked"] += int(m.blocked_count or 0)
-    return [{"date": d, "passed": v["passed"], "blocked": v["blocked"]} for d, v in sorted(chart_by_date.items())]
+    return [UsageChartPoint(date=d, passed=v["passed"], blocked=v["blocked"]) for d, v in sorted(chart_by_date.items())]
 
 
 def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
@@ -356,16 +370,9 @@ async def guardrails_usage_detail(
     trend = _trend_from_comparison(fail_rate, prev_fail)
 
     # Aggregate by date in case metrics exist under both UUID and logical name
-    ts_by_date: Dict[str, Dict[str, Any]] = {}
-    for m in metrics:
-        d = m.date
-        if d not in ts_by_date:
-            ts_by_date[d] = {"passed": 0, "blocked": 0}
-        ts_by_date[d]["passed"] += int(m.passed_count or 0)
-        ts_by_date[d]["blocked"] += int(m.blocked_count or 0)
     time_series = [
-        {"date": d, "passed": v["passed"], "blocked": v["blocked"], "score": None}
-        for d, v in sorted(ts_by_date.items())
+        UsageTimeSeriesPoint(date=p.date, passed=p.passed, blocked=p.blocked, score=None)
+        for p in _chart_from_metrics(metrics)
     ]
     _litellm_params = getattr(guardrail, "litellm_params", None) or (
         guardrail.get("litellm_params") if isinstance(guardrail, dict) else None
@@ -422,7 +429,18 @@ def _build_usage_logs_where(
     return where
 
 
-def _usage_log_entry_from_row(r: Any, sl: Any, action_filter: Optional[str]) -> Optional[UsageLogEntry]:
+def _action_from_guardrail_entry(entry: dict[str, Any] | None) -> GuardrailAction:
+    if not entry:
+        return "passed"
+    st = (entry.get("guardrail_status") or "").lower()
+    if "intervened" in st or "block" in st:
+        return "blocked"
+    if "fail" in st or "error" in st:
+        return "flagged"
+    return "passed"
+
+
+def _usage_log_entry_from_row(r: Any, sl: Any, action_filter: str | None) -> UsageLogEntry | None:
     meta = sl.metadata
     if isinstance(meta, str):
         try:
@@ -435,16 +453,11 @@ def _usage_log_entry_from_row(r: Any, sl: Any, action_filter: Optional[str]) -> 
         if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id:
             entry_for_guardrail = gi
             break
-    action_val = "passed"
+    action_val = _action_from_guardrail_entry(entry_for_guardrail)
     score_val = None
     latency_val = None
     reason_val = None
     if entry_for_guardrail:
-        st = (entry_for_guardrail.get("guardrail_status") or "").lower()
-        if "intervened" in st or "block" in st:
-            action_val = "blocked"
-        elif "fail" in st or "error" in st:
-            action_val = "flagged"
         duration = entry_for_guardrail.get("duration")
         if duration is not None:
             latency_val = round(float(duration) * 1000, 0)

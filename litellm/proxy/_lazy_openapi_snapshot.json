@@ -11070,6 +11070,29 @@
           "title": "UpdateGuardrailRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageDetailResponse": {
           "properties": {
             "avgLatency": {
@@ -11126,18 +11149,27 @@
               "type": "integer"
             },
             "status": {
+              "enum": [
+                "healthy",
+                "warning",
+                "critical"
+              ],
               "title": "Status",
               "type": "string"
             },
             "time_series": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageTimeSeriesPoint"
               },
               "title": "Time Series",
               "type": "array"
             },
             "trend": {
+              "enum": [
+                "up",
+                "down",
+                "stable"
+              ],
               "title": "Trend",
               "type": "string"
             },
@@ -11166,6 +11198,11 @@
         "UsageLogEntry": {
           "properties": {
             "action": {
+              "enum": [
+                "passed",
+                "blocked",
+                "flagged"
+              ],
               "title": "Action",
               "type": "string"
             },
@@ -11293,8 +11330,7 @@
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -11374,10 +11410,20 @@
               "type": "integer"
             },
             "status": {
+              "enum": [
+                "healthy",
+                "warning",
+                "critical"
+              ],
               "title": "Status",
               "type": "string"
             },
             "trend": {
+              "enum": [
+                "up",
+                "down",
+                "stable"
+              ],
               "title": "Trend",
               "type": "string"
             },
@@ -11399,6 +11445,41 @@
             "trend"
           ],
           "title": "UsageOverviewRow",
+          "type": "object"
+        },
+        "UsageTimeSeriesPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked",
+            "score"
+          ],
+          "title": "UsageTimeSeriesPoint",
           "type": "object"
         },
         "ValidationError": {
@@ -21117,12 +21198,34 @@
           "title": "PolicyVersionStatusUpdateRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageOverviewResponse": {
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -21202,10 +21305,20 @@
               "type": "integer"
             },
             "status": {
+              "enum": [
+                "healthy",
+                "warning",
+                "critical"
+              ],
               "title": "Status",
               "type": "string"
             },
             "trend": {
+              "enum": [
+                "up",
+                "down",
+                "stable"
+              ],
               "title": "Trend",
               "type": "string"
             },

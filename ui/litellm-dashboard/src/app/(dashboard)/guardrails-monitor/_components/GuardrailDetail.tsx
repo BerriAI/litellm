@@ -1,12 +1,11 @@
 import { ArrowLeftOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
 import { Button, Col, Row, Spin, Tabs } from "antd";
-import React, { useMemo, useState } from "react";
-import { getGuardrailsUsageDetail, getGuardrailsUsageLogs } from "@/components/networking";
+import React, { useState } from "react";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
-import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
+import { useGuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrailsMonitor/useGuardrailUsageDetail";
+import { useGuardrailUsageLogs } from "@/app/(dashboard)/hooks/guardrailsMonitor/useGuardrailUsageLogs";
 
 interface GuardrailDetailProps {
   guardrailId: string;
@@ -22,71 +21,37 @@ const statusColors: Record<string, { bg: string; text: string; dot: string }> = 
   critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
 };
 
+const LOGS_PAGE = 1;
+const LOGS_PAGE_SIZE = 50;
+
 export function GuardrailDetail({ guardrailId, onBack, accessToken = null, startDate, endDate }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [logsPage, setLogsPage] = useState(1);
-  const logsPageSize = 50;
 
   const {
     data: detailData,
     isLoading: detailLoading,
     error: detailError,
-  } = useQuery({
-    queryKey: ["guardrails-usage-detail", guardrailId, startDate, endDate],
-    queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
-    enabled: !!accessToken && !!guardrailId,
-  });
-  const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
-    queryFn: () =>
-      getGuardrailsUsageLogs(accessToken!, {
-        guardrailId,
-        page: logsPage,
-        pageSize: logsPageSize,
-        startDate,
-        endDate,
-      }),
-    enabled: !!accessToken && !!guardrailId,
-  });
+  } = useGuardrailUsageDetail(guardrailId, startDate, endDate);
+  const logsParams = {
+    guardrailId,
+    page: LOGS_PAGE,
+    pageSize: LOGS_PAGE_SIZE,
+    startDate,
+    endDate,
+  };
+  const { data: logsData, isLoading: logsLoading } = useGuardrailUsageLogs(logsParams);
 
-  const logs: LogEntry[] = useMemo(() => {
-    const list = logsData?.logs ?? [];
-    return list.map((l: Record<string, unknown>) => ({
-      id: l.id as string,
-      timestamp: l.timestamp as string,
-      action: l.action as "blocked" | "passed" | "flagged",
-      score: l.score as number | undefined,
-      model: l.model as string | undefined,
-      input_snippet: l.input_snippet as string | undefined,
-      output_snippet: l.output_snippet as string | undefined,
-      reason: l.reason as string | undefined,
-    }));
-  }, [logsData?.logs]);
-
-  const data = detailData
-    ? {
-        name: detailData.guardrail_name,
-        description: detailData.description ?? "",
-        status: detailData.status,
-        provider: detailData.provider,
-        type: detailData.type,
-        requestsEvaluated: detailData.requestsEvaluated,
-        failRate: detailData.failRate,
-        avgScore: detailData.avgScore,
-        avgLatency: detailData.avgLatency,
-      }
-    : {
-        name: guardrailId,
-        description: "",
-        status: "healthy",
-        provider: "—",
-        type: "—",
-        requestsEvaluated: 0,
-        failRate: 0,
-        avgScore: undefined as number | undefined,
-        avgLatency: undefined as number | undefined,
-      };
+  const logs = logsData?.logs ?? [];
+  const data = {
+    name: detailData?.guardrail_name ?? guardrailId,
+    description: detailData?.description ?? "",
+    status: detailData?.status ?? "healthy",
+    provider: detailData?.provider ?? "—",
+    requestsEvaluated: detailData?.requestsEvaluated ?? 0,
+    failRate: detailData?.failRate ?? 0,
+    avgLatency: detailData?.avgLatency ?? null,
+  };
   const statusStyle = statusColors[data.status] ?? statusColors.healthy;
 
   if (detailLoading && !detailData) {
