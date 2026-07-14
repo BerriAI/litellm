@@ -11152,6 +11152,11 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_computer_use": true,
@@ -11160,7 +11165,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -11173,6 +11179,11 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_computer_use": true,
@@ -11181,7 +11192,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "claude-3-7-sonnet-20250219": {
         "cache_creation_input_token_cost": 3.75e-06,
