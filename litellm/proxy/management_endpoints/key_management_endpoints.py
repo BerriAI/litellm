@@ -468,7 +468,10 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     Handle the key type.
     """
     key_type = data.key_type
-    data_json.pop("key_type", None)
+    if key_type is None:
+        data_json.pop("key_type", None)
+        return data_json
+    data_json["key_type"] = key_type.value
     if key_type == LiteLLMKeyType.LLM_API:
         data_json["allowed_routes"] = ["llm_api_routes"]
     elif key_type == LiteLLMKeyType.MANAGEMENT:
@@ -3566,6 +3569,7 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
@@ -3706,6 +3710,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
