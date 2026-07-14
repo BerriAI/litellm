@@ -63,7 +63,10 @@ class AggregateToolListing(NamedTuple):
 
 def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
     """Walk the exception tree (``__cause__``/``__context__``/ExceptionGroup members) for an
-    ``httpx.Response``, mirroring how upstream failures surface through the MCP SDK's task groups."""
+    ``httpx.Response``, mirroring how upstream failures surface through the MCP SDK's task groups.
+    Explicit links are searched first: each node's ``raise ... from`` cause, then group members in
+    raise order, then the incidental ``__context__`` chain, so a response raised while handling the
+    real failure can never shadow the response on the explicit causal chain."""
     seen: set[int] = set()
     stack = [exc]
     while stack:
@@ -74,12 +77,13 @@ def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
         response = getattr(current, "response", None)
         if isinstance(response, httpx.Response):
             return response
+        if current.__context__ is not None:
+            stack.append(current.__context__)
         exceptions = getattr(current, "exceptions", None)
         if isinstance(exceptions, tuple):
-            stack.extend(exceptions)
-        for link in (current.__cause__, current.__context__):
-            if link is not None:
-                stack.append(link)
+            stack.extend(reversed(exceptions))
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
     return None
 
 

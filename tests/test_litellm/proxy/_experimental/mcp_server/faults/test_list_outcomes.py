@@ -49,6 +49,31 @@ def test_embedded_401_classifies_auth_required():
     assert classify_list_exception(exc).tag == "auth_required"
 
 
+def test_context_response_does_not_shadow_the_causal_chain_response():
+    real_response = httpx.Response(401, request=httpx.Request("POST", "https://mcp.example.com/mcp"))
+    real = httpx.HTTPStatusError("upstream rejected", request=real_response.request, response=real_response)
+    incidental_response = httpx.Response(500, request=httpx.Request("POST", "https://hooks.example.com/log"))
+    incidental = httpx.HTTPStatusError(
+        "logging hook failed", request=incidental_response.request, response=incidental_response
+    )
+    wrapper = RuntimeError("wrapper")
+    wrapper.__cause__ = real
+    wrapper.__context__ = incidental
+    fault = classify_list_exception(wrapper)
+    assert fault.tag == "auth_required"
+    assert fault.status_code == 401
+
+
+def test_exception_group_members_are_searched_in_raise_order():
+    first_response = httpx.Response(502, request=httpx.Request("POST", "https://mcp.example.com/mcp"))
+    first = httpx.HTTPStatusError("first", request=first_response.request, response=first_response)
+    second_response = httpx.Response(503, request=httpx.Request("POST", "https://mcp.example.com/mcp"))
+    second = httpx.HTTPStatusError("second", request=second_response.request, response=second_response)
+    fault = classify_list_exception(BaseExceptionGroup("task group", [first, second]))
+    assert fault.tag == "upstream_error"
+    assert fault.status_code == 502
+
+
 def test_unknown_exception_is_internal():
     assert classify_list_exception(ValueError("who knows")).tag == "internal"
 
