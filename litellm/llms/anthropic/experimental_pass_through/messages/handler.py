@@ -148,6 +148,7 @@ async def _try_websearch_short_circuit(
     tools: Optional[List[Dict]],
     custom_llm_provider: Optional[str],
     stream: Optional[bool],
+    kwargs: Optional[dict] = None,
 ) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
     """
     Attempt to short-circuit a web-search-only request.
@@ -177,6 +178,7 @@ async def _try_websearch_short_circuit(
             messages=messages,
             tools=tools,
             custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
         )
         if response is not None:
             anthropic_response = cast(AnthropicMessagesResponse, response)
@@ -292,6 +294,7 @@ async def anthropic_messages(
         tools=tools,
         custom_llm_provider=custom_llm_provider,
         stream=original_stream,
+        kwargs={**kwargs, "metadata": metadata},
     )
     if short_circuit_response is not None:
         return short_circuit_response

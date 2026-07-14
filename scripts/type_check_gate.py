@@ -13,9 +13,13 @@ bystander's count equals its base, so it is spared, while any PR that actually
 grows the rule past its limit still fails.
 
 Head counts are read from stdin (the caller runs basedpyright once and pipes
-``--outputjson`` in); the base count is a second basedpyright pass over a
-detached worktree at the merge-base, run under the same environment so import
-resolution matches. ``--update`` ratchets each rule's ``limit`` down by the
+``--outputjson`` in). The base count only matters once some rule is over its
+limit, so when none is the base pass is skipped outright. When it is needed, it
+is a second basedpyright pass over a detached worktree at the merge-base, run
+under the same environment so import resolution matches, and its per-rule
+counts are cached under the repo's git common dir keyed by merge-base commit,
+``pyrightconfig.json``, and ``uv.lock``, so re-runs against the same branch
+point pay for it once. ``--update`` ratchets each rule's ``limit`` down by the
 number of errors this branch fixed relative to its branch point (the merge-base),
 so the headroom you were granted shrinks by exactly what you cleared and never
 grows.
@@ -28,20 +32,24 @@ carries an unambiguous ``rule`` field.
 
 import argparse
 import contextlib
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
 PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
+UV_LOCK = REPO_ROOT / "uv.lock"
 DEFAULT_BASE = "origin/litellm_internal_staging"
+CACHE_FILE_PREFIX = "basedpyright-base-"
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -129,6 +137,109 @@ def base_counts(ref: str) -> dict[str, int]:
         return count_basedpyright(proc.stdout, root=worktree)
 
 
+def over_ceiling(
+    head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> frozenset[str]:
+    """Rules whose head count already exceeds their limit.
+
+    A rule can only breach when it is over its limit, so when none are the base
+    comparison cannot change the verdict and the base worktree pass can be skipped.
+    """
+    return frozenset(
+        code
+        for code, total in head.items()
+        if total > (budget[code]["limit"] if code in budget else DEFAULT_LIMIT)
+    )
+
+
+def environment_fingerprints() -> tuple[str, ...]:
+    return tuple(
+        hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (PYRIGHT_CONFIG, UV_LOCK)
+        if path.exists()
+    )
+
+
+def cache_key(base_point: str, fingerprints: tuple[str, ...]) -> str:
+    return hashlib.sha256("|".join((base_point, *fingerprints)).encode()).hexdigest()[
+        :16
+    ]
+
+
+def cache_path(
+    directory: Path, base_point: str, fingerprints: tuple[str, ...]
+) -> Path:
+    return directory / f"{CACHE_FILE_PREFIX}{cache_key(base_point, fingerprints)}.json"
+
+
+def default_cache_dir() -> Path:
+    common = Path(_run(["git", "rev-parse", "--git-common-dir"]).strip())
+    resolved = common if common.is_absolute() else REPO_ROOT / common
+    return resolved / "litellm-lint-cache"
+
+
+def load_cached_counts(path: Path) -> dict[str, int] | None:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    counts = data.get("counts") if isinstance(data, dict) else None
+    if not isinstance(counts, dict):
+        return None
+    if not all(
+        isinstance(code, str) and isinstance(total, int) and not isinstance(total, bool)
+        for code, total in counts.items()
+    ):
+        return None
+    return counts
+
+
+def scratch_path(path: Path) -> Path:
+    """In-flight scratch for the tmp+rename write. Dot-prefixed so the prune
+    glob in `store_counts` can never match it (a concurrent run would otherwise
+    unlink it between write and rename), and pid-suffixed so two concurrent
+    writers of the same entry never share a scratch."""
+    return path.with_name(f".{path.name}.{os.getpid()}.tmp")
+
+
+def store_counts(
+    directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob(f"{CACHE_FILE_PREFIX}*.json"):
+        if stale != path:
+            stale.unlink(missing_ok=True)
+    scratch = scratch_path(path)
+    scratch.write_text(
+        json.dumps(
+            {"base_point": base_point, "counts": dict(sorted(counts.items()))},
+            indent=2,
+        )
+        + "\n"
+    )
+    scratch.replace(path)
+
+
+def base_counts_cached(
+    base_point: str,
+    cache_dir: Path | None = None,
+    compute: Callable[[str], dict[str, int]] = base_counts,
+) -> dict[str, int]:
+    """`base_counts` memoized on disk. The base tree at a given commit is
+    immutable, so its counts are a pure function of the merge-base plus the
+    environment fingerprints in the cache key; an empty result is never stored
+    because it is the signature of a crashed pass, not a clean tree."""
+    directory = default_cache_dir() if cache_dir is None else cache_dir
+    path = cache_path(directory, base_point, environment_fingerprints())
+    cached = load_cached_counts(path)
+    if cached is not None:
+        return cached
+    counts = compute(base_point)
+    if counts:
+        store_counts(directory, path, base_point, counts)
+    return counts
+
+
 def evaluate(
     head: Mapping[str, int],
     base: Mapping[str, int],
@@ -185,7 +296,7 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     """
     budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
     base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    updated = ratcheted_budget(budget, current, base_counts(base_point))
+    updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
     print(
@@ -205,8 +316,13 @@ def cmd_check(base_ref: str) -> None:
             f"nothing; refusing to certify a vacuous run."
         )
         raise SystemExit(1)
+    if not over_ceiling(head, budget):
+        print(
+            f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)"
+        )
+        return
     base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    base = base_counts(base_point)
+    base = base_counts_cached(base_point)
     if is_vacuous_run(base, budget):
         print(
             f"FAIL: basedpyright produced no errors for the base tree at "

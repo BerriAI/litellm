@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 
 # Token storage utilities
@@ -593,6 +594,44 @@ def logout():
     click.echo("✅ Logged out successfully. Authentication token cleared.")
 
 
+@click.command(name="print-token")
+@click.pass_context
+def print_token(ctx: click.Context):
+    """Print a valid API token for this proxy.
+
+    Designed to be used as Claude Code's `apiKeyHelper`
+    (https://docs.claude.com/en/docs/claude-code/settings): stdout must
+    contain only the token, so all diagnostics go to stderr. The token
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
+    expired, run `lite login` again.
+    """
+    token_data = load_token()
+    if not token_data:
+        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    # apiKeyHelper is invoked bare (no --base-url), so unless the caller
+    # explicitly pointed us at a server, trust whichever one `lite login`
+    # actually issued this token for -- that's the whole point of not
+    # needing a wrapper command.
+    if ctx.obj.get("base_url_explicit"):
+        base_url = ctx.obj["base_url"]
+        if token_data.get("base_url") != base_url.rstrip("/"):
+            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+            sys.exit(1)
+
+    if not is_cli_token_fresh(token_data):
+        click.echo("Token expired. Run 'lite login' again.", err=True)
+        sys.exit(1)
+
+    api_key = token_data.get("key")
+    if not api_key:
+        click.echo("No token available. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    click.echo(api_key)
+
+
 @click.command(name="whoami")
 def whoami():
     """Show current authentication status"""
@@ -616,8 +655,16 @@ def whoami():
         click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
 
 
+@click.group(name="auth")
+def auth_group():
+    """Manage CLI authentication (apiKeyHelper support, etc.)"""
+
+
+auth_group.add_command(print_token)
+
+
 # Export functions for use by other CLI commands
-__all__ = ["login", "logout", "whoami", "prompt_team_selection"]
+__all__ = ["login", "logout", "print_token", "auth_group", "whoami", "prompt_team_selection"]
 
 # Export individual commands instead of grouping them
 # login, logout, and whoami will be added as top-level commands

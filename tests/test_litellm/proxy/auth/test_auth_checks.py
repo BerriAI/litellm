@@ -333,8 +333,10 @@ async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestric
 
 
 @pytest.mark.asyncio
-async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
-    """Key with all-team-models but no team_id cannot resolve the sentinel; access must be denied."""
+async def test_can_key_call_model_all_team_models_no_team_id_is_unrestricted():
+    """A teamless key with all-team-models inherits the full proxy model list
+    (empty resolved list = unrestricted access), the same as leaving the models
+    field empty. This test will fail if someone re-introduces a teamless denial."""
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
@@ -344,15 +346,86 @@ async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
         team_models=[],
     )
 
-    with pytest.raises(ProxyException) as exc_info:
+    assert (
         await can_key_call_model(
             model="gpt-4o",
             llm_model_list=None,
             valid_token=valid_token,
             llm_router=None,
         )
+        is True
+    )
 
-    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+def test_resolve_key_models_teamless_all_team_models_returns_empty():
+    """_resolve_key_models_for_auth_check must return [] for a teamless key
+    with all-team-models, making it equivalent to an unscoped key (unrestricted
+    access). Fails if someone returns the sentinel list for teamless keys."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import _resolve_key_models_for_auth_check
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    result = _resolve_key_models_for_auth_check(valid_token)
+    assert result == [], "teamless all-team-models must resolve to [] (unrestricted)"
+
+
+@pytest.mark.asyncio
+async def test_enforce_key_access_teamless_all_team_models_passes():
+    """_enforce_key_and_fallback_model_access must not deny a teamless key with
+    all-team-models. The inference path skips the key-level model check when
+    the sentinel is present, regardless of team_id. Fails if someone adds a
+    team_id guard to the pass branch."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    await _enforce_key_and_fallback_model_access(
+        valid_token=valid_token,
+        request_data={"model": "gpt-4o"},
+        route="/chat/completions",
+        request=None,
+        llm_model_list=None,
+        llm_router=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_resolved_model_teamless_all_team_models_passes():
+    """can_key_call_resolved_model must skip the key model check for a teamless
+    key with all-team-models. Fails if someone adds a team_id guard to the
+    skip_key_model_check condition."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    with patch("litellm.proxy.auth.auth_checks.can_key_call_model", new_callable=AsyncMock) as mock_call:
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            with patch("litellm.proxy.proxy_server.proxy_logging_obj", None):
+                with patch("litellm.proxy.proxy_server.user_api_key_cache", None):
+                    await can_key_call_resolved_model(
+                        model="gpt-4o",
+                        llm_model_list=None,
+                        valid_token=valid_token,
+                        llm_router=None,
+                    )
+        mock_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -626,6 +699,38 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
+    """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
+    re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
+    exception type. The MCP dcr_bridge admission and refresh paths depend on this to tell a transient
+    outage (retry, 503) from a missing user (fail closed), which is why they classify across the cause
+    chain instead of the top exception's type. If this wrapping ever changes, that classification must
+    change with it, so this test guards the contract the callers rely on."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=ConnectionError("can't reach database server")
+    )
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(ValueError) as exc_info:
+            await get_user_object(
+                user_id="outage-contract-probe-user",
+                prisma_client=mock_prisma_client,
+                user_api_key_cache=mock_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=None,
+            )
+
+    assert isinstance(exc_info.value.__context__, ConnectionError)
 
 
 @pytest.mark.asyncio
@@ -2560,6 +2665,170 @@ async def test_virtual_key_budget_check_fallback_no_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 15.0
+
+
+# =====================================================================
+# Throttle-on-budget-exceeded tests (LIT-3894): an over-budget key that
+# opted in is throttled to a global % of its TPM/RPM instead of blocked.
+# =====================================================================
+
+
+def _over_budget_token(**overrides) -> UserAPIKeyAuth:
+    base = dict(
+        token="throttle-token",
+        spend=20.0,
+        max_budget=10.0,
+        user_id="test-user",
+    )
+    base.update(overrides)
+    return UserAPIKeyAuth(**base)
+
+
+def _patched_spend(value: float):
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
+        return value
+
+    return patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend)
+
+
+def _budget_logging_obj():
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    return proxy_logging_obj
+
+
+@pytest.mark.parametrize(
+    "limit, pct, expected",
+    [
+        (1000, 0.1, 100),
+        (100, 0.1, 10),
+        (1, 0.1, 1),  # floor would be 0; trickle of 1 keeps the key alive
+        (None, 0.1, None),
+        (50, 0.5, 25),
+        (1000, None, 1000),  # no percentage -> limit unchanged
+    ],
+)
+def test_throttled_limit(limit, pct, expected):
+    from litellm.proxy.auth.budget_throttle import throttled_limit
+
+    assert throttled_limit(limit, pct) == expected
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_throttles_instead_of_blocking(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(20.0):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=_budget_logging_obj(),
+        )
+
+    # persistent limits are untouched (so the throttle never compounds); the
+    # request-scoped percentage is what the rate limiter scales by
+    assert valid_token.budget_throttle_pct == 0.1
+    assert valid_token.tpm_limit == 1000
+    assert valid_token.rpm_limit == 100
+    # the request-scoped decision must not leak into serialized responses
+    assert "budget_throttle_pct" not in valid_token.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_budget_throttle_decision_cleared_before_caching():
+    """The request-scoped throttle decision must not persist into the key cache,
+    otherwise it would re-apply (and compound) on every subsequent request."""
+    from litellm.proxy.auth.auth_checks import _copy_user_api_key_auth_for_cache
+
+    valid_token = _over_budget_token(
+        tpm_limit=1000, rpm_limit=100, metadata={"throttle_on_budget_exceeded": True}
+    )
+    valid_token.budget_throttle_pct = 0.1
+
+    cached = _copy_user_api_key_auth_for_cache(user_api_key_obj=valid_token)
+
+    assert cached.budget_throttle_pct is None
+    assert cached.tpm_limit == 1000
+    assert cached.rpm_limit == 100
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_throttle_no_configured_limits(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(metadata={"throttle_on_budget_exceeded": True})
+    assert valid_token.tpm_limit is None
+    assert valid_token.rpm_limit is None
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_not_opted_in_still_blocks(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(tpm_limit=1000, rpm_limit=100)
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.parametrize("pct", [None, 0, 1.5, -0.1, True])
+@pytest.mark.asyncio
+async def test_budget_exceeded_invalid_percentage_blocks(monkeypatch, pct):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", pct)
+    valid_token = _over_budget_token(
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(20.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=_budget_logging_obj(),
+            )
+
+    assert valid_token.budget_throttle_pct is None
+
+
+@pytest.mark.asyncio
+async def test_under_budget_does_not_throttle(monkeypatch):
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    valid_token = _over_budget_token(
+        max_budget=100.0,
+        tpm_limit=1000,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+
+    with _patched_spend(5.0):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=_budget_logging_obj(),
+        )
+
+    assert valid_token.budget_throttle_pct is None
 
 
 @pytest.mark.asyncio

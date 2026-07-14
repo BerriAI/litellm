@@ -70,6 +70,9 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     model: str
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
+    content: str | None = None
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
