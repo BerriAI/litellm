@@ -7596,14 +7596,28 @@ class ProxyStartupEvent:
         # but YAML config has False.
         if store_model_in_db is not True and prisma_client is not None:
             try:
-                _db_gs_record = await ConfigRepository(prisma_client).table.find_first(
-                    where={"param_name": "general_settings"}
+                _db_gs_record = await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: ConfigRepository(prisma_client).table.find_first(
+                        where={"param_name": "general_settings"}
+                    ),
+                    reason="startup_store_model_in_db_general_settings_lookup_failure",
                 )
-                if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
-                    _db_val = _db_gs_record.param_value.get("store_model_in_db")
-                    if _db_val is True or (isinstance(_db_val, str) and _db_val.lower() == "true"):
-                        store_model_in_db = True
-                        verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
+                if _db_gs_record is not None:
+                    _db_param_value = _db_gs_record.param_value
+                    # Prisma can return the JSON column as a raw string; normalize
+                    # it the way ConfigRepository.get_param does before reading, so
+                    # the override isn't silently skipped for string-valued rows.
+                    if isinstance(_db_param_value, str):
+                        try:
+                            _db_param_value = json.loads(_db_param_value)
+                        except (json.JSONDecodeError, TypeError):
+                            _db_param_value = {}
+                    if isinstance(_db_param_value, dict):
+                        _db_val = _db_param_value.get("store_model_in_db")
+                        if _db_val is True or (isinstance(_db_val, str) and _db_val.lower() == "true"):
+                            store_model_in_db = True
+                            verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
             except Exception as e:
                 verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
 
