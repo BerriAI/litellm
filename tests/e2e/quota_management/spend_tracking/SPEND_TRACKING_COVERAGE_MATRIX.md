@@ -29,6 +29,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 
 | Modality | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
+| Non-negative spend (all providers) | `test_anthropic_claude3_transformation.py`, `llm_cost_calc/utils.py` (#25846) | partial | yes (`test_no_provider_logs_negative_spend`) |
 | Chat (non-stream) | `test_cost_calculator.py`, `local_testing/test_completion_cost.py` | covered | yes (`test_chat_completion_writes_nonzero_spend_row`) |
 | Chat (streaming) | `test_streaming_interrupt_spend_tracking.py` | partial | yes (`test_streaming_chat_completion_tracks_spend`) |
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
@@ -68,6 +69,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_tag_spend_matches_sum_of_tagged_logs` | `/spend/tags` SUM/COUNT == tagged rows |
 | `test_end_user_spend_attributed_on_row` | `end_user` attributed + costed |
 | `test_each_model_on_a_shared_key_gets_its_own_row` | per-model/provider rows, correct model + cost, distinct request_ids matching response id |
+| `test_no_provider_logs_negative_spend` | no provider writes spend < 0 across streaming/non-streaming chat + embeddings; each provider still logs a positive row (non-vacuous) |
 | `test_failure_call_writes_failure_status_row` | failed call -> `status=failure`, `spend=0` |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |
 | `test_spend_logs_endpoint_returns_spend` | `/spend/logs` returns 200 + the key's spend, never a 5xx (intermittent-500 regression) |

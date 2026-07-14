@@ -430,6 +430,81 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
 
 
+# Chat providers this negative-spend guard sweeps when the proxy exposes them. Two
+# are guaranteed by the suite's driver_models (gemini, anthropic); gpt-5.5 (openai
+# chat) is only wired on the stage/docker gateways, so it's swept when present.
+# Adding a provider here widens the guard by one line.
+_NEG_GUARD_CHAT_MODELS: tuple[str, ...] = ("gemini-2.5-flash", "claude-haiku-4-5", "gpt-5.5")
+_NEG_GUARD_EMBEDDING_MODEL = "openai-text-embedding-3-small"
+_NEG_GUARD_EMBEDDING_ROW_MARKER = "text-embedding-3-small"
+
+
+@pytest.mark.covers("quota_management.spend_tracking.non_negative.never_negative")
+def test_no_provider_logs_negative_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """No provider ever writes a negative spend row. One key sweeps every chat
+    provider the proxy exposes, both non-streaming and streaming, plus an embedding;
+    then every logged row is asserted non-negative. A negative cost is a real billing
+    bug: cache-token accounting that lets a derived token count fall below zero
+    (BerriAI/litellm#25846) surfaces here as spend < 0, and the streaming leg is
+    included on purpose because that is the path that regression rode in on. The
+    per-provider positive-row check keeps the guard non-vacuous - a pipeline that
+    silently logs 0 (or drops the row) fails instead of sliding past a bare `>= 0`."""
+    present = frozenset(entry.model_name for entry in client.gateway.model_info())
+    chat_models = tuple(m for m in _NEG_GUARD_CHAT_MODELS if m in present)
+    assert len(chat_models) >= 2, (
+        f"need >=2 chat providers for a cross-provider guard; "
+        f"proxy exposes {sorted(present)}"
+    )
+    assert _NEG_GUARD_EMBEDDING_MODEL in present, (
+        f"embedding deployment {_NEG_GUARD_EMBEDDING_MODEL!r} not registered; "
+        f"proxy exposes {sorted(present)}"
+    )
+
+    for model in chat_models:
+        _ = unwrap(
+            client.chat(scoped_key, model, f"one word {unique_marker()}", max_tokens=16)
+        )
+        stream = client.chat_stream(
+            scoped_key, model, f"count to three {unique_marker()}", max_tokens=32
+        )
+        assert stream.ok, (
+            f"{model} stream failed (status {stream.status_code}): {stream.body[:300]}"
+        )
+    _ = unwrap(
+        client.embed(
+            scoped_key, _NEG_GUARD_EMBEDDING_MODEL, f"vectorize {unique_marker()}"
+        )
+    )
+
+    expected_markers = (*chat_models, _NEG_GUARD_EMBEDDING_ROW_MARKER)
+
+    def every_provider_costed(rows: list[SpendLogRow]) -> bool:
+        return all(
+            any(marker in (r.model or "") and (r.spend or 0) > 0 for r in rows)
+            for marker in expected_markers
+        )
+
+    # min_rows waits for the streaming rows too (non-stream + stream per chat model,
+    # plus the embedding), so the streaming spend is actually observed and checked.
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2 * len(chat_models) + 1,
+        predicate=every_provider_costed,
+    )
+
+    negative = [r for r in rows if (r.spend or 0) < 0]
+    assert not negative, (
+        f"provider logged negative spend (billing regression): {_summarize(negative)}"
+    )
+
+    for marker in expected_markers:
+        assert any(
+            marker in (r.model or "") and (r.spend or 0) > 0 for r in rows
+        ), f"no positive spend row for {marker!r}; guard would be vacuous: {_summarize(rows)}"
+
+
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
 def test_failure_call_writes_failure_status_row(
     client: SpendClient, scoped_key: str
