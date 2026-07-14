@@ -3479,3 +3479,44 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_completion_cost_interactions_api_response():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    litellm.register_model(
+        model_cost={
+            "gemini/fake-interactions-model": {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                "input_cost_per_token": 3e-7,
+                "output_cost_per_token": 2.5e-6,
+            }
+        }
+    )
+
+    response = InteractionsAPIResponse(
+        id="interaction_123",
+        model="fake-interactions-model",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 871,
+            "total_input_tokens": 16,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 16}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 561,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 561}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 294,
+        },
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gemini/fake-interactions-model",
+        custom_llm_provider="gemini",
+        call_type="acreate_interaction",
+    )
+
+    assert cost == pytest.approx(16 * 3e-7 + (561 + 294) * 2.5e-6)
