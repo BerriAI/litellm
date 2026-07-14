@@ -4,7 +4,7 @@ Calls the Singulr Guard API to scan messages.
 """
 
 import os
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -45,12 +45,12 @@ _DEFAULT_TIMEOUT = 30.0
 class SingulrGuardrail(CustomGuardrail):
     def __init__(
         self,
-        singulr_api_key: Optional[str] = None,
-        singulr_api_base: Optional[str] = None,
-        singulr_application_id: Optional[str] = None,
-        singulr_guardrail_id: Optional[str] = None,
-        block_on_error: Optional[bool] = None,
-        timeout: Optional[float] = None,
+        singulr_api_key: str | None = None,
+        singulr_api_base: str | None = None,
+        singulr_application_id: str | None = None,
+        singulr_guardrail_id: str | None = None,
+        block_on_error: bool | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> None:
         self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
@@ -93,7 +93,7 @@ class SingulrGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
             SingulrGuardrailConfigModel,
         )
@@ -162,7 +162,7 @@ class SingulrGuardrail(CustomGuardrail):
             if value
         )
 
-    async def _call_api(self, payload: dict[str, Any]) -> Optional[SingulrGuardrailResponse]:
+    async def _call_api(self, payload: dict[str, Any]) -> SingulrGuardrailResponse | None:
         endpoint = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
@@ -215,7 +215,7 @@ class SingulrGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: str,
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         payload = self._build_payload(request_data, inputs, input_type)
         # verbose_proxy_logger.debug("Singulr: payload=%s", payload)
