@@ -76,10 +76,8 @@ _DEFAULT_MAX_BYTES_PER_CALL = 10 * 1024 * 1024
 _MAX_TOTAL_STORE_BYTES = 256 * 1024 * 1024
 # Max compresr_retrieve calls expanded into a single follow-up (repeats deduped).
 _MAX_RETRIEVALS_PER_LOOP = 8
-# The shared HTTP client defaults to a 600s read timeout; that is far too long
-# for an inline, on-request-path guardrail (a hung Compresr backend would pin
-# the request coroutine and a pooled connection for 10 minutes). Bound it so a
-# stall is routed through the fail policy quickly instead.
+# The shared client's 600s read timeout is far too long for an on-request
+# guardrail; bound the compress call so a stall hits the fail policy quickly.
 _COMPRESS_TIMEOUT_SECONDS = 60.0
 _SOURCE_TAG = "integration:litellm"
 # Request-content fields the compression_params passthrough must never
@@ -115,20 +113,12 @@ def _parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
 def _validate_api_base(url: str) -> str:
     """Return ``url`` if it passes basic outbound-target checks, else raise.
 
-    Best-effort defense in depth against a mis- or maliciously-configured
-    ``api_base``: rejects non-http(s) schemes and the well-known cloud-metadata
-    IPs/hostnames (including alternate IP-literal encodings). Private-range
-    hosts are allowed because on-prem Compresr deployments legitimately live
-    there.
-
-    This is NOT a complete SSRF control, and deliberately does no DNS resolution
-    (which would block the event loop at construction and still not close the
-    gap): the shared outbound client follows redirects and re-resolves DNS on
-    every request, so a host that passes here can still redirect to, or later
-    resolve to, a blocked address (TOCTOU / DNS rebinding). ``api_base`` is
-    trusted operator config rather than end-user input, so this is an accepted
-    limitation; closing it fully requires the shared HTTP handler to expose a
-    no-redirect / IP-pinned request path.
+    Best-effort defense in depth for a mis/maliciously-configured ``api_base``:
+    rejects non-http(s) schemes and cloud-metadata IPs/hosts (incl. alternate IP
+    encodings); private ranges are allowed for on-prem deployments. NOT a complete
+    SSRF control — no DNS resolution, and the shared client follows redirects and
+    re-resolves DNS (TOCTOU / rebinding); ``api_base`` is trusted operator config,
+    so this is an accepted limitation.
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -236,9 +226,8 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
                     intent = _render_tool_intent(fn if isinstance(fn, dict) else {})
                     if intent:
                         return intent
-        # Legacy function_call fallback: only trust a name match. Without a
-        # name on the function-result message, any earlier assistant turn with
-        # a function_call would match and attribute the wrong intent.
+        # Legacy function_call fallback: require a name match, else an earlier
+        # function_call turn would attribute the wrong intent.
         fc = prev.get("function_call")
         if isinstance(fc, dict) and fn_name and fc.get("name") == fn_name:
             intent = _render_tool_intent(fc)
@@ -603,16 +592,14 @@ class CompresrGuardrail(CustomGuardrail):
         if self.max_bytes_per_call < 0:
             raise ValueError("max_bytes_per_call must be >= 0 (0 disables the cap; positive values enforce it)")
         self.allow_bypass_header = False if allow_bypass_header is None else allow_bypass_header
-        # Dynamic (adaptive) compression — latte_v2 only, on by default. When on,
-        # the server picks the ratio per input (Kneedle elbow) instead of honoring
-        # target_compression_ratio; None bounds let the server default apply.
+        # Dynamic (adaptive) compression — latte_v2 only, on by default: the server
+        # picks the ratio per input instead of honoring target_compression_ratio.
         self.dynamic = True if dynamic is None else dynamic
         self.dynamic_min_ratio = dynamic_min_ratio
         self.dynamic_max_ratio = dynamic_max_ratio
-        # Passthrough of extra compression params (e.g. heuristic_chunking, or a
-        # newer knob) forwarded verbatim in the compress payload, so a new
-        # Compresr feature works without changing this guardrail. Named fields
-        # win on collision; request-content fields are stripped outright.
+        # Passthrough of extra compression params forwarded verbatim, so a new
+        # Compresr feature works without changing this guardrail. Named fields win;
+        # request-content fields are stripped.
         reserved_keys = _RESERVED_COMPRESSION_PARAM_KEYS.intersection(compression_params or {})
         if reserved_keys:
             verbose_proxy_logger.warning(
@@ -808,10 +795,9 @@ class CompresrGuardrail(CustomGuardrail):
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as e:
-            # The shared handler calls raise_for_status(), so a non-2xx reply
-            # arrives here rather than as a returned Response — and the raised
-            # error carries the upstream body and our request headers (API key).
-            # Route it through the fail policy so none of that reaches the client.
+            # The shared handler calls raise_for_status(), so a non-2xx reply arrives
+            # here as an error carrying the upstream body + our API key header; route
+            # it through the fail policy so none of that reaches the client.
             resp = getattr(e, "response", None)
             self._handle_compress_failure(
                 "Compresr compression service returned an error",
@@ -822,11 +808,9 @@ class CompresrGuardrail(CustomGuardrail):
             )
             return None
         except (httpx.RequestError, litellm.Timeout) as e:
-            # Every request-side httpx failure (connect, timeout, transport,
-            # redirect loops, response-decoding) is a RequestError; route the
-            # whole class through the fail policy so none escapes as a 500 when
-            # fail_open is configured. HTTPStatusError is handled above and is
-            # not a RequestError, so it is not swallowed here.
+            # Every request-side httpx failure is a RequestError; route the whole
+            # class through the fail policy so none escapes as a 500 under fail_open.
+            # (HTTPStatusError is handled above and is not a RequestError.)
             self._handle_compress_failure(
                 "Compresr compression service request failed",
                 {"detail": str(e)},
@@ -1019,17 +1003,14 @@ class CompresrGuardrail(CustomGuardrail):
         if results is None:  # service failed, fail_open configured
             return inputs
 
-        # Recovery needs a per-tenant store key. Without a caller scope (proxy
-        # runs without per-key auth) the store key would fall back to the
-        # client-settable call id, letting one caller retrieve another's
-        # originals by reusing the id; skip retrieval instead.
+        # Recovery needs a per-tenant scope; without per-key auth the key would fall
+        # back to the client-settable call id (cross-tenant reads), so skip it.
         store_key = _scoped_store_key(logging_obj)
         scope = _caller_scope(logging_obj)
         recovery_enabled = self.enable_retrieval and store_key is not None and bool(scope)
         if self.enable_retrieval and not scope and not self._warned_no_scope_recovery:
-            # Surface the silent no-recovery case once: retrieval is requested but
-            # this request has no per-key auth scope, so content is compressed with
-            # no way for the model to recover the originals.
+            # Surface the silent no-recovery case once (compressed, but no auth
+            # scope to inject the retrieve tool).
             self._warned_no_scope_recovery = True
             verbose_proxy_logger.warning(
                 "Compresr: enable_retrieval is on but this request has no per-key auth scope; "
@@ -1039,11 +1020,9 @@ class CompresrGuardrail(CustomGuardrail):
 
         applied = self._apply_compression_results(messages, targets, contexts, results, recovery_enabled)
         if applied.messages_compressed == 0:
-            # Nothing was replaced. Return the original inputs object: handlers
-            # detect guardrail edits by identity, and a fresh structured_messages
-            # list would force a full write-back of an untouched request (on
-            # Anthropic that reconversion strips cache_control from thinking
-            # blocks).
+            # Nothing replaced: return the original inputs object (handlers detect
+            # edits by identity; a fresh list forces write-back that strips Anthropic
+            # cache_control from thinking blocks).
             verbose_proxy_logger.debug("Compresr: service returned no compressed content; request unchanged")
             return inputs
 
