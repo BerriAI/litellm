@@ -1974,97 +1974,7 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
-            if self.sent_last_chunk is True:
-                # log the final chunk with accurate streaming values
-                try:
-                    complete_streaming_response = litellm.stream_chunk_builder(
-                        chunks=self.chunks,
-                        messages=self.messages,
-                        logging_obj=self.logging_obj,
-                    )
-                except Exception as e:
-                    # see sync __next__: a raise from stream_chunk_builder inside this
-                    # except handler escapes __anext__ and drops the request from SpendLogs.
-                    # Recover best-effort usage from the raw chunks so cost is still tracked
-                    verbose_logger.warning(
-                        "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
-                        str(e),
-                    )
-                    try:
-                        complete_streaming_response = self.model_response_creator(
-                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
-                        )
-                    except Exception:
-                        complete_streaming_response = None
-
-                response = self.model_response_creator()
-                if complete_streaming_response is not None:
-                    setattr(
-                        response,
-                        "usage",
-                        getattr(complete_streaming_response, "usage"),
-                    )
-                    try:
-                        _copy = complete_streaming_response.model_copy(deep=True)
-                    except RuntimeError:
-                        _copy = complete_streaming_response.model_copy()
-                    asyncio.create_task(
-                        self.async_cache_streaming_response(
-                            processed_chunk=_copy,
-                            cache_hit=cache_hit,
-                        )
-                    )
-                # Update hidden_params with final usage from
-                # stream_chunk_builder (see sync __next__ for full comment).
-                if (
-                    self.stream_options is None
-                    and complete_streaming_response is not None
-                    and self._last_returned_hidden_params is not None
-                ):
-                    final_usage = getattr(complete_streaming_response, "usage", None)
-                    if final_usage is not None:
-                        self._last_returned_hidden_params["usage"] = final_usage
-
-                if self.sent_stream_usage is False and self.send_stream_usage is True:
-                    self.sent_stream_usage = True
-                    return response
-
-                _deferred_cb = getattr(
-                    self.logging_obj,
-                    "_on_deferred_stream_complete",
-                    None,
-                )
-                if _deferred_cb is not None:
-                    # Proxy has post-call guardrails. Store the assembled
-                    # response so the outer streaming consumer
-                    # (ProxyLogging.async_post_call_streaming_iterator_hook)
-                    # can fire the deferred callback AFTER all guardrail
-                    # end-of-stream blocks complete.  Scheduling here via
-                    # create_task would race with unified_guardrail's
-                    # end-of-stream block for short-stream providers.
-                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
-                        complete_streaming_response,
-                        cache_hit,
-                    )
-                else:
-                    # prefer_async_handlers routes CustomLogger to async_success_handler
-                    # when consumers use ``async for`` on sync-SDK streams. Legacy string
-                    # callbacks still run via executor.submit inside dispatch_success_handlers.
-                    asyncio.create_task(
-                        self.logging_obj.dispatch_success_handlers(
-                            complete_streaming_response,
-                            cache_hit=cache_hit,
-                            start_time=None,
-                            end_time=None,
-                            prefer_async_handlers=True,
-                        )
-                    )
-
-                raise StopAsyncIteration  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                return processed_chunk
+            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
@@ -2079,20 +1989,120 @@ class CustomStreamWrapper:
                 # Handle any exceptions that might occur during streaming
                 asyncio.create_task(self.logging_obj.async_failure_handler(e, traceback_exception))
             self._handle_stream_fallback_error(e)
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            if self.received_finish_reason is None:
+                self._log_stream_failure_and_raise(e)
+            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            traceback_exception = traceback.format_exc()
-            if self.logging_obj is not None:
-                self._record_partial_usage_for_failure()
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.failure_handler,
-                    args=(e, traceback_exception),
-                ).start()  # log response
-                # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
-                    self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+            self._log_stream_failure_and_raise(e)
+
+    async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        if self.sent_last_chunk is True:
+            # log the final chunk with accurate streaming values
+            try:
+                complete_streaming_response = litellm.stream_chunk_builder(
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
-            self._handle_stream_fallback_error(e)
+            except Exception as e:
+                # see sync __next__: a raise from stream_chunk_builder inside this
+                # except handler escapes __anext__ and drops the request from SpendLogs.
+                # Recover best-effort usage from the raw chunks so cost is still tracked
+                verbose_logger.warning(
+                    "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
+                    str(e),
+                )
+                try:
+                    complete_streaming_response = self.model_response_creator(
+                        chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                    )
+                except Exception:
+                    complete_streaming_response = None
+
+            response = self.model_response_creator()
+            if complete_streaming_response is not None:
+                setattr(
+                    response,
+                    "usage",
+                    getattr(complete_streaming_response, "usage"),
+                )
+                try:
+                    _copy = complete_streaming_response.model_copy(deep=True)
+                except RuntimeError:
+                    _copy = complete_streaming_response.model_copy()
+                asyncio.create_task(
+                    self.async_cache_streaming_response(
+                        processed_chunk=_copy,
+                        cache_hit=cache_hit,
+                    )
+                )
+            # Update hidden_params with final usage from
+            # stream_chunk_builder (see sync __next__ for full comment).
+            if (
+                self.stream_options is None
+                and complete_streaming_response is not None
+                and self._last_returned_hidden_params is not None
+            ):
+                final_usage = getattr(complete_streaming_response, "usage", None)
+                if final_usage is not None:
+                    self._last_returned_hidden_params["usage"] = final_usage
+
+            if self.sent_stream_usage is False and self.send_stream_usage is True:
+                self.sent_stream_usage = True
+                return response
+
+            _deferred_cb = getattr(
+                self.logging_obj,
+                "_on_deferred_stream_complete",
+                None,
+            )
+            if _deferred_cb is not None:
+                # Proxy has post-call guardrails. Store the assembled
+                # response so the outer streaming consumer
+                # (ProxyLogging.async_post_call_streaming_iterator_hook)
+                # can fire the deferred callback AFTER all guardrail
+                # end-of-stream blocks complete.  Scheduling here via
+                # create_task would race with unified_guardrail's
+                # end-of-stream block for short-stream providers.
+                self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                    complete_streaming_response,
+                    cache_hit,
+                )
+            else:
+                # prefer_async_handlers routes CustomLogger to async_success_handler
+                # when consumers use ``async for`` on sync-SDK streams. Legacy string
+                # callbacks still run via executor.submit inside dispatch_success_handlers.
+                asyncio.create_task(
+                    self.logging_obj.dispatch_success_handlers(
+                        complete_streaming_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                        prefer_async_handlers=True,
+                    )
+                )
+
+            raise StopAsyncIteration  # Re-raise StopIteration
+        else:
+            self.sent_last_chunk = True
+            processed_chunk = self.finish_reason_handler()
+            return processed_chunk
+
+    def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+        traceback_exception = traceback.format_exc()
+        if self.logging_obj is not None:
+            self._record_partial_usage_for_failure()
+            ## LOGGING
+            threading.Thread(
+                target=self.logging_obj.failure_handler,
+                args=(e, traceback_exception),
+            ).start()  # log response
+            # Handle any exceptions that might occur during streaming
+            asyncio.create_task(
+                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+            )
+        self._handle_stream_fallback_error(e)
 
     def _record_partial_usage_for_failure(self) -> None:
         """
