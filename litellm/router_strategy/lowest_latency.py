@@ -73,6 +73,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
@@ -262,6 +269,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
