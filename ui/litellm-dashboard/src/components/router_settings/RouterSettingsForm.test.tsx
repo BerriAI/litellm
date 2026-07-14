@@ -171,4 +171,39 @@ describe("RouterSettingsForm", () => {
       }),
     );
   });
+
+  it("should not show the Default LiteLLM Params section before router_settings has loaded", () => {
+    render(<RouterSettingsForm {...baseProps} />);
+    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
+  });
+
+  it("should show the Default LiteLLM Params section once router_settings has loaded", () => {
+    const props = {
+      ...baseProps,
+      value: { ...defaultValue, routerSettings: { default_litellm_params: { timeout: 30 } } },
+    };
+    render(<RouterSettingsForm {...props} />);
+    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
+  });
+
+  it("should call onChange with the updated default_litellm_params when the section changes", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps,
+      onChange,
+      value: { ...defaultValue, routerSettings: { default_litellm_params: { timeout: 30 } } },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerSettings: expect.objectContaining({
+          default_litellm_params: { timeout: 30, cache_control_injection_points: [{ location: "message" }] },
+        }),
+      }),
+    );
+  });
 });
