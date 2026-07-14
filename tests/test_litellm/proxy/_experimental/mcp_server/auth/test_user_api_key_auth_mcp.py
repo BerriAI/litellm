@@ -6255,9 +6255,17 @@ class TestUserSubjectTeamUnion:
         ):
             yield
 
+    @staticmethod
+    def _admitted_subject(user_id):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_ADMITTED_USER_SUBJECT_METADATA,
+        )
+
+        return UserAPIKeyAuth(user_id=user_id, api_key=None, metadata={MCP_ADMITTED_USER_SUBJECT_METADATA: True})
+
     async def test_keyless_user_unions_servers_across_all_their_teams(self):
         teams = {"team-a": self._team("team-a", ["srv1", "srv2"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
-        auth = UserAPIKeyAuth(user_id="sso-user", api_key=None)
+        auth = self._admitted_subject("sso-user")
         with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
         assert set(result) == {"srv1", "srv2", "srv3"}
@@ -6281,7 +6289,7 @@ class TestUserSubjectTeamUnion:
         assert set(result) == {"srv1"}
 
     async def test_keyless_user_with_no_teams_gets_nothing_from_teams(self):
-        auth = UserAPIKeyAuth(user_id="lonely-user", api_key=None)
+        auth = self._admitted_subject("lonely-user")
         with self._patch(teams_by_id={}, user_teams=[]):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
         assert result == []
@@ -6301,14 +6309,28 @@ class TestUserSubjectTeamUnion:
         assert await MCPRequestHandler._team_ids_for_mcp_grant(
             UserAPIKeyAuth(api_key="sk", team_id="t1", user_id="u")
         ) == ["t1"]
-        # keyless user-subject, no team -> resolved from user record
+        # keyless subject admitted by the gateway/bridge path (marked), no team -> resolved from record
         with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
-            assert await MCPRequestHandler._team_ids_for_mcp_grant(
-                UserAPIKeyAuth(api_key=None, user_id="u")
-            ) == ["t2", "t3"]
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(self._admitted_subject("u")) == ["t2", "t3"]
         # keyless, no user_id -> nothing
         assert await MCPRequestHandler._team_ids_for_mcp_grant(UserAPIKeyAuth(api_key=None)) == []
+        # keyless with a user_id but NOT admission-marked (JWT auth) -> nothing (unchanged behavior)
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(
+                UserAPIKeyAuth(api_key=None, user_id="jwt-user")
+            ) == []
         # UI sentinel -> nothing
         assert await MCPRequestHandler._team_ids_for_mcp_grant(
             UserAPIKeyAuth(api_key="sk", team_id=UI_TEAM_ID, user_id="u")
         ) == []
+
+    async def test_jwt_keyless_user_without_team_claim_does_not_union(self):
+        """Regression for the review finding: a JWT-authenticated caller is also keyless with a
+        user_id and (with no team claim) no team_id, but it is NOT admission-marked, so it must
+        keep its prior behavior of inheriting no team grants rather than silently gaining the
+        union across every team the user belongs to."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        jwt_auth = UserAPIKeyAuth(user_id="jwt-user", api_key=None)  # no admission marker
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(jwt_auth)
+        assert result == []
