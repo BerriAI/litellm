@@ -93,6 +93,56 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     assert "Failed to get API key" in str(excinfo.value)
 
 
+def test_github_copilot_config_get_openai_compatible_provider_info_explicit_api_key():
+    """An explicit api_key must be honored instead of the account's own Authenticator.
+
+    This lets multiple GitHub Copilot accounts be run behind a single LiteLLM
+    instance (one deployment per account, each with its own api_key), the same
+    way api_base is already overridable. Before this behavior existed, a
+    deployment's explicit api_key was silently ignored in favor of whichever
+    account GITHUB_COPILOT_TOKEN_DIR pointed at.
+    """
+
+    config = GithubCopilotConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = (
+        "https://api.enterprise.githubcopilot.com"
+    )
+
+    explicit_api_key = "gh.explicit-account-key-456"
+    (
+        _,
+        dynamic_api_key,
+        _,
+    ) = config._get_openai_compatible_provider_info(
+        model="github_copilot/gpt-4",
+        api_base=None,
+        api_key=explicit_api_key,
+        custom_llm_provider="github_copilot",
+    )
+
+    assert dynamic_api_key == explicit_api_key
+    config.authenticator.get_api_key.assert_not_called()
+
+    # Even if the account's own Authenticator is completely broken, an
+    # explicit api_key must still get through rather than raising.
+    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
+        message="Failed to get API key",
+        status_code=401,
+    )
+    (
+        _,
+        dynamic_api_key,
+        _,
+    ) = config._get_openai_compatible_provider_info(
+        model="github_copilot/gpt-4",
+        api_base=None,
+        api_key=explicit_api_key,
+        custom_llm_provider="github_copilot",
+    )
+    assert dynamic_api_key == explicit_api_key
+
+
 @patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
 @patch("litellm.main.openai_chat_completions.completion")
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
@@ -145,6 +195,51 @@ def test_completion_github_copilot_mock_response(
     assert "headers" in kwargs
     assert kwargs.get("model") == "gpt-4"
     assert kwargs.get("messages") == messages
+
+
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
+@patch("litellm.main.openai_chat_completions.completion")
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
+def test_completion_github_copilot_explicit_api_key_bypasses_authenticator(
+    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch
+):
+    """An explicit api_key on the completion call must reach the outgoing
+    Authorization header even if the account's own Authenticator is
+    completely broken. This is what lets a second GitHub Copilot account's
+    deployment keep working even if the first account's Authenticator fails.
+    """
+
+    monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
+
+    mock_get_api_key.side_effect = GetAPIKeyError(
+        message="Failed to get API key",
+        status_code=401,
+    )
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "Hello from the second account!"
+    mock_class_completion.return_value = mock_response
+    mock_instance_completion.return_value = mock_response
+
+    explicit_api_key = "gh.second-account-key-789"
+
+    response = completion(
+        model="github_copilot/gpt-4",
+        messages=[{"role": "user", "content": "Hello, who are you?"}],
+        api_key=explicit_api_key,
+    )
+
+    assert response is not None
+
+    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
+    assert len(invoked) == 1
+    _, kwargs = invoked[0].call_args
+    assert kwargs["api_key"] == explicit_api_key
+    assert (
+        kwargs["optional_params"]["extra_headers"]["Authorization"]
+        == f"Bearer {explicit_api_key}"
+    )
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
