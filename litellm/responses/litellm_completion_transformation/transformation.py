@@ -74,13 +74,9 @@ from .custom_tools import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
-# Sibling cache to TOOL_CALLS_CACHE: preserves any assistant text content that
-# accompanied a tool_call, keyed by tool_call_id. TOOL_CALLS_CACHE only stores
-# the tool_call itself (id/type/function), so a lone `function_call_output`
-# reconstructed purely from TOOL_CALLS_CACHE (no DB session available - see
-# `_transform_responses_api_tool_call_output_to_chat_completion_message`)
-# would otherwise silently drop any text the assistant said alongside the
-# tool call (e.g. "Let me look that up...").
+# Sibling cache to TOOL_CALLS_CACHE, keyed by tool_call_id: preserves the
+# assistant text content that accompanied the tool call (see
+# `_transform_responses_api_tool_call_output_to_chat_completion_message`).
 TOOL_CALL_CONTENT_CACHE = InMemoryCache()
 
 
@@ -322,6 +318,22 @@ class LiteLLMCompletionResponsesConfig:
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
+
+        When ``previous_response_id`` is set, ``_messages`` (the new
+        follow-up input, e.g. a bare ``function_call_output``) is merged with
+        ``session_messages`` (history reconstructed from the spend-logs DB).
+        Transforming a lone ``function_call_output`` independently
+        reconstructs a synthetic assistant ``tool_calls`` message from
+        ``TOOL_CALLS_CACHE`` so the tool result isn't orphaned - see
+        ``_transform_responses_api_tool_call_output_to_chat_completion_message``.
+        That reconstruction has no visibility into ``session_messages``, so if
+        the DB session *also* already contains the assistant message for the
+        same ``tool_call_id``, naively concatenating the two produces two
+        back-to-back assistant messages for the same tool_use id, with the
+        real ``tool_result`` immediately after only the second one - which
+        Anthropic rejects with: "tool_use ids were found without tool_result
+        blocks immediately after". We drop the redundant, cache-reconstructed
+        assistant message(s) before combining to avoid this.
         """
         chat_completion_session = ChatCompletionSession(messages=[], litellm_session_id=None)
         if previous_response_id:
@@ -338,28 +350,8 @@ class LiteLLMCompletionResponsesConfig:
         # Store original _messages before combining for safety check
         original_new_messages = _messages.copy() if _messages else []
 
-        # Fix: Avoid duplicate assistant tool_use messages when the session (DB)
-        # already supplies the assistant message for a given tool_call_id.
-        #
-        # `_messages` is built independently from the new follow-up input (e.g.
-        # a bare `function_call_output` for an MCP/tool follow-up call). When
-        # transforming a lone `function_call_output`, `TOOL_CALLS_CACHE` (a
-        # same-process, in-memory cache populated when the original tool_call
-        # was first returned) is used to reconstruct a synthetic assistant
-        # `tool_calls` message so the tool result isn't orphaned - see
-        # `_transform_responses_api_tool_call_output_to_chat_completion_message`.
-        #
-        # That reconstruction has no visibility into `session_messages` (the
-        # conversation history reconstructed from the spend-logs DB for
-        # `previous_response_id`). If the DB session *also* already contains
-        # the assistant message for that same tool_call_id, concatenating the
-        # two produces two back-to-back assistant messages for the same
-        # tool_use id, with the real `tool_result` immediately after only the
-        # *second* one - which Anthropic rejects with: "tool_use ids were
-        # found without tool_result blocks immediately after".
-        #
-        # Drop the redundant assistant message(s) from `_messages` whose
-        # tool_call_id already appears in `session_messages` before combining.
+        # Drop assistant messages in `_messages` whose tool_call_id duplicates
+        # one already in `session_messages` (see docstring above).
         existing_tool_call_ids = LiteLLMCompletionResponsesConfig._collect_assistant_tool_call_ids(session_messages)
         if existing_tool_call_ids:
             _messages = LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
@@ -999,6 +991,15 @@ class LiteLLMCompletionResponsesConfig:
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
+
+        A lone `function_call_output` (no accompanying `function_call` item
+        in the same input, e.g. an MCP/tool follow-up call using
+        `previous_response_id`) has no assistant tool_use message to pair
+        with. We reconstruct one from `TOOL_CALLS_CACHE` /
+        `TOOL_CALL_CONTENT_CACHE` (populated in
+        `transform_chat_completion_tools_to_responses_tools` when the tool
+        call was first returned) so the tool result isn't orphaned, and so
+        any assistant text that accompanied the tool call isn't lost.
         """
         call_id = tool_call_output.get("call_id")
         # If call_id is missing or empty, skip this message
@@ -1124,10 +1125,6 @@ class LiteLLMCompletionResponsesConfig:
             chat_completion_response_message = ChatCompletionResponseMessage(
                 tool_calls=[tool_call_chunk],
                 role="assistant",
-                # Restore any assistant text that accompanied this tool call
-                # (e.g. "Let me look that up...") so it isn't silently
-                # dropped when reconstructing purely from cache (no DB
-                # session available yet for `previous_response_id`).
                 content=TOOL_CALL_CONTENT_CACHE.get_cache(key=tool_call_output.get("call_id") or ""),
             )
             return [chat_completion_response_message, tool_output_message]
@@ -1444,6 +1441,11 @@ class LiteLLMCompletionResponsesConfig:
         For custom tools (e.g. apply_patch), returns CustomToolCallOutputItem
         with ``type="custom_tool_call"``. For regular function tools, returns
         ``ResponseFunctionToolCall`` with ``type="function_call"``.
+
+        Also populates TOOL_CALLS_CACHE / TOOL_CALL_CONTENT_CACHE for each
+        tool_call, so a later bare `function_call_output` can be reconstructed
+        into a full assistant message - see
+        `_transform_responses_api_tool_call_output_to_chat_completion_message`.
         """
         all_chat_completion_tools: list[ChatCompletionMessageToolCall] = []
         for choice in chat_completion_response.choices:
@@ -1456,11 +1458,6 @@ class LiteLLMCompletionResponsesConfig:
                             key=tool_call.id,
                             value=tool_call,
                         )
-                        # Preserve any assistant text that accompanied the
-                        # tool call(s) so a later reconstruction from cache
-                        # alone (no DB session yet - see
-                        # `_transform_responses_api_tool_call_output_to_chat_completion_message`)
-                        # doesn't silently drop it.
                         if message_content:
                             TOOL_CALL_CONTENT_CACHE.set_cache(
                                 key=tool_call.id,
