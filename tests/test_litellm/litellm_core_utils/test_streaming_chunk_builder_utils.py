@@ -956,3 +956,56 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
     assert response.model_dump()["vertex_ai_grounding_metadata"] == [
         {"webSearchQueries": ["test query"]}
     ]
+
+
+@pytest.mark.parametrize("tool_call_id", ["", None])
+def test_get_combined_tool_content_missing_id(tool_call_id):
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-8478099a-3724-42c7-9194-88d97ffd254b",
+            created=1744771912,
+            model="llama-3.3-70b-versatile",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=None,
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id=tool_call_id,
+                                function=Function(
+                                    arguments='{"location": "San Francisco", "unit": "imperial"}',
+                                    name="get_current_weather",
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            stream_options=None,
+        ),
+    ]
+    chunk_processor = ChunkProcessor(chunks=chunks)
+
+    tool_calls_list = chunk_processor.get_combined_tool_content(chunks)
+
+    assert len(tool_calls_list) == 1
+    assert tool_calls_list[0].function.name == "get_current_weather"
+    assert tool_calls_list[0].function.arguments == '{"location": "San Francisco", "unit": "imperial"}'
+    assert isinstance(tool_calls_list[0].id, str) and len(tool_calls_list[0].id) > 0
+
+    response = stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "whats the weather"}])
+    assert response.choices[0].message.tool_calls is not None
+    assert len(response.choices[0].message.tool_calls) == 1
+    assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
