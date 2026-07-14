@@ -167,6 +167,47 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
+    def _transform_tool_choice_for_responses_api_response(
+        tool_choice: Any,
+    ) -> str | dict[str, Any] | None:
+        """
+        Transform tool_choice into the shape the Responses API's own
+        ``ResponsesAPIResponse.tool_choice`` field accepts.
+
+        This is the inverse of ``_transform_tool_choice``: that function
+        converts an incoming Responses-API-shaped tool_choice into Chat
+        Completion format so it can be sent to the provider. But the
+        streaming iterator also needs a tool_choice value to echo back on
+        the synthetic ``response.created``/``response.in_progress`` events,
+        and those events are validated against the Responses API schema, not
+        the Chat Completion one. Reusing the Chat-Completion-shaped value
+        there fails validation for a forced named tool call, since OpenAI's
+        Responses API ``ToolChoiceFunctionParam`` is the flat
+        ``{"type": "function", "name": "..."}``, not Chat Completion's
+        nested ``{"type": "function", "function": {"name": "..."}}``.
+
+        Handles:
+        - String values: "auto", "none", "required" -> pass through as-is
+        - Chat Completion nested function format:
+            - {"type": "function", "function": {"name": "..."}} -> {"type": "function", "name": "..."}
+        - Already-flat Responses API format: pass through as-is
+        """
+        if tool_choice is None:
+            return None
+
+        if isinstance(tool_choice, str):
+            return tool_choice
+
+        if isinstance(tool_choice, dict):
+            if tool_choice.get("type") == "function":
+                function_name = tool_choice.get("function", {}).get("name") or tool_choice.get("name")
+                if function_name:
+                    return {"type": "function", "name": function_name}
+
+        # Return as-is for unknown formats
+        return tool_choice
+
+    @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
         """
         A Responses ``web_search`` built-in tool is derived into a ``web_search_options`` param.
@@ -1617,7 +1658,10 @@ class LiteLLMCompletionResponsesConfig:
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
-            tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
+            tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                getattr(chat_completion_response, "tool_choice", "auto")
+            )
+            or "auto",
             tools=getattr(chat_completion_response, "tools", []),
             top_p=getattr(chat_completion_response, "top_p", None),
             max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
