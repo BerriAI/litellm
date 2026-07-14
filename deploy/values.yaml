@@ -21,6 +21,10 @@ app:
     PROXY_BASE_URL: https://llm-proxy.bitovi-tools.com
     ALLOWED_EMAIL_DOMAINS: bitovi.com
     LITELLM_USE_SHORT_MCP_TOOL_PREFIX: "true"
+    # Disable load_dotenv in the container (prod best practice).
+    LITELLM_MODE: PRODUCTION
+    # Prefer prisma migrate deploy across upgrades.
+    USE_PRISMA_MIGRATE: "True"
     # The Bitnami valkey chart names its Service <releaseName>-primary in
     # standalone mode - there is no bare "claude-usage-proxy-valkey" Service.
     REDIS_HOST: claude-usage-proxy-valkey-primary
