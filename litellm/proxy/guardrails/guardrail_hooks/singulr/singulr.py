@@ -127,7 +127,7 @@ class SingulrGuardrail(CustomGuardrail):
     ) -> dict[str, Any]:
         singulr_request = SingulrGuardrailRequest(
             model=inputs.get("model") or request_data.get("model"),
-            prompts=self._extract_texts_by_role(inputs, ("user", "system")) if input_type == "request" else None,
+            prompts=inputs.get("texts") or [] if input_type == "request" else None,
             completions=self._extract_texts_by_role(inputs, ("assistant",)) if input_type == "response" else None,
             tools=inputs.get("tools") or [],
             tool_calls=cast(Optional[List[ChatCompletionMessageToolCall]], inputs.get("tool_calls")) or [],
