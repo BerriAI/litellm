@@ -460,7 +460,12 @@ class TestBedrockMantleResponsesRegistry:
             model="xai.grok-4.3",
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
-        assert cfg.use_openai_path is False
+        # grok-4.3 is a third-party frontier model on Bedrock Mantle, served on the
+        # /openai/v1 base (like gpt-5.x / gemma-4), not the standard /v1 path used by
+        # open-weights models such as gpt-oss. The standard /v1 base returns
+        # "Berm is not enabled for this account", so the price-map entry carries
+        # use_openai_responses_path=true.
+        assert cfg.use_openai_path is True
 
     def test_unmapped_frontier_model_falls_through_to_none(self, restore_model_cost):
         # The gate is data-driven, not name-based: an unseen model not yet in the
