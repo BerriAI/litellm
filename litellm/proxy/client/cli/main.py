@@ -18,6 +18,7 @@ from .commands.keys import keys
 # local imports
 from .commands.models import models
 from .commands.teams import teams
+from .commands.up import down, up
 from .commands.users import users
 from .interface import interactive_shell
 
@@ -131,6 +132,9 @@ cli.add_command(users)
 # Add a top-level command per coding agent (claude, codex, opencode, ...)
 for agent_command in agent_commands():
     cli.add_command(agent_command)
+# Add the up/down commands (route Claude Code through the local LiteLLM proxy)
+cli.add_command(up)
+cli.add_command(down)
 
 
 if __name__ == "__main__":

@@ -471,6 +471,24 @@ The token minted by `lite login` is a short-lived, per-session agent credential,
 
 The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
+### Route Every Claude Code Session Through the Proxy
+
+`lite claude` wraps a single invocation, but `lite up` goes further: it patches `~/.claude/settings.json`, Claude Code's own config file, so that every Claude Code session started afterward -- from any terminal, launched normally with just `claude`, no wrapper needed -- routes through your LiteLLM proxy. It sets `env.ANTHROPIC_BASE_URL` to the proxy URL and `apiKeyHelper` to a `lite auth print-token` invocation, drops any stray static `ANTHROPIC_API_KEY` so the helper-issued token wins, and leaves every other setting in the file untouched. It backs up the original file before patching it.
+
+Two things need to already be true: you've run `lite login`, since the apiKeyHelper depends on that stored token, and the proxy is already reachable, since `lite up` does not start one for you.
+
+```bash
+lite login
+litellm --config litellm/proxy/dev_config.yaml &
+lite up
+```
+
+`lite up` runs in the foreground and blocks. Press Ctrl-C to stop it, which restores the original settings file and exits. If the process is ever killed uncleanly instead -- `kill -9`, a crash -- the settings file is left patched, and `lite down` is the manual recovery path: run it at any later point to restore from the same backup.
+
+This is a one-time file patch and restore, not a live traffic interceptor. A Claude Code session already running before `lite up` started keeps whatever `ANTHROPIC_BASE_URL` and token it loaded at its own startup, and a session still running when `lite up` stops keeps routing through the proxy until it exits; only sessions *started* while the patch is in effect are affected, and only *new* sessions after a restore go back to Anthropic directly.
+
+Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:
