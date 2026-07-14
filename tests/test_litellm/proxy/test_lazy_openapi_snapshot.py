@@ -1,3 +1,4 @@
+import importlib
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -23,27 +24,31 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
     fake_app = SimpleNamespace(
         title="LiteLLM test",
         version="0.0.0",
-        routes=[route_a, route_b],
+        routes=[],
     )
 
-    fake_feature_a_module = ModuleType("fake_feature_a")
-    fake_feature_b_module = ModuleType("fake_feature_b")
-    monkeypatch.setitem(sys.modules, "fake_feature_a", fake_feature_a_module)
-    monkeypatch.setitem(sys.modules, "fake_feature_b", fake_feature_b_module)
+    # resolve the fakes through import_module rather than seeding sys.modules: a module
+    # already loaded when registration begins is treated as already registered
+    fakes = {"fake_feature_a": ModuleType("fake_feature_a"), "fake_feature_b": ModuleType("fake_feature_b")}
+    real_import_module = importlib.import_module
+    monkeypatch.setattr(
+        importlib, "import_module", lambda name, *a, **kw: fakes.get(name) or real_import_module(name, *a, **kw)
+    )
 
+    # a feature owns the routes its own registration adds to the app
     fake_lazy_features_module = ModuleType("litellm.proxy._lazy_features")
     fake_lazy_features_module.LAZY_FEATURES = [
         SimpleNamespace(
             name="feature-a",
             module_path="fake_feature_a",
             path_prefixes=("/feature-a",),
-            register_fn=lambda app, module: None,
+            register_fn=lambda app, module: app.routes.append(route_a),
         ),
         SimpleNamespace(
             name="feature-b",
             module_path="fake_feature_b",
             path_prefixes=("/feature-b",),
-            register_fn=lambda app, module: None,
+            register_fn=lambda app, module: app.routes.append(route_b),
         ),
     ]
     monkeypatch.setitem(sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module)
@@ -77,6 +82,54 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
     assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["operationId"] == "shared_operation_id_get_2"
     assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["tags"] == ["feature-a"]
     assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == ["feature-b"]
+
+
+def test_generate_snapshot_keeps_routes_that_sit_outside_the_declared_prefixes(monkeypatch):
+    """Regression: fragments used to be built by matching routes against feat.path_prefixes.
+
+    A feature can register routes outside its own prefixes (MCP owns /{mcp_server_name}/token
+    and the /v1/mcp/oauth/* routes), and those were silently dropped from the snapshot, so
+    /openapi.json never advertised them. A feature owns whatever its registration adds.
+    """
+    from litellm.proxy import _lazy_openapi_snapshot
+
+    off_prefix_route = SimpleNamespace(path="/{server_name}/token")
+    fake_app = SimpleNamespace(title="LiteLLM test", version="0.0.0", routes=[])
+
+    fake_module = ModuleType("fake_mcp")
+    real_import_module = importlib.import_module
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        lambda name, *a, **kw: fake_module if name == "fake_mcp" else real_import_module(name, *a, **kw),
+    )
+
+    fake_lazy_features_module = ModuleType("litellm.proxy._lazy_features")
+    fake_lazy_features_module.LAZY_FEATURES = [
+        SimpleNamespace(
+            name="mcp",
+            module_path="fake_mcp",
+            path_prefixes=("/mcp",),  # the route it registers does not start with this
+            register_fn=lambda app, module: app.routes.append(off_prefix_route),
+        )
+    ]
+    monkeypatch.setitem(sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module)
+
+    fake_proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    fake_proxy_server_module.app = fake_app
+    fake_proxy_server_module.ensure_unique_openapi_operation_ids = lambda schema, reserved: schema
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy_server_module)
+    monkeypatch.setattr(
+        "fastapi.openapi.utils.get_openapi",
+        lambda title, version, routes: {
+            "paths": {r.path: {"get": {"operationId": "op_get"}} for r in routes},
+            "components": {"schemas": {}},
+        },
+    )
+
+    fragments = _lazy_openapi_snapshot.generate_snapshot()
+
+    assert "/{server_name}/token" in fragments["mcp"]["paths"]
 
 
 def test_normalize_operation_ids_uses_each_http_method():

@@ -15317,6 +15317,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/a2a/{agent_id}/message/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Agent A2A
+         * @description Invoke an agent using the A2A protocol (JSON-RPC 2.0).
+         *
+         *     Supported methods:
+         *     - message/send: Send a message and get a response
+         *     - message/stream: Send a message and stream the response
+         */
+        post: operations["invoke_agent_a2a_v1_a2a__agent_id__message_send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/access_group": {
         parameters: {
             query?: never;
@@ -20404,6 +20428,23 @@ export interface paths {
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
         trace?: never;
     };
+    "/{mcp_server_name}/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize */
+        get: operations["authorize__mcp_server_name__authorize_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/{mcp_server_name}/mcp": {
         parameters: {
             query?: never;
@@ -20488,6 +20529,49 @@ export interface paths {
          *     4. MCP access group tag (DB lookup, cached)
          */
         patch: operations["dynamic_mcp_route__mcp_server_name__mcp_patch"];
+        trace?: never;
+    };
+    "/{mcp_server_name}/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Client */
+        post: operations["register_client__mcp_server_name__register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/{mcp_server_name}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Token Endpoint
+         * @description Accept the authorization code from client and exchange it for OAuth token.
+         *     Supports PKCE flow by forwarding code_verifier to upstream provider.
+         *
+         *     1. Call the token endpoint with PKCE parameters
+         *     2. Store the user's token in the db - and generate a LiteLLM virtual key
+         *     3. Return the token
+         *     4. Return a virtual key in this response
+         */
+        post: operations["token_endpoint__mcp_server_name__token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/{provider}/v1/batches": {
@@ -21634,6 +21718,25 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             };
+        };
+        /** Body_token_endpoint__mcp_server_name__token_post */
+        Body_token_endpoint__mcp_server_name__token_post: {
+            /** Client Id */
+            client_id: string;
+            /** Client Secret */
+            client_secret?: string | null;
+            /** Code */
+            code?: string;
+            /** Code Verifier */
+            code_verifier?: string;
+            /** Grant Type */
+            grant_type: string;
+            /** Redirect Uri */
+            redirect_uri?: string;
+            /** Refresh Token */
+            refresh_token?: string | null;
+            /** Scope */
+            scope?: string | null;
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
@@ -53084,6 +53187,37 @@ export interface operations {
             };
         };
     };
+    invoke_agent_a2a_v1_a2a__agent_id__message_send_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_access_groups_v1_access_group_get: {
         parameters: {
             query?: never;
@@ -60782,6 +60916,45 @@ export interface operations {
             };
         };
     };
+    authorize__mcp_server_name__authorize_get: {
+        parameters: {
+            query: {
+                redirect_uri: string;
+                client_id?: string | null;
+                state?: string;
+                code_challenge?: string | null;
+                code_challenge_method?: string | null;
+                response_type?: string | null;
+                scope?: string | null;
+            };
+            header?: never;
+            path: {
+                mcp_server_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     dynamic_mcp_route__mcp_server_name__mcp_get: {
         parameters: {
             query?: never;
@@ -60978,6 +61151,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_client__mcp_server_name__register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    token_endpoint__mcp_server_name__token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_server_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_token_endpoint__mcp_server_name__token_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

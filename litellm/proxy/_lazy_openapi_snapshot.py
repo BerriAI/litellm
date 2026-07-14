@@ -114,6 +114,12 @@ def generate_snapshot(*, strict: bool = False) -> dict[str, dict]:
     A feature whose module fails to import is skipped, which yields an incomplete
     snapshot. That is tolerable when writing the file by hand but not when verifying
     it, so `strict` turns a skip into an error rather than silent drift.
+
+    Each feature's routes are the ones its own registration adds to the app, captured
+    around the register_fn call. Selecting them by path_prefixes instead would drop any
+    route that does not sit under a declared prefix (the MCP OAuth routes, and the
+    /{mcp_server_name}/... catch-alls, live outside theirs) and would double-attribute
+    routes where prefixes overlap (guardrails and policy_engine both own /policies/usage).
     """
     from fastapi.openapi.utils import get_openapi
 
@@ -121,11 +127,16 @@ def generate_snapshot(*, strict: bool = False) -> dict[str, dict]:
     from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
     preloaded = frozenset(sys.modules)
-    skipped = tuple(
-        result
-        for result in (_register_lazy_feature(app, feat, preloaded) for feat in LAZY_FEATURES)
-        if result is not None
-    )
+    routes_by_feature: Dict[str, list] = {}
+    skipped: list = []
+    for feat in LAZY_FEATURES:
+        before = {id(route) for route in app.routes}
+        result = _register_lazy_feature(app, feat, preloaded)
+        if result is not None:
+            skipped.append(result)
+            continue
+        routes_by_feature[feat.name] = [route for route in app.routes if id(route) not in before]
+
     for name, error in skipped:
         sys.stderr.write(f"warning: skip {name}: {error}\n")
     if strict and skipped:
@@ -138,7 +149,7 @@ def generate_snapshot(*, strict: bool = False) -> dict[str, dict]:
     fragments: Dict[str, Dict] = {}
     used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
-        feat_routes = [r for r in app.routes if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)]
+        feat_routes = routes_by_feature.get(feat.name) or []
         if not feat_routes:
             continue
         _stabilize_multi_method_route_ids(feat_routes)
