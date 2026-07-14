@@ -157,7 +157,9 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionResponseMessage,
     FileTypes,
+    GenericChatCompletionMessage,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -190,9 +192,11 @@ from litellm.types.router import (
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    Message,
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -250,6 +254,14 @@ else:
     AdaptiveRouter = Any
     QualityRouter = Any
     PreRoutingHookResponse = Any
+
+PreCallCheckMessage = (
+    AllMessageValues
+    | GenericChatCompletionMessage
+    | ChatCompletionMessageToolCall
+    | ChatCompletionResponseMessage
+    | Message
+)
 
 
 class RoutingArgs(enum.Enum):
@@ -4376,7 +4388,7 @@ class Router:
                 return True
         return False
 
-    def _get_messages_for_pre_call_check(self, model: str, kwargs: Dict[str, Any]) -> Optional[List[Any]]:
+    def _get_messages_for_pre_call_check(self, model: str, kwargs: dict[str, Any]) -> list[PreCallCheckMessage] | None:
         """
         Converts Responses API `input` to `messages` for `_pre_call_checks`, skipping
         the conversion unless a deployment actually has max_input_tokens configured.
@@ -9912,7 +9924,7 @@ class Router:
         )
 
         ## get model group RPM ##
-        model_group_cache: Optional[dict] = None
+        model_group_cache: dict[str, int] | None = None
         if _any_deployment_has_rpm:
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
