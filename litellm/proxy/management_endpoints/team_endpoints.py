@@ -86,6 +86,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
@@ -2888,6 +2889,8 @@ async def team_member_update(
         )
 
     _validate_budget_duration(data.budget_duration)
+    # Reject NaN/±inf spend before it can reach the DB / spend counter.
+    validate_finite_spend(data.spend)
 
     _existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
 
@@ -2967,6 +2970,36 @@ async def team_member_update(
             team_default_budget_id=team_default_budget_id,
         )
 
+    ### reset member spend
+    # spend lives on LiteLLM_TeamMembership, not the budget table that
+    # _upsert_budget_and_membership writes, so persist it directly. Use an
+    # upsert: a spend-only request produces an empty budget_patch, so the
+    # membership row is not guaranteed to exist after the call above. Written
+    # outside the budget tx and followed by a counter invalidation so
+    # enforcement re-reads the new value (reseed-from-DB).
+    if data.spend is not None:
+        await prisma_client.db.litellm_teammembership.upsert(
+            where={
+                "user_id_team_id": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                }
+            },
+            data={
+                "create": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                    "spend": data.spend,
+                },
+                "update": {"spend": data.spend},
+            },
+        )
+        from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+        await _invalidate_spend_counter(
+            counter_key=f"spend:team_member:{received_user_id}:{data.team_id}"
+        )
+
     ### update team member role
     if data.role is not None:
         team_members: List[Member] = []
@@ -2999,6 +3032,7 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+        spend=data.spend,
     )
 
 
