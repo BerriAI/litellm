@@ -36,17 +36,13 @@ const options = ["prompt_caching", "router_budget_limiting", "session_affinity"]
 
 describe("OptionalPreCallChecksSelector", () => {
   it("should render one option per entry in options", () => {
-    render(
-      <OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />,
-    );
+    render(<OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />);
     const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual(options);
   });
 
   it("should display default label when no metadata is provided", () => {
-    render(
-      <OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />,
-    );
+    render(<OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />);
     expect(screen.getByText("Optional Pre-call Checks")).toBeInTheDocument();
   });
 

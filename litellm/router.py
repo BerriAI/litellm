@@ -9706,6 +9706,26 @@ class Router:
         _settings_to_return["routing_groups"] = [group.model_dump() for group in self._routing_groups.values()]
         return _settings_to_return
 
+    def _merge_default_litellm_params_setting(self, value: dict | None) -> None:
+        if value is not None:
+            self.default_litellm_params = {**self.default_litellm_params, **value}
+
+    def _apply_optional_pre_call_checks_setting(self, value: OptionalPreCallChecks | None) -> None:
+        if value is None:
+            return
+        new_checks = [check for check in value if check not in self.optional_pre_call_checks]
+        if new_checks:
+            self.add_optional_pre_call_checks(new_checks)
+
+    # Settings whose update logic doesn't fit `setattr(self, var, value)` (e.g.
+    # merge-not-replace, or side effects beyond storing the value). Dispatched via
+    # a single `var in ...` branch in update_settings so adding an entry here
+    # doesn't grow that function's branch count per field.
+    _CUSTOM_UPDATE_SETTINGS_HANDLERS: dict = {
+        "default_litellm_params": _merge_default_litellm_params_setting,
+        "optional_pre_call_checks": _apply_optional_pre_call_checks_setting,
+    }
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -9756,14 +9776,8 @@ class Router:
                         value = RetryPolicy(**value)
                     if value is None or isinstance(value, RetryPolicy):
                         setattr(self, var, value)
-                elif var == "default_litellm_params":
-                    if kwargs[var] is not None:
-                        self.default_litellm_params = {**self.default_litellm_params, **kwargs[var]}
-                elif var == "optional_pre_call_checks":
-                    if kwargs[var] is not None:
-                        new_checks = [check for check in kwargs[var] if check not in self.optional_pre_call_checks]
-                        if new_checks:
-                            self.add_optional_pre_call_checks(new_checks)
+                elif var in self._CUSTOM_UPDATE_SETTINGS_HANDLERS:
+                    self._CUSTOM_UPDATE_SETTINGS_HANDLERS[var](self, kwargs[var])
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed

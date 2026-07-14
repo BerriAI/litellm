@@ -138,7 +138,10 @@ describe("RouterSettingsForm", () => {
     const props = {
       ...baseProps,
       routerFieldsMetadata: {
-        optional_pre_call_checks: { ui_field_name: "Optional Pre-call Checks", options: ["prompt_caching", "router_budget_limiting"] },
+        optional_pre_call_checks: {
+          ui_field_name: "Optional Pre-call Checks",
+          options: ["prompt_caching", "router_budget_limiting"],
+        },
       },
     };
     render(<RouterSettingsForm {...props} />);

@@ -32223,6 +32223,10 @@ export interface components {
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Default Litellm Params */
+            default_litellm_params?: {
+                [key: string]: unknown;
+            } | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
@@ -32248,6 +32252,8 @@ export interface components {
             } | null;
             /** Num Retries */
             num_retries?: number | null;
+            /** Optional Pre Call Checks */
+            optional_pre_call_checks?: ("prompt_caching" | "router_budget_limiting" | "responses_api_deployment_check" | "deployment_affinity" | "session_affinity" | "forward_client_headers_by_model_group" | "enforce_model_rate_limits" | "encrypted_content_affinity")[] | null;
             /** Retry After */
             retry_after?: number | null;
             retry_policy?: components["schemas"]["RetryPolicy"] | null;
