@@ -1914,3 +1914,27 @@ async def test_recovery_disabled_when_no_caller_scope():
         )
     assert not has_compresr_retrieve_tool(result.get("tools") or [])
     assert guardrail._originals_by_call_id == {}
+
+
+@pytest.mark.asyncio
+async def test_warns_once_when_recovery_skipped_without_scope():
+    # enable_retrieval is on but the request has no per-key auth scope: recovery
+    # is silently skipped, so a call-time warning must surface it (once).
+    guardrail = _make_guardrail()
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "call-abc"
+    logging_obj.model_call_details = {"litellm_params": {"metadata": {}}}
+    mock_post = AsyncMock(return_value=_make_single_compress_response())
+
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        with patch("litellm.proxy.guardrails.guardrail_hooks.compresr.compresr.verbose_proxy_logger") as mock_log:
+            for _ in range(3):
+                await guardrail.apply_guardrail(
+                    inputs=_apply_inputs(AGENT_MESSAGES),
+                    request_data={"model": "gpt-4o"},
+                    input_type="request",
+                    logging_obj=logging_obj,
+                )
+
+    no_scope_warnings = [c for c in mock_log.warning.call_args_list if "no per-key auth scope" in str(c)]
+    assert len(no_scope_warnings) == 1
