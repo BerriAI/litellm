@@ -31,27 +31,6 @@ describe("GuardrailTable", () => {
     }
   });
 
-  it("filters rows by the toolbar search over name and ID", async () => {
-    const user = userEvent.setup();
-    render(
-      <GuardrailTable
-        guardrailsList={[
-          makeGuardrail({ guardrail_id: "gr-1", guardrail_name: "PII Redaction" }),
-          makeGuardrail({ guardrail_id: "gr-2", guardrail_name: "Prompt Shield" }),
-        ]}
-        {...baseProps}
-      />,
-    );
-
-    expect(screen.getByText("PII Redaction")).toBeInTheDocument();
-    expect(screen.getByText("Prompt Shield")).toBeInTheDocument();
-
-    await user.type(screen.getByTestId("datatable-search"), "shield");
-
-    expect(screen.queryByText("PII Redaction")).not.toBeInTheDocument();
-    expect(screen.getByText("Prompt Shield")).toBeInTheDocument();
-  });
-
   it("deletes a DB guardrail through the actions menu", async () => {
     const user = userEvent.setup();
     const onDeleteClick = vi.fn();

@@ -175,7 +175,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                           guardrailsList={guardrailsList}
                           isLoading={isLoading}
                           onDeleteClick={handleDeleteClick}
-                          onGuardrailUpdated={fetchGuardrails}
                           onGuardrailClick={(id) => setSelectedGuardrailId(id)}
                         />
                       )}

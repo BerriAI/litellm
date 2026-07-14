@@ -4,7 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
+import { DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
 import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/types";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -87,7 +87,13 @@ export const getGuardrailTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Guardrail ID" />,
     size: 200,
     enableSorting: true,
-    cell: ({ row }) => <IdCell value={row.original.guardrail_id} onClick={onGuardrailClick} />,
+    cell: ({ row }) => (
+      <IdentityCell
+        title={row.original.guardrail_id}
+        titleClassName="font-mono text-xs font-normal"
+        onClick={() => onGuardrailClick(row.original.guardrail_id)}
+      />
+    ),
   },
   {
     id: "guardrail_name",
@@ -156,7 +162,7 @@ export const getGuardrailTableColumns = ({
   },
   {
     id: "actions",
-    meta: { pinned: "right", className: "text-right", headerClassName: "text-right" },
+    meta: { className: "text-right", headerClassName: "text-right" },
     header: () => <span className="sr-only">Actions</span>,
     size: 64,
     enableSorting: false,
