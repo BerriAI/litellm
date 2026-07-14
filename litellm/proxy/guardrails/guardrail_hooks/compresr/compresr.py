@@ -627,6 +627,8 @@ class CompresrGuardrail(CustomGuardrail):
         self._originals_by_call_id: OrderedDict[str, tuple[dict[str, str], float]] = OrderedDict()
         # Running byte size of the store, kept in sync to enforce the global cap cheaply.
         self._store_total_bytes = 0
+        # One-shot guard so the "recovery skipped, no auth scope" warning fires once.
+        self._warned_no_scope_recovery = False
         if self.enable_retrieval:
             verbose_proxy_logger.warning(
                 "Compresr: enable_retrieval is on; the recovery store is per-process. "
@@ -1024,6 +1026,16 @@ class CompresrGuardrail(CustomGuardrail):
         store_key = _scoped_store_key(logging_obj)
         scope = _caller_scope(logging_obj)
         recovery_enabled = self.enable_retrieval and store_key is not None and bool(scope)
+        if self.enable_retrieval and not scope and not self._warned_no_scope_recovery:
+            # Surface the silent no-recovery case once: retrieval is requested but
+            # this request has no per-key auth scope, so content is compressed with
+            # no way for the model to recover the originals.
+            self._warned_no_scope_recovery = True
+            verbose_proxy_logger.warning(
+                "Compresr: enable_retrieval is on but this request has no per-key auth scope; "
+                "compressing without recovery (compresr_retrieve tool not injected). "
+                "Configure virtual-key auth to enable recovery."
+            )
 
         applied = self._apply_compression_results(messages, targets, contexts, results, recovery_enabled)
         if applied.messages_compressed == 0:
