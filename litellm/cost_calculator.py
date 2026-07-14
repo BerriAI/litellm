@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -899,6 +900,8 @@ def _get_usage_object(
                 usage_obj,
             )
         )
+    elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_dict(usage_obj):
+        return InteractionsUsageObjectTransformation.transform_interactions_usage_to_chat_usage(usage_obj)
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
@@ -1267,6 +1270,12 @@ def completion_cost(
                         )
                         if tr_usage is not None:
                             _usage = tr_usage.model_dump()
+                    elif isinstance(_usage, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_dict(
+                        _usage
+                    ):
+                        _usage = InteractionsUsageObjectTransformation.transform_interactions_usage_to_chat_usage(
+                            _usage
+                        ).model_dump()
                     else:
                         _usage = _usage
 

@@ -77,9 +77,13 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
+from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
@@ -1675,6 +1679,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 results=result,
             )
 
+        elif self._is_interactions_create_call_type() and isinstance(result, InteractionsAPIStreamingResponse):
+            logging_result = self._interactions_streaming_result_as_response(result)
+
         elif (
             self.call_type == CallTypes.llm_passthrough_route.value
             or self.call_type == CallTypes.allm_passthrough_route.value
@@ -1695,6 +1702,28 @@ class Logging(LiteLLMLoggingBaseClass):
                     endpoint=self.model_call_details.get("endpoint", ""),
                 )
         return logging_result
+
+    def _is_interactions_create_call_type(self) -> bool:
+        return self.call_type in (
+            CallTypes.create_interaction.value,
+            CallTypes.acreate_interaction.value,
+        )
+
+    def _interactions_streaming_result_as_response(
+        self, result: InteractionsAPIStreamingResponse
+    ) -> InteractionsAPIResponse:
+        interaction = result.interaction if isinstance(result.interaction, dict) else {}
+        return InteractionsAPIResponse(
+            id=interaction.get("id") or result.id or result.interaction_id,
+            model=interaction.get("model") or result.model,
+            agent=interaction.get("agent") or result.agent,
+            status=interaction.get("status") or result.status,
+            created=interaction.get("created") or result.created,
+            updated=interaction.get("updated") or result.updated,
+            outputs=interaction.get("outputs") or result.outputs,
+            steps=interaction.get("steps") or result.steps,
+            usage=interaction.get("usage") or result.usage,
+        )
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: Any) -> None:
         """
@@ -1787,6 +1816,20 @@ class Logging(LiteLLMLoggingBaseClass):
                         else dict(transformed_usage)
                     )
                 standard_logging_payload["response"] = response_dict
+        elif isinstance(result, InteractionsAPIResponse):
+            result = result.model_copy()
+            transformed_usage = InteractionsUsageObjectTransformation.transform_interactions_usage_to_chat_usage(
+                result.usage
+            )
+            setattr(result, "usage", transformed_usage)
+            if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                response_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+                response_dict["usage"] = (
+                    transformed_usage.model_dump()
+                    if hasattr(transformed_usage, "model_dump")
+                    else dict(transformed_usage)
+                )
+                standard_logging_payload["response"] = response_dict
         elif isinstance(result, TranscriptionResponse):
             from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
                 TranscriptionUsageObjectTransformation,
@@ -1832,7 +1875,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result = self.normalize_logging_result(result=result)
 
-            if standard_logging_object is None and result is not None and self.stream is not True:
+            is_final_interactions_stream_result = self._is_interactions_create_call_type() and isinstance(
+                logging_result, InteractionsAPIResponse
+            )
+            if (
+                standard_logging_object is None
+                and result is not None
+                and (self.stream is not True or is_final_interactions_stream_result)
+            ):
                 if self._is_recognized_call_type_for_logging(logging_result=logging_result) or isinstance(
                     logging_result, (dict, list)
                 ):
@@ -1888,6 +1938,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, FineTuningJob)
             or isinstance(logging_result, LiteLLMBatch)
             or isinstance(logging_result, ResponsesAPIResponse)
+            or (isinstance(logging_result, InteractionsAPIResponse) and self._is_interactions_create_call_type())
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
@@ -4687,6 +4738,8 @@ class StandardLoggingPayloadSetup:
         elif isinstance(usage, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(usage):
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+            if InteractionsUsageObjectTransformation.is_interactions_usage_dict(usage):
+                return InteractionsUsageObjectTransformation.transform_interactions_usage_to_chat_usage(usage)
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
@@ -4713,6 +4766,10 @@ class StandardLoggingPayloadSetup:
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
+            if InteractionsUsageObjectTransformation.is_interactions_usage_dict(_raw):
+                return InteractionsUsageObjectTransformation.transform_interactions_usage_to_chat_usage(
+                    _raw
+                ).model_dump()
             return _raw
         if isinstance(_raw, Usage):
             return _raw.model_dump()
