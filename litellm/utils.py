@@ -2561,6 +2561,23 @@ def supports_embedding_image_input(model: str, custom_llm_provider: Optional[str
     )
 
 
+def supports_embedding(model: str, custom_llm_provider: str | None = None) -> bool:
+    """Check if a given model supports the embedding endpoint (mode == 'embedding' in the model cost map)."""
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+
+        return model_info.get("mode") == "embedding"
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking embedding support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
+
+
 ####### HELPER FUNCTIONS ################
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
