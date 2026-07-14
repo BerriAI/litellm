@@ -14,12 +14,9 @@ vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   const IconComponent = React.forwardRef<HTMLButtonElement, any>(
     ({ icon: IconComp, onClick, className, ...props }, ref) => {
-      const ariaLabel = className?.includes("cursor-not-allowed")
-        ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
-        : "Delete model";
       return React.createElement(
         "button",
-        { ...props, onClick, className, ref, "aria-label": ariaLabel },
+        { ...props, onClick, className, ref, "aria-label": "Delete model" },
         IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
       );
     },
@@ -764,9 +761,8 @@ describe("columns", () => {
     });
     render(<TestTable data={[model]} columns={cols} />);
 
-    const deleteButton = screen.getByRole("button", {
-      name: /config model cannot be deleted/i,
-    });
+    const deleteButton = screen.getByRole("button", { name: "Delete model" });
+    expect(deleteButton).toHaveClass("cursor-not-allowed");
     await user.click(deleteButton);
     expect(onDeleteClick).not.toHaveBeenCalled();
   });
@@ -793,7 +789,8 @@ describe("columns", () => {
     });
     render(<TestTable data={[model]} columns={cols} />);
 
-    const deleteButton = screen.getByRole("button", { name: /config model cannot be deleted/i });
+    expect(screen.getByText("Config Model")).toBeInTheDocument();
+    const deleteButton = screen.getByRole("button", { name: "Delete model" });
     expect(deleteButton).toBeInTheDocument();
     expect(deleteButton).toHaveClass("cursor-not-allowed");
   });
