@@ -1021,6 +1021,26 @@ class TestComplexityRouterRegistryLifecycle:
         assert name not in router.complexity_routers
         assert name not in router.model_name_to_deployment_indices
 
+    def test_remove_strategy_router_registrations_drops_complexity_entry(self):
+        router = self._router()
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+
+        router._remove_strategy_router_registrations(
+            model_name=name,
+            litellm_params=router.get_deployment(model_id="cr-1").litellm_params,
+        )
+
+        assert name not in router.complexity_routers
+
+    def test_remove_adaptive_router_registration_is_noop_when_absent(self):
+        router = self._router()
+
+        # No adaptive router registered under this name, so this is a safe no-op.
+        router._remove_adaptive_router_registration(model_name="does-not-exist")
+
+        assert "does-not-exist" not in router.adaptive_routers
+
 
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
