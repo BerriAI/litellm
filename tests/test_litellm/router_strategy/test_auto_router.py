@@ -316,3 +316,87 @@ class TestAutoRouter:
 
         # Assert
         assert result is None
+
+
+@pytest.fixture
+def async_auto_router(mock_router_instance):
+    class RouteChoice:
+        def __init__(self, name):
+            self.name = name
+
+    mock_semantic_router_class = MagicMock()
+    mock_semantic_router_class.from_json.return_value.routes = ["route1"]
+    mock_routelayer = MagicMock(return_value=RouteChoice(name="test-model"))
+    mock_semantic_router_class.return_value = mock_routelayer
+    modules = {
+        "semantic_router": MagicMock(),
+        "semantic_router.routers": MagicMock(SemanticRouter=mock_semantic_router_class),
+        "semantic_router.schema": MagicMock(RouteChoice=RouteChoice),
+        "litellm.router_strategy.auto_router.litellm_encoder": MagicMock(LiteLLMRouterEncoder=MagicMock()),
+    }
+
+    with patch.dict("sys.modules", modules):
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            auto_router_config_path="test/path/router.json",
+            default_model="gpt-4o-mini",
+            embedding_model="text-embedding-model",
+            litellm_router_instance=mock_router_instance,
+        )
+        yield auto_router, mock_semantic_router_class, mock_routelayer
+
+
+class TestAutoRouterAsyncExecution:
+    @pytest.mark.asyncio
+    async def test_offloads_construction_and_route_call(self, async_auto_router):
+        auto_router, mock_semantic_router_class, mock_routelayer = async_auto_router
+
+        async def run_sync(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch(
+            "litellm.router_strategy.auto_router.auto_router.asyncio.to_thread",
+            new=AsyncMock(side_effect=run_sync),
+        ) as mock_to_thread:
+            result = await auto_router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "test message"}],
+            )
+
+        assert result is not None
+        assert result.model == "test-model"
+        assert mock_to_thread.await_count == 2
+        assert mock_to_thread.await_args_list[0].args[0] is mock_semantic_router_class
+        assert mock_to_thread.await_args_list[1].args == (mock_routelayer,)
+        assert mock_to_thread.await_args_list[1].kwargs == {"text": "test message"}
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cold_start_constructs_routelayer_once(self, async_auto_router):
+        auto_router, mock_semantic_router_class, mock_routelayer = async_auto_router
+
+        async def run_sync(function, *args, **kwargs):
+            if function is mock_semantic_router_class:
+                await asyncio.sleep(0)
+            return function(*args, **kwargs)
+
+        with patch(
+            "litellm.router_strategy.auto_router.auto_router.asyncio.to_thread",
+            new=AsyncMock(side_effect=run_sync),
+        ):
+            results = await asyncio.gather(
+                auto_router.async_pre_routing_hook(
+                    model="test-model",
+                    request_kwargs={},
+                    messages=[{"role": "user", "content": "first message"}],
+                ),
+                auto_router.async_pre_routing_hook(
+                    model="test-model",
+                    request_kwargs={},
+                    messages=[{"role": "user", "content": "second message"}],
+                ),
+            )
+
+        assert all(result is not None for result in results)
+        mock_semantic_router_class.assert_called_once()
+        assert mock_routelayer.call_count == 2
