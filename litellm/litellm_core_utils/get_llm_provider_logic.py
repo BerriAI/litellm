@@ -253,6 +253,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == "https://api.getnadir.com/v1":
+                        custom_llm_provider = "nadir"
+                        dynamic_api_key = get_secret_str("NADIR_API_KEY")
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"
                         dynamic_api_key = get_secret_str("BASETEN_API_KEY")
@@ -593,6 +596,17 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "nadir":
+        # Bind the server-side NADIR_API_KEY to the trusted Nadir endpoint. If a
+        # caller directs the request at a custom api_base, do NOT fall back to
+        # the env key: forwarding the server's key as a Bearer token to a
+        # caller-controlled host is a credential-exfiltration risk. Such
+        # overrides must supply their own key.
+        default_nadir_base = get_secret_str("NADIR_API_BASE") or "https://api.getnadir.com/v1"
+        caller_base = api_base
+        api_base = api_base or default_nadir_base
+        trusted_base = caller_base is None or caller_base.rstrip("/") == default_nadir_base.rstrip("/")
+        dynamic_api_key = api_key or (get_secret_str("NADIR_API_KEY") if trusted_base else None)
     elif custom_llm_provider == "baseten":
         # Use BasetenConfig to determine the appropriate API base URL
         if api_base is None:
