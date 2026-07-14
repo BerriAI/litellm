@@ -2899,19 +2899,20 @@ async def test_token_root_does_not_resolve_private_server_for_external_client():
 
 
 @pytest.mark.asyncio
-async def test_register_root_resolves_single_oauth2_server():
-    """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
-    try:
-        from fastapi import Request
+async def test_register_root_does_aggregate_dcr_not_single_server_resolution():
+    """Root /register is the aggregate DCR endpoint: it mints a stateless llm_dcrc_ client
+    from the request's redirect_uris and does NOT resolve a single configured oauth2 server
+    (a single-server deployment registers at /{server}/register instead)."""
+    import json
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            register_client,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
     global_mcp_server_manager.registry.clear()
     oauth2_server = _create_oauth2_server()
@@ -2922,33 +2923,37 @@ async def test_register_root_resolves_single_oauth2_server():
     mock_request.headers = {}
 
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-            new=AsyncMock(return_value={}),
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
+            ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637"),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=None)
+            response = await register_client(request=mock_request, mcp_server_name=None)
 
-        # Should resolve to the single server and return its name as client_id
-        assert result["client_id"] == "test_oauth"
-        assert "redirect_uris" in result
+        body = json.loads(response.body)
+        assert body["client_id"].startswith("llm_dcrc_")
+        assert body["client_id"] != "test_oauth"
+        assert body["token_endpoint_auth_method"] == "none"
     finally:
         global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_register_root_does_not_resolve_private_server_for_external_client():
-    """Root /register must not reveal or use a hidden MCP server."""
-    try:
-        from fastapi import Request
+async def test_register_root_does_not_leak_a_private_server():
+    """Root /register never resolves or reveals a configured server, so a private one cannot
+    leak to an external caller: it always mints the aggregate DCR client instead."""
+    import json
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            register_client,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
     global_mcp_server_manager.registry.clear()
     oauth2_server = _create_oauth2_server(available_on_public_internet=False)
@@ -2962,17 +2967,19 @@ async def test_register_root_does_not_resolve_private_server_for_external_client
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-                new=AsyncMock(return_value={}),
+                new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
                 return_value="198.51.100.10",
             ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637"),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=None)
+            response = await register_client(request=mock_request, mcp_server_name=None)
 
-        assert result["client_id"] == "dummy_client"
-        assert result["redirect_uris"] == ["https://llm.example.com/callback"]
+        body = json.loads(response.body)
+        assert body["client_id"].startswith("llm_dcrc_")
+        assert "test_oauth" not in body["client_id"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -7630,6 +7637,7 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         global_mcp_server_manager.registry.clear()
 
 
+
 def test_gateway_dcr_flow_routing_engages_only_for_llm_dcrc_clients(monkeypatch):
     """The aggregate DCR arms engage for llm_dcrc_ client_ids (register always mints one,
     authorize/token route into the aggregate flow); a non-gateway client_id keeps the
@@ -7682,8 +7690,6 @@ def test_gateway_dcr_flow_routing_engages_only_for_llm_dcrc_clients(monkeypatch)
     assert token_response.status_code == 400
     assert token_response.json()["error"] == "invalid_grant"
 
-    # a non-gateway (upstream-issued) client_id is not routed into the aggregate arm; it
-    # falls to the per-server exchange, which 404s for an unknown server
     upstream_shaped = client.post(
         "/token",
         data={"grant_type": "authorization_code", "client_id": "regular-upstream-client", "code": "x"},
