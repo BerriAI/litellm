@@ -4737,3 +4737,26 @@ def test_gemini_image_models_do_not_support_reasoning(
         f"{model} incorrectly classified as reasoning-capable. "
         "Add 'supports_reasoning: false' to its model_cost entry."
     )
+
+
+def test_completion_exception_preserves_global_num_retries(monkeypatch):
+    monkeypatch.setattr(litellm, "num_retries", 2)
+    with pytest.raises(litellm.RateLimitError):
+        litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    assert litellm.num_retries == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_exception_preserves_global_num_retries(monkeypatch):
+    monkeypatch.setattr(litellm, "num_retries", 2)
+    with pytest.raises(litellm.RateLimitError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    assert litellm.num_retries == 2
