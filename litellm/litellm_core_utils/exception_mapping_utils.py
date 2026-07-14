@@ -397,6 +397,7 @@ def _map_openai_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(

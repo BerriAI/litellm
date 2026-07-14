@@ -7,9 +7,12 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
+import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.common_utils import OpenAIError
 
@@ -126,3 +129,24 @@ class TestEmptyResponseHandling:
 
         assert response == mock_stream
         assert headers == {"x-request-id": "123"}
+
+    @respx.mock
+    def test_nonstandard_error_response_preserves_embedded_status_and_body(self):
+        response_body = {"response": "Token is invalid [2]", "status": 400}
+        respx.post("https://gateway.example.com/v1/chat/completions").mock(
+            return_value=Response(200, json=response_body)
+        )
+
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.completion(
+                model="openai/test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base="https://gateway.example.com/v1",
+                api_key="test-key",
+                max_retries=0,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.body["response"] == response_body["response"]
+        assert exc_info.value.body["status"] == response_body["status"]
+        assert "Token is invalid [2]" in exc_info.value.message
