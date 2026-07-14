@@ -6,7 +6,7 @@ Calls the Singulr Guard API to scan messages.
 import json
 import os
 from collections import defaultdict
-from typing import Any, TypeAlias, Union, cast
+from typing import Any, TypeAlias, Union
 from urllib.parse import urlparse
 
 import httpx
