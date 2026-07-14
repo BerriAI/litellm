@@ -9872,6 +9872,34 @@ async def test_token_counter_oversized_dict_key_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_token_counter_oversized_model_name_returns_400():
+    """An oversized `model` string must also trip the size cap.
+
+    The model name becomes a key in the tokenizer selection LRU cache, so
+    excluding it from the cap would let a caller pin arbitrarily large strings
+    in memory across requests via distinct oversized model names.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_model = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model=oversized_model,
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
 async def test_token_counter_saturated_concurrency_returns_429():
     """When the tokenization concurrency bound is saturated, excess requests get 429.
 

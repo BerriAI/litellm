@@ -10621,7 +10621,10 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     if prompt is None and messages is None and contents is None:
         raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
 
-    if _count_request_string_chars(prompt, messages, contents, tools, system) > TOKEN_COUNTER_MAX_REQUEST_CHARS:
+    if (
+        _count_request_string_chars(request.model, prompt, messages, contents, tools, system)
+        > TOKEN_COUNTER_MAX_REQUEST_CHARS
+    ):
         raise HTTPException(
             status_code=400,
             detail={"error": "Request payload too large for token counting"},
