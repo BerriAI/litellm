@@ -535,6 +535,7 @@ def _check_allowed_routes_caller_permission(
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
+    allowed_routes_changed: bool | None = None,
     allow_safe_presets: bool = False,
 ) -> None:
     """
@@ -552,6 +553,8 @@ def _check_allowed_routes_caller_permission(
     carve-out below accepts any list of tokens in
     `_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS`.
     """
+    if allowed_routes_changed is False:
+        return
     if not allowed_routes_was_provided and not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -576,6 +579,7 @@ def _check_allowed_routes_caller_permission(
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
+    permissions_changed: bool | None = None,
 ) -> None:
     """
     Require PROXY_ADMIN when `permissions` is present in the request body.
@@ -584,6 +588,8 @@ def _check_permissions_caller_permission(
     omits the field (default flows through) is distinct from one that
     sends any explicit value.
     """
+    if permissions_changed is False:
+        return
     permissions_in_request = "permissions" in data.model_fields_set
     if not permissions_in_request and not data.permissions:
         return
@@ -2260,6 +2266,9 @@ async def _validate_update_key_data(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
         allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+        allowed_routes_changed=(
+            "allowed_routes" in data.model_fields_set and data.allowed_routes != existing_key_row.allowed_routes
+        ),
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -2268,6 +2277,9 @@ async def _validate_update_key_data(
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+        permissions_changed=(
+            "permissions" in data.model_fields_set and data.permissions != existing_key_row.permissions
+        ),
     )
 
     _validate_caller_can_change_key_ownership(
