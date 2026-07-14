@@ -9805,6 +9805,45 @@ async def test_token_counter_offloads_counting_to_executor():
 
 
 @pytest.mark.asyncio
+async def test_token_counter_selects_tokenizer_off_the_event_loop():
+    """Tokenizer selection must run inside the executor, not on the event loop.
+
+    `_select_tokenizer` can synchronously load a HuggingFace tokenizer for some
+    model names (a blocking download/parse), so running it inline before the
+    executor dispatch would block the loop. We spy on `_select_tokenizer` and
+    assert every call happens on a thread other than the event-loop's.
+    """
+    import threading
+
+    import litellm.utils as litellm_utils
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    loop_thread_ident = threading.get_ident()
+    select_thread_idents = []
+    real_select_tokenizer = litellm_utils._select_tokenizer
+
+    def spy_select_tokenizer(*args, **kwargs):
+        select_thread_idents.append(threading.get_ident())
+        return real_select_tokenizer(*args, **kwargs)
+
+    with patch.object(litellm_utils, "_select_tokenizer", side_effect=spy_select_tokenizer):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert response.total_tokens > 0
+    assert len(select_thread_idents) >= 1
+    assert all(ident != loop_thread_ident for ident in select_thread_idents)
+
+
+@pytest.mark.asyncio
 async def test_token_counter_oversized_payload_returns_400():
     """A payload whose combined string size exceeds the cap must map to 400.
 

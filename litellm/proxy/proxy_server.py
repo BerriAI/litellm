@@ -210,7 +210,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache
 
 import litellm
 import litellm._redis
@@ -10574,6 +10574,28 @@ async def _try_provider_token_count(
 _token_count_semaphore = asyncio.Semaphore(TOKEN_COUNTER_MAX_CONCURRENCY)
 
 
+def _select_tokenizer_and_count(
+    model_to_use: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    prompt: str | None,
+    messages: list | None,
+) -> tuple[str, int]:
+    """Select the tokenizer for a model and count tokens with it.
+
+    Runs in the executor thread: tokenizer selection can synchronously load a
+    HuggingFace tokenizer for some model names (a blocking download/parse), so
+    it must stay off the event loop alongside the count itself.
+    """
+    _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
+    total_tokens = litellm.token_counter(
+        model=model_to_use,
+        text=prompt,
+        messages=messages,
+        custom_tokenizer=_tokenizer_used,  # type: ignore
+    )
+    return str(_tokenizer_used["type"]), total_tokens
+
+
 def _count_request_string_chars(*fields: object) -> int:
     """Sum the length of every string leaf in the given token-count request fields."""
     total = 0
@@ -10605,8 +10627,6 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    from litellm import token_counter
-
     global llm_router
 
     prompt = request.prompt
@@ -10705,20 +10725,15 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             detail={"error": "Too many concurrent token counting requests. Please retry later."},
         )
     try:
-        _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
-
-        tokenizer_used = str(_tokenizer_used["type"])
         loop = asyncio.get_running_loop()
         async with _token_count_semaphore:
-            total_tokens = await loop.run_in_executor(
+            tokenizer_used, total_tokens = await loop.run_in_executor(
                 None,
-                partial(
-                    token_counter,
-                    model=model_to_use,
-                    text=prompt,
-                    messages=messages,
-                    custom_tokenizer=_tokenizer_used,  # type: ignore
-                ),
+                _select_tokenizer_and_count,
+                model_to_use,
+                custom_tokenizer,
+                prompt,
+                messages,
             )
     except (ValueError, TypeError, AttributeError, KeyError, IndexError):
         verbose_proxy_logger.exception(
