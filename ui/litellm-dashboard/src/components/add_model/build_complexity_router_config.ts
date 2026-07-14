@@ -1,5 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
-import { ClassifierLLMConfig, ClassifierType } from "./ComplexityRouterConfig";
+import { AdaptiveEligible, AdaptiveRouterWeights, ClassifierLLMConfig, ClassifierType } from "./ComplexityRouterConfig";
 
 export interface ComplexityTiers {
   SIMPLE: string;
@@ -17,6 +17,10 @@ export interface BuildComplexityRouterConfigParams {
   semanticMatchingEnabled: boolean;
   embeddingModel: string | undefined;
   matchThreshold: number;
+  adaptive: boolean;
+  adaptiveWeights: AdaptiveRouterWeights;
+  tierDistancePenalty: number;
+  adaptiveEligible: AdaptiveEligible;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -28,6 +32,10 @@ export interface ComplexityRouterConfigPayload {
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
   match_threshold?: number;
+  adaptive?: boolean;
+  adaptive_weights?: AdaptiveRouterWeights;
+  tier_distance_penalty?: number;
+  adaptive_eligible?: AdaptiveEligible;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -43,7 +51,8 @@ export const getSemanticConfigError = ({
   embeddingModel,
   keywordTierRules,
 }: Pick<BuildComplexityRouterConfigParams, "semanticMatchingEnabled" | "embeddingModel" | "keywordTierRules">):
-  string | null => {
+  | string
+  | null => {
   if (!semanticMatchingEnabled) return null;
   if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
@@ -61,6 +70,10 @@ export const buildComplexityRouterConfig = ({
   semanticMatchingEnabled,
   embeddingModel,
   matchThreshold,
+  adaptive,
+  adaptiveWeights,
+  tierDistancePenalty,
+  adaptiveEligible,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
   // "Add keyword rule" seeds a rule with an empty keywords list, so without this an
@@ -80,6 +93,12 @@ export const buildComplexityRouterConfig = ({
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,
       match_threshold: matchThreshold,
+    }),
+    ...(adaptive && {
+      adaptive: true,
+      adaptive_weights: adaptiveWeights,
+      tier_distance_penalty: tierDistancePenalty,
+      adaptive_eligible: adaptiveEligible,
     }),
   };
 };

@@ -92,6 +92,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           },
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
+          adaptive: parsedConfig.adaptive || false,
+          adaptive_weights: parsedConfig.adaptive_weights,
+          tier_distance_penalty: parsedConfig.tier_distance_penalty,
+          adaptive_eligible: parsedConfig.adaptive_eligible || "all",
         });
 
         form.setFieldsValue({
@@ -137,7 +141,15 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const values = await form.validateFields();
 
       if (isComplexityRouter) {
-        const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
+        const {
+          tiers,
+          classifier_type,
+          classifier_llm_config,
+          adaptive,
+          adaptive_weights,
+          tier_distance_penalty,
+          adaptive_eligible,
+        } = complexityRouterConfig;
         if (Object.values(tiers).filter(Boolean).length === 0) {
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
           return;
@@ -154,6 +166,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             tiers,
             classifier_type,
             ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
+            ...(adaptive && { adaptive, adaptive_weights, tier_distance_penalty, adaptive_eligible }),
           },
           complexity_router_default_model: defaultModel,
         };

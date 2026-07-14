@@ -21,6 +21,10 @@ const baseParams: BuildComplexityRouterConfigParams = {
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
   matchThreshold: 0.5,
+  adaptive: false,
+  adaptiveWeights: { quality: 0.3, cost: 0.7 },
+  tierDistancePenalty: 0.5,
+  adaptiveEligible: "all",
 };
 
 describe("buildComplexityRouterConfig", () => {
@@ -122,6 +126,34 @@ describe("buildComplexityRouterConfig", () => {
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.keyword_tier_rules).toBeUndefined();
+  });
+
+  it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: false,
+      adaptiveWeights: { quality: 0.9, cost: 0.1 },
+      tierDistancePenalty: 2,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBeUndefined();
+    expect(config.adaptive_weights).toBeUndefined();
+    expect(config.tier_distance_penalty).toBeUndefined();
+    expect(config.adaptive_eligible).toBeUndefined();
+  });
+
+  it("includes adaptive fields when adaptive is enabled", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
+    expect(config.tier_distance_penalty).toBe(0.75);
+    expect(config.adaptive_eligible).toBe("classified_tier");
   });
 });
 
