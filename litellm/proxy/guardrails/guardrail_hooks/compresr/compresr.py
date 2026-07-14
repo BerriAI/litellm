@@ -900,6 +900,7 @@ class CompresrGuardrail(CustomGuardrail):
         contexts: list[str],
         results: list[dict[str, object]],
         recovery_enabled: bool,
+        existing_originals: dict[str, str] | None = None,
     ) -> _CompressionResult:
         """Write each compression result into a copy of ``messages``.
 
@@ -908,6 +909,14 @@ class CompresrGuardrail(CustomGuardrail):
         untouched request is not needlessly rewritten downstream.
         """
         out = _CompressionResult(compressed_messages=list(messages))
+        existing = existing_originals or {}
+        cap = self.max_bytes_per_call
+        # Seed with what is already stored under this store key: markers are
+        # attached only while the store (existing + this call's originals) stays
+        # within the cap, so _store_originals never has to evict a hash this call
+        # just shipped a marker for -- including on a later turn that reuses the
+        # store key. A hash already stored (or repeated here) costs no new bytes.
+        recovery_bytes = _entry_bytes(existing)
         for target_idx, original_text, result in zip(targets, contexts, results):
             compressed_text = result.get("compressed_context")
             if not isinstance(compressed_text, str) or not compressed_text or compressed_text == original_text:
@@ -915,8 +924,12 @@ class CompresrGuardrail(CustomGuardrail):
             out.messages_compressed += 1
             if recovery_enabled:
                 hash_value = _content_hash(original_text)
-                out.originals[hash_value] = original_text
-                compressed_text += _recovery_marker(hash_value)
+                already_stored = hash_value in existing or hash_value in out.originals
+                new_bytes = 0 if already_stored else len(original_text.encode("utf-8", "surrogatepass"))
+                if cap <= 0 or recovery_bytes + new_bytes <= cap:
+                    recovery_bytes += new_bytes
+                    out.originals[hash_value] = original_text
+                    compressed_text += _recovery_marker(hash_value)
             previous = out.text_replacements.get(original_text)
             if previous is not None and previous != compressed_text:
                 # Two targets with identical text but different query-specific
@@ -1018,7 +1031,12 @@ class CompresrGuardrail(CustomGuardrail):
                 "Configure virtual-key auth to enable recovery."
             )
 
-        applied = self._apply_compression_results(messages, targets, contexts, results, recovery_enabled)
+        existing_originals: dict[str, str] = {}
+        if recovery_enabled and store_key is not None:
+            existing_originals = self._originals_by_call_id.get(store_key, ({}, 0.0))[0]
+        applied = self._apply_compression_results(
+            messages, targets, contexts, results, recovery_enabled, existing_originals
+        )
         if applied.messages_compressed == 0:
             # Nothing replaced: return the original inputs object (handlers detect
             # edits by identity; a fresh list forces write-back that strips Anthropic
