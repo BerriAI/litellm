@@ -1041,6 +1041,64 @@ class TestComplexityRouterRegistryLifecycle:
 
         assert "does-not-exist" not in router.adaptive_routers
 
+    def test_remove_strategy_router_registrations_covers_auto_and_quality(self):
+        from litellm.types.router import LiteLLM_Params
+
+        router = self._router()
+        router.auto_routers["auto-x"] = object()  # stand-in AutoRouter registration
+        router.quality_routers["quality-x"] = object()  # stand-in QualityRouter registration
+
+        router._remove_strategy_router_registrations(
+            model_name="auto-x",
+            litellm_params=LiteLLM_Params(model="auto_router/auto-x"),
+        )
+        router._remove_strategy_router_registrations(
+            model_name="quality-x",
+            litellm_params=LiteLLM_Params(model="auto_router/quality_router/quality-x"),
+        )
+
+        assert "auto-x" not in router.auto_routers
+        assert "quality-x" not in router.quality_routers
+
+    def test_delete_hybrid_adaptive_deployment_unregisters_hook(self):
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        name = "auto_router/complexity_router/hybrid"
+        router = Router(
+            model_list=[
+                Deployment(
+                    model_name=name,
+                    litellm_params=LiteLLM_Params(
+                        model=name,
+                        complexity_router_default_model="cheap",
+                        complexity_router_config={
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap", "premium"]},
+                        },
+                    ),
+                    model_info={"id": "hybrid-1"},
+                ).to_json(exclude_none=True),
+                {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "premium", "litellm_params": {"model": "openai/gpt-4o"}},
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert name in router.adaptive_routers
+        registered = router.adaptive_routers[name]
+        hooks = litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert any(isinstance(h, AdaptiveRouterPostCallHook) and h.adaptive_router is registered for h in hooks)
+
+        router.delete_deployment(id="hybrid-1")
+
+        assert name not in router.adaptive_routers
+        hooks_after = litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert not any(
+            isinstance(h, AdaptiveRouterPostCallHook) and h.adaptive_router is registered for h in hooks_after
+        )
+
 
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
