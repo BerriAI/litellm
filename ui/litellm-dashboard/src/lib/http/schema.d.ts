@@ -10670,6 +10670,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ptu_reservation/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close Ptu Reservation
+         * @description Close a reservation by setting effective_to.
+         *
+         *     Parameters:
+         *     - id (str, required)
+         *     - effective_to (datetime, optional): defaults to now UTC
+         */
+        post: operations["close_ptu_reservation_ptu_reservation_close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ptu_reservation/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Info Ptu Reservation
+         * @description Get a single reservation by id.
+         *
+         *     Query parameter:
+         *     - id (str, required)
+         */
+        get: operations["info_ptu_reservation_ptu_reservation_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ptu_reservation/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Ptu Reservations
+         * @description List PTU reservations.
+         *
+         *     Query parameters:
+         *     - team_id (optional): filter by team
+         *     - model (optional): filter by model
+         *     - active_only (optional, default false): only reservations live right now
+         */
+        get: operations["list_ptu_reservations_ptu_reservation_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ptu_reservation/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Ptu Reservation
+         * @description Create a new PTU reservation for a (team, model) pair.
+         *
+         *     Parameters:
+         *     - team_id (str, required)
+         *     - model (str, required)
+         *     - cost_source (str): "manual" (default). "azure_billing" is reserved.
+         *     - ptu_count (int): required for cost_source="manual", positive
+         *     - cost_per_ptu (float): required for cost_source="manual", non-negative USD/month
+         *     - azure_resource_id (str): reserved; must be null for manual
+         *     - effective_from (datetime, required): inclusive UTC start
+         *     - effective_to (datetime, optional): exclusive UTC end; null = still active
+         */
+        post: operations["new_ptu_reservation_ptu_reservation_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/agent_hub": {
         parameters: {
             query?: never;
@@ -28601,6 +28703,71 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * PTUReservationCloseRequest
+         * @description Body accepted by POST /ptu_reservation/close.
+         */
+        PTUReservationCloseRequest: {
+            /**
+             * Effective To
+             * @description Timestamp to set as effective_to. Defaults to now (UTC) if omitted.
+             */
+            effective_to?: string | null;
+            /**
+             * Id
+             * @description Reservation id to close.
+             */
+            id: string;
+        };
+        /**
+         * PTUReservationNewRequest
+         * @description Body accepted by POST /ptu_reservation/new.
+         */
+        PTUReservationNewRequest: {
+            /**
+             * Azure Resource Id
+             * @description Azure resource ARM id, for cost_source='azure_billing'.
+             */
+            azure_resource_id?: string | null;
+            /**
+             * Cost Per Ptu
+             * @description Monthly cost per PTU in USD. Required for manual.
+             */
+            cost_per_ptu?: number | null;
+            /**
+             * Cost Source
+             * @description Source of the cost figures. Only 'manual' is supported in this release.
+             * @default manual
+             * @enum {string}
+             */
+            cost_source: "manual" | "azure_billing";
+            /**
+             * Effective From
+             * Format: date-time
+             * @description Inclusive UTC start of the reservation.
+             */
+            effective_from: string;
+            /**
+             * Effective To
+             * @description Exclusive UTC end of the reservation. Null = still active.
+             */
+            effective_to?: string | null;
+            /**
+             * Model
+             * @description Model name the reservation covers.
+             */
+            model: string;
+            /**
+             * Ptu Count
+             * @description Number of provisioned throughput units. Required for manual.
+             */
+            ptu_count?: number | null;
+            /**
+             * Team Id
+             * @description Team that owns the reservation.
+             */
+            team_id: string;
         };
         /**
          * PaginatedAuditLogResponse
@@ -47112,6 +47279,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderBudgetResponse"];
+                };
+            };
+        };
+    };
+    close_ptu_reservation_ptu_reservation_close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PTUReservationCloseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    info_ptu_reservation_ptu_reservation_info_get: {
+        parameters: {
+            query: {
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_ptu_reservations_ptu_reservation_list_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                model?: string | null;
+                active_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_ptu_reservation_ptu_reservation_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PTUReservationNewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -63,6 +63,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/{mcp_server_name}/",
     # Budgets / tags / workflows / memory mgmt
     "/budget/",
+    "/ptu_reservation/",
     "/tag/",
     "/workflow/",
     "/v1/workflows/",
