@@ -243,12 +243,9 @@ class SingulrGuardrail(CustomGuardrail):
 
         tool_calls: list[_SingulrToolCall] = []
         if raw_tool_calls and isinstance(raw_tool_calls[0], ChatCompletionMessageToolCall):
-            tool_calls = cast(list[_SingulrToolCall], raw_tool_calls)  # noqa: LIT006  # Type casting for tool call validation
+            tool_calls = raw_tool_calls
         elif raw_tool_calls:
-            tool_calls = cast(  # noqa: LIT006  # Complex nested cast for tool call reconstruction
-                list[_SingulrToolCall],
-                self.reconstruct_tool_calls(cast(list[ChatCompletionToolCallChunk], raw_tool_calls)),
-            )
+            tool_calls = self.reconstruct_tool_calls(raw_tool_calls)
 
         singulr_request = SingulrGuardrailRequest(
             model=inputs.get("model") or request_data.get("model"),
