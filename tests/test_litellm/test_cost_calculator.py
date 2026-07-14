@@ -754,6 +754,45 @@ def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
     assert abs(cost - 120.0 * (0.017 / 60)) < 1e-9
 
 
+@pytest.mark.parametrize(
+    "undated, dated",
+    [
+        ("azure/gpt-audio-mini", "azure/gpt-audio-mini-2025-10-06"),
+        ("azure/gpt-realtime-mini", "azure/gpt-realtime-mini-2025-10-06"),
+    ],
+)
+def test_undated_azure_audio_aliases_mirror_dated_pricing(monkeypatch, undated, dated):
+    """
+    Azure deployments are commonly created against the undated model name, so
+    base_model=azure/gpt-audio-mini must resolve. Missing undated aliases billed
+    text tokens at $0 (issue #33170). Verify the undated alias exists and its
+    token pricing matches the dated variant.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    assert undated in litellm.model_cost
+
+    undated_info = litellm.get_model_info(model=undated, custom_llm_provider="azure")
+    dated_info = litellm.get_model_info(model=dated, custom_llm_provider="azure")
+    assert undated_info["input_cost_per_token"] == dated_info["input_cost_per_token"]
+    assert undated_info["output_cost_per_token"] == dated_info["output_cost_per_token"]
+    assert (
+        undated_info["input_cost_per_audio_token"]
+        == dated_info["input_cost_per_audio_token"]
+    )
+
+    prompt_usd, completion_usd = cost_per_token(
+        model=undated,
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        custom_llm_provider="azure",
+    )
+    assert prompt_usd == 1000 * dated_info["input_cost_per_token"]
+    assert completion_usd == 1000 * dated_info["output_cost_per_token"]
+    assert prompt_usd > 0
+
+
 def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
     """A realtime stream without transcription completed events adds no extra cost."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
