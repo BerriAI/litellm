@@ -28305,9 +28305,9 @@
         "source": "https://nebius.com/prices-ai-studio"
     },
     "nebius/Qwen/Qwen3.5-397B-A17B": {
-        "max_tokens": 262144,
+        "max_tokens": 8192,
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 3.6e-06,
         "litellm_provider": "nebius",
@@ -28318,9 +28318,9 @@
         "source": "https://nebius.com/prices-ai-studio"
     },
     "nebius/zai-org/GLM-5.2": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 1000000,
+        "max_tokens": 432000,
+        "max_input_tokens": 432000,
+        "max_output_tokens": 432000,
         "input_cost_per_token": 1.4e-06,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "nebius",
@@ -28331,9 +28331,9 @@
         "source": "https://nebius.com/prices-ai-studio"
     },
     "nebius/nvidia/nemotron-3-super-120b-a12b": {
-        "max_tokens": 262144,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_tokens": 32768,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32768,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "nebius",
@@ -28370,16 +28370,15 @@
         "source": "https://nebius.com/prices-ai-studio"
     },
     "nebius/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": {
-        "max_tokens": 262144,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_tokens": 4096,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
         "cache_read_input_token_cost": 6e-09,
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "source": "https://nebius.com/prices-ai-studio"
     },

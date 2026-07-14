@@ -120,24 +120,31 @@ def test_nebius_model_pricing_metadata():
         model_prices = json.load(file)
 
     expected_models = {
-        "nebius/Qwen/Qwen3.5-397B-A17B": (262144, 6e-07, 3.6e-06, None),
-        "nebius/zai-org/GLM-5.2": (1000000, 1.4e-06, 4.4e-06, None),
-        "nebius/nvidia/nemotron-3-super-120b-a12b": (262144, 3e-07, 9e-07, None),
-        "nebius/nvidia/Nemotron-3-Ultra-550b-a55b": (1000000, 1e-06, 3e-06, None),
-        "nebius/moonshotai/Kimi-K2.7-Code": (262144, 9.5e-07, 4e-06, None),
-        "nebius/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": (262144, 6e-08, 2.4e-07, 6e-09),
+        "nebius/Qwen/Qwen3.5-397B-A17B": (262144, 8192, 6e-07, 3.6e-06, None, True),
+        "nebius/zai-org/GLM-5.2": (432000, 432000, 1.4e-06, 4.4e-06, None, True),
+        "nebius/nvidia/nemotron-3-super-120b-a12b": (256000, 32768, 3e-07, 9e-07, None, True),
+        "nebius/nvidia/Nemotron-3-Ultra-550b-a55b": (1000000, 1000000, 1e-06, 3e-06, None, True),
+        "nebius/moonshotai/Kimi-K2.7-Code": (262144, 262144, 9.5e-07, 4e-06, None, True),
+        "nebius/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": (32000, 4096, 6e-08, 2.4e-07, 6e-09, False),
     }
 
-    for model, (max_tokens, input_cost, output_cost, cache_read_cost) in expected_models.items():
+    for model, (
+        max_input_tokens,
+        max_output_tokens,
+        input_cost,
+        output_cost,
+        cache_read_cost,
+        supports_reasoning,
+    ) in expected_models.items():
         model_info = model_prices[model]
         assert model_info["litellm_provider"] == "nebius"
         assert model_info["mode"] == "chat"
-        assert model_info["max_tokens"] == max_tokens
-        assert model_info["max_input_tokens"] == max_tokens
-        assert model_info["max_output_tokens"] == max_tokens
+        assert model_info["max_tokens"] == max_output_tokens
+        assert model_info["max_input_tokens"] == max_input_tokens
+        assert model_info["max_output_tokens"] == max_output_tokens
         assert model_info["input_cost_per_token"] == input_cost
         assert model_info["output_cost_per_token"] == output_cost
         assert model_info.get("cache_read_input_token_cost") == cache_read_cost
         assert model_info["supports_function_calling"] is True
-        assert model_info["supports_reasoning"] is True
+        assert model_info.get("supports_reasoning", False) is supports_reasoning
         assert model_info["supports_response_schema"] is True
