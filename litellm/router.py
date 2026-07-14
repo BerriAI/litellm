@@ -9710,11 +9710,18 @@ class Router:
         if value is not None:
             self.default_litellm_params = {**self.default_litellm_params, **value}
 
-    def _remove_optional_pre_call_checks(self, removed_checks: OptionalPreCallChecks) -> None:
+    def _remove_optional_pre_call_checks(self, removed_checks: OptionalPreCallChecks) -> list[str]:
         """
         Reverse of `add_optional_pre_call_checks` for the subset of checks that can be
         safely turned off at runtime: clears the corresponding flag(s) on shared
         affinity callbacks, or unregisters the dedicated callback instance entirely.
+
+        Returns the subset of `removed_checks` that were kept active anyway because
+        they're still required by config (currently only `router_budget_limiting`,
+        which `Router.__init__` auto-enables whenever budgets are configured on the
+        deployments/provider, independent of `optional_pre_call_checks`) - callers
+        should fold these back into the tracked `optional_pre_call_checks` list so it
+        doesn't claim a check is off when it's actually still enforced.
         """
         from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
             EncryptedContentAffinityCheck,
@@ -9748,13 +9755,23 @@ class Router:
             "enforce_model_rate_limits": ModelRateLimitingCheck,
             "router_budget_limiting": RouterBudgetLimiting,
         }
+        retained_checks: list[str] = []
         for check, callback_type in removable_callback_types.items():
             if check not in removed_checks:
+                continue
+            if check == "router_budget_limiting" and RouterBudgetLimiting.should_init_router_budget_limiter(
+                model_list=self.model_list, provider_budget_config=self.provider_budget_config
+            ):
+                # Budgets are still configured on the deployments/provider - Router.__init__
+                # would auto-enable this regardless of optional_pre_call_checks, so a save
+                # that omits it must not silently disable budget enforcement.
+                retained_checks.append(check)
                 continue
             litellm.logging_callback_manager.remove_callbacks_by_type(optional_callbacks, callback_type)
             litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, callback_type)
             if check == "router_budget_limiting":
                 self.router_budget_logger = None
+        return retained_checks
 
     def _apply_optional_pre_call_checks_setting(self, value: OptionalPreCallChecks | None) -> None:
         if value is None:
@@ -9763,9 +9780,8 @@ class Router:
         removed_checks = [check for check in self.optional_pre_call_checks if check not in value]
         if new_checks:
             self.add_optional_pre_call_checks(new_checks)
-        if removed_checks:
-            self._remove_optional_pre_call_checks(removed_checks)
-        self.optional_pre_call_checks = list(value)
+        retained_checks = self._remove_optional_pre_call_checks(removed_checks) if removed_checks else []
+        self.optional_pre_call_checks = list(dict.fromkeys([*value, *retained_checks]))
 
     # Settings whose update logic doesn't fit `setattr(self, var, value)` (e.g.
     # merge-not-replace, or side effects beyond storing the value). Dispatched via

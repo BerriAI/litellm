@@ -5167,6 +5167,47 @@ async def test_update_settings_optional_pre_call_checks_removes_unregistered_che
     assert not any(cb.__class__.__name__ == "RouterBudgetLimiting" for cb in litellm.callbacks)
 
 
+@pytest.mark.asyncio
+async def test_update_settings_cannot_remove_router_budget_limiting_while_budgets_configured():
+    """
+    Regression test: `Router.__init__` auto-enables `router_budget_limiting` whenever
+    a deployment has `max_budget`/`budget_duration` set or `provider_budget_config` is
+    configured, independent of what's in `optional_pre_call_checks`
+    (`RouterBudgetLimiting.should_init_router_budget_limiter`). If update_settings
+    honored a save that omits "router_budget_limiting" from the list while those
+    budgets are still configured, deployments would keep serving requests after their
+    budget is exhausted - a silent budget-enforcement bypass reachable via the Admin UI
+    or a config-sync payload that simply doesn't include the check.
+    """
+    from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": "fake-key",
+                    "api_base": "https://fake.openai.azure.com",
+                    "max_budget": 100,
+                    "budget_duration": "1d",
+                },
+            }
+        ],
+    )
+    assert router.router_budget_logger is not None
+    assert "router_budget_limiting" in router.optional_pre_call_checks
+
+    # A save that omits the (auto-enabled, config-required) check must not disable it.
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    assert "router_budget_limiting" in router.optional_pre_call_checks
+    assert "prompt_caching" in router.optional_pre_call_checks
+    assert router.router_budget_logger is not None
+    assert any(isinstance(cb, RouterBudgetLimiting) for cb in (router.optional_callbacks or []))
+    assert any(isinstance(cb, RouterBudgetLimiting) for cb in litellm.callbacks)
+
+
 def test_update_settings_optional_pre_call_checks_removes_affinity_flags():
     """
     Regression test: deployment_affinity/session_affinity/responses_api_deployment_check
