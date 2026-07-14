@@ -21,6 +21,7 @@ from litellm.proxy.proxy_server import (
     _is_remote_module_url,
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
+    resolve_complexity_router_plugins,
 )
 
 from .conftest import normalize
@@ -110,6 +111,54 @@ def test__scrub_db_overlay_remote_module_loads_strips_lists_and_strs():
 def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
     # Non-dict input bypasses scrubbing entirely.
     assert _scrub_db_overlay_remote_module_loads("litellm_settings", "raw") == "raw"
+
+
+# ---------------------------------------------------------------------------
+# resolve_complexity_router_plugins
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
+    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    resolve_complexity_router_plugins(
+        model_name="smart-router", complexity_router_config=config, config_file_path=None
+    )
+    assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+
+
+def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
+    plugin_file = tmp_path / "my_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "my_plugin_instance = _Plugin()\n"
+    )
+    config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
+
+    resolve_complexity_router_plugins(
+        model_name="smart-router",
+        complexity_router_config=config,
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    assert len(config["plugins"]) == 1
+    assert hasattr(config["plugins"][0], "run")
+    assert type(config["plugins"][0]).__name__ == "_Plugin"
+
+
+def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
+    plugin_file = tmp_path / "bad_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+    config: Dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2848,4 +2848,39 @@ class TestRoutingPlugins:
             messages=[{"role": "user", "content": "Hello!"}],
         )
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_pin_shortcut_disabled_when_plugins_configured(self, mock_router_instance):
+        """Regression: the session_affinity cache-pin shortcut returned a stale pinned
+        model without ever re-running it through plugins, so a policy plugin's decision
+        (e.g. a budget cap crossed mid-session) was only ever enforced on a session's
+        first turn. With plugins configured, every turn must go through
+        _classify_and_route (and therefore the plugin pipeline) again."""
+        mock_router_instance.cache = DualCache()
+
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "session_affinity": True,
+                "plugins": [AllowAll()],
+            },
+        )
+        request_kwargs = {"metadata": {"session_id": "session-1"}}
+
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            first = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+            )
+            second = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi again"}]
+            )
+        assert first.model == "gpt-4o-mini"
+        assert second.model == "gpt-4o-mini"
+        assert spy.call_count == 2
         assert result.model == "gpt-4o-mini"

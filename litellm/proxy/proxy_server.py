@@ -556,6 +556,7 @@ from litellm.types.router import (
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
+    RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
 )
@@ -3660,6 +3661,39 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     litellm_config_cache.redis_cache = redis_cache
 
 
+def resolve_complexity_router_plugins(
+    model_name: str,
+    complexity_router_config: dict,
+    config_file_path: Optional[str],
+) -> None:
+    """
+    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
+    instances via `get_instance_fn` (the same convention `litellm_settings.callbacks`
+    uses), in place. Raises at config-load time if a path resolves to something that
+    doesn't implement `RoutingPlugin`, rather than deferring to a confusing
+    `AttributeError` on the first request that reaches the plugin pipeline.
+    """
+    plugin_paths = complexity_router_config.get("plugins")
+    if not isinstance(plugin_paths, list):
+        return
+
+    resolved_plugins = [
+        get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+        if isinstance(plugin_path, str)
+        else plugin_path
+        for plugin_path in plugin_paths
+    ]
+    for plugin_path, resolved_plugin in zip(plugin_paths, resolved_plugins):
+        if not isinstance(resolved_plugin, RoutingPlugin):
+            raise ValueError(
+                f"complexity_router_config.plugins entry {plugin_path!r} on model {model_name!r} "
+                f"resolved to {resolved_plugin!r}, which does not implement the RoutingPlugin "
+                "interface (an async `run(context)` method). Fix the referenced module before "
+                "starting the proxy."
+            )
+    complexity_router_config["plugins"] = resolved_plugins
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -4722,14 +4756,11 @@ class ProxyConfig:
                         model["litellm_params"][k] = get_secret(v)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
-                    plugin_paths = complexity_router_config.get("plugins")
-                    if isinstance(plugin_paths, list):
-                        complexity_router_config["plugins"] = [
-                            get_instance_fn(value=plugin_path, config_file_path=config_file_path)
-                            if isinstance(plugin_path, str)
-                            else plugin_path
-                            for plugin_path in plugin_paths
-                        ]
+                    resolve_complexity_router_plugins(
+                        model_name=model.get("model_name", ""),
+                        complexity_router_config=complexity_router_config,
+                        config_file_path=config_file_path,
+                    )
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)

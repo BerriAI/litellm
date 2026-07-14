@@ -893,10 +893,16 @@ class ComplexityRouter(CustomLogger):
         When `session_affinity` is enabled and a session_id is resolvable on the request,
         pins the model chosen on the session's first turn and reuses it for every later
         turn, skipping classification entirely. Otherwise delegates to `_classify_and_route`.
+
+        Skipped entirely when `plugins` are configured: reusing a stale pin would bypass
+        the plugin pipeline on every turn after the first, since a pinned model was never
+        re-checked against a policy plugin whose decision can change between turns (e.g. a
+        budget plugin, once the session's spend crosses its cap).
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if self.config.session_affinity else None
+        use_session_affinity = self.config.session_affinity and not self.config.plugins
+        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
