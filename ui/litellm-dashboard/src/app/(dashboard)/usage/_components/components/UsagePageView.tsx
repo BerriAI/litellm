@@ -8,6 +8,7 @@
 
 import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   Card,
   Col,
@@ -94,7 +95,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Debounced search for user selector
   const [userSearchInput, setUserSearchInput] = useState("");
   const [debouncedUserSearch, setDebouncedUserSearch] = useDebouncedState("", {
-    wait: 300,
+    wait: DEBOUNCE_WAIT_MS,
   });
 
   const {

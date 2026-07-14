@@ -4,12 +4,22 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "../add_model/ComplexityRouterConfig";
+import ComplexityRouterConfig, {
+  ComplexityRouterConfigValue,
+  DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_TIER_DISTANCE_PENALTY,
+} from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const isComplexityRouterModel = (modelData: any): boolean =>
   modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
   modelData?.litellm_params?.complexity_router_config != null;
+
+const normalizeTierModels = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value) return [value];
+  return [];
+};
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -19,6 +29,57 @@ interface EditAutoRouterModalProps {
   accessToken: string;
   userRole: string;
 }
+
+const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
+  "tiers",
+  "classifier_type",
+  "classifier_llm_config",
+  "adaptive",
+  "adaptive_weights",
+  "tier_distance_penalty",
+  "adaptive_eligible",
+]);
+
+const toRecord = (value: unknown): Record<string, unknown> => {
+  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+};
+
+export const buildUpdatedComplexityRouterConfig = (
+  storedConfig: unknown,
+  value: ComplexityRouterConfigValue,
+  customTechnicalKeywords?: string[],
+): Record<string, unknown> => {
+  const preservedConfig = Object.fromEntries(
+    Object.entries(toRecord(storedConfig)).filter(
+      ([key]) =>
+        !MANAGED_COMPLEXITY_ROUTER_KEYS.has(key) &&
+        (customTechnicalKeywords === undefined || key !== "custom_technical_keywords"),
+    ),
+  );
+  const adaptiveEligible = value.adaptive_eligible ?? "all";
+
+  return {
+    ...preservedConfig,
+    tiers: value.tiers,
+    classifier_type: value.classifier_type,
+    ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(customTechnicalKeywords &&
+      customTechnicalKeywords.length > 0 && {
+        custom_technical_keywords: customTechnicalKeywords,
+      }),
+    ...(value.adaptive && {
+      adaptive: true,
+      adaptive_weights: value.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
+      ...(adaptiveEligible === "all" && {
+        tier_distance_penalty: value.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
+      }),
+      adaptive_eligible: adaptiveEligible,
+    }),
+  };
+};
 
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
@@ -35,8 +96,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
+  const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
-    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
   const isComplexityRouter = isComplexityRouterModel(modelData);
@@ -85,14 +147,21 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
         setComplexityRouterConfig({
           tiers: {
-            SIMPLE: parsedConfig.tiers?.SIMPLE || "",
-            MEDIUM: parsedConfig.tiers?.MEDIUM || "",
-            COMPLEX: parsedConfig.tiers?.COMPLEX || "",
-            REASONING: parsedConfig.tiers?.REASONING || "",
+            SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
+            MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
+            COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
+            REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
           },
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
+          adaptive: parsedConfig.adaptive || false,
+          adaptive_weights: parsedConfig.adaptive_weights,
+          tier_distance_penalty: parsedConfig.tier_distance_penalty,
+          adaptive_eligible: parsedConfig.adaptive_eligible || "all",
         });
+        setCustomTechnicalKeywords(
+          Array.isArray(parsedConfig.custom_technical_keywords) ? parsedConfig.custom_technical_keywords : [],
+        );
 
         form.setFieldsValue({
           auto_router_name: modelData.model_name,
@@ -138,7 +207,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
       if (isComplexityRouter) {
         const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
-        if (Object.values(tiers).filter(Boolean).length === 0) {
+        if (Object.values(tiers).every((models) => models.length === 0)) {
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
           return;
         }
@@ -147,14 +216,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           return;
         }
 
-        const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+        const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
         const updatedLitellmParams = {
           ...modelData.litellm_params,
-          complexity_router_config: {
-            tiers,
-            classifier_type,
-            ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
-          },
+          complexity_router_config: buildUpdatedComplexityRouterConfig(
+            modelData.litellm_params?.complexity_router_config,
+            complexityRouterConfig,
+            customTechnicalKeywords,
+          ),
           complexity_router_default_model: defaultModel,
         };
         const updatedModelInfo = {
@@ -264,6 +333,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 onChange={(config) => {
                   setComplexityRouterConfig(config);
                 }}
+                customTechnicalKeywords={customTechnicalKeywords}
+                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
               />
             </div>
           ) : (

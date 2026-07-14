@@ -115,7 +115,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   }, [accessToken]);
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       {selectedTagId ? (
         <TagInfoView
           tagId={selectedTagId}
