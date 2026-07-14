@@ -2,6 +2,7 @@
 Test Bedrock AgentCore integration
 """
 
+import json
 import os
 import sys
 from dotenv import load_dotenv
@@ -11,61 +12,130 @@ load_dotenv()
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import httpx
 
+AGENTCORE_TEST_MODEL = "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/hosted_agent_test-MockedRt"
+
+FAKE_AWS_CREDS = {
+    "aws_access_key_id": "fake-access-key-id",
+    "aws_secret_access_key": "fake-secret-access-key",
+    "aws_region_name": "us-west-2",
+}
+
+AGENTCORE_ANSWER = "Machine learning is pattern matching at scale."
+
+AGENTCORE_SSE_BODY = (
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"Machine learning is "}}}}\n\n'
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"pattern matching at scale."}}}}\n\n'
+    'data: {"event":{"metadata":{"usage":{"inputTokens":12,"outputTokens":9,"totalTokens":21}}}}\n\n'
+    'data: {"message":{"role":"assistant","content":[{"text":"Machine learning is pattern matching at scale."}]}}\n'
+)
+
+
+def _json_invocation_response() -> Mock:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "result": {"role": "assistant", "content": [{"text": AGENTCORE_ANSWER}]}
+    }
+    return mock_response
+
+
+def _sse_invocation_response() -> Mock:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.text = AGENTCORE_SSE_BODY
+    return mock_response
+
+
+class _FakeAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    async def __aiter__(self):
+        yield self._payload
+
 
 @pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD",  # non-streaming invocation
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",  # streaming invocation
-    ],
+    "mock_response_factory,expected_total_tokens",
+    [(_json_invocation_response, None), (_sse_invocation_response, 21)],
+    ids=["json_invocation", "sse_invocation"],
 )
-def test_bedrock_agentcore_basic(model):
+def test_bedrock_agentcore_basic(mock_response_factory, expected_total_tokens, monkeypatch):
     """
-    Test AgentCore invocation parameterized by model
+    Test AgentCore invocation parameterized by the response shape the runtime returns
     """
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model=model,
-        messages=[
-            {"role": "user", "content": "Explain machine learning in simple terms"}
-        ],
-    )
-    print("response from agentcore=", response.model_dump_json(indent=4))
-    # Assert that the message content has a response with some length
-    assert response.choices[0].message.content
-    assert len(response.choices[0].message.content) > 0
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=mock_response_factory()) as mock_post:
+        response = litellm.completion(
+            model=AGENTCORE_TEST_MODEL,
+            messages=[
+                {"role": "user", "content": "Explain machine learning in simple terms"}
+            ],
+            client=client,
+            **FAKE_AWS_CREDS,
+        )
+
+    mock_post.assert_called_once()
+    request_body = json.loads(mock_post.call_args.kwargs["data"])
+    assert request_body == {"prompt": "Explain machine learning in simple terms"}
+    assert "AWS4-HMAC-SHA256" in mock_post.call_args.kwargs["headers"]["Authorization"]
+    assert response.choices[0].message.content == AGENTCORE_ANSWER
+    assert response.choices[0].finish_reason == "stop"
+    if expected_total_tokens is None:
+        assert response.usage.total_tokens > 0
+    else:
+        assert response.usage.total_tokens == expected_total_tokens
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD",  # streaming invocation
-    ],
-)
-async def test_bedrock_agentcore_with_streaming(model):
+async def test_bedrock_agentcore_with_streaming(monkeypatch):
     """
     Test AgentCore with streaming
     """
-    print("running streming test for model=", model)
-    # litellm._turn_on_debug()
-    response = await litellm.acompletion(
-        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
-        messages=[
-            {
-                "role": "user",
-                "content": "Explain machine learning in simple terms",
-            }
-        ],
-        stream=True,
-    )
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    async for chunk in response:
-        print("chunk=", chunk)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client = AsyncHTTPHandler()
+    streaming_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_FakeAsyncByteStream(AGENTCORE_SSE_BODY.encode()),
+        request=httpx.Request("POST", "https://bedrock-agentcore.us-west-2.amazonaws.com"),
+    )
+    with patch.object(
+        client, "post", new=AsyncMock(return_value=streaming_response)
+    ) as mock_post:
+        response = await litellm.acompletion(
+            model=AGENTCORE_TEST_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Explain machine learning in simple terms",
+                }
+            ],
+            stream=True,
+            client=client,
+            **FAKE_AWS_CREDS,
+        )
+        chunks = [chunk async for chunk in response]
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["stream"] is True
+    streamed_content = "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices
+    )
+    assert streamed_content == AGENTCORE_ANSWER
+    assert any(
+        chunk.choices[0].finish_reason == "stop" for chunk in chunks if chunk.choices
+    )
 
 
 def test_bedrock_agentcore_with_custom_params():
@@ -336,15 +406,14 @@ def test_bedrock_agentcore_with_all_parameters():
         assert request_data["prompt"] == "Complete test"
 
 
-def test_bedrock_agentcore_without_api_key_uses_sigv4():
+def test_bedrock_agentcore_without_api_key_uses_sigv4(monkeypatch):
     """
     Test that AgentCore uses AWS SigV4 signing when api_key is not provided
     """
-    import json
-
-    litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
+    litellm._turn_on_debug()
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     client = HTTPHandler()
 
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
@@ -357,9 +426,9 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
                         "content": "Test SigV4",
                     }
                 ],
-                # No api_key provided - should use SigV4
                 runtimeSessionId="sigv4-test-session",
                 client=client,
+                **FAKE_AWS_CREDS,
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -368,18 +437,14 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
-        # Verify headers - should have AWS SigV4 headers, not Bearer token
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
 
-        # Should NOT have Bearer Authorization when using SigV4
-        if "Authorization" in headers:
-            assert not headers["Authorization"].startswith("Bearer ")
-            # Should have AWS4-HMAC-SHA256 signature
-            assert "AWS4-HMAC-SHA256" in headers["Authorization"]
+        assert "Authorization" in headers
+        assert not headers["Authorization"].startswith("Bearer ")
+        assert "AWS4-HMAC-SHA256" in headers["Authorization"]
 
-        # Session ID should still be present
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
         assert (
             headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
