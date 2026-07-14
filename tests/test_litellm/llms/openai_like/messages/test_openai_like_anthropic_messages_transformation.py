@@ -250,11 +250,12 @@ def test_request_strips_advisor_blocks_when_advisor_tool_absent(config):
 
 
 def test_request_maps_reasoning_effort_to_thinking(config):
+    max_tokens = 8192
     payload = config.transform_anthropic_messages_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "hi"}],
         anthropic_messages_optional_request_params={
-            "max_tokens": 1024,
+            "max_tokens": max_tokens,
             "reasoning_effort": "medium",
         },
         litellm_params=GenericLiteLLMParams(),
@@ -264,6 +265,7 @@ def test_request_maps_reasoning_effort_to_thinking(config):
     assert "reasoning_effort" not in payload
     assert isinstance(payload.get("thinking"), dict)
     assert payload["thinking"].get("type") == "enabled"
+    assert payload["thinking"]["budget_tokens"] < max_tokens
 
 
 def test_passthrough_disables_anthropic_beta_filtering(config):
