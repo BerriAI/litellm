@@ -3059,3 +3059,115 @@ async def test_stream_chunk_builder_raise_and_usage_recovery_failure_does_not_cr
             chunks = [c async for c in response]
 
     assert len(chunks) > 0
+
+
+class TransportErrorAfterChunksIterator:
+    """Yields the given chunks, then raises the given exception once, then StopAsyncIteration."""
+
+    def __init__(self, model_responses, exception):
+        self.model_responses = model_responses
+        self.exception = exception
+        self.index = 0
+        self.raised = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index < len(self.model_responses):
+            chunk = self.model_responses[self.index]
+            self.index += 1
+            return chunk
+        if not self.raised:
+            self.raised = True
+            raise self.exception
+        raise StopAsyncIteration
+
+
+def _reset_test_chunk(content: Optional[str] = None, finish_reason: Optional[str] = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reset-test",
+        created=1783458104,
+        model="stub-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_transport_read_error_after_finish_reason_ends_stream_gracefully(
+    logging_obj: Logging,
+):
+    """A trailing connection reset after the provider's finish chunk must not fail the stream."""
+    import httpx
+
+    completion_stream = TransportErrorAfterChunksIterator(
+        model_responses=[
+            _reset_test_chunk(content="Hello"),
+            _reset_test_chunk(finish_reason="stop"),
+        ],
+        exception=httpx.ReadError("Response payload is not completed"),
+    )
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="hosted_vllm/stub-model",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    chunks = [chunk async for chunk in response]
+
+    finish_reasons = [
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].finish_reason
+    ]
+    contents = [
+        chunk.choices[0].delta.content
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content
+    ]
+    assert finish_reasons == ["stop"]
+    assert contents == ["Hello"]
+
+
+@pytest.mark.asyncio
+async def test_transport_read_error_before_finish_reason_raises(logging_obj: Logging):
+    """A connection reset before any finish chunk must surface, never end as a clean stop.
+
+    Regression test for silent empty/truncated HTTP 200 streams: the aiohttp
+    transport used to swallow mid-stream connection resets, so the wrapper saw a
+    clean end-of-stream and fabricated finish_reason "stop".
+    """
+    import httpx
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    completion_stream = TransportErrorAfterChunksIterator(
+        model_responses=[_reset_test_chunk(content="Hel")],
+        exception=httpx.ReadError("Response payload is not completed"),
+    )
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="hosted_vllm/stub-model",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    received = []
+    with pytest.raises(MidStreamFallbackError):
+        async for chunk in response:
+            received.append(chunk)
+
+    fabricated_finish_reasons = [
+        chunk.choices[0].finish_reason
+        for chunk in received
+        if chunk.choices and chunk.choices[0].finish_reason
+    ]
+    assert fabricated_finish_reasons == []
