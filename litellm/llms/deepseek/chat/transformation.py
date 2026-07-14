@@ -8,6 +8,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
@@ -135,6 +136,57 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             and (optional_params.get("thinking") or {}).get("type") == "enabled"
         )
 
+    def _downgrade_json_schema_to_json_object(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+    ) -> tuple[list[AllMessageValues], dict]:
+        """
+        DeepSeek's /chat/completions rejects `response_format={"type": "json_schema"}`
+        with "This response_format type is unavailable now" — no DeepSeek model
+        supports native Structured Outputs, only JSON mode (`{"type": "json_object"}`).
+        See recurring reports #7580 and #7646.
+
+        DeepSeek models are marked `supports_response_schema=True` in the model-cost
+        map (#20885) and downstream consumers filter their model lists on that flag, so
+        flipping it is not an option. Instead, honour the flag: downgrade json_schema to
+        json_object and move the schema into the prompt via `response_schema_prompt`
+        (the same helper the Gemini path uses when it can't enforce a schema natively).
+        The injected message also satisfies DeepSeek's requirement that the word "json"
+        appear in the input when json_object mode is used.
+
+        The downgrade is unconditional (not gated on `supports_response_schema`) because
+        no DeepSeek model supports native json_schema.
+        """
+        response_format = optional_params.get("response_format")
+        if not isinstance(response_format, dict) or response_format.get("type") != "json_schema":
+            return messages, optional_params
+
+        json_schema: Optional[dict] = None
+        nested_schema = response_format.get("json_schema")
+        if isinstance(nested_schema, dict):
+            json_schema = nested_schema.get("schema")
+        elif "response_schema" in response_format:
+            json_schema = response_format["response_schema"]
+
+        # DeepSeek rejects the json_schema *type* itself, so the format must always be
+        # downgraded to json_object — even when the schema body is absent/empty, where
+        # there is simply nothing to inject. Only convey the schema (and satisfy the
+        # "json" keyword requirement) via the prompt when one is actually present.
+        if json_schema:
+            messages = messages + [
+                {
+                    "role": "user",
+                    "content": response_schema_prompt(model=model, response_schema=json_schema),
+                }
+            ]
+        optional_params = {
+            **optional_params,
+            "response_format": {"type": "json_object"},
+        }
+        return messages, optional_params
+
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
         """
@@ -222,6 +274,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
         optional_params = self._drop_unsupported_tools(optional_params)
+        messages, optional_params = self._downgrade_json_schema_to_json_object(
+            model=model, messages=messages, optional_params=optional_params
+        )
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
@@ -245,6 +300,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         fix for multi-turn thinking-mode conversations.
         """
         optional_params = self._drop_unsupported_tools(optional_params)
+        messages, optional_params = self._downgrade_json_schema_to_json_object(
+            model=model, messages=messages, optional_params=optional_params
+        )
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return await super().async_transform_request(
