@@ -23,6 +23,7 @@ def _get_prisma_env() -> dict:
     prisma_env = os.environ.copy()
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
+        prisma_env.setdefault("PRISMA_CLI_QUERY_ENGINE_TYPE", "binary")
         prisma_env["NPM_CONFIG_PREFER_OFFLINE"] = "true"
         prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
             "NPM_CONFIG_CACHE", "/app/.cache/npm"
