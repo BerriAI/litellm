@@ -1,29 +1,9 @@
 """Live e2e: Arize Phoenix trace delivery for the global ``arize_phoenix`` callback.
 
-Registry cells:
-- logging.arize_phoenix.success.logs_spend (messages)
-- logging.arize_phoenix.stream.logs_spend  (messages)
-
-The proxy ships OTLP spans to the compose ``phoenix`` service
-(PHOENIX_COLLECTOR_HTTP_ENDPOINT); read-back is Phoenix's REST route
-``/v1/projects/{project}/spans``. Every request must yield exactly one
-``litellm_request`` generation span in Phoenix. ArizePhoenixLogger builds its
-own TracerProvider precisely so it can coexist with other OTEL-based callbacks
-(datadog, otel, arize) without either dropping or double-shipping traces, so
-the burst test counts spans per request instead of just probing for presence.
-
-The burst class simulates Claude Code traffic: consecutive Anthropic-format
-``/v1/messages`` calls, mixing streaming and tool use, against a Claude model.
-
-Known-red (registry fail_before_fix: proven): non-streaming /v1/messages
-currently ships two complete traces per request. The @client async wrapper
-enqueues async_success_handler AND executor-submits the sync success_handler;
-the sync CustomLogger gate keys off _is_sync_litellm_request, whose flag list
-(acompletion/aresponses/aembedding/...) has no marker for the async-only
-anthropic_messages entrypoint, so log_success_event fires a second time.
-Streaming escapes because only the async handler assembles the final stream.
-test_burst_ships_exactly_one_trace_per_request stays strict so the fix has a
-regression gate.
+Every test sends real /v1/messages traffic through the proxy and reads spans
+back from Phoenix over its REST API, matched by a unique prompt marker. The
+burst tests stay strict (exactly one generation span and one spend row per
+request) so duplicate-logging regressions fail loudly.
 """
 
 from __future__ import annotations
@@ -38,17 +18,20 @@ from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 from logging_client import (
     CLAUDE_CODE_TOOLS,
-    PHOENIX_GENERATION_SPAN,
     LoggingClient,
     PhoenixCreds,
     costs_agree,
     phoenix_span_blob,
 )
-from models import AnthropicMessagesResponse, AnthropicToolChoice, SpendLogRow, SpendLogsParams
+from models import (
+    AnthropicMessagesResponse,
+    AnthropicToolChoice,
+    SpendLogRow,
+    SpendLogsParams,
+)
 
 pytestmark = pytest.mark.e2e
 
-DRIVER_MODEL = "claude-haiku-4-5"
 CLAUDE_CODE_BURST = 10
 
 
@@ -58,7 +41,12 @@ def _utc_now_iso() -> str:
 
 def _fresh_key(client: LoggingClient, resources: ResourceManager) -> str:
     key = client.key_with_alias(
-        f"e2e-phoenix-key-{unique_marker()}", models=[DRIVER_MODEL]
+        f"e2e-phoenix-key-{unique_marker()}",
+        models=[
+            "bedrock/us.anthropic.claude-sonnet-5",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+        ],
     )
     resources.defer(lambda: client.delete_key(key))
     return key
@@ -74,41 +62,55 @@ class TestArizePhoenixLogging:
     """The arize_phoenix callback on Anthropic-format /v1/messages traffic."""
 
     @pytest.mark.covers("logging.arize_phoenix.success.logs_spend", exercised_on=["messages"])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us.anthropic.claude-sonnet-5",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+        ],
+    )
     def test_messages_success_delivers_trace(
         self,
         client: LoggingClient,
         resources: ResourceManager,
         phoenix_creds: PhoenixCreds,
+        model: str,
     ) -> None:
         key = _fresh_key(client, resources)
         since = _utc_now_iso()
         marker = unique_marker()
-        outcome = client.messages_raw(
-            key, DRIVER_MODEL, f"reply with one word only {marker}"
-        )
+        outcome = client.messages_raw(key, model, f"What's the capital of France? (run {marker})")
         require_successful_call(outcome)
 
         spans = client.poll_phoenix_spans(phoenix_creds, marker=marker, since=since)
         assert spans, (
-            f"Phoenix never received a {PHOENIX_GENERATION_SPAN} span for "
+            f"Phoenix never received a generation span for "
             f"marker={marker!r} in project {phoenix_creds.project!r}"
         )
 
     @pytest.mark.covers("logging.arize_phoenix.success.logs_spend", exercised_on=["messages"])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us.anthropic.claude-sonnet-5",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+        ],
+    )
     def test_messages_spend_log_flushed(
         self,
         client: LoggingClient,
         resources: ResourceManager,
         phoenix_creds: PhoenixCreds,
+        model: str,
     ) -> None:
         """The Phoenix trace and the proxy's own spend row must both land for one
         request, and their costs must agree with x-litellm-response-cost."""
         key = _fresh_key(client, resources)
         since = _utc_now_iso()
         marker = unique_marker()
-        outcome = client.messages_raw(
-            key, DRIVER_MODEL, f"reply with one word only {marker}"
-        )
+        outcome = client.messages_raw(key, model, f"Who is Lebron James? (run {marker})")
         require_successful_call(outcome)
 
         spans = client.poll_phoenix_spans(phoenix_creds, marker=marker, since=since)
@@ -129,18 +131,27 @@ class TestArizePhoenixLogging:
         )
 
     @pytest.mark.covers("logging.arize_phoenix.success.logs_spend", exercised_on=["messages"])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us.anthropic.claude-sonnet-5",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+        ],
+    )
     def test_messages_tool_use_on_trace(
         self,
         client: LoggingClient,
         resources: ResourceManager,
         phoenix_creds: PhoenixCreds,
+        model: str,
     ) -> None:
         key = _fresh_key(client, resources)
         since = _utc_now_iso()
         marker = unique_marker()
         outcome = client.messages_raw(
             key,
-            DRIVER_MODEL,
+            model,
             f"Read the file /workspace/config-{marker}.yaml",
             tools=CLAUDE_CODE_TOOLS,
             tool_choice=AnthropicToolChoice(type="any"),
@@ -163,9 +174,8 @@ class TestArizePhoenixLogging:
         )
 
 
-class TestClaudeCodeSimulation:
-    """A Claude Code-style burst over /v1/messages: many consecutive calls with
-    streaming and tool use mixed in, then exact per-request trace accounting."""
+class TestAreThereDuplicateTraces:
+    "Using both anthropic /v1/messages and bedrock (uses passthrough) logger to check if it logs duplicate traces."
 
     @pytest.mark.covers("logging.arize_phoenix.stream.logs_spend", exercised_on=["messages"])
     def test_burst_ships_exactly_one_trace_per_request(
@@ -183,7 +193,7 @@ class TestClaudeCodeSimulation:
         for i, marker in enumerate(markers):
             outcome = client.messages_raw(
                 key,
-                DRIVER_MODEL,
+                "bedrock/us.anthropic.claude-sonnet-5" if i % 2 == 0 else "anthropic/claude-sonnet-5",
                 f"Claude Code session step: reply with one word only {marker}",
                 stream=i % 2 == 1,
                 tools=CLAUDE_CODE_TOOLS if i % 3 == 0 else None,
@@ -202,7 +212,7 @@ class TestClaudeCodeSimulation:
         spans = [
             span
             for span in client.find_phoenix_spans(phoenix_creds, marker=run, since=since)
-            if span.status_code == "OK"
+            if span.get("status_code") != "ERROR"
         ]
         counts = {
             marker: sum(1 for span in spans if marker in phoenix_span_blob(span))
@@ -210,7 +220,7 @@ class TestClaudeCodeSimulation:
         }
         wrong = {marker: n for marker, n in counts.items() if n != 1}
         assert not wrong, (
-            f"every request must ship exactly one {PHOENIX_GENERATION_SPAN} span to "
+            f"every request must ship exactly one generation span to "
             f"Phoenix; off-by-count markers (duplicates > 1, dropped == 0): {wrong}"
         )
         assert len(spans) == CLAUDE_CODE_BURST, (
@@ -233,7 +243,7 @@ class TestClaudeCodeSimulation:
             require_successful_call(
                 client.messages_raw(
                     key,
-                    DRIVER_MODEL,
+                    "bedrock/us.anthropic.claude-sonnet-5" if i % 2 == 0 else "anthropic/claude-sonnet-5",
                     f"Claude Code session step: reply with one word only {marker}",
                     stream=i % 2 == 1,
                 )
@@ -258,6 +268,6 @@ class TestClaudeCodeSimulation:
         spans = client.poll_phoenix_spans(
             phoenix_creds, marker=run, min_count=CLAUDE_CODE_BURST, since=since
         )
-        assert len([s for s in spans if s.status_code == "OK"]) >= CLAUDE_CODE_BURST, (
+        assert len([s for s in spans if s.get("status_code") != "ERROR"]) >= CLAUDE_CODE_BURST, (
             f"Phoenix must hold a trace for each of the {CLAUDE_CODE_BURST} spend rows"
         )

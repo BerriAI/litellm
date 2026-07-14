@@ -407,13 +407,13 @@ class FileListResponse(BaseModel):
     data: list[FileEntry]
 
 
+
+# creating fine tuning jobs (deprecated as of July 2026), we list finetuning jobs so tests wont fail on our suite.
 class FineTuningJobsParams(BaseModel):
     custom_llm_provider: Literal["openai", "azure"]
 
-
 class FineTuningJobEntry(BaseModel):
     id: str
-
 
 class FineTuningJobsResponse(BaseModel):
     """GET /fine_tuning/jobs answer; `data` required for the same reason as

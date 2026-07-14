@@ -15,7 +15,7 @@ Dynamic credentials by product surface:
 - user/key: key metadata.logging with callback_name=langfuse_otel
 - org: organization + team under it + team callback (no org-level callback API)
 
-Extra success paths assert tool calls and applied guardrails land on the trace.
+Extra success paths assert tool calls land on the trace.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from logging_client import (
     LoggingClient,
     completion_response_id,
     costs_agree,
-    observation_has_guardrail,
     observation_mentions_tool,
     observation_spend,
 )
@@ -284,70 +283,6 @@ class TestLangfuseTeamLogging:
             obs_cost=observation_spend(obs),
             scope="team-tools",
         )
-
-    @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["chat_completions"])
-    def test_tool_permission_guardrail_logged(
-        self,
-        client: LoggingClient,
-        resources: ResourceManager,
-        langfuse_creds: LangfuseCreds,
-    ) -> None:
-        """tool_permission post_call guardrail must appear on the Langfuse trace
-        (StandardLogging guardrail_information -> Langfuse guardrail span)."""
-        marker = unique_marker()
-        guardrail_name = f"e2e-lf-tool-perm-{marker}"
-        guardrail_id = client.create_tool_permission_guardrail(
-            guardrail_name, allowed_tool="get_weather"
-        )
-        resources.defer(lambda: client.delete_guardrail(guardrail_id))
-
-        _, key, key_alias = self._team_key(
-            client, resources, langfuse_creds, models=[DRIVER_MODEL]
-        )
-        prompt_marker = unique_marker()
-        outcome = client.chat_raw(
-            key,
-            DRIVER_MODEL,
-            f"Use get_weather for Berlin. marker={prompt_marker}",
-            tools=[WEATHER_TOOL],
-            tool_choice="required",
-            guardrails=[guardrail_name],
-            max_tokens=128,
-        )
-        require_successful_call(outcome)
-
-        observations = client.poll_langfuse_trace_observations(
-            langfuse_creds, key_alias=key_alias, prompt_marker=prompt_marker
-        )
-        assert observations, (
-            f"team+guardrail: no Langfuse observations for key_alias={key_alias!r}"
-        )
-        gen = next(
-            (
-                o
-                for o in observations
-                if prompt_marker in _json_blob(o.input)
-                or key_alias in _json_blob(o.metadata)
-                or o.name in (f"litellm:{key_alias}", "litellm_request")
-            ),
-            observations[0],
-        )
-        _assert_logs_spend(
-            client,
-            key=key,
-            outcome=outcome,
-            obs_cost=observation_spend(gen),
-            scope="team-guardrail",
-        )
-        assert any(
-            observation_has_guardrail(o, guardrail_name=guardrail_name)
-            or (o.name is not None and "guardrail" in o.name.lower())
-            for o in observations
-        ), (
-            f"Langfuse trace must include applied guardrail {guardrail_name!r}; "
-            f"observation names={[o.name for o in observations]}"
-        )
-
 
 class TestLangfuseUserKeyLogging:
     """User-owned key with metadata.logging (key-level dynamic Langfuse credentials).

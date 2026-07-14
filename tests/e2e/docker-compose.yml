@@ -10,6 +10,7 @@ configs:
         proxy_budget_rescheduler_max_time: 10
 
       litellm_settings:
+        callbacks: ["prometheus", "datadog", "arize_phoenix"]
         drop_params: true
         num_retries: 3
         request_timeout: 600
@@ -87,6 +88,10 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       AZURE_API_BASE: ${AZURE_API_BASE:-}
       AZURE_API_KEY: ${AZURE_API_KEY:-}
+      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-}
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
+      PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-}
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: span_only
     ports:
       - "4000:4000"
     configs:

@@ -20,6 +20,7 @@ from typing import Iterator
 
 import pytest
 import requests
+from dotenv import load_dotenv
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
@@ -29,6 +30,7 @@ _E2E_TEST_RAN = pytest.StashKey[bool]()
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    load_dotenv(Path(__file__).parent / ".env")
     config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",

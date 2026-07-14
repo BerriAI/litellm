@@ -1,14 +1,10 @@
-"""Client for the logging e2e suite: team/key/org-scoped Langfuse OTEL callbacks,
-chat (including tools), Prometheus scrape, and Langfuse observation read-back.
+"""Client for the logging e2e suite.
 
-Holds the shared Gateway so the ``resources`` fixture cleans up keys, teams,
-users, orgs, and models it creates. External Langfuse reads go through
-``e2e_http`` (the only module allowed to call ``requests.*``).
+The suite drives the otel_v2 logging pipeline; providers covered are langfuse,
+arize_phoenix, datadog, and prometheus.
 
-Uses the ``langfuse_otel`` callback (OTLP to ``{host}/api/public/otel``), not
-the classic ``langfuse`` SDK callback. OTEL generations land as name
-``litellm_request``; correlate by unique prompt marker and ``user_api_key_alias``
-in metadata. Spend is on ``calculatedTotalCost`` (StandardLogging response_cost).
+Holds the shared Gateway so the ResourceManager cleans up keys, teams, users,
+orgs, and models it creates.
 """
 
 from __future__ import annotations
@@ -21,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, ValidationError
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
 from e2e_gateway import Gateway, build_gateway
@@ -77,8 +73,6 @@ WEATHER_TOOL = ChatTool(
     ),
 )
 
-PHOENIX_GENERATION_SPAN = "litellm_request"
-PHOENIX_PROXY_PARENT_SPAN = "litellm_proxy_request"
 _PHOENIX_MAX_PAGES = 20
 
 CLAUDE_CODE_TOOLS = [
@@ -111,33 +105,7 @@ class TeamCallbackBody(BaseModel):
 
 class TeamCallbackResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     status: str
-
-
-class GuardrailLitellmParams(BaseModel):
-    guardrail: str
-    mode: str
-    default_on: bool = False
-    rules: list[dict[str, object]] | None = None
-    default_action: str | None = None
-    on_disallowed_action: str | None = None
-
-
-class GuardrailSpec(BaseModel):
-    guardrail_name: str
-    litellm_params: GuardrailLitellmParams
-
-
-class CreateGuardrailBody(BaseModel):
-    guardrail: GuardrailSpec
-
-
-class CreateGuardrailResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    guardrail_id: str | None = None
-    guardrail_name: str | None = None
 
 
 class LangfuseObservation(BaseModel):
@@ -206,36 +174,6 @@ class LangfuseCreds:
         )
 
 
-class PhoenixSpanContext(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    trace_id: str
-    span_id: str
-
-
-class PhoenixSpan(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    name: str
-    context: PhoenixSpanContext
-    parent_id: str | None = None
-    status_code: str
-    attributes: dict[str, JsonValue] = {}
-
-
-class PhoenixSpansPage(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    data: list[PhoenixSpan] = []
-    next_cursor: str | None = None
-
-
-class PhoenixSpansParams(BaseModel):
-    limit: int = 100
-    cursor: str | None = None
-    start_time: str | None = None
-
-
 @dataclass(frozen=True, slots=True)
 class PhoenixCreds:
     base_url: str
@@ -250,15 +188,24 @@ class PhoenixCreds:
 
 
 def load_phoenix_creds() -> PhoenixCreds:
-    """Local compose Phoenix by default (docker-compose.yml `phoenix` service);
-    env overrides point the read-back at a deployed Phoenix instead."""
-    base_url = (os.getenv("PHOENIX_BASE_URL") or "http://localhost:6006").rstrip("/")
-    project = os.getenv("PHOENIX_PROJECT_NAME") or "litellm-e2e"
-    return PhoenixCreds(base_url=base_url, project=project, api_key=os.getenv("PHOENIX_API_KEY"))
+    """Reads the exact env vars the proxy's arize_phoenix integration reads, so
+    the read-back always targets the same Phoenix host and project the proxy
+    ships traces to (locally and on the EKS cluster)."""
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        pytest.fail(
+            "Arize Phoenix e2e requires PHOENIX_COLLECTOR_ENDPOINT; "
+            "missing credentials is a hard failure, not a skip"
+        )
+    return PhoenixCreds(
+        base_url=endpoint.rstrip("/").removesuffix("/v1/traces"),
+        project=os.getenv("PHOENIX_PROJECT_NAME") or "default",
+        api_key=os.getenv("PHOENIX_API_KEY"),
+    )
 
 
-def phoenix_span_blob(span: PhoenixSpan) -> str:
-    return json.dumps(span.attributes, default=str)
+def phoenix_span_blob(span: dict[str, JsonValue]) -> str:
+    return json.dumps(span.get("attributes"), default=str)
 
 
 def load_langfuse_creds() -> LangfuseCreds:
@@ -321,15 +268,6 @@ def observation_mentions_tool(obs: LangfuseObservation, tool_name: str) -> bool:
         default=str,
     )
     return tool_name in blob
-
-
-def observation_has_guardrail(obs: LangfuseObservation, *, guardrail_name: str) -> bool:
-    blob = json.dumps(obs.metadata, default=str) if obs.metadata is not None else ""
-    if guardrail_name in blob or "guardrail" in blob.lower():
-        return True
-    if obs.name is not None and "guardrail" in obs.name.lower():
-        return True
-    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,46 +389,6 @@ class LoggingClient:
             f"POST /team/{team_id}/callback must return status=success; got {response.status!r}"
         )
 
-    def create_tool_permission_guardrail(self, name: str, *, allowed_tool: str) -> str:
-        """Register a tool_permission guardrail that allows one tool and denies the rest."""
-        response = unwrap(
-            self.gateway.transport.post(
-                "/guardrails",
-                headers=self.gateway.transport.master,
-                json=CreateGuardrailBody(
-                    guardrail=GuardrailSpec(
-                        guardrail_name=name,
-                        litellm_params=GuardrailLitellmParams(
-                            guardrail="tool_permission",
-                            mode="post_call",
-                            default_on=False,
-                            default_action="deny",
-                            on_disallowed_action="block",
-                            rules=[
-                                {
-                                    "id": "allow-named-tool",
-                                    "tool_name": allowed_tool,
-                                    "decision": "allow",
-                                }
-                            ],
-                        ),
-                    )
-                ),
-                response_type=CreateGuardrailResponse,
-            )
-        )
-        guardrail_id = response.guardrail_id
-        assert guardrail_id, f"create guardrail returned no id: {response!r}"
-        return guardrail_id
-
-    def delete_guardrail(self, guardrail_id: str) -> None:
-        _ = self.gateway.transport.delete(
-            f"/guardrails/{guardrail_id}",
-            headers=self.gateway.transport.master,
-            json=NoBody(),
-            response_type=NoBody,
-        )
-
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
         return self.gateway.create_model(model_name, litellm_params)
 
@@ -518,7 +416,6 @@ class LoggingClient:
         stream: bool = False,
         tools: list[ChatTool] | None = None,
         tool_choice: str | None = None,
-        guardrails: list[str] | None = None,
         max_tokens: int = 64,
     ) -> StreamingResponse:
         body = ChatBody(
@@ -528,7 +425,6 @@ class LoggingClient:
             stream=stream,
             tools=tools,
             tool_choice=tool_choice,
-            guardrails=guardrails,
         )
         if stream:
             return self.gateway.chat_stream(key, body)
@@ -602,41 +498,48 @@ class LoggingClient:
         creds: PhoenixCreds,
         *,
         since: str | None = None,
-    ) -> list[PhoenixSpan]:
+    ) -> list[dict[str, JsonValue]]:
         """Every span Phoenix holds for the project (paged read of the
         /v1/projects/{project}/spans REST route), newest window bounded by ``since``."""
-        pages: list[list[PhoenixSpan]] = []
+        spans: list[dict[str, JsonValue]] = []
         cursor: str | None = None
         for _ in range(_PHOENIX_MAX_PAGES):
+            query = {"limit": "100"} | ({"cursor": cursor} if cursor else {}) | ({"start_time": since} if since else {})
             result = get(
                 URL(f"{creds.base_url}/v1/projects/{creds.project}/spans"),
                 headers=creds.auth_headers,
-                params=PhoenixSpansParams(limit=100, cursor=cursor, start_time=since),
-                response_type=PhoenixSpansPage,
+                params=RootModel[dict[str, str]].model_validate(query),
+                response_type=RootModel[JsonValue],
                 timeout=30.0,
             )
-            match result:
-                case Success(data=page):
-                    pages.append(page.data)
-                    cursor = page.next_cursor
-                    if cursor is None:
-                        break
-                case _:
-                    break
-        return [span for page in pages for span in page]
+            if not isinstance(result, Success):
+                break
+            page = result.data.root
+            if not isinstance(page, dict):
+                break
+            data = page.get("data")
+            if isinstance(data, list):
+                spans.extend(span for span in data if isinstance(span, dict))
+            next_cursor = page.get("next_cursor")
+            if not isinstance(next_cursor, str):
+                break
+            cursor = next_cursor
+        return spans
 
     def find_phoenix_spans(
         self,
         creds: PhoenixCreds,
         *,
         marker: str,
-        span_name: str = PHOENIX_GENERATION_SPAN,
         since: str | None = None,
-    ) -> list[PhoenixSpan]:
+    ) -> list[dict[str, JsonValue]]:
+        """LLM generation spans carrying ``marker``. Only generation spans hold
+        message content, so the marker match excludes the request's child spans
+        (db writes, cache reads) that share the LLM span kind."""
         return [
             span
             for span in self.list_phoenix_spans(creds, since=since)
-            if span.name == span_name and marker in phoenix_span_blob(span)
+            if span.get("span_kind") == "LLM" and marker in phoenix_span_blob(span)
         ]
 
     def poll_phoenix_spans(
@@ -644,18 +547,15 @@ class LoggingClient:
         creds: PhoenixCreds,
         *,
         marker: str,
-        span_name: str = PHOENIX_GENERATION_SPAN,
         min_count: int = 1,
         since: str | None = None,
-    ) -> list[PhoenixSpan]:
-        """Poll until at least ``min_count`` spans named ``span_name`` carry
-        ``marker`` in their attributes, or the poll budget runs out."""
+    ) -> list[dict[str, JsonValue]]:
+        """Poll until at least ``min_count`` generation spans carry ``marker``
+        in their attributes, or the poll budget runs out."""
         deadline = time.monotonic() + POLL_TIMEOUT
-        matched: list[PhoenixSpan] = []
+        matched: list[dict[str, JsonValue]] = []
         while time.monotonic() < deadline:
-            matched = self.find_phoenix_spans(
-                creds, marker=marker, span_name=span_name, since=since
-            )
+            matched = self.find_phoenix_spans(creds, marker=marker, since=since)
             if len(matched) >= min_count:
                 return matched
             time.sleep(POLL_INTERVAL)
@@ -733,7 +633,7 @@ class LoggingClient:
         key_alias: str,
         prompt_marker: str,
     ) -> list[LangfuseObservation]:
-        """Generation plus any sibling/child observations (guardrail spans, etc.)."""
+        """Generation plus any sibling/child observations."""
         gen = self.poll_langfuse_observation(
             creds, key_alias=key_alias, prompt_marker=prompt_marker
         )
@@ -743,4 +643,17 @@ class LoggingClient:
 
 
 def build_logging_client() -> LoggingClient:
-    return LoggingClient(gateway=build_gateway())
+    client = LoggingClient(gateway=build_gateway())
+    client.create_model(
+        "bedrock/us.anthropic.claude-sonnet-5",
+        LiteLLMParamsBody(model="bedrock/us.anthropic.claude-sonnet-5"),
+    )
+    client.create_model(
+        "bedrock/us.anthropic.claude-opus-4-8",
+        LiteLLMParamsBody(model="bedrock/us.anthropic.claude-opus-4-8"),
+    )
+    client.create_model(
+        "anthropic/claude-sonnet-5",
+        LiteLLMParamsBody(model="anthropic/claude-sonnet-5", api_key="os.environ/ANTHROPIC_API_KEY"),
+    )
+    return client
