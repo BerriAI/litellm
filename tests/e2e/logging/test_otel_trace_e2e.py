@@ -26,7 +26,8 @@ from pydantic import BaseModel, ConfigDict
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
-from logging_client import LoggingClient
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient
+from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
 
 pytestmark = pytest.mark.e2e
@@ -159,6 +160,56 @@ def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
         if tag.key == key:
             return tag.value
     return None
+
+
+#: The attribute contract a failed call's gen-AI span must carry (LIT-4179), as
+#: one reviewable payload. Exact-match values; error.message is additionally
+#: proven untruncated by _assert_error_span_contract, which parses the provider
+#: error JSON embedded in it - a truncated message stops parsing.
+EXPECTED_ERROR_SPAN_ATTRIBUTES: dict[str, str] = {
+    "error": "True",
+    "error.type": "AuthenticationError",
+    "otel.status_code": "ERROR",
+}
+
+
+class _ProviderErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    message: str
+
+
+class _ProviderError(BaseModel):
+    """The provider error JSON embedded in error.message; validating it proves
+    the attribute survived untruncated (a cut-off message stops parsing)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    error: _ProviderErrorDetail
+
+
+def _assert_error_span_contract(span: JaegerSpan) -> None:
+    """The failed call's gen-AI span carries the LIT-4179 error contract: the
+    exact attributes in EXPECTED_ERROR_SPAN_ATTRIBUTES, plus an untruncated
+    error.message whose embedded provider error JSON still parses and whose
+    text also rides the span status description."""
+    for key, expected in EXPECTED_ERROR_SPAN_ATTRIBUTES.items():
+        actual = _tag(span, key)
+        assert str(actual) == expected, f"error span attribute {key!r} must be {expected!r}, got {actual!r}"
+
+    message = _tag(span, "error.message")
+    assert isinstance(message, str) and message, "error span must carry a non-empty error.message"
+    assert "AnthropicException" in message, (
+        f"error.message must carry the upstream provider exception, got: {message[:200]}"
+    )
+    provider_error = _ProviderError.model_validate_json(message[message.index("{") : message.rindex("}") + 1])
+    assert provider_error.error.message == "invalid x-api-key", (
+        f"the embedded provider error must survive untruncated; parsed: {provider_error}"
+    )
+    assert _tag(span, "otel.status_description") == message, (
+        "the span status description must carry the same untruncated message as error.message"
+    )
 
 
 class TestOtelTraceCompleteness:
@@ -444,3 +495,63 @@ class TestOtelTraceCompleteness:
         assert spend_row.call_type == "aresponses", (
             f"the spend row must be attributed to the responses call type, got {spend_row.call_type!r}"
         )
+
+    @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
+    def test_failed_chat_completions_error_span_attributes(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A failed /chat/completions call (upstream authentication error) must
+        export one complete OTEL trace whose gen-AI span carries the full
+        LIT-4179 error contract: error=True, the exact error.type, ERROR span
+        status, and an UNTRUNCATED error.message containing the provider's
+        complete error JSON - proven by parsing that JSON back out of the
+        attribute (truncation breaks the parse). The root SERVER span must
+        record the 401 the client received.
+
+        The trace has no cost-write span by design: a failed call bills
+        nothing, so the tree contract is asserted with require_cost_span=False.
+
+        The failure is produced by registering a deployment with a deliberately
+        invalid upstream Anthropic key, so the request clears proxy auth and
+        fails at the provider - the only path that produces a gen-AI error span
+        (proxy-gate rejections never reach the model and are deliberately not
+        traced as LLM calls).
+        """
+        route = "/chat/completions"
+        _assert_otel_destination_configured(client)
+
+        model_name = f"otel-err-{unique_marker()}"
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
+        resources.defer(lambda: client.delete_key(key))
+
+        deadline = time.monotonic() + client.gateway.poll_timeout
+        while True:
+            outcome = client.chat_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
+            assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
+            if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
+                break
+            time.sleep(client.gateway.poll_interval)
+        assert outcome.status_code == 401, (
+            f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.call_id is not None, "failed responses must still carry x-litellm-call-id"
+
+        genai_span = f"chat {model_name}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span, require_cost_span=False),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span, require_cost_span=False)
+
+        root = next(span for span in hits[0].spans if not span.references)
+        assert str(_tag(root, "http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        )
+        genai = next(span for span in hits[0].spans if span.operation_name == genai_span)
+        _assert_error_span_contract(genai)
