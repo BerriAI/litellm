@@ -657,6 +657,7 @@ async def test_register_client_persists_dcr_client_identity():
     update_data = mock_update.call_args.kwargs["data"]
     assert update_data.server_id == "remote_server"
     assert update_data.token_url == "https://provider.example/oauth/token"
+    assert update_data.authorization_url == "https://provider.example/oauth/authorize"
     assert update_data.credentials["client_id"] == "generated-client"
     assert update_data.credentials["client_secret"] == "generated-secret"
     assert update_data.credentials["token_endpoint_auth_method"] == "client_secret_basic"
