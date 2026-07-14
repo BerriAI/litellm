@@ -171,35 +171,11 @@ class LiteLLMCompletionResponsesConfig:
         tool_choice: Any,
     ) -> str | dict[str, Any] | None:
         """
-        Transform tool_choice into the shape the Responses API's own
-        ``ResponsesAPIResponse.tool_choice`` field accepts.
-
-        This is the inverse of ``_transform_tool_choice``: that function
-        converts an incoming Responses-API-shaped tool_choice into Chat
-        Completion format so it can be sent to the provider. But the
-        streaming iterator also needs a tool_choice value to echo back on
-        the synthetic ``response.created``/``response.in_progress`` events,
-        and those events are validated against the Responses API schema, not
-        the Chat Completion one. Reusing the Chat-Completion-shaped value
-        there fails validation for a forced named tool call, since OpenAI's
-        Responses API ``ToolChoiceFunctionParam`` is the flat
-        ``{"type": "function", "name": "..."}``, not Chat Completion's
-        nested ``{"type": "function", "function": {"name": "..."}}``.
-
-        Delegates to ``_transform_tool_choice`` first to normalize any
-        Cursor-IDE-style dict input (e.g. {"type": "tool"}, {"type":
-        "function"} without a name) into a string or the Chat Completion
-        nested shape, then rewrites only the nested-function case into the
-        flat Responses API shape.
-
-        Handles:
-        - String values: "auto", "none", "required" -> pass through as-is
-        - Dict with type only (Cursor IDE format), normalized the same way
-          as _transform_tool_choice: {"type": "auto"/"none"/"required"/
-          "tool"/"any"} -> the corresponding string
-        - Chat Completion nested function format:
-            - {"type": "function", "function": {"name": "..."}} -> {"type": "function", "name": "..."}
-        - Already-flat Responses API format: pass through as-is
+        Inverse of ``_transform_tool_choice``: normalizes tool_choice into the
+        shape ``ResponsesAPIResponse.tool_choice`` accepts (flat
+        ``{"type": "function", "name": "..."}``), not Chat Completion's nested
+        ``{"type": "function", "function": {"name": "..."}}``, which fails
+        Pydantic validation on this field.
         """
         normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
 
