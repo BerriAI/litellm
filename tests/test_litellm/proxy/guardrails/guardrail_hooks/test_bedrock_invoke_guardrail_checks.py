@@ -212,6 +212,27 @@ async def test_threshold_none_is_detect_only():
 
 
 @pytest.mark.asyncio
+async def test_unsolicited_check_scores_are_ignored():
+    """Scores for checks the user never configured must not block, even over threshold."""
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, prompt_attack_threshold=0.5)
+    payload = {
+        "results": {
+            "promptAttack": {
+                "results": [{"category": "JAILBREAK", "severityScore": 1.0}]
+            }
+        }
+    }
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
+    with creds, prep, post_patch:
+        result = await g.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"messages": []},
+        )
+    assert result == BedrockGuardrailResponse()
+
+
+@pytest.mark.asyncio
 async def test_disable_exception_on_block_raises_modify_response_exception():
     g = BedrockGuardrail(
         checks=CONTENT_FILTER_CHECKS,

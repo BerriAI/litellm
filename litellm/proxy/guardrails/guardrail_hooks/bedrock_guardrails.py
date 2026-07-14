@@ -1082,7 +1082,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ) -> list[dict[str, Any]]:
         """Return the check results whose score meets/exceeds the configured threshold.
 
-        A threshold of ``None`` makes that check detect-only (never contributes a
+        Only checks present in the configured ``checks`` block are evaluated; a
+        threshold of ``None`` makes that check detect-only (never contributes a
         violation). Only the non-sensitive label (category/type) and the numeric
         score are kept -- never offsets or matched text.
         """
@@ -1105,9 +1106,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ),
         ]
 
+        configured_checks = self.checks or {}
         violations: list[dict[str, Any]] = []
         for check_key, score_field, label_field, threshold in check_specs:
-            if threshold is None:
+            if threshold is None or check_key not in configured_checks:
                 continue
             for entry in (results.get(check_key) or {}).get("results") or []:
                 score = entry.get(score_field)
