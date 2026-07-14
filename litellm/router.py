@@ -2710,15 +2710,18 @@ class Router:
                     try:
                         await response.fetch_stream()
                     except Exception as fetch_err:
+                        if model_name is not None:
+                            self.success_calls[model_name] -= 1
                         _headers = getattr(fetch_err, "headers", None)
-                        if isinstance(_headers, dict):
-                            _framing_headers = frozenset(
-                                {"content-length", "transfer-encoding", "content-encoding", "content-type"}
-                            )
+                        if _headers is not None and hasattr(_headers, "items"):
+                            _strip_headers = frozenset({
+                                "content-length", "transfer-encoding", "content-encoding", "content-type",
+                                "set-cookie", "cookie", "proxy-authenticate", "proxy-authorization",
+                            })
                             setattr(
                                 fetch_err,
                                 "headers",
-                                {k: v for k, v in _headers.items() if k.lower() not in _framing_headers},
+                                {k: v for k, v in _headers.items() if k.lower() not in _strip_headers},
                             )
                         raise fetch_err
                 return await self._acompletion_streaming_iterator(
