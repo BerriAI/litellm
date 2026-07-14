@@ -12272,6 +12272,55 @@ async def test_bulk_update_team_keys_team_member_no_permission(monkeypatch):
     mock.update_data.assert_not_called()
 
 
+def test_handle_key_type_persists_key_type_and_derives_routes():
+    """`handle_key_type` keeps `key_type` in the payload (so it is persisted on
+    the token) while still deriving the `allowed_routes` preset. Regression for
+    the UI showing scoped keys as "All Proxy Models": the frontend now reads the
+    persisted `key_type` instead of reverse-mapping the preset string."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    cases = {
+        LiteLLMKeyType.MANAGEMENT: ("management", ["management_routes"]),
+        LiteLLMKeyType.READ_ONLY: ("read_only", ["info_routes"]),
+        LiteLLMKeyType.LLM_API: ("llm_api", ["llm_api_routes"]),
+    }
+    for key_type, (expected_type, expected_routes) in cases.items():
+        data = GenerateKeyRequest(key_type=key_type)
+        out = handle_key_type(data, {"key_type": key_type})
+        assert out["key_type"] == expected_type
+        assert out["allowed_routes"] == expected_routes
+
+
+def test_handle_key_type_default_persists_type_without_forcing_routes():
+    """`default` is persisted but must not overwrite an explicit `allowed_routes`
+    (e.g. a SCIM key created with `["/scim/*"]` and no explicit key_type)."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT)
+    out = handle_key_type(data, {"allowed_routes": ["/scim/*"], "key_type": LiteLLMKeyType.DEFAULT})
+    assert out["key_type"] == "default"
+    assert out["allowed_routes"] == ["/scim/*"]
+
+
+def test_handle_key_type_none_drops_key_type():
+    """When no `key_type` is supplied the payload must not carry a `key_type`
+    entry, so old keys stay `null` and the frontend keeps its route fallback."""
+    from litellm.proxy._types import GenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=None)
+    out = handle_key_type(data, {"key_type": None})
+    assert "key_type" not in out
+
+
 # ---- pydantic-layer validation -------------------------------------------
 
 

@@ -4,17 +4,18 @@ import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 const mockModelInfo = [
-  { model_group: "gpt-4" },
-  { model_group: "gpt-3.5-turbo" },
-  { model_group: "claude-3-opus" },
+  { model_group: "gpt-4", mode: "chat" },
+  { model_group: "gpt-3.5-turbo", mode: "chat" },
+  { model_group: "claude-3-opus", mode: "chat" },
+  { model_group: "text-embedding-3-small", mode: "embedding" },
 ] as any[];
 
 const defaultValue: ComplexityRouterConfigValue = {
   tiers: {
-    SIMPLE: "gpt-3.5-turbo",
-    MEDIUM: "gpt-3.5-turbo",
-    COMPLEX: "gpt-4",
-    REASONING: "claude-3-opus",
+    SIMPLE: ["gpt-3.5-turbo"],
+    MEDIUM: ["gpt-3.5-turbo"],
+    COMPLEX: ["gpt-4"],
+    REASONING: ["claude-3-opus"],
   },
   classifier_type: "heuristic",
 };
@@ -57,11 +58,13 @@ describe("ComplexityRouterConfig", () => {
 
   it("should display the how classification works section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
   });
 
   it("should show score thresholds in the classification section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText(/Score < 0.15/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
@@ -106,6 +109,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should render the custom technical keywords field", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
   });
 
@@ -117,6 +121,7 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={vi.fn()}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("udp")).toBeInTheDocument();
     expect(screen.getByText("kafka")).toBeInTheDocument();
   });
@@ -131,14 +136,16 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
       />,
     );
-    const keywordsCard = screen.getByText("Custom Technical Keywords").closest(".ant-card") as HTMLElement;
-    const input = within(keywordsCard).getByRole("combobox");
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
+    const input = within(keywordsSection).getByRole("combobox");
     await user.type(input, "udp,");
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 
   it("should render an empty state when no keyword tier rules exist", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Keyword Tier Overrides")).toBeInTheDocument();
     expect(screen.getByText("No keyword tier overrides configured")).toBeInTheDocument();
   });
@@ -157,6 +164,7 @@ describe("ComplexityRouterConfig", () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onKeywordTierRulesChange={onKeywordTierRulesChange} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(onKeywordTierRulesChange).toHaveBeenCalledTimes(1);
     const newRules = onKeywordTierRulesChange.mock.calls[0][0];
@@ -174,6 +182,7 @@ describe("ComplexityRouterConfig", () => {
         onKeywordTierRulesChange={onKeywordTierRulesChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("invoice")).toBeInTheDocument();
     expect(screen.getByText("refund")).toBeInTheDocument();
 
@@ -183,6 +192,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should not show embedding model or match score fields when semantic matching is disabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={false} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Semantic keyword matching")).toBeInTheDocument();
     expect(screen.queryByText("Embedding model")).not.toBeInTheDocument();
     expect(screen.queryByText("Minimum match score")).not.toBeInTheDocument();
@@ -190,6 +200,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should show embedding model and match score fields when semantic matching is enabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={true} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Embedding model")).toBeInTheDocument();
     expect(screen.getByText("Minimum match score")).toBeInTheDocument();
   });
@@ -204,7 +215,58 @@ describe("ComplexityRouterConfig", () => {
         onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("switch"));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
+  });
+
+  it("excludes embedding-mode models from the tier and classifier dropdowns", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+
+    const simpleTierSection = screen.getByText("Simple Tier").closest(".mb-4") as HTMLElement;
+    const combobox = within(simpleTierSection).getByRole("combobox");
+    await user.click(combobox);
+
+    expect((await screen.findAllByText("gpt-3.5-turbo")).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("text-embedding-3-small")).toHaveLength(0);
+  });
+
+  it("does not show tier validation errors by default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("This tier is required")).not.toBeInTheDocument();
+  });
+
+  it("shows an inline error on the classifier model select when llm is selected without a model", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("A classifier model is required")).toBeInTheDocument();
+  });
+
+  it("does not show the classifier model error once a classifier model is set", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("A classifier model is required")).not.toBeInTheDocument();
+  });
+
+  it("shows a validation error only under unfilled tiers when showValidationErrors is true", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: [] } }}
+        showValidationErrors={true}
+      />,
+    );
+    expect(screen.getAllByText("This tier is required")).toHaveLength(1);
   });
 });

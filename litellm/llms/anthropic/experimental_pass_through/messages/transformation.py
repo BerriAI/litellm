@@ -3,7 +3,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import httpx
 
 from litellm.constants import (
-    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
@@ -358,7 +357,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking = (
-            AnthropicMessagesConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
             else None
         )
@@ -377,19 +376,34 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 optional_params.pop("output_config", None)
 
     @staticmethod
-    def _cap_thinking_budget_to_max_tokens(thinking: Dict, max_tokens: Optional[int]) -> Optional[Dict]:
-        """Cap a legacy ``thinking.budget_tokens`` below ``max_tokens`` (Anthropic
-        requires ``max_tokens > budget_tokens``). Returns the (possibly capped)
-        thinking dict, or ``None`` when ``max_tokens`` is too small to fit even the
-        minimum thinking budget and thinking should be dropped."""
-        budget = thinking.get("budget_tokens")
-        if max_tokens is None or not isinstance(budget, int):
-            return thinking
-        if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS:
-            return None
-        if budget < max_tokens:
-            return thinking
-        return {**thinking, "budget_tokens": max_tokens - 1}
+    def _drop_incompatible_temperature_for_thinking(
+        model: str, optional_params: dict, custom_llm_provider: str
+    ) -> None:
+        """Anthropic rejects any ``temperature`` other than 1 while extended thinking
+        is enabled ("temperature may only be set to 1 when thinking is enabled").
+
+        Clients like Claude Code send ``thinking``/``output_config.effort`` together
+        with a pinned ``temperature`` (e.g. the safety classifier uses ``temperature=0``
+        for determinism). When the request lands on a non-adaptive model, the effort
+        interface is reshaped above into legacy ``thinking={type: enabled}`` (or kept
+        as ``output_config.effort`` on Opus 4.5), and the leftover ``temperature`` would
+        400. Preserving the thinking the caller asked for wins over an unhonorable
+        sampling value (Anthropic forces ``temperature=1`` under thinking regardless),
+        so drop it and let the API default apply.
+
+        Adaptive models (4.6+) own this natively and are left untouched.
+        """
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        temperature = optional_params.get("temperature")
+        if temperature is None or temperature == 1:
+            return
+        thinking = optional_params.get("thinking")
+        output_config = optional_params.get("output_config")
+        thinking_enabled = isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        effort_enabled = isinstance(output_config, dict) and output_config.get("effort") is not None
+        if thinking_enabled or effort_enabled:
+            optional_params.pop("temperature", None)
 
     def transform_anthropic_messages_request(
         self,
@@ -428,6 +442,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
+            custom_llm_provider=self._resolved_provider,
+        )
+
+        self._drop_incompatible_temperature_for_thinking(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
         )
 

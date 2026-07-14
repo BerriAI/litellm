@@ -138,7 +138,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       />
     </div>
   ) : (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <div className="gap-2 p-8 h-[75vh] w-full mt-2">
         <div className="flex justify-between mt-2 w-full items-center mb-4">
           <h1>Vector Store Management</h1>

@@ -7882,7 +7882,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
-                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
+                    track_unmanaged_batch_cost=general_settings.get("track_unmanaged_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -14805,6 +14805,7 @@ async def get_config_list(
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
+        "skip_user_budget_on_team_key": {"type": "Boolean"},
     }
 
     return_val = []

@@ -35,6 +35,7 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
     ChatBody,
     ChatMessage,
     ChatResponse,
@@ -73,6 +74,14 @@ WEATHER_TOOL = ChatTool(
         },
     ),
 )
+
+
+class ResponsesRequestBody(BaseModel):
+    """OpenAI Responses API /v1/responses request (non-streaming)."""
+
+    model: str
+    input: str
+    max_output_tokens: int
 
 
 class TeamCallbackBody(BaseModel):
@@ -453,6 +462,32 @@ class LoggingClient:
             "/chat/completions",
             headers=self.gateway.transport.bearer(key),
             json=body,
+        )
+
+    def messages_raw(self, key: str, model: str, text: str, *, max_tokens: int = 16) -> StreamingResponse:
+        """Non-streaming POST /v1/messages (Anthropic-native body): raw outcome
+        judged by status/body/headers, for tests that need x-litellm-call-id."""
+        return self.gateway.transport.send(
+            "/v1/messages",
+            headers=self.gateway.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=text)],
+            ),
+        )
+
+    def responses_raw(
+        self, key: str, model: str, text: str, *, max_output_tokens: int = 64
+    ) -> StreamingResponse:
+        """Non-streaming POST /v1/responses (OpenAI Responses API): raw outcome
+        judged by status/body/headers, for tests that need x-litellm-call-id.
+        max_output_tokens caps reasoning-model output cost; a capped response is
+        still a 200 and still exports the trace."""
+        return self.gateway.transport.send(
+            "/v1/responses",
+            headers=self.gateway.transport.bearer(key),
+            json=ResponsesRequestBody(model=model, input=text, max_output_tokens=max_output_tokens),
         )
 
     def scrape_metrics(self) -> str:

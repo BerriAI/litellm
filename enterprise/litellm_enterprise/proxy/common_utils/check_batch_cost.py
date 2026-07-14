@@ -29,7 +29,7 @@ class CheckBatchCost:
         proxy_logging_obj: "ProxyLogging",
         prisma_client: "PrismaClient",
         llm_router: "Router",
-        track_unmanaged_vertex_batch_cost: bool = False,
+        track_unmanaged_batch_cost: bool = False,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -37,7 +37,7 @@ class CheckBatchCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
-        self._track_unmanaged_vertex_batch_cost = track_unmanaged_vertex_batch_cost
+        self._track_unmanaged_batch_cost = track_unmanaged_batch_cost
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
@@ -118,11 +118,11 @@ class CheckBatchCost:
         Resolve (model_id, batch_id) for a managed-object row, where model_id is a router
         deployment id and batch_id is the raw provider batch id.
 
-        Managed batches encode both in a base64 unified id. Unmanaged Vertex batches, created with
-        a raw gs:// input_file_id, store the raw provider job id as unified_object_id; when
-        track_unmanaged_vertex_batch_cost is enabled the model is derived from the gs:// path and
-        mapped to a configured vertex_ai deployment. Returns None (recording a metric) when the row
-        can't be routed.
+        Managed batches encode both in a base64 unified id. Unmanaged batches (created outside
+        LiteLLM's own /v1/batches with a raw input_file_id) store the raw provider job id as
+        unified_object_id instead; when track_unmanaged_batch_cost is enabled the model is derived
+        from the provider-specific input_file_id layout (Vertex gs:// or Bedrock s3://) and mapped
+        to a matching deployment. Returns None (recording a metric) when the row can't be routed.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
@@ -142,8 +142,43 @@ class CheckBatchCost:
                 return None
             return model_id, get_batch_id_from_unified_batch_id(decoded)
 
-        if self._track_unmanaged_vertex_batch_cost:
-            return self._resolve_unmanaged_vertex_routing(job, prom_logger)
+        if self._track_unmanaged_batch_cost:
+            from litellm.llms.bedrock.batches.transformation import (
+                BedrockBatchesConfig,
+            )
+            from litellm.llms.vertex_ai.batches.transformation import (
+                VertexAIBatchTransformation,
+            )
+
+            input_file_id = self._get_input_file_id(job)
+            if VertexAIBatchTransformation.is_unmanaged_gcs_batch_input_file_id(
+                input_file_id
+            ):
+                assert input_file_id is not None  # narrowed by is_unmanaged_gcs_batch_input_file_id
+                return self._resolve_unmanaged_provider_routing(
+                    job=job,
+                    prom_logger=prom_logger,
+                    llm_provider="vertex_ai",
+                    bare_model_name=VertexAIBatchTransformation.get_bare_model_name_from_gcs_file(
+                        input_file_id
+                    ),
+                )
+            if BedrockBatchesConfig.is_unmanaged_s3_batch_input_file_id(input_file_id):
+                assert input_file_id is not None  # narrowed by is_unmanaged_s3_batch_input_file_id
+                return self._resolve_unmanaged_provider_routing(
+                    job=job,
+                    prom_logger=prom_logger,
+                    llm_provider="bedrock",
+                    bare_model_name=BedrockBatchesConfig.get_bare_model_name_from_s3_file(
+                        input_file_id
+                    ),
+                )
+            verbose_proxy_logger.info(
+                f"Skipping job {unified_object_id}: not a recognized unmanaged batch "
+                "(no gs:// or s3:// input_file_id with an embedded model)"
+            )
+            self._record_error(prom_logger, "invalid_unified_id")
+            return None
 
         verbose_proxy_logger.info(
             f"Skipping job {unified_object_id} because it is not a valid unified object id"
@@ -151,36 +186,17 @@ class CheckBatchCost:
         self._record_error(prom_logger, "invalid_unified_id")
         return None
 
-    def _resolve_unmanaged_vertex_routing(
+    def _resolve_unmanaged_provider_routing(
         self,
         job: "LiteLLM_ManagedObjectTable",
         prom_logger: Optional["PrometheusLogger"],
+        llm_provider: str,
+        bare_model_name: str,
     ) -> Optional[Tuple[str, str]]:
-        from litellm.llms.vertex_ai.batches.transformation import (
-            VertexAIBatchTransformation,
-        )
-
-        input_file_id = self._get_input_file_id(job)
-        if not VertexAIBatchTransformation.is_unmanaged_gcs_batch_input_file_id(
-            input_file_id
-        ):
-            verbose_proxy_logger.info(
-                f"Skipping job {job.unified_object_id}: not an unmanaged vertex batch "
-                "(no gs:// input_file_id with a publishers/ model path)"
-            )
-            self._record_error(prom_logger, "invalid_unified_id")
-            return None
-        assert input_file_id is not None  # narrowed by is_unmanaged_gcs_batch_input_file_id
-
-        bare_model_name = VertexAIBatchTransformation.get_bare_model_name_from_gcs_file(
-            input_file_id
-        )
-        deployment_id = self._get_vertex_ai_deployment_id_for_bare_model(
-            bare_model_name
-        )
+        deployment_id = self._get_deployment_id_for_bare_model(bare_model_name, llm_provider)
         if deployment_id is None:
             verbose_proxy_logger.info(
-                f"Skipping unmanaged vertex batch {job.unified_object_id}: no vertex_ai "
+                f"Skipping unmanaged {llm_provider} batch {job.unified_object_id}: no {llm_provider} "
                 f"deployment configured for model {bare_model_name}"
             )
             self._record_error(prom_logger, "unmanaged_no_matching_deployment")
@@ -188,22 +204,22 @@ class CheckBatchCost:
 
         return deployment_id, job.unified_object_id
 
-    def _get_vertex_ai_deployment_id_for_bare_model(
-        self, bare_model_name: str
+    def _get_deployment_id_for_bare_model(
+        self, bare_model_name: str, llm_provider: str
     ) -> Optional[str]:
         model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
         deployment_id = (
-            self._get_vertex_ai_deployment_id(model_group) if model_group else None
+            self._get_deployment_id_for_provider(model_group, llm_provider) if model_group else None
         )
         if deployment_id is not None:
             return deployment_id
 
-        return self._get_vertex_ai_deployment_id_from_matching_deployments(
-            bare_model_name
+        return self._get_deployment_id_from_matching_deployments(
+            bare_model_name, llm_provider
         )
 
-    def _get_vertex_ai_deployment_id_from_matching_deployments(
-        self, bare_model_name: str
+    def _get_deployment_id_from_matching_deployments(
+        self, bare_model_name: str, llm_provider: str
     ) -> Optional[str]:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
@@ -215,13 +231,13 @@ class CheckBatchCost:
             if not self._is_bare_model_match(actual_model, bare_model_name):
                 continue
             try:
-                _, llm_provider, _, _ = get_llm_provider(
+                _, deployment_llm_provider, _, _ = get_llm_provider(
                     model=actual_model,
                     custom_llm_provider=litellm_params.get("custom_llm_provider"),
                 )
             except Exception:
                 continue
-            if llm_provider != "vertex_ai":
+            if deployment_llm_provider != llm_provider:
                 continue
             model_info = deployment.get("model_info") or {}
             deployment_id = model_info.get("id")
@@ -231,15 +247,21 @@ class CheckBatchCost:
 
     @staticmethod
     def _is_bare_model_match(actual_model: str, bare_model_name: str) -> bool:
+        # Bedrock model ids may have ":" replaced with "-" in the S3 object key (see
+        # BedrockBatchesConfig.get_bare_model_name_from_s3_file), so normalize both sides;
+        # a no-op for providers like vertex_ai whose model ids never contain a colon.
+        normalized_actual = actual_model.replace(":", "-")
+        normalized_bare = bare_model_name.replace(":", "-")
         return (
-            actual_model == bare_model_name
-            or actual_model.endswith(f"/{bare_model_name}")
-            or actual_model.endswith(f":{bare_model_name}")
+            normalized_actual == normalized_bare
+            or normalized_actual.endswith(f"/{normalized_bare}")
         )
 
-    def _get_vertex_ai_deployment_id(self, model_group: str) -> Optional[str]:
+    def _get_deployment_id_for_provider(
+        self, model_group: str, llm_provider: str
+    ) -> Optional[str]:
         """
-        Returns the first deployment id for `model_group` whose provider is vertex_ai,
+        Returns the first deployment id for `model_group` whose provider is `llm_provider`,
         skipping deployments from other providers that happen to share the model group name.
         """
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -249,13 +271,13 @@ class CheckBatchCost:
             if deployment_info is None:
                 continue
             try:
-                _, llm_provider, _, _ = get_llm_provider(
+                _, deployment_llm_provider, _, _ = get_llm_provider(
                     model=deployment_info.litellm_params.model,
                     custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
                 )
             except Exception:
                 continue
-            if llm_provider == "vertex_ai":
+            if deployment_llm_provider == llm_provider:
                 return deployment_id
         return None
 
