@@ -243,13 +243,15 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
             "that cached the prompt."
         ),
         field_default=[],
+        # "forward_client_headers_by_model_group" is excluded: it's a literal in the
+        # OptionalPreCallChecks type union, but add_optional_pre_call_checks has no
+        # handler for it, so selecting it from the UI would silently do nothing.
         options=[
             "prompt_caching",
             "router_budget_limiting",
             "responses_api_deployment_check",
             "deployment_affinity",
             "session_affinity",
-            "forward_client_headers_by_model_group",
             "enforce_model_rate_limits",
             "encrypted_content_affinity",
         ],
