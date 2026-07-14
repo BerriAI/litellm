@@ -235,30 +235,6 @@ def test_pinned_temperature_dropped_for_opus_4_5_effort():
     assert "temperature" not in result
 
 
-def test_reasoning_effort_budget_capped_below_max_tokens():
-    """Sibling defect (#33203): the reasoning_effort alias mapped effort to legacy
-    thinking without capping budget_tokens below max_tokens, emitting
-    budget_tokens >= max_tokens which Anthropic rejects. A high-effort budget with
-    max_tokens=3000 must be capped to 2999."""
-    result = _transform(
-        "claude-haiku-4-5",
-        {"max_tokens": 3000, "reasoning_effort": "high"},
-    )
-
-    assert result["thinking"] == {"type": "enabled", "budget_tokens": 2999}
-
-
-def test_reasoning_effort_thinking_dropped_when_max_tokens_too_small():
-    """reasoning_effort thinking is dropped when max_tokens can't fit even the minimum
-    budget, so the request still succeeds."""
-    result = _transform(
-        "claude-haiku-4-5",
-        {"max_tokens": 512, "reasoning_effort": "medium"},
-    )
-
-    assert "thinking" not in result
-
-
 def test_reasoning_effort_with_pinned_temperature_drops_temperature():
     """The reasoning_effort alias synthesizes legacy enabled thinking on a non-adaptive
     model; a co-pinned non-1 temperature must be dropped to avoid the Anthropic 400."""

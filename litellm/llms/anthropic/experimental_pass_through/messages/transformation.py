@@ -188,16 +188,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
-    ) -> None:
+    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict, custom_llm_provider: str) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400. Legacy
-        ``budget_tokens`` is capped below ``max_tokens`` (Anthropic requires
-        ``max_tokens > budget_tokens``) and thinking is dropped when ``max_tokens``
-        can't fit even the minimum budget.
+        ``effort='none'`` clears both. Invalid efforts raise a 400.
         """
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
@@ -223,12 +218,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("output_config", None)
             return
 
-        if "thinking" not in optional_params:
-            capped_thinking = AnthropicConfig._cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
-            if capped_thinking is not None:
-                optional_params["thinking"] = capped_thinking
-            else:
-                verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
+        optional_params.setdefault("thinking", mapped_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
@@ -439,7 +429,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
-            max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
 
