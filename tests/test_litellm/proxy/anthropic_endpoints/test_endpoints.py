@@ -382,3 +382,107 @@ class TestCountTokensErrorHandling:
             response = await ep.count_tokens(mock_request, mock_user_api_key_dict)
 
         assert response == {"input_tokens": 15}
+
+    @pytest.mark.asyncio
+    async def test_oversized_payload_returns_400(self):
+        """A payload exceeding the token-counting size cap must surface as 400.
+
+        The internal token_counter raises HTTPException(400) before offloading
+        the count; the wrapper's `except HTTPException: raise` passes it through.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "a" * 200}],
+            }
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "TOKEN_COUNTER_MAX_REQUEST_CHARS", 100),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+    @pytest.mark.asyncio
+    async def test_saturated_concurrency_returns_429(self):
+        """A saturated tokenization concurrency bound must surface as 429.
+
+        The internal token_counter raises ProxyRateLimitError (an HTTPException
+        subclass) when the bound cannot be acquired; the wrapper's
+        `except HTTPException: raise` passes the 429 through untouched.
+        """
+        import asyncio
+
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "_token_count_semaphore", asyncio.Semaphore(0)),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail == {"error": "Too many concurrent token counting requests. Please retry later."}
+
+    @pytest.mark.asyncio
+    async def test_unexpected_internal_error_returns_generic_500(self):
+        """An unexpected internal failure must map to a generic 500.
+
+        The terminal `except Exception` handler must not reflect the internal
+        exception text back to the client.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            raise RuntimeError("secret internal failure detail")
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == {"error": "Internal server error"}
+        assert "secret internal failure detail" not in str(exc_info.value.detail)

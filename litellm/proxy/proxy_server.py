@@ -234,6 +234,8 @@ from litellm.constants import (
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    TOKEN_COUNTER_MAX_CONCURRENCY,
+    TOKEN_COUNTER_MAX_REQUEST_CHARS,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -313,6 +315,7 @@ from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslat
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
@@ -10565,6 +10568,27 @@ async def _try_provider_token_count(
     return result
 
 
+# Bounds concurrent local tokenization work. `run_in_executor(None, ...)` queues into the
+# process-wide default executor, whose work queue is unbounded — without this cap, token-count
+# requests submitted faster than they complete would accumulate their payloads in memory.
+_token_count_semaphore = asyncio.Semaphore(TOKEN_COUNTER_MAX_CONCURRENCY)
+
+
+def _count_request_string_chars(*fields: Any) -> int:
+    """Sum the length of every string leaf in the given token-count request fields."""
+    total = 0
+    stack: List[Any] = [field for field in fields if field is not None]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            total += len(node)
+        elif isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, (list, tuple)):
+            stack.extend(node)
+    return total
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -10595,6 +10619,12 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     #########################################################
     if prompt is None and messages is None and contents is None:
         raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
+
+    if _count_request_string_chars(prompt, messages, contents, tools, system) > TOKEN_COUNTER_MAX_REQUEST_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Request payload too large for token counting"},
+        )
 
     deployment: Optional[Dict[str, Any]] = None
     litellm_model_name = None
@@ -10663,21 +10693,29 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             Optional[CustomHuggingfaceTokenizer],
             model_info.get("custom_tokenizer", None),
         )
+
+    # Try-acquire: when the bound is saturated, reject instead of queueing unboundedly.
+    # No await between this check and the acquire below, so the acquire never blocks.
+    if _token_count_semaphore.locked():
+        raise ProxyRateLimitError(
+            detail={"error": "Too many concurrent token counting requests. Please retry later."},
+        )
     try:
         _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
         tokenizer_used = str(_tokenizer_used["type"])
         loop = asyncio.get_running_loop()
-        total_tokens = await loop.run_in_executor(
-            None,
-            partial(
-                token_counter,
-                model=model_to_use,
-                text=prompt,
-                messages=messages,
-                custom_tokenizer=_tokenizer_used,  # type: ignore
-            ),
-        )
+        async with _token_count_semaphore:
+            total_tokens = await loop.run_in_executor(
+                None,
+                partial(
+                    token_counter,
+                    model=model_to_use,
+                    text=prompt,
+                    messages=messages,
+                    custom_tokenizer=_tokenizer_used,  # type: ignore
+                ),
+            )
     except (ValueError, TypeError, AttributeError, KeyError, IndexError):
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): could not tokenize the provided messages/prompt"

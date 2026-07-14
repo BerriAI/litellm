@@ -9802,3 +9802,57 @@ async def test_token_counter_offloads_counting_to_executor():
 
     assert response.total_tokens > 0
     assert len(calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_token_counter_oversized_payload_returns_400():
+    """A payload whose combined string size exceeds the cap must map to 400.
+
+    The cap bounds per-request memory/CPU before the count is offloaded to the
+    executor; the body must carry only the generic error message.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_content = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": oversized_content}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
+async def test_token_counter_saturated_concurrency_returns_429():
+    """When the tokenization concurrency bound is saturated, excess requests get 429.
+
+    The bound try-acquires: it must reject immediately instead of queueing more
+    payloads into the default executor's unbounded work queue.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch.object(proxy_server_module, "_token_count_semaphore", asyncio.Semaphore(0)):
+        with pytest.raises(HTTPException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                )
+            )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == {"error": "Too many concurrent token counting requests. Please retry later."}
