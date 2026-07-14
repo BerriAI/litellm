@@ -16,19 +16,22 @@ from .base import GuardrailConfigModel
 
 class SingulrGuardrailRequest(BaseModel):
     model: Optional[str] = None
-    prompts: Optional[List[str]] = None
-    completions: Optional[List[str]] = None
+    prompts: Optional[dict[str, list[str]]] = None
+    completions: Optional[list[str]] = None
     tools: Optional[List[ChatCompletionToolParam]] = None
     tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
 
+
 class SingulrGuardrailPayload(BaseModel):
     """Payload sent to the Singulr guardrail API."""
+
     request: SingulrGuardrailRequest
     input_type: str
 
 
 class SingulrGuardrailResponse(BaseModel):
     """Response returned by the Singulr guardrail API."""
+
     should_block: bool = False
     blocking_due_to: Optional[str] = None
 
