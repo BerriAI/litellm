@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
@@ -528,6 +528,15 @@ def _validate_caller_can_change_key_ownership(
                 f"user={existing_user_id} to user={incoming_user_id}"
             ),
         )
+
+
+def _allowed_routes_values_match(
+    submitted_routes: Sequence[str] | None,
+    existing_routes: Sequence[str] | None,
+) -> bool:
+    if submitted_routes is None or existing_routes is None:
+        return submitted_routes == existing_routes
+    return set(submitted_routes) == set(existing_routes)
 
 
 def _check_allowed_routes_caller_permission(
@@ -2267,7 +2276,11 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
         allowed_routes_changed=(
-            "allowed_routes" in data.model_fields_set and data.allowed_routes != existing_key_row.allowed_routes
+            "allowed_routes" in data.model_fields_set
+            and not _allowed_routes_values_match(
+                data.allowed_routes,
+                existing_key_row.allowed_routes,
+            )
         ),
     )
     _check_passthrough_routes_caller_permission(

@@ -9589,6 +9589,8 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     mock_existing_key.key_alias = None
     mock_existing_key.models = []
     mock_existing_key.metadata = {}
+    mock_existing_key.allowed_routes = []
+    mock_existing_key.permissions = {}
     mock_existing_key.model_dump.return_value = {
         "token": test_hashed_token,
         "user_id": "internal_user",
@@ -9650,7 +9652,12 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     # Updating key_alias (non-budget field) should succeed
     result = await update_key_fn(
         request=mock_request,
-        data=UpdateKeyRequest(key=test_hashed_token, key_alias="my-alias"),
+        data=UpdateKeyRequest(
+            key=test_hashed_token,
+            key_alias="my-alias",
+            allowed_routes=[],
+            permissions={},
+        ),
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=None,
     )
@@ -14348,9 +14355,9 @@ async def test_update_key_non_admin_permissions_non_empty_rejected(monkeypatch):
             UpdateKeyRequest(
                 key="sk-alice-personal",
                 tpm_limit=42,
-                allowed_routes=["llm_api_routes"],
+                allowed_routes=["management_routes", "llm_api_routes"],
             ),
-            ["llm_api_routes"],
+            ["llm_api_routes", "management_routes"],
             {},
         ),
         (
