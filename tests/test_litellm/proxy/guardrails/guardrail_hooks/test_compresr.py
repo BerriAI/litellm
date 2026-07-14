@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     COMPRESR_RETRIEVE_TOOL_NAME,
     CompresrGuardrail,
+    _content_hash,
     _scoped_store_key,
     has_compresr_retrieve_tool,
 )
@@ -1462,6 +1463,67 @@ def test_originals_store_global_cap_keeps_current_when_single_call_is_large(
     guardrail = _make_guardrail(max_bytes_per_call=5_000)
     guardrail._store_originals("solo", {f"{0:024x}": "x" * 4_000})
     assert "solo" in guardrail._originals_by_call_id
+
+
+def test_recovery_markers_respect_per_call_byte_cap():
+    # Regression: markers were built from every original before _store_originals
+    # applied the byte cap, so an evicted original left a dangling marker the
+    # model could never retrieve. Recovery must be attached only for originals
+    # that fit the cap, so every shipped marker stays retrievable.
+    guardrail = _make_guardrail(max_bytes_per_call=1000)
+    contexts = ["a" * 400, "b" * 400, "c" * 400]
+    messages = [{"role": "tool", "content": text} for text in contexts]
+    results = [{"compressed_context": f"small-{i}"} for i in range(3)]
+
+    applied = guardrail._apply_compression_results(
+        messages, [0, 1, 2], contexts, results, recovery_enabled=True
+    )
+
+    # 400 + 400 fit under 1000; the third (which would reach 1200) is skipped.
+    assert applied.messages_compressed == 3
+    assert len(applied.originals) == 2
+    third_hash = _content_hash("c" * 400)
+    assert third_hash not in applied.originals
+    assert f"compresr hash={third_hash}" not in applied.compressed_messages[2]["content"]
+
+    # Every marker still shipped must resolve to a stored original.
+    guardrail._store_originals("c", applied.originals)
+    for hash_value in applied.originals:
+        assert guardrail._retrieve_original("c", hash_value) is not None
+        assert f"compresr hash={hash_value}" in "".join(
+            str(m["content"]) for m in applied.compressed_messages
+        )
+
+
+def test_recovery_markers_respect_byte_cap_across_reused_store_key():
+    # Regression: the per-call budget must also count bytes already stored under
+    # the same store key (a later turn reusing the call id). Otherwise merging
+    # this call's originals with the existing entry overflows the cap and
+    # _store_originals evicts an original this call just shipped a marker for.
+    guardrail = _make_guardrail(max_bytes_per_call=100)
+    old_hash = _content_hash("A" * 50)
+    guardrail._store_originals("k", {old_hash: "A" * 50})
+    guardrail._store_originals("k", {_content_hash("C" * 40): "C" * 40})
+    existing = guardrail._originals_by_call_id["k"][0]
+
+    # This turn recompresses the same "A" (already stored) plus a new "D".
+    contexts = ["D" * 40, "A" * 50]
+    messages = [{"role": "tool", "content": text} for text in contexts]
+    results = [{"compressed_context": "dd"}, {"compressed_context": "aa"}]
+    applied = guardrail._apply_compression_results(
+        messages, [0, 1], contexts, results, recovery_enabled=True, existing_originals=existing
+    )
+
+    guardrail._store_originals("k", applied.originals)
+    # No marker shipped this turn may dangle after the store enforces the cap.
+    for hash_value in applied.originals:
+        assert guardrail._retrieve_original("k", hash_value) is not None
+        assert f"compresr hash={hash_value}" in "".join(
+            str(m["content"]) for m in applied.compressed_messages
+        )
+    # The zero-cost repeat of an already-stored original stays retrievable.
+    assert old_hash in applied.originals
+    assert guardrail._retrieve_original("k", old_hash) is not None
 
 
 # ── dynamic (adaptive) compression — latte_v2 Kneedle ─────────────────
