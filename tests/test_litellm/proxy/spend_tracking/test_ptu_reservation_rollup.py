@@ -309,3 +309,31 @@ async def test_rollup_boundary_effective_from_at_day_start_is_active(mock_prisma
     result = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))
 
     assert result.rows_written == 1
+
+
+@pytest.mark.asyncio
+async def test_rollup_force_bypasses_flag_off(mock_prisma, monkeypatch):
+    prisma, mock_daily, mock_reservation = mock_prisma
+    monkeypatch.setitem(ps.general_settings, "enable_ptu_cost_attribution", False)
+    mock_reservation.find_many = AsyncMock(return_value=[_r(id="res_1", ptu_count=1, cost_per_ptu=200.0)])
+
+    result = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12), force=True)
+
+    assert result.skipped_flag_off is False
+    assert result.rows_written == 1
+    mock_reservation.find_many.assert_awaited_once()
+    mock_daily.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rollup_force_default_false_still_honors_flag(mock_prisma, monkeypatch):
+    prisma, mock_daily, mock_reservation = mock_prisma
+    monkeypatch.setitem(ps.general_settings, "enable_ptu_cost_attribution", False)
+    mock_reservation.find_many = AsyncMock(return_value=[_r(id="res_1")])
+
+    result = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))
+
+    assert result.skipped_flag_off is True
+    assert result.rows_written == 0
+    mock_reservation.find_many.assert_not_awaited()
+    mock_daily.upsert.assert_not_awaited()

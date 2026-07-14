@@ -1,6 +1,9 @@
 """Re-run the PTU reservation daily rollup for a specific UTC date.
 
-Idempotent under the LiteLLM_DailyTeamSpend unique constraint.
+Idempotent under the LiteLLM_DailyTeamSpend unique constraint. Reads
+DATABASE_URL from the environment, connects Prisma directly, and bypasses
+the ``enable_ptu_cost_attribution`` config flag so operators can backfill
+without turning the feature on for live traffic.
 
 Usage:
     python scripts/ptu_reservation_backfill.py --date 2026-07-12
@@ -42,26 +45,37 @@ def _dates_from_args(args: argparse.Namespace) -> list[date]:
 
 
 async def _run(dates: list[date]) -> int:
-    from litellm.proxy.proxy_server import prisma_client
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL is not set", file=sys.stderr)
+        return 2
+
+    from litellm._logging import verbose_proxy_logger
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.spend_tracking.ptu_reservation_rollup import (
         run_ptu_reservation_rollup,
     )
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-    if prisma_client is None:
-        print("ERROR: prisma_client is None; is DATABASE_URL set?", file=sys.stderr)
-        return 2
-
-    total_rows = 0
-    for target in dates:
-        result = await run_ptu_reservation_rollup(prisma_client, target_date=target)
-        print(
-            f"[{result.day.isoformat()}] "
-            f"reservations={result.reservations_processed} rows_written={result.rows_written}"
-            f"{' (flag off, skipped)' if result.skipped_flag_off else ''}"
-        )
-        total_rows += result.rows_written
-    print(f"total rows written: {total_rows}")
-    return 0
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
+    await prisma_client.connect()
+    try:
+        total_rows = 0
+        for target in dates:
+            result = await run_ptu_reservation_rollup(prisma_client, target_date=target, force=True)
+            print(
+                f"[{result.day.isoformat()}] "
+                f"reservations={result.reservations_processed} rows_written={result.rows_written}"
+            )
+            total_rows += result.rows_written
+        print(f"total rows written: {total_rows}")
+        return 0
+    finally:
+        try:
+            await prisma_client.db.disconnect()
+        except Exception as exc:
+            verbose_proxy_logger.debug("prisma disconnect failed: %s", exc)
 
 
 def main() -> int:

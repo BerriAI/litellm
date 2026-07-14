@@ -88,23 +88,26 @@ async def _upsert_ptu_daily_row(
 async def run_ptu_reservation_rollup(
     prisma_client: Any,
     target_date: date | None = None,
+    *,
+    force: bool = False,
 ) -> RollupResult:
     """Rollup one UTC day of flat PTU cost across all active reservations.
 
-    Defaults to yesterday UTC. Callable from the scheduler and from the CLI
-    backfill helper; both paths are idempotent under the ``LiteLLM_DailyTeamSpend``
-    unique constraint.
+    Defaults to yesterday UTC. ``force=True`` bypasses the feature-flag check
+    so the CLI backfill can run when the scheduler is off. Idempotent under
+    the LiteLLM_DailyTeamSpend unique constraint on every invocation path.
     """
-    from litellm.proxy.proxy_server import general_settings
+    if not force:
+        from litellm.proxy.proxy_server import general_settings
 
-    if not general_settings.get("enable_ptu_cost_attribution", False):
-        verbose_proxy_logger.debug("PTU rollup: feature flag off, skipping")
-        return RollupResult(
-            day=target_date or (datetime.now(timezone.utc).date() - timedelta(days=1)),
-            reservations_processed=0,
-            rows_written=0,
-            skipped_flag_off=True,
-        )
+        if not general_settings.get("enable_ptu_cost_attribution", False):
+            verbose_proxy_logger.debug("PTU rollup: feature flag off, skipping")
+            return RollupResult(
+                day=target_date or (datetime.now(timezone.utc).date() - timedelta(days=1)),
+                reservations_processed=0,
+                rows_written=0,
+                skipped_flag_off=True,
+            )
 
     if prisma_client is None:
         verbose_proxy_logger.warning("PTU rollup: prisma_client is None, skipping")
@@ -136,7 +139,7 @@ async def run_ptu_reservation_rollup(
                 flat_cost=flat_cost,
             )
             rows_written += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # one bad reservation must not stop the batch; logged and continued
             verbose_proxy_logger.error(
                 "PTU rollup: upsert failed for reservation=%s day=%s: %s",
                 reservation.id,
