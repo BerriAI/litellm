@@ -336,12 +336,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if "text" in self.responses_api_request:
             response_created_event_data["text"] = self.responses_api_request["text"]
         if "tool_choice" in self.responses_api_request:
-            # Normalize tool_choice to the shape ResponsesAPIResponse.tool_choice
-            # accepts (flat {"type": "function", "name": "..."}), not the Chat
-            # Completion nested {"type": "function", "function": {"name": "..."}}
-            # shape that _transform_tool_choice produces for the outbound provider
-            # call. Reusing that Chat-Completion-shaped value here fails Pydantic
-            # validation for any forced named tool call.
+            # Use the Responses-API-shaped value here, not _transform_tool_choice's
+            # Chat Completion shape, or forced named tool calls fail Pydantic validation.
             response_created_event_data["tool_choice"] = (
                 LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
                     self.responses_api_request["tool_choice"]
