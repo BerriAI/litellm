@@ -340,11 +340,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _get_model_capability(model: str, key: str) -> Optional[bool]:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
+        from litellm.utils import _get_bundled_model_cost_map
+
         try:
-            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
-                value = litellm.model_cost.get(cand, {}).get(key)
-                if isinstance(value, bool):
-                    return value
+            candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+                for cand in candidates:
+                    value = model_cost.get(cand, {}).get(key)
+                    if isinstance(value, bool):
+                        return value
         except Exception:
             pass
         return None
