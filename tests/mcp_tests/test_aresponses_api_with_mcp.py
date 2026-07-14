@@ -1038,25 +1038,29 @@ async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messa
     """
     Regression test for https://github.com/BerriAI/litellm/issues/16361 (non-streaming).
 
-    For non-OpenAI-native models (e.g. Anthropic), `previous_response_id` is handled by
-    litellm's own chat-completion bridge: it fetches prior conversation history from the
-    spend-logs "session" and prepends it ahead of the new follow-up input (see
+    The non-streaming MCP follow-up call must NOT pass `previous_response_id`
+    - mirroring the fix already applied to the streaming path in
+    `mcp_streaming_iterator.py` (see #19317). If it did, litellm's own
+    chat-completion bridge would fetch prior conversation history from the
+    spend-logs "session" and prepend it ahead of the follow-up's own
+    self-contained input (see
     ``LiteLLMCompletionResponsesConfig.async_responses_api_session_handler``:
-    ``combined_messages = session_messages + _messages``).
-
-    If the non-streaming MCP follow-up call *also* sends a self-contained input (original
-    messages + assistant tool_use + tool result) *in addition to* `previous_response_id`,
-    the assistant `tool_use` message coming from the reconstructed session ends up
-    immediately followed by a *duplicate* system/user message instead of the
-    `tool_result` -- which Anthropic rejects with:
+    ``combined_messages = session_messages + _messages``), producing
+    duplicated/malformed messages: the assistant `tool_use` message coming
+    from the reconstructed session would end up immediately followed by a
+    *duplicate* system/user message instead of the `tool_result` -- which
+    Anthropic rejects with:
 
         "tool_use ids were found without tool_result blocks immediately after"
 
-    This test mocks the DB-backed session reconstruction (``ResponsesSessionHandler``)
-    and the underlying ``litellm.acompletion`` call to capture the *actual* messages
-    list sent for the follow-up call, and asserts that the assistant message carrying
-    the tool_use/tool_call is immediately followed by its tool_result, with no
-    duplicated assistant/tool_use entries in between.
+    This test mocks the DB-backed session reconstruction (``ResponsesSessionHandler``,
+    asserted to never be consulted for the follow-up) and the underlying
+    ``litellm.acompletion`` call to capture the *actual* messages/kwargs sent
+    for the follow-up call, and asserts that:
+    - ``previous_response_id`` is NOT passed on the follow-up call.
+    - the assistant message carrying the tool_use/tool_call is immediately
+      followed by its tool_result, with no duplicated assistant/tool_use
+      entries in between.
     """
     from litellm.responses.litellm_completion_transformation.session_handler import (
         ResponsesSessionHandler,
@@ -1108,9 +1112,13 @@ async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messa
         return results
 
     # ------------------------------------------------------------------
-    # 2. Mock the DB-backed session reconstruction to simulate that the
-    #    *first* call was already logged, ending in the assistant message
-    #    with the tool_use/tool_call.
+    # 2. Mock the DB-backed session reconstruction. It must NEVER be
+    #    consulted for either call in this test: the initial call has no
+    #    `previous_response_id` (new conversation), and the follow-up call
+    #    must not pass one either (that's the fix under test).  If it were
+    #    consulted and returned this populated `fake_session`, naively
+    #    concatenating it with the follow-up's self-contained input would
+    #    reproduce the duplicate-messages bug this test guards against.
     # ------------------------------------------------------------------
     fake_session = ChatCompletionSession(
         messages=[
@@ -1130,6 +1138,7 @@ async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messa
         ],
         litellm_session_id="session-regression-test",
     )
+
 
     # ------------------------------------------------------------------
     # 3. Mock the underlying provider call. Call #1 returns a tool_use;
@@ -1190,7 +1199,7 @@ async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messa
             "get_chat_completion_message_history_for_previous_response_id",
             new_callable=AsyncMock,
             return_value=fake_session,
-        ),
+        ) as mock_session_history,
         patch(
             "litellm.acompletion",
             new_callable=AsyncMock,
@@ -1224,6 +1233,19 @@ async def test_non_streaming_mcp_follow_up_call_does_not_duplicate_session_messa
         call_count["n"] == 2
     ), f"Expected exactly 2 acompletion calls (initial + follow-up), got {call_count['n']}"
     assert captured_follow_up_kwargs, "Follow-up acompletion call was never captured"
+
+    # Core assertion for the fix: the follow-up call must not pass
+    # `previous_response_id` (mirrors the streaming fix in #19317). If it
+    # did, the session handler would fetch `fake_session` above and prepend
+    # it ahead of the follow-up's already self-contained input, duplicating
+    # the conversation history.
+    assert "previous_response_id" not in captured_follow_up_kwargs, (
+        "Follow-up acompletion call must not pass previous_response_id - doing so "
+        "makes litellm's session handler prepend spend-log history on top of the "
+        "already self-contained follow-up input, duplicating messages. "
+        f"Got kwargs: {captured_follow_up_kwargs}"
+    )
+    mock_session_history.assert_not_called()
 
     follow_up_messages = captured_follow_up_kwargs.get("messages") or []
     assert follow_up_messages, "Follow-up call must include messages"

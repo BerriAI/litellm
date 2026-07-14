@@ -1018,28 +1018,21 @@ class LiteLLM_Proxy_MCP_Handler:
         response: ResponsesAPIResponse,
         tool_results: list[dict[str, Any]],
         original_input: Any = None,
-        previous_response_id: str | None = None,
     ) -> list[Any]:
         """Create follow-up input with tool results in proper format.
 
-        When ``previous_response_id`` is provided the session handler will
-        reconstruct the full conversation history (including the original
-        user messages and the assistant response with tool_use blocks) from
-        the spend-log database.  In that case we must **only** emit
-        ``function_call_output`` items so that the combined message list
-        produced by the session handler places the ``tool_result`` blocks
-        immediately after the assistant ``tool_use`` blocks, as required by
-        Anthropic.  Including the original input / assistant message /
-        function_call items again would duplicate them and break the
-        ``tool_use`` → ``tool_result`` ordering contract.
-
-        When ``previous_response_id`` is ``None`` (e.g. the streaming MCP
-        iterator path) the follow-up input must be fully self-contained and
-        therefore includes the original input, assistant message, function
-        calls, and tool results.
+        Always self-contained (includes the original input, assistant
+        response, function calls, and tool results). The follow-up call
+        itself does not pass ``previous_response_id`` (see
+        ``_make_follow_up_call``), so there is no spend-log session to merge
+        with here - matching the streaming MCP iterator, which was fixed the
+        same way (dropping ``previous_response_id`` from the follow-up call)
+        for the same reason: sending both `previous_response_id` *and* a
+        self-contained input causes the session handler to duplicate the
+        history it reconstructs from the DB on top of what's already in the
+        input, which providers like Anthropic reject as malformed tool_use /
+        tool_result message ordering.
         """
-        if previous_response_id is not None:
-            return LiteLLM_Proxy_MCP_Handler._build_tool_result_items(tool_results)
         return LiteLLM_Proxy_MCP_Handler._build_self_contained_follow_up_input(
             response=response,
             tool_results=tool_results,
@@ -1054,12 +1047,21 @@ class LiteLLM_Proxy_MCP_Handler:
         response_id: str,
         **call_params: Any,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
-        """Make follow-up response API call with tool results."""
+        """Make follow-up response API call with tool results.
+
+        Intentionally does NOT pass ``previous_response_id``: the follow-up
+        input built by ``_create_follow_up_input`` is already self-contained
+        (original input + assistant tool_use + tool_result), so passing
+        ``previous_response_id`` as well would cause the session handler to
+        prepend the same history again from the spend-logs DB, producing
+        duplicate/malformed messages (see
+        https://github.com/BerriAI/litellm/issues/16361). The streaming MCP
+        iterator was fixed the same way - see `mcp_streaming_iterator.py`.
+        """
         return await aresponses(
             input=follow_up_input,
             model=model,
             tools=all_tools,  # Keep tools for potential future calls
-            previous_response_id=response_id,  # Link to previous response
             **call_params,
         )
 
