@@ -339,14 +339,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/tool_permission/ToolPermissionRulesEditor.tsx": {
     "no-restricted-imports": {
       "count": 1
