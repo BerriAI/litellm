@@ -140,7 +140,7 @@ describe("RouterSettings", () => {
       expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
     });
     expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
-    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
+    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -208,7 +208,7 @@ describe("RouterSettings", () => {
     expect(NotificationsManager.success).not.toHaveBeenCalled();
   });
 
-  it("should round-trip default_litellm_params and optional_pre_call_checks unmodified on save", async () => {
+  it("should preserve untouched default_litellm_params by omitting it from an unrelated save", async () => {
     vi.mocked(getCallbacksCall).mockResolvedValue({
       router_settings: {
         ...mockCallbacksResponse.router_settings,
@@ -231,11 +231,72 @@ describe("RouterSettings", () => {
       expect(setCallbacksCall).toHaveBeenCalledWith(
         "test-token",
         expect.objectContaining({
+          router_settings: expect.not.objectContaining({
+            default_litellm_params: expect.anything(),
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should save frontend-owned cache-control fields after an explicit edit", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: { timeout: 30 },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Cache Control Injection Points" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
           router_settings: expect.objectContaining({
             default_litellm_params: {
-              cache_control_injection_points: [{ location: "message", role: "system", index: 2 }],
+              timeout: 30,
+              cache_control_injection_points: [{ location: "message" }],
             },
-            optional_pre_call_checks: ["prompt_caching"],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should remove cache-control fields after they are explicitly disabled", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: {
+          timeout: 30,
+          cache_control_injection_points: [{ location: "message", index: -1 }],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("cache-control-index-input-0")).toHaveValue("-1");
+    });
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
+            default_litellm_params: { timeout: 30 },
           }),
         }),
       ),

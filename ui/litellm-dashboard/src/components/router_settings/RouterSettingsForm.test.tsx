@@ -156,14 +156,51 @@ describe("RouterSettingsForm", () => {
     );
   });
 
-  it("should not render Default LiteLLM Params when persisted values exist", () => {
+  it("should render cache-control fields without rendering the raw Default LiteLLM Params input", () => {
     const props = {
       ...baseProps,
-      value: { ...defaultValue, routerSettings: { default_litellm_params: { timeout: 30 } } },
+      value: {
+        ...defaultValue,
+        routerSettings: {
+          default_litellm_params: {
+            timeout: 30,
+            cache_control_injection_points: [{ location: "message", role: "system", index: -1 }],
+          },
+        },
+      },
     };
     render(<RouterSettingsForm {...props} />);
 
     expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
-    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
+    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
+    expect(screen.getByTestId("cache-control-index-input-0")).toHaveValue("-1");
+  });
+
+  it("should mark default_litellm_params as modified when cache control changes", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps,
+      onChange,
+      value: {
+        ...defaultValue,
+        routerSettings: { default_litellm_params: { timeout: 30 } },
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerSettings: {
+          default_litellm_params: {
+            timeout: 30,
+            cache_control_injection_points: [{ location: "message" }],
+          },
+        },
+        modifiedRouterSettings: ["default_litellm_params"],
+      }),
+    );
   });
 });
