@@ -50,7 +50,14 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    ServerListFault,
+    classify_list_exception,
+)
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -2767,10 +2774,12 @@ class MCPServerManager:
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
+        except MCPServerListError:
+            raise
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []
+            raise MCPServerListError(classify_list_exception(e), server.name) from e
 
     async def get_prompts_from_server(
         self,
@@ -3372,34 +3381,36 @@ class MCPServerManager:
             server_name: Name of the server for logging
 
         Returns:
-            List of tools from the server
+            List of tools from the server. Failures never return an empty list: an upstream 401/403
+            raises MCPUpstreamAuthError and everything else raises MCPServerListError carrying a
+            classified fault, so each boundary applies its own absorb-or-relay policy.
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools(raise_on_error=True)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-        except TimeoutError:
+        except TimeoutError as e:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
             return []
         except ConnectionError as e:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
             auth_info = _extract_upstream_auth_failure(e)
-            if auth_info is not None and auth_info[0] == 401:
-                _, www_authenticate = auth_info
-                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP 401")
+            if auth_info is not None and auth_info[0] in (401, 403):
+                status_code, www_authenticate = auth_info
+                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP {status_code}")
                 raise MCPUpstreamAuthError(
-                    status_code=401,
+                    status_code=status_code,
                     www_authenticate=www_authenticate,
                     server_name=server_name,
                 ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            return []
+            raise MCPServerListError(classify_list_exception(e), server_name) from e
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 

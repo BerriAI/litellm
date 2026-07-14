@@ -11,7 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
@@ -824,9 +828,12 @@ class TestMCPServerManager:
         assert exc_info.value.www_authenticate == challenge
 
     @pytest.mark.asyncio
-    async def test_list_absorbs_non_auth_httpexception(self):
-        """A non-auth HTTP error (e.g. 412 no endpoint, 503 IdP down) must stay absorbed to [] so one
-        misconfigured/unavailable server does not blank the whole aggregate listing."""
+    async def test_list_surfaces_non_auth_httpexception_as_internal_fault(self):
+        """A non-auth HTTP error (e.g. 412 no endpoint, 503 IdP down) now raises MCPServerListError
+        with an "internal" fault carrying the status code instead of absorbing to []: the silent
+        empty list made a misconfigured/unavailable server indistinguishable from a healthy server
+        with no tools. The aggregate absorbs it into that server's outcome, so one broken server
+        still does not blank the whole aggregate listing."""
         server = MCPServer(
             server_id="te-412",
             name="te-412-server",
@@ -841,10 +848,10 @@ class TestMCPServerManager:
         manager._create_mcp_client = AsyncMock(
             side_effect=HTTPException(status_code=412, detail="token exchange endpoint is not configured")
         )
-        result = await manager._get_tools_from_server(
-            server=server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
-        )
-        assert result == []
+        with pytest.raises(MCPServerListError) as exc_info:
+            await manager._get_tools_from_server(server=server, oauth2_headers={"Authorization": "Bearer subj-jwt"})
+        assert exc_info.value.fault == ServerListFault(tag="internal", status_code=412)
+        assert exc_info.value.server_name == "te-412-server"
 
     def _upstream_status_error(self, status_code: int, www_authenticate: Optional[str] = None) -> httpx.HTTPStatusError:
         """Build an httpx.HTTPStatusError shaped like the one the MCP SDK surfaces for an upstream
@@ -6862,14 +6869,16 @@ def _upstream_status_error(status_code: int, challenge: str) -> httpx.HTTPStatus
 
 
 class TestMCPToolsListAuthSurfacing:
-    """Regression: MCP tools/list 401 auth failures must surface as MCPUpstreamAuthError.
+    """Regression: MCP tools/list failures must surface as typed exceptions, never a silent [].
 
     Previously a missing/expired per-user OAuth token, or an upstream 401 for any
     non-carveout auth_type, was swallowed to an empty tool list, so a single-server
     client saw a 200 with no tools instead of a 401 challenge. The listing helpers
-    now raise MCPUpstreamAuthError on a 401 regardless of auth_type; the single-server
-    routes turn it into a 401 + WWW-Authenticate while the aggregator absorbs it to an
-    empty list. Only a 401 challenges; a 403 (forbidden) degrades like any other error.
+    now raise MCPUpstreamAuthError on an upstream 401 or 403 and MCPServerListError
+    with a classified fault for every other failure; single-server routes relay a
+    truthful HTTP status while the aggregator absorbs each failure into that
+    server's outcome, so a broken upstream is never indistinguishable from a
+    healthy server with no tools.
     """
 
     @pytest.mark.asyncio
@@ -6891,25 +6900,38 @@ class TestMCPToolsListAuthSurfacing:
         assert exc_info.value.server_name == "static-key-server"
 
     @pytest.mark.asyncio
-    async def test_fetch_tools_with_timeout_absorbs_upstream_403(self):
-        """Only a 401 drives the re-auth challenge. A 403 (authenticated but
-        forbidden, e.g. insufficient scope) is not a re-auth signal, so even
-        with a WWW-Authenticate header it degrades to an empty list rather than
-        surfacing a challenge."""
+    async def test_fetch_tools_with_timeout_surfaces_upstream_403(self):
+        """An upstream 403 (authenticated but forbidden, e.g. insufficient scope) now raises
+        MCPUpstreamAuthError instead of absorbing to []: the silent empty list made a forbidden
+        upstream indistinguishable from a healthy server with no tools. The upstream
+        WWW-Authenticate is preserved so single-server routes can relay the real challenge."""
         manager = MCPServerManager()
         challenge = 'Bearer error="insufficient_scope", scope="read:tools"'
         client = MagicMock()
         client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
 
-        assert await manager._fetch_tools_with_timeout(client, "forbidden-server") == []
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "forbidden-server")
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.www_authenticate == challenge
+        assert exc_info.value.server_name == "forbidden-server"
 
     @pytest.mark.asyncio
-    async def test_fetch_tools_with_timeout_returns_empty_on_non_auth_error(self):
+    async def test_fetch_tools_with_timeout_raises_classified_fault_on_non_auth_error(self):
+        """A non-auth listing failure now raises MCPServerListError carrying a classified fault
+        instead of absorbing to []: the silent empty list made a broken upstream indistinguishable
+        from a healthy server with no tools. An unrecognized exception classifies as the gateway's
+        own fault ("internal")."""
         manager = MCPServerManager()
         client = MagicMock()
         client.list_tools = AsyncMock(side_effect=RuntimeError("upstream 500"))
 
-        assert await manager._fetch_tools_with_timeout(client, "srv") == []
+        with pytest.raises(MCPServerListError) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "srv")
+
+        assert exc_info.value.fault == ServerListFault(tag="internal")
+        assert exc_info.value.server_name == "srv"
 
     @pytest.mark.asyncio
     async def test_get_tools_from_server_surfaces_unusable_user_token(self):
@@ -6936,9 +6958,12 @@ class TestMCPToolsListAuthSurfacing:
         assert exc_info.value.server_name == "oauth-srv"
 
     @pytest.mark.asyncio
-    async def test_get_tools_from_server_absorbs_non_challenge_http_error(self):
-        """A non-auth HTTPException (500) stays absorbed so one misconfigured server cannot blank
-        the listing; 401/403 are the challenge-class statuses routed to MCPUpstreamAuthError."""
+    async def test_get_tools_from_server_surfaces_non_challenge_http_error_as_internal_fault(self):
+        """A non-auth HTTPException (500) now raises MCPServerListError with an "internal" fault
+        carrying the status code instead of absorbing to []: the silent empty list made a
+        misconfigured server indistinguishable from a healthy server with no tools. The aggregate
+        absorbs it into that server's outcome; single-server routes relay a truthful status.
+        401/403 remain the challenge-class statuses routed to MCPUpstreamAuthError."""
         manager = MCPServerManager()
         server = MCPServer(server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http)
         manager._create_mcp_client = AsyncMock(
@@ -6948,7 +6973,11 @@ class TestMCPToolsListAuthSurfacing:
             )
         )
 
-        assert await manager._get_tools_from_server(server) == []
+        with pytest.raises(MCPServerListError) as exc_info:
+            await manager._get_tools_from_server(server)
+
+        assert exc_info.value.fault == ServerListFault(tag="internal", status_code=500)
+        assert exc_info.value.server_name == "stdio-srv"
 
     @pytest.mark.asyncio
     async def test_get_tools_from_server_suppresses_upstream_challenge_for_dcr_bridge(self):

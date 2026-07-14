@@ -690,16 +690,16 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
-        result = await rest_endpoints.list_tool_rest_api(
-            request,
-            server_id="server-1",
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
-        assert "server server-1" in result["message"]
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        assert "server-1" in exc_info.value.detail["message"]
 
     async def test_lists_tools_for_allowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
@@ -911,6 +911,63 @@ class TestListToolsRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
 
+    async def test_single_server_upstream_fault_surfaces_truthful_status(self, monkeypatch):
+        """A single-server listing whose upstream breaks (5xx, timeout, unreachable) must answer
+        with the truthful gateway status instead of masking the failure as an empty-success
+        {"tools": [], "error": null} body a caller cannot distinguish from a toolless server."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPServerListError,
+        )
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+            ServerListFault,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "flaky"
+            allowed_tools = None
+            mcp_info = {"server_name": "flaky"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPServerListError(ServerListFault(tag="upstream_error", status_code=503), "flaky")
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail["error"] == "upstream_error"
+        assert "flaky" in exc_info.value.detail["message"]
+
     async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
         """The multi-server aggregate listing degrades a server whose upstream
         rejects auth to an empty contribution and still returns the healthy
@@ -1108,15 +1165,15 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
-        result = await rest_endpoints.list_tool_rest_api(
-            request,
-            server_id="restricted-server",
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="restricted-server",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
 
     async def test_mcp_server_name_query_param_resolves_to_server(self, monkeypatch):
         """mcp_server_name is a name-based alias for server_id: it should

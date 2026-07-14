@@ -284,7 +284,8 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     """Regression: across the aggregate (/mcp), a delegate/passthrough server that raises
     MCPUpstreamAuthError must not empty every other server's tools. Re-raising it on the
     aggregate path (introduced with the passthrough feature) zeroed the whole list because the
-    fan-out gather propagated it."""
+    fan-out gather propagated it. The failed server now contributes an "auth_required" outcome
+    instead of vanishing, so it stays distinguishable from a healthy server with no tools."""
     from unittest.mock import patch
 
     from mcp.types import Tool as MCPTool
@@ -312,22 +313,24 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     ), patch.object(
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert [t.name for t in tools] == ["working_docs-read"]
+    assert [t.name for t in listing.tools] == ["working_docs-read"]
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"
+    assert listing.outcomes["working_docs"].tag == "ok"
 
 
 @pytest.mark.asyncio
 async def test_single_server_route_also_absorbs_upstream_auth_error():
     """A single-server route (/<server>/mcp) absorbs an upstream-auth error just like the aggregate:
-    the failing server is omitted (empty list) rather than re-raised. Surfacing it to the client as a
-    401 + WWW-Authenticate challenge cannot be done from this list handler — the MCP session manager
-    serializes a raise into a JSON-RPC error, not an HTTP 401 — so re-auth surfacing is handled by a
-    request-scope preemptive check, tracked separately."""
+    the failing server contributes no tools and an "auth_required" outcome rather than re-raising.
+    Surfacing it to the client as a 401 + WWW-Authenticate challenge cannot be done from this list
+    handler — the MCP session manager serializes a raise into a JSON-RPC error, not an HTTP 401 — so
+    re-auth surfacing is handled by a request-scope preemptive check, tracked separately."""
     from unittest.mock import patch
 
     from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -351,12 +354,13 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
         ), patch.object(
             mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
-            tools = await mcp_server._get_tools_from_mcp_servers(
+            listing = await mcp_server._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
                 mcp_auth_header=None,
                 mcp_servers=["delegate_docs"],
             )
-        assert tools == []
+        assert listing.tools == []
+        assert listing.outcomes["delegate_docs"].tag == "auth_required"
     finally:
         _mcp_gateway_server_name.reset(token)
 
@@ -388,10 +392,11 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert tools == []
+    assert listing.tools == []
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"
