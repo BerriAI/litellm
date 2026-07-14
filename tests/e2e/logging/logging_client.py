@@ -76,6 +76,14 @@ WEATHER_TOOL = ChatTool(
 )
 
 
+class ResponsesRequestBody(BaseModel):
+    """OpenAI Responses API /v1/responses request (non-streaming)."""
+
+    model: str
+    input: str
+    max_output_tokens: int
+
+
 class TeamCallbackBody(BaseModel):
     callback_name: Literal["langfuse_otel", "langfuse", "langsmith", "gcs"]
     callback_type: Literal["success", "failure", "success_and_failure"]
@@ -467,6 +475,19 @@ class LoggingClient:
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    def responses_raw(
+        self, key: str, model: str, text: str, *, max_output_tokens: int = 64
+    ) -> StreamingResponse:
+        """Non-streaming POST /v1/responses (OpenAI Responses API): raw outcome
+        judged by status/body/headers, for tests that need x-litellm-call-id.
+        max_output_tokens caps reasoning-model output cost; a capped response is
+        still a 200 and still exports the trace."""
+        return self.gateway.transport.send(
+            "/v1/responses",
+            headers=self.gateway.transport.bearer(key),
+            json=ResponsesRequestBody(model=model, input=text, max_output_tokens=max_output_tokens),
         )
 
     def scrape_metrics(self) -> str:
