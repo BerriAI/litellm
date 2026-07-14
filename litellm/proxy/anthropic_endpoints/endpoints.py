@@ -302,7 +302,7 @@ async def count_tokens(
             status_code=status_code,
             detail=detail,
         )
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError, KeyError, IndexError):
         verbose_proxy_logger.exception("litellm.proxy.anthropic_endpoints.count_tokens(): invalid request payload")
         raise HTTPException(
             status_code=400,

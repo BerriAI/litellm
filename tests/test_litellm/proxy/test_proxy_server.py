@@ -9720,6 +9720,40 @@ async def test_token_counter_malformed_message_returns_400_without_reflection():
 
 
 @pytest.mark.asyncio
+async def test_token_counter_tokenizer_attribute_error_returns_400_without_reflection():
+    """An AttributeError raised deep inside the tokenizer must also map to 400.
+
+    Only ValueError/TypeError used to be caught, so an AttributeError from a
+    content block of an unexpected shape escaped the handler and surfaced as a
+    500. It must now be a 400 whose body carries no internal exception text.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch(
+        "litellm.token_counter",
+        side_effect=AttributeError("'dict' object has no attribute 'startswith'"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "attribute" not in detail
+    assert "startswith" not in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
 async def test_token_counter_wellformed_message_still_counts():
     """A well-formed request must still return a positive token count."""
     from litellm.proxy._types import TokenCountRequest

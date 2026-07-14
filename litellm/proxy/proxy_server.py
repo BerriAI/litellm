@@ -10678,7 +10678,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                 custom_tokenizer=_tokenizer_used,  # type: ignore
             ),
         )
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError, KeyError, IndexError):
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): could not tokenize the provided messages/prompt"
         )

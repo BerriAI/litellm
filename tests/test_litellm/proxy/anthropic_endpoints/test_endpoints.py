@@ -303,6 +303,53 @@ class TestCountTokensErrorHandling:
         assert "Traceback" not in detail
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tokenizer_error",
+        [
+            AttributeError("'NoneType' object has no attribute 'get'"),
+            KeyError("type"),
+            IndexError("list index out of range"),
+        ],
+    )
+    async def test_tokenizer_attribute_error_returns_400_not_500(self, tokenizer_error):
+        """Non-(ValueError/TypeError) tokenizer failures must also map to 400.
+
+        AttributeError/KeyError/IndexError raised deep inside the tokenizer
+        used to fall through to the terminal `except Exception` and surface as
+        a 500. They must now be a 400 whose body carries no internal exception
+        text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            raise tokenizer_error
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "NoneType" not in detail
+        assert "attribute" not in detail
+        assert "Internal server error" not in detail
+
+    @pytest.mark.asyncio
     async def test_wellformed_request_still_counts(self):
         """A valid request must still return the Anthropic-shaped token count."""
         from fastapi import Request
