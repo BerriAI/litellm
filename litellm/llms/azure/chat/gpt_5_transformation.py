@@ -19,6 +19,11 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
+    def _rejects_non_default_temperature(cls, model: str) -> bool:
+        model_name = model.split("/")[-1]
+        return model_name.startswith(("gpt-5.5", "gpt-5.6"))
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
@@ -93,6 +98,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
+        temperature_value = non_default_params.get("temperature")
+        if self._rejects_non_default_temperature(model) and temperature_value not in (None, 1):
+            if litellm.drop_params is True or drop_params is True:
+                non_default_params = {key: value for key, value in non_default_params.items() if key != "temperature"}
+            else:
+                raise UnsupportedParamsError(
+                    status_code=400,
+                    message=(
+                        f"Azure OpenAI {model} does not support temperature={temperature_value}. "
+                        "Only temperature=1 is supported. "
+                        "To drop unsupported params set `litellm.drop_params = True`"
+                    ),
+                )
+
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
 
