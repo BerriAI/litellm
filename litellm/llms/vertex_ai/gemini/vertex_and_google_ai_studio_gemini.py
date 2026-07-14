@@ -323,6 +323,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
+            "encoding_format",
             "extra_headers",
             "seed",
             "logprobs",

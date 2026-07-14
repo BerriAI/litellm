@@ -27,7 +27,7 @@ from ..common_utils import VertexAIError
 
 class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
     def get_supported_openai_params(self, model: str) -> list:
-        return ["dimensions"]
+        return ["dimensions", "encoding_format"]
 
     def map_openai_params(
         self,

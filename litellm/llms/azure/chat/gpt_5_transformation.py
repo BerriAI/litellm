@@ -133,6 +133,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if result_effort == "none" and not supports_none:
             result.pop("reasoning_effort")
 
+        # Azure gpt-5.5 / gpt-5.6 reject any non-default temperature
+        if "gpt-5.5" in model or "gpt-5.6" in model:
+            if "temperature" in result and result["temperature"] != 1:
+                if litellm.drop_params is True or (drop_params is not None and drop_params is True):
+                    result.pop("temperature")
+                else:
+                    raise UnsupportedParamsError(
+                        message="Azure gpt-5.5 and gpt-5.6 reject any non-default temperature. To drop it, set litellm.drop_params = True.",
+                        status_code=400,
+                    )
+
         # Azure gpt-5.4+ with tools + reasoning_effort is now routed to the
         # Responses API bridge (same as OpenAI), so we no longer need to drop
         # reasoning_effort here.  See: responses_api_bridge_check() in main.py.
