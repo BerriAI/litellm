@@ -497,9 +497,7 @@ class ComplexityRouter(CustomLogger):
             # (which was never checked against the plugins) would let that policy be
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
-            raise ValueError(
-                f"No candidate models left for tier {tier_key} after routing-plugin filtering"
-            )
+            raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
         return self._pick_from_tier_value(context.candidate_models, tier_key)
 
     def _ensure_adaptive_router(self) -> Any | None:
