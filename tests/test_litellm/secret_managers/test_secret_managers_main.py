@@ -255,6 +255,144 @@ def test_unsupported_oidc_provider():
         get_secret(secret_name)
 
 
+class _FakeSTSClient:
+    def __init__(self, token="aws_jwt", expiration=None):
+        self._token = token
+        self._expiration = expiration
+        self.calls = []
+
+    def get_web_identity_token(self, **kwargs):
+        self.calls.append(kwargs)
+        response = {"WebIdentityToken": self._token}
+        if self._expiration is not None:
+            response["Expiration"] = self._expiration
+        return response
+
+
+def test_oidc_aws_success_signs_rs256_and_caches():
+    """AWS OIDC mints a JWT via GetWebIdentityToken with RS256 and caches to expiry."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.secret_managers.main import _get_aws_oidc_token
+
+    expiration = datetime.now(timezone.utc) + timedelta(seconds=3600)
+    fake_client = _FakeSTSClient(token="aws_jwt", expiration=expiration)
+    factory = Mock(return_value=fake_client)
+
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        with patch("litellm.secret_managers.main._resolve_aws_region", return_value="eu-west-1"):
+            token = _get_aws_oidc_token(
+                oidc_aud="api://AzureADTokenExchange",
+                cache_key="oidc/aws/api://AzureADTokenExchange",
+                sts_client_factory=factory,
+            )
+
+    assert token == "aws_jwt"
+    factory.assert_called_once_with("eu-west-1")
+    assert fake_client.calls == [
+        {"Audience": ["api://AzureADTokenExchange"], "SigningAlgorithm": "RS256"}
+    ]
+    (cache_kwargs,) = mock_cache.set_cache.call_args_list
+    assert cache_kwargs.kwargs["key"] == "oidc/aws/api://AzureADTokenExchange"
+    assert cache_kwargs.kwargs["value"] == "aws_jwt"
+    assert 3500 <= cache_kwargs.kwargs["ttl"] <= 3540
+
+
+def test_oidc_aws_uses_cache_without_calling_sts():
+    from litellm.secret_managers.main import _get_aws_oidc_token
+
+    factory = Mock(side_effect=AssertionError("STS should not be called on cache hit"))
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = "cached_jwt"
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        token = _get_aws_oidc_token(
+            oidc_aud="api://AzureADTokenExchange",
+            cache_key="oidc/aws/api://AzureADTokenExchange",
+            sts_client_factory=factory,
+        )
+
+    assert token == "cached_jwt"
+    factory.assert_not_called()
+    mock_cache.set_cache.assert_not_called()
+
+
+def test_oidc_aws_no_expiration_skips_caching():
+    from litellm.secret_managers.main import _get_aws_oidc_token
+
+    fake_client = _FakeSTSClient(token="aws_jwt", expiration=None)
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        with patch("litellm.secret_managers.main._resolve_aws_region", return_value="us-east-1"):
+            token = _get_aws_oidc_token(
+                oidc_aud="aud",
+                cache_key="oidc/aws/aud",
+                sts_client_factory=Mock(return_value=fake_client),
+            )
+
+    assert token == "aws_jwt"
+    mock_cache.set_cache.assert_not_called()
+
+
+def test_get_aws_sts_client_pins_regional_endpoint():
+    from litellm.secret_managers.main import _get_aws_sts_client
+
+    with patch("boto3.client") as mock_client:
+        _get_aws_sts_client("ap-southeast-2")
+
+    mock_client.assert_called_once_with(
+        "sts",
+        region_name="ap-southeast-2",
+        endpoint_url="https://sts.ap-southeast-2.amazonaws.com",
+    )
+
+
+def test_resolve_aws_region_prefers_env(monkeypatch):
+    from litellm.secret_managers.main import _resolve_aws_region
+
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    assert _resolve_aws_region() == "eu-central-1"
+
+
+def test_resolve_aws_region_raises_when_unresolved(monkeypatch):
+    from litellm.secret_managers.main import _resolve_aws_region
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    with patch("boto3.Session") as mock_session:
+        mock_session.return_value.region_name = None
+        with pytest.raises(ValueError, match="AWS OIDC provider requires a region"):
+            _resolve_aws_region()
+
+
+def test_oidc_aws_get_secret_end_to_end(monkeypatch):
+    """End-to-end: get_secret('oidc/aws/<aud>') returns the STS-minted JWT."""
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    fake_client = _FakeSTSClient(token="aws_jwt", expiration=None)
+
+    mock_cache = Mock()
+    mock_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_cache):
+        with patch(
+            "litellm.secret_managers.main._get_aws_sts_client",
+            return_value=fake_client,
+        ):
+            result = get_secret("oidc/aws/api://AzureADTokenExchange")
+
+    assert result == "aws_jwt"
+    assert fake_client.calls == [
+        {"Audience": ["api://AzureADTokenExchange"], "SigningAlgorithm": "RS256"}
+    ]
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
