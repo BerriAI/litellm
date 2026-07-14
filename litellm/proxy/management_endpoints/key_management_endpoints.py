@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_project_object,
     get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -646,6 +647,43 @@ def _check_budget_limits_delegation_ceiling(
         )
 
 
+async def _resolve_delegation_ceiling(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: LiteLLM_TeamTableCachedObj | None,
+    is_ui_session_token: bool,
+) -> float | None:
+    """
+    Budget a non-admin caller is allowed to delegate to a newly created key.
+
+    A UI session token (team_id == UI_SESSION_TOKEN_TEAM_ID) carries
+    max_budget == max_ui_session_budget, a per-session chat spend cap (default
+    $0.25) rather than the caller's real authority, so its ceiling is the
+    caller's user-account budget resolved from the DB (None once the user is
+    resolved means the account is uncapped). If the user cannot be resolved the
+    ceiling fails closed to the session cap. Every other caller delegates from
+    its own max_budget, falling back to the team budget for a CLI session token
+    creating a team key.
+    """
+    if is_ui_session_token:
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        try:
+            user_object = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+        except Exception:  # noqa: BLE001  # get_user_object raises a bare Exception when the user is absent; fail closed to the session cap
+            user_object = None
+        return user_object.max_budget if user_object is not None else user_api_key_dict.max_budget
+    if user_api_key_dict.max_budget is not None:
+        return user_api_key_dict.max_budget
+    if user_api_key_dict.is_session_token and team_table is not None:
+        return team_table.max_budget
+    return None
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -806,7 +844,8 @@ async def _common_key_generation_helper(
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
-    is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
+    is_ui_session_token = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+    is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
     # Session tokens (lite login) carry max_budget=None to avoid a per-session
     # LLM spend cap, but that None must not be read as "unlimited delegation
     # authority". A personal key (no team) has no team-budget enforcement at
@@ -827,10 +866,10 @@ async def _common_key_generation_helper(
                 )
             },
         )
-    delegation_ceiling = (
-        user_api_key_dict.max_budget
-        if user_api_key_dict.max_budget is not None
-        else (team_table.max_budget if user_api_key_dict.is_session_token and team_table is not None else None)
+    delegation_ceiling = await _resolve_delegation_ceiling(
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_table,
+        is_ui_session_token=is_ui_session_token,
     )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
