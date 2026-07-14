@@ -190,7 +190,7 @@ class TestOtelTraceCompleteness:
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
-    @pytest.mark.covers("logging.otel.success.exports_metric")
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["messages"])
     def test_messages_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
