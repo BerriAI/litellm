@@ -43806,6 +43806,7 @@
         "supports_vision": true
     },
     "bedrock_mantle/xai.grok-4.3": {
+        "use_openai_responses_path": true,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 2.5e-06,
         "cache_read_input_token_cost": 2e-07,
