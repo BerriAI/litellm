@@ -4,12 +4,11 @@ Calls the Singulr Guard API to scan messages.
 """
 
 import os
-from typing import Any, List, Optional, cast
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
 import pydantic
-from openai.types.chat import ChatCompletionMessageToolCall
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -33,7 +32,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailPayload,
-    SingulrGuardrailRequest, SingulrGuardrailResponse,
+    SingulrGuardrailRequest,
+    SingulrGuardrailResponse,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -57,8 +57,6 @@ class SingulrGuardrail(CustomGuardrail):
         self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
             "/"
         )
-        # self.singulr_api_base = "http://localhost:8003"
-
         parsed = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",
@@ -105,19 +103,25 @@ class SingulrGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_texts_by_role(
         inputs: GenericGuardrailAPIInputs,
-        roles: tuple[str, ...],
-    ) -> List[str]:
+    ) -> dict[str, list[str]]:
         structured_messages = inputs.get("structured_messages")
-        if structured_messages is None:
-            return inputs.get("texts") or []
+        if not structured_messages:
+            return {}
 
-        return [
-            text
-            for message in structured_messages
-            if message.get("role") in roles
-            for text in (convert_content_list_to_str(message=message),)
-            if text
-        ]
+        result: dict[str, list[str]] = {}
+
+        for message in structured_messages:
+            role = message.get("role")
+            if not role:
+                continue
+
+            text = convert_content_list_to_str(message=message)
+            if not text:
+                continue
+
+            result.setdefault(role, []).append(text)
+
+        return result
 
     def _build_payload(
         self,
@@ -125,12 +129,20 @@ class SingulrGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> dict[str, Any]:
+
+        messages = self._extract_texts_by_role(inputs=inputs)
+        model_response = inputs.get("texts") or []
+
+        ## Guardrail test playground send input text in texts field
+        if input_type == "request" and not messages:
+            messages["user"] = inputs.get("texts") or []
+
         singulr_request = SingulrGuardrailRequest(
             model=inputs.get("model") or request_data.get("model"),
-            prompts=self._extract_texts_by_role(inputs, ("user", "system")) if input_type == "request" else None,
-            completions=self._extract_texts_by_role(inputs, ("assistant",)) if input_type == "response" else None,
+            prompts=messages if input_type == "request" else None,
+            completions=model_response if input_type == "response" else None,
             tools=inputs.get("tools") or [],
-            tool_calls=cast(Optional[List[ChatCompletionMessageToolCall]], inputs.get("tool_calls")) or [],
+            tool_calls=inputs.get("tool_calls") or [],
         )
         payload = SingulrGuardrailPayload(request=singulr_request, input_type=input_type)
         return payload.model_dump(exclude_none=True)
@@ -205,9 +217,7 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: str,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        payload = self._build_payload(
-            request_data, inputs, input_type
-        )
+        payload = self._build_payload(request_data, inputs, input_type)
         verbose_proxy_logger.debug("Singulr: payload=%s", payload)
         if not payload:
             return inputs
