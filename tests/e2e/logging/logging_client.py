@@ -77,11 +77,12 @@ WEATHER_TOOL = ChatTool(
 
 
 class ResponsesRequestBody(BaseModel):
-    """OpenAI Responses API /v1/responses request (non-streaming)."""
+    """OpenAI Responses API /v1/responses request."""
 
     model: str
     input: str
     max_output_tokens: int
+    stream: bool | None = None
 
 
 class TeamCallbackBody(BaseModel):
@@ -485,16 +486,22 @@ class LoggingClient:
         )
 
     def responses_raw(
-        self, key: str, model: str, text: str, *, max_output_tokens: int = 64
+        self, key: str, model: str, text: str, *, max_output_tokens: int = 64, stream: bool = False
     ) -> StreamingResponse:
-        """Non-streaming POST /v1/responses (OpenAI Responses API): raw outcome
-        judged by status/body/headers, for tests that need x-litellm-call-id.
+        """POST /v1/responses (OpenAI Responses API): raw outcome judged by
+        status/body/headers, for tests that need x-litellm-call-id.
         max_output_tokens caps reasoning-model output cost; a capped response is
-        still a 200 and still exports the trace."""
+        still a 200 and still exports the trace. With ``stream=True`` the SSE
+        body is consumed and its events counted."""
+        body = ResponsesRequestBody(
+            model=model, input=text, max_output_tokens=max_output_tokens, stream=stream or None
+        )
+        if stream:
+            return self.gateway.transport.stream(
+                "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
+            )
         return self.gateway.transport.send(
-            "/v1/responses",
-            headers=self.gateway.transport.bearer(key),
-            json=ResponsesRequestBody(model=model, input=text, max_output_tokens=max_output_tokens),
+            "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
         )
 
     def scrape_metrics(self) -> str:
