@@ -957,15 +957,14 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-6-20250918",
-        "claude-opus-4.6-20250918",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
         "claude-opus-4-5-20251101",
-        "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
+    Test that supported Opus models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
