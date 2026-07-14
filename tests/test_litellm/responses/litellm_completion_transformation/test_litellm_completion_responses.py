@@ -976,6 +976,104 @@ class TestFunctionCallTransformation:
 
         assert ids == set()
 
+    def test_extract_tool_call_ids_returns_every_id_on_the_message(self):
+        """
+        `_extract_tool_call_ids` must return *all* tool_call ids on a message,
+        not just the first - this is what the dedup helpers below rely on to
+        correctly handle assistant messages with multiple tool_calls.
+        """
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_A", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+                {"id": "call_B", "type": "function", "function": {"name": "bar", "arguments": "{}"}},
+            ],
+        }
+
+        assert LiteLLMCompletionResponsesConfig._extract_tool_call_ids(message) == {"call_A", "call_B"}
+
+    def test_extract_tool_call_ids_empty_when_no_tool_calls(self):
+        assert LiteLLMCompletionResponsesConfig._extract_tool_call_ids({"role": "assistant", "content": "hi"}) == set()
+
+    def test_deduplicate_tool_call_output_messages_drops_multi_tool_call_message_on_any_id_match(self):
+        """
+        Regression test: an assistant message carrying multiple tool_calls
+        (`[call_A, call_B]`) must be dropped as a duplicate if *any* of its
+        ids is already known - not only if its *first* id matches.
+
+        Before this fix, `_deduplicate_tool_call_output_messages` only
+        checked `tool_calls[0].id`. If the session already contained
+        `call_B` but not `call_A`, the message would be kept (since
+        `call_A` isn't in `existing_tool_call_ids`), leaving a duplicate
+        assistant entry for `call_B`.
+        """
+        multi_tool_call_message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_A", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+                {"id": "call_B", "type": "function", "function": {"name": "bar", "arguments": "{}"}},
+            ],
+        }
+        tool_result = {"role": "tool", "content": "result", "tool_call_id": "call_B"}
+
+        # Session already has `call_B` (but not `call_A`).
+        filtered = LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
+            tool_call_output_messages=[multi_tool_call_message, tool_result],
+            existing_tool_call_ids={"call_B"},
+        )
+
+        assert filtered == [tool_result], (
+            "The multi-tool-call assistant message must be dropped entirely because it "
+            f"shares call_B with the session, not kept because call_A didn't match. Got: {filtered}"
+        )
+
+    def test_deduplicate_tool_call_output_messages_keeps_message_when_no_ids_match(self):
+        """Control case: none of the message's ids are known, so it must be kept."""
+        multi_tool_call_message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_A", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+                {"id": "call_B", "type": "function", "function": {"name": "bar", "arguments": "{}"}},
+            ],
+        }
+
+        filtered = LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
+            tool_call_output_messages=[multi_tool_call_message],
+            existing_tool_call_ids={"call_C"},
+        )
+
+        assert filtered == [multi_tool_call_message]
+
+    def test_deduplicate_tool_call_output_messages_second_message_deduped_by_first(self):
+        """
+        A later multi-tool-call message sharing an id with an *earlier* kept
+        message in the same list (not just `existing_tool_call_ids`) must
+        also be dropped.
+        """
+        first_message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_A", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+        }
+        duplicate_message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_A", "type": "function", "function": {"name": "foo", "arguments": "{}"}},
+                {"id": "call_C", "type": "function", "function": {"name": "baz", "arguments": "{}"}},
+            ],
+        }
+
+        filtered = LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
+            tool_call_output_messages=[first_message, duplicate_message],
+            existing_tool_call_ids=set(),
+        )
+
+        assert filtered == [first_message]
+
     @pytest.mark.asyncio
     async def test_async_responses_api_session_handler_drops_cache_reconstructed_duplicate_tool_use(self):
         """
@@ -1109,6 +1207,105 @@ class TestFunctionCallTransformation:
             else getattr(next_message, "tool_call_id", None)
         )
         assert tool_call_id_on_result == tool_call_id
+
+    @pytest.mark.asyncio
+    async def test_async_responses_api_session_handler_dedupes_multi_tool_call_assistant_message(self):
+        """
+        Regression test: the dedup wired into `async_responses_api_session_handler`
+        must drop a duplicate assistant message even when that message carries
+        *multiple* tool_calls and only one of them is already present in the
+        session (not just when its first tool_call id matches).
+
+        Unlike `test_async_responses_api_session_handler_drops_cache_reconstructed_duplicate_tool_use`
+        (which reproduces the cache-reconstruction path, always single-tool-call),
+        this test builds a genuine multi-tool-call assistant message directly to
+        exercise `_deduplicate_tool_call_output_messages`'s handling of messages
+        with more than one tool_call id.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses.litellm_completion_transformation.session_handler import (
+            ResponsesSessionHandler,
+        )
+
+        call_a, call_b = "call_multi_A", "call_multi_B"
+
+        # Session already contains an assistant message for call_b (but not call_a).
+        fake_session = ChatCompletionSession(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "look up two things"},
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id=call_b,
+                            type="function",
+                            function=Function(name="get_time", arguments="{}"),
+                        )
+                    ],
+                ),
+            ],
+            litellm_session_id="session-multi-tool-call",
+        )
+
+        # The follow-up's own new messages independently carry a *multi*
+        # tool-call assistant message for [call_a, call_b] (e.g. a client
+        # sending back both tool results at once), followed by both tool
+        # results.
+        duplicate_multi_tool_call_message = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id=call_a, type="function", function=Function(name="get_weather", arguments="{}")
+                ),
+                ChatCompletionMessageToolCall(
+                    id=call_b, type="function", function=Function(name="get_time", arguments="{}")
+                ),
+            ],
+        )
+        litellm_completion_request = {
+            "model": "claude-haiku-4-5",
+            "messages": [
+                duplicate_multi_tool_call_message,
+                {"role": "tool", "content": "72F", "tool_call_id": call_a},
+                {"role": "tool", "content": "12:00", "tool_call_id": call_b},
+            ],
+        }
+
+        with patch.object(
+            ResponsesSessionHandler,
+            "get_chat_completion_message_history_for_previous_response_id",
+            new_callable=AsyncMock,
+            return_value=fake_session,
+        ):
+            result = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id="resp_prev_multi",
+                litellm_completion_request=litellm_completion_request,
+            )
+
+        combined = result["messages"]
+
+        def _role(m):
+            return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+
+        assistant_messages_with_call_b = [
+            m for m in combined if _role(m) == "assistant" and call_b in LiteLLMCompletionResponsesConfig._extract_tool_call_ids(m)
+        ]
+        assert len(assistant_messages_with_call_b) == 1, (
+            "The duplicate multi-tool-call assistant message must be dropped entirely "
+            "because it shares call_b with the session - even though its *first* "
+            f"tool_call id (call_a) doesn't match. Messages: {combined}"
+        )
+
+        # call_a's tool result is orphaned now that the duplicate assistant
+        # message carrying it was dropped along with call_b - this matches
+        # existing behavior for any tool_result whose assistant message
+        # isn't available (see `_ensure_tool_results_have_corresponding_tool_calls`),
+        # and is an acceptable trade-off for the caller sending overlapping
+        # tool_calls across the session boundary in the first place.
 
     def test_tool_call_output_reconstruction_preserves_assistant_text_content(self):
         """

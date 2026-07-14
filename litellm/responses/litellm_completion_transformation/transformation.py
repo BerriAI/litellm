@@ -483,29 +483,16 @@ class LiteLLMCompletionResponsesConfig:
                         else:
                             role = str(getattr(m, "role", "") or "")
 
-                        # Drop assistant tool_calls wrappers if we already have this call_id
+                        # Drop assistant tool_calls wrappers if we already have
+                        # any of its tool_call ids. Checking every id (not
+                        # just the first) matters because a single assistant
+                        # message can carry multiple tool_calls.
                         if role == "assistant":
-                            tool_calls: Any = (
-                                m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
-                            )
-                            call_id = ""
-                            if (
-                                isinstance(tool_calls, Sequence)
-                                and not isinstance(tool_calls, (str, bytes))
-                                and len(tool_calls) > 0
-                            ):
-                                first_call = tool_calls[0]
-                                call_id_raw = (
-                                    first_call.get("id")
-                                    if isinstance(first_call, dict)
-                                    else getattr(first_call, "id", None)
-                                )
-                                if call_id_raw:
-                                    call_id = str(call_id_raw)
-                            if call_id and call_id in existing_tool_call_ids:
+                            call_ids = LiteLLMCompletionResponsesConfig._extract_tool_call_ids(m)
+                            if call_ids and call_ids & existing_tool_call_ids:
                                 continue
-                            if call_id:
-                                existing_tool_call_ids.add(call_id)
+                            if call_ids:
+                                existing_tool_call_ids |= call_ids
 
                         deduped_in_place.append(m)
 
@@ -514,6 +501,24 @@ class LiteLLMCompletionResponsesConfig:
 
                 messages.extend(chat_completion_messages)
         return messages
+
+    @staticmethod
+    def _extract_tool_call_ids(message: Any) -> set[str]:
+        """Return every tool_call id carried by a single assistant message.
+
+        Callers must only invoke this for assistant messages - it does not
+        check the message's role.  Used by dedup logic that must treat an
+        assistant message as a duplicate if it shares *any* tool_call id
+        with another message, not just its first one (an assistant message
+        can carry multiple tool_calls when the model calls several tools in
+        one turn).
+        """
+        ids: set[str] = set()
+        for tool_call in LiteLLMCompletionResponsesConfig._get_tool_calls_list(message):
+            tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
+            if tool_call_id:
+                ids.add(str(tool_call_id))
+        return ids
 
     @staticmethod
     def _collect_assistant_tool_call_ids(
@@ -537,10 +542,7 @@ class LiteLLMCompletionResponsesConfig:
             role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
             if role != "assistant":
                 continue
-            for tool_call in LiteLLMCompletionResponsesConfig._get_tool_calls_list(message):
-                tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
-                if tool_call_id:
-                    tool_call_ids.add(str(tool_call_id))
+            tool_call_ids |= LiteLLMCompletionResponsesConfig._extract_tool_call_ids(message)
         return tool_call_ids
 
     @staticmethod
@@ -555,7 +557,17 @@ class LiteLLMCompletionResponsesConfig:
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
-        """Return tool call outputs after dropping assistant entries with duplicate call_ids."""
+        """Return tool call outputs after dropping assistant entries with duplicate call_ids.
+
+        An assistant message is considered a duplicate - and dropped in its
+        entirety - if it shares *any* of its tool_call ids with
+        ``existing_tool_call_ids`` (or with an earlier message already kept
+        in this pass), not just its first tool_call id. A model can call
+        multiple tools in a single assistant turn, so checking only the
+        first id would miss duplicates on messages carrying e.g.
+        ``[call_A, call_B]`` when the session already has ``call_B`` but not
+        ``call_A``.
+        """
         if not tool_call_output_messages:
             return []
 
@@ -572,35 +584,16 @@ class LiteLLMCompletionResponsesConfig:
                 role = tool_call_message.get("role", "")
             else:
                 role = getattr(tool_call_message, "role", "")
-            call_id = ""
 
+            call_ids: set[str] = set()
             if role == "assistant":
-                tool_calls: Any = None
-                if isinstance(tool_call_message, dict):
-                    tool_calls = tool_call_message.get("tool_calls")
-                else:
-                    tool_calls = getattr(tool_call_message, "tool_calls", None)
+                call_ids = LiteLLMCompletionResponsesConfig._extract_tool_call_ids(tool_call_message)
 
-                if (
-                    isinstance(tool_calls, Sequence)
-                    and not isinstance(tool_calls, (str, bytes))
-                    and len(tool_calls) > 0
-                ):
-                    first_call = tool_calls[0]
-                    call_id_raw = None
-                    if isinstance(first_call, dict):
-                        call_id_raw = first_call.get("id")
-                    else:
-                        call_id_raw = getattr(first_call, "id", None)
-
-                    if call_id_raw:
-                        call_id = str(call_id_raw)
-
-            if call_id and call_id in seen_tool_call_ids and role == "assistant":
+            if call_ids and call_ids & seen_tool_call_ids:
                 continue
 
-            if call_id and role == "assistant":
-                seen_tool_call_ids.add(call_id)
+            if call_ids:
+                seen_tool_call_ids |= call_ids
 
             filtered_messages.append(tool_call_message)
 
