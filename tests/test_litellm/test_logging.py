@@ -299,6 +299,34 @@ def test_print_verbose_still_prints_when_set_verbose_true(monkeypatch, capfd):
     assert "legacy set_verbose output" in out, f"expected print() output, got: {out!r}"
 
 
+def test_print_verbose_skips_redaction_when_debugging_is_off(monkeypatch):
+    """
+    Regression test: print_verbose() must not redact or log anything when neither
+    verbose_logger is at DEBUG level nor the legacy set_verbose flag is set. It's
+    called 60+ times per request across hot paths (litellm_logging.py, main.py,
+    caching), so paying for regex-based secret redaction on every call would add
+    real overhead in production deployments where debug logging is off.
+    """
+    import litellm._logging as logging_module
+
+    original_level = verbose_logger.level
+    verbose_logger.setLevel(logging.WARNING)
+    monkeypatch.setattr(logging_module, "set_verbose", False)
+
+    redact_calls = []
+    monkeypatch.setattr(logging_module, "redact_secrets", lambda value: redact_calls.append(value) or value)
+    debug_calls = []
+    monkeypatch.setattr(verbose_logger, "debug", lambda msg: debug_calls.append(msg))
+
+    try:
+        print_verbose("should never be redacted or logged")
+    finally:
+        verbose_logger.setLevel(original_level)
+
+    assert redact_calls == [], f"redact_secrets should not run, got calls: {redact_calls}"
+    assert debug_calls == [], f"verbose_logger.debug should not run, got calls: {debug_calls}"
+
+
 @pytest.mark.asyncio
 async def test_cache_hit_includes_custom_llm_provider():
     """
