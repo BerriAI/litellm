@@ -151,7 +151,7 @@ def _settled_names(*, route: str, genai_span: str) -> set[str]:
 
 
 class TestOtelTraceCompleteness:
-    @pytest.mark.covers("logging.otel.success.exports_metric")
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
     def test_chat_completions_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -223,7 +223,7 @@ class TestOtelTraceCompleteness:
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
-    @pytest.mark.covers("logging.otel.success.exports_metric")
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["responses"])
     def test_responses_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
