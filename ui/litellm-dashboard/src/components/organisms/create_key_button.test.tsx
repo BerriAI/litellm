@@ -1,7 +1,8 @@
 import { act, fireEvent, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
+import { userFilterUICall } from "../networking";
 import CreateKey from "./create_key_button";
 
 const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall, teamDropdownTeamsRef } =
@@ -134,14 +135,16 @@ vi.mock("antd", () => {
   const Select = ({
     children,
     onChange,
+    onSearch,
     options,
     ...props
   }: {
     children?: any;
     onChange?: (value: string) => void;
+    onSearch?: (value: string) => void;
     options?: Array<{ value: string; label: string }>;
-  }) =>
-    React.createElement(
+  }) => {
+    const select = React.createElement(
       "select",
       {
         ...props,
@@ -150,6 +153,21 @@ vi.mock("antd", () => {
       children,
       options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
+
+    if (!onSearch) {
+      return select;
+    }
+
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement("input", {
+        "data-testid": "select-search-input",
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => onSearch(event.target.value),
+      }),
+      select,
+    );
+  };
 
   Select.Option = ({ children, ...props }: { children?: any }) => React.createElement("option", props, children);
 
@@ -638,6 +656,80 @@ describe("CreateKey", () => {
       expect(within(modelsSelect).getByText("All Team Models")).toBeInTheDocument();
       expect(within(modelsSelect).queryByText("All Proxy Models")).not.toBeInTheDocument();
       expect(within(modelsSelect).queryByText("all-proxy-models")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("user search debounce", () => {
+    const mockUserFilterUICall = vi.mocked(userFilterUICall);
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    const renderUserSearch = () => {
+      const view = renderWithProviders(
+        <CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ owned_by: "another_user" }} />,
+      );
+      return { input: screen.getByTestId("select-search-input"), unmount: view.unmount };
+    };
+
+    it("should not fire the search before the wait elapses", () => {
+      const { input } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(299);
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+    });
+
+    it("should fire exactly one search carrying the last value after the wait", async () => {
+      const { input } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "a" } });
+        vi.advanceTimersByTime(100);
+        fireEvent.change(input, { target: { value: "al" } });
+        vi.advanceTimersByTime(100);
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(mockUserFilterUICall).toHaveBeenCalledTimes(1);
+      const params = mockUserFilterUICall.mock.calls[0][1] as URLSearchParams;
+      expect(params.get("user_email")).toBe("alice");
+    });
+
+    it("should fire nothing when unmounted mid-wait", () => {
+      const { input, unmount } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      unmount();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
     });
   });
 
