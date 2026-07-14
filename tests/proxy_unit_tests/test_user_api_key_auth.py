@@ -229,7 +229,12 @@ async def test_aaauser_personal_budgets(key_ownership):
     from starlette.datastructures import URL
     import litellm
 
-    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -273,8 +278,9 @@ async def test_aaauser_personal_budgets(key_ownership):
         == valid_token
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException) as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio

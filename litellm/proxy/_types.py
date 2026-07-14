@@ -2422,7 +2422,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
-    skip_user_budget_on_team_key: bool | None = Field(
+    skip_user_budget_on_team_key: Optional[bool] = Field(
         None,
         description=(
             "If True, restores the legacy behavior where a user's personal "
