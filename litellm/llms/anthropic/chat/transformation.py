@@ -1442,7 +1442,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             elif param == "response_format" and isinstance(value, dict):
                 if AnthropicConfig._supports_model_capability(
-                    model, "supports_native_structured_output"
+                    model,
+                    "supports_native_structured_output",
+                    self._resolved_provider,
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
