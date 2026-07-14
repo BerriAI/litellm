@@ -23,6 +23,7 @@ class FocusExportEngine:
         provider: str,
         export_format: str,
         prefix: str,
+        include_end_user: bool = False,
         destination_config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.provider = provider
@@ -35,7 +36,7 @@ class FocusExportEngine:
         )
         self._serializer = self._init_serializer()
         self._transformer = FocusTransformer()
-        self._database = FocusLiteLLMDatabase()
+        self._database = FocusLiteLLMDatabase(include_end_user=include_end_user)
 
     def _init_serializer(self) -> FocusSerializer:
         if self.export_format == "csv":

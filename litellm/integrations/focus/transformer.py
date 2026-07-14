@@ -16,6 +16,7 @@ _TAG_KEYS = (
     "organization_alias",
     "user_id",
     "user_email",
+    "end_user",
     "api_key_alias",
     "model",
     "model_group",

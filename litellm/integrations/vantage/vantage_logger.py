@@ -31,6 +31,7 @@ class VantageLogger(FocusLogger):
         VANTAGE_BASE_URL: Optional base URL override (default: https://api.vantage.sh)
         VANTAGE_EXPORT_FREQUENCY: Export frequency — "hourly" (default), "daily", or "interval"
         VANTAGE_EXPORT_INTERVAL_SECONDS: Interval in seconds when frequency is "interval"
+        VANTAGE_INCLUDE_END_USER: Export exact request spend with end-user tags when true
     """
 
     def __init__(
@@ -41,12 +42,18 @@ class VantageLogger(FocusLogger):
         base_url: Optional[str] = None,
         frequency: Optional[str] = None,
         interval_seconds: Optional[int] = None,
+        include_end_user: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
         resolved_api_key = api_key or os.getenv("VANTAGE_API_KEY")
         resolved_token = integration_token or os.getenv("VANTAGE_INTEGRATION_TOKEN")
         resolved_base_url = base_url or os.getenv("VANTAGE_BASE_URL", "https://api.vantage.sh")
         resolved_frequency = (frequency or os.getenv("VANTAGE_EXPORT_FREQUENCY") or "hourly").lower()
+        resolved_include_end_user = (
+            include_end_user
+            if include_end_user is not None
+            else os.getenv("VANTAGE_INCLUDE_END_USER", "false").lower() in {"1", "true", "yes"}
+        )
 
         raw_interval = interval_seconds or os.getenv("VANTAGE_EXPORT_INTERVAL_SECONDS")
         resolved_interval: Optional[int] = None
@@ -72,6 +79,7 @@ class VantageLogger(FocusLogger):
             export_format="csv",
             frequency=resolved_frequency,
             interval_seconds=resolved_interval,
+            include_end_user=resolved_include_end_user,
             prefix="vantage_exports",
             destination_config=destination_config,
             **kwargs,

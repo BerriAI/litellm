@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
 
 import polars as pl
 
@@ -67,3 +68,9 @@ def test_consumed_and_pricing_quantity_match():
     """ConsumedQuantity and PricingQuantity must always be equal."""
     result = _transform([_base_row(api_requests=42)])
     assert result["ConsumedQuantity"][0] == result["PricingQuantity"][0]
+
+
+def test_end_user_is_included_in_focus_tags():
+    result = _transform([_base_row(end_user="customer@example.com")])
+
+    assert json.loads(result["Tags"][0])["end_user"] == "customer@example.com"

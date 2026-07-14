@@ -9,11 +9,11 @@ import pytest
 from litellm.integrations.focus.database import FocusLiteLLMDatabase
 
 
-def _setup_db(monkeypatch: pytest.MonkeyPatch, query_return):
+def _setup_db(monkeypatch: pytest.MonkeyPatch, query_return, *, include_end_user: bool = False):
     """Create a database instance with a stubbed prisma client."""
     query_mock = AsyncMock(return_value=query_return)
     mock_client = SimpleNamespace(db=SimpleNamespace(query_raw=query_mock))
-    db = FocusLiteLLMDatabase()
+    db = FocusLiteLLMDatabase(include_end_user=include_end_user)
     monkeypatch.setattr(db, "_ensure_prisma_client", lambda: mock_client)
     return db, query_mock
 
@@ -81,9 +81,36 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
     await db.get_usage_data()
 
     query_text, *_ = query_mock.await_args.args
-    assert (
-        "COALESCE(vt.organization_id, tt.organization_id) as organization_id"
-        in query_text
-    )
+    assert "COALESCE(vt.organization_id, tt.organization_id) as organization_id" in query_text
     assert "ot.organization_alias as organization_alias" in query_text
     assert 'LEFT JOIN "LiteLLM_OrganizationTable" ot' in query_text
+
+
+@pytest.mark.asyncio
+async def test_should_use_exact_spend_logs_when_end_user_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    start = datetime(2026, 7, 13, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    db, query_mock = _setup_db(monkeypatch, [], include_end_user=True)
+
+    await db.get_usage_data(start_time_utc=start, end_time_utc=end)
+
+    query_text, *params = query_mock.await_args.args
+    assert 'FROM "LiteLLM_SpendLogs" sl' in query_text
+    assert "NULLIF(sl.end_user, '') as end_user" in query_text
+    assert 'sl."startTime" >= $1::timestamptz' in query_text
+    assert 'sl."startTime" < $2::timestamptz' in query_text
+    assert 'FROM "LiteLLM_DailyEndUserSpend"' not in query_text
+    assert params == [start, end]
+
+
+@pytest.mark.asyncio
+async def test_should_keep_daily_export_as_default(monkeypatch: pytest.MonkeyPatch):
+    db, query_mock = _setup_db(monkeypatch, [])
+
+    await db.get_usage_data()
+
+    query_text, *_ = query_mock.await_args.args
+    assert 'FROM "LiteLLM_DailyUserSpend" dus' in query_text
+    assert 'FROM "LiteLLM_SpendLogs" sl' not in query_text

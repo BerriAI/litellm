@@ -34,6 +34,7 @@ class FocusLogger(CustomLogger):
         cron_offset_minute: Optional[int] = None,
         interval_seconds: Optional[int] = None,
         prefix: Optional[str] = None,
+        include_end_user: Optional[bool] = None,
         destination_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
@@ -56,6 +57,11 @@ class FocusLogger(CustomLogger):
                 )
         env_prefix = os.getenv("FOCUS_PREFIX")
         self.prefix: str = prefix if prefix is not None else (env_prefix if env_prefix else "focus_exports")
+        self.include_end_user = (
+            include_end_user
+            if include_end_user is not None
+            else os.getenv("FOCUS_INCLUDE_END_USER", "false").lower() in {"1", "true", "yes"}
+        )
 
         self._destination_config = destination_config
         self._engine: Optional["FocusExportEngine"] = None
@@ -69,6 +75,7 @@ class FocusLogger(CustomLogger):
                 provider=self.provider,
                 export_format=self.export_format,
                 prefix=self.prefix,
+                include_end_user=self.include_end_user,
                 destination_config=self._destination_config,
             )
         return self._engine
