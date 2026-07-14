@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAda
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
 from e2e_gateway import Gateway, build_gateway
+from lifecycle import ResourceManager
 from e2e_http import (
     URL,
     AuthHeaders,
@@ -642,18 +643,24 @@ class LoggingClient:
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
 
 
-def build_logging_client() -> LoggingClient:
+def build_logging_client() -> tuple[LoggingClient, ResourceManager]:
+    """The suite's client plus a session ResourceManager holding the teardown
+    for the models registered here; the caller runs teardown at session end."""
     client = LoggingClient(gateway=build_gateway())
-    client.create_model(
+    resources = ResourceManager(client=client.gateway)
+    bedrock_sonnet = client.create_model(
         "bedrock/us.anthropic.claude-sonnet-5",
         LiteLLMParamsBody(model="bedrock/us.anthropic.claude-sonnet-5"),
     )
-    client.create_model(
+    resources.defer(lambda: client.delete_model(bedrock_sonnet))
+    bedrock_opus = client.create_model(
         "bedrock/us.anthropic.claude-opus-4-8",
         LiteLLMParamsBody(model="bedrock/us.anthropic.claude-opus-4-8"),
     )
-    client.create_model(
+    resources.defer(lambda: client.delete_model(bedrock_opus))
+    anthropic_sonnet = client.create_model(
         "anthropic/claude-sonnet-5",
         LiteLLMParamsBody(model="anthropic/claude-sonnet-5", api_key="os.environ/ANTHROPIC_API_KEY"),
     )
-    return client
+    resources.defer(lambda: client.delete_model(anthropic_sonnet))
+    return client, resources

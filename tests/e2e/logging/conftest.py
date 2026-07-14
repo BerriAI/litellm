@@ -7,6 +7,7 @@ Never pytest.skip from this suite for environment gaps.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -28,11 +29,14 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> LoggingClient:
+def client() -> Iterator[LoggingClient]:
     """The logging suite's client: holds the shared Gateway so `resources` /
     `scoped_key` clean up keys and teams, and adds `/metrics` scraping plus
-    Langfuse read-back."""
-    return build_logging_client()
+    Langfuse and Phoenix read-back. The models registered at build time are
+    queued for deletion and removed at session end."""
+    logging_client, model_cleanup = build_logging_client()
+    yield logging_client
+    model_cleanup.teardown()
 
 
 @pytest.fixture
