@@ -29,6 +29,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _finish_bridge_mint,
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
+    _reload_active_user_by_id,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
@@ -1272,7 +1273,7 @@ async def authorize(
         global_mcp_server_manager,
     )
 
-    if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id) and is_mcp_gateway_dcr_enabled():
+    if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
         return aggregate_authorize(
             request=request,
             client_id=client_id,
@@ -1347,7 +1348,7 @@ async def token_endpoint(
         global_mcp_server_manager,
     )
 
-    if mcp_server_name is None and is_gateway_dcr_client_id(client_id) and is_mcp_gateway_dcr_enabled():
+    if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
             user_api_key_cache,
@@ -1389,16 +1390,16 @@ async def token_endpoint(
 
 @router.post("/authorize/complete")
 async def authorize_complete(request: Request, flow: str = Form(...)):
-    """Finish an aggregate connect flow (``mcp_gateway_dcr``): mint the gateway
-    authorization code for the signed-in user and redirect back to the DCR client. POST
-    plus the per-flow HttpOnly cookie set at /authorize; 404 when the flag is off so the
-    route is byte-invisible to existing deployments."""
-    if not is_mcp_gateway_dcr_enabled():
-        raise HTTPException(status_code=404, detail="Not Found")
-    return complete_connect_flow(
+    """Finish an aggregate connect flow: mint the gateway authorization code for the
+    signed-in user and redirect back to the DCR client. POST plus the per-flow HttpOnly
+    cookie set at /authorize; an anonymous or bad-flow request just 400s."""
+    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
+
+    return await complete_connect_flow(
         request=request,
         flow_handle=flow,
         session_user_id=_session_cookie_user_id(request),
+        cache=user_api_key_cache,
     )
 
 
@@ -2126,8 +2127,13 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
-        if is_mcp_gateway_dcr_enabled():
-            return await register_aggregate_client(request=request, request_body=data)
+        # A real DCR request carries redirect_uris (RFC 7591): route it to the aggregate DCR
+        # endpoint the aggregate authorization-server metadata advertises. A single-server
+        # deployment registers at /{server}/register instead (its bare-origin discovery
+        # advertises that), so this does not affect it. A request without redirect_uris is not
+        # a DCR request, so the legacy single-server-or-dummy fallback is kept for it.
+        if data.get("redirect_uris"):
+            return await register_aggregate_client(request_body=data)
         resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             return await register_client_with_server(

@@ -2420,12 +2420,19 @@ async def sso_readiness():
 
 
 def _is_same_origin_return_path(return_to: str) -> bool:
-    """True for a strictly relative return path (starts with ``/``, not
-    protocol-relative ``//``, no backslash tricks browsers normalize to slashes), which
-    stays on the gateway's own origin by construction and is therefore safe to honor
-    without a configured ``control_plane_url``. Used by the MCP gateway DCR authorize
-    round-trip so a browser sent through login lands back on the authorize request."""
-    return return_to.startswith("/") and not return_to.startswith("//") and "\\" not in return_to
+    """True for a strictly relative return path that stays on the gateway's own origin by
+    construction, and is therefore safe to honor without a configured ``control_plane_url``.
+    Used by the MCP gateway DCR authorize round-trip so a browser sent through login lands
+    back on the authorize request.
+
+    Requires a single leading ``/`` (not protocol-relative ``//``), no backslash (browsers
+    fold ``\\`` to ``/``, so ``/\\evil.com`` would escape the origin), and no control or
+    whitespace characters. Rejecting control chars keeps a ``\\r\\n``/tab-bearing value out
+    of the redirect ``Location`` and the ``litellm_cp_return_to`` cookie entirely, rather
+    than relying on downstream header encoding to neutralize it."""
+    if not return_to.startswith("/") or return_to.startswith("//") or "\\" in return_to:
+        return False
+    return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
 
 
 class SSOAuthenticationHandler:

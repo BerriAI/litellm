@@ -62,7 +62,7 @@ def _request(path="/authorize", query="", cookies=None, method="GET"):
 
 
 async def _register(redirect_uris) -> dict:
-    response = await register_aggregate_client(request=_request("/register"), request_body={"redirect_uris": redirect_uris})
+    response = await register_aggregate_client(request_body={"redirect_uris": redirect_uris})
     return json.loads(response.body)
 
 
@@ -103,7 +103,7 @@ async def test_register_allows_loopback_http_for_dev_clients():
     ],
 )
 async def test_register_rejects_bad_redirect_uris(redirect_uris):
-    response = await register_aggregate_client(request=_request("/register"), request_body={"redirect_uris": redirect_uris})
+    response = await register_aggregate_client(request_body={"redirect_uris": redirect_uris})
     assert response.status_code == 400
     assert json.loads(response.body)["error"] in ("invalid_redirect_uri", "invalid_client_metadata")
 
@@ -117,7 +117,9 @@ async def test_tampered_client_id_does_not_open():
     assert open_gateway_dcr_client("other_prefix") is None
 
 
-def _authorize(client_id, session_user_id, redirect_uri=REDIRECT_URI, challenge=CODE_CHALLENGE, method="S256", response_type="code"):
+def _authorize(
+    client_id, session_user_id, redirect_uri=REDIRECT_URI, challenge=CODE_CHALLENGE, method="S256", response_type="code"
+):
     return aggregate_authorize(
         request=_request(query=f"client_id={client_id}"),
         client_id=client_id,
@@ -188,24 +190,27 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
     authorize_response = _authorize(client_id, session_user_id="u1")
     handle, cookies = _flow_cookie_from(authorize_response)
 
-    denied = complete_connect_flow(
+    denied = await complete_connect_flow(
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="attacker",
+        cache=DualCache(),
     )
     assert denied.status_code == 403
 
-    anonymous = complete_connect_flow(
+    anonymous = await complete_connect_flow(
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id=None,
+        cache=DualCache(),
     )
     assert anonymous.status_code == 401
 
-    completed = complete_connect_flow(
+    completed = await complete_connect_flow(
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
+        cache=DualCache(),
     )
     assert completed.status_code == 303
     redirect = urlparse(completed.headers["location"])
@@ -269,15 +274,19 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
 
 @pytest.mark.asyncio
 async def test_complete_rejects_missing_tampered_and_expired_flows():
-    missing = complete_connect_flow(
-        request=_request("/authorize/complete", method="POST"), flow_handle="nope", session_user_id="u1"
+    missing = await complete_connect_flow(
+        request=_request("/authorize/complete", method="POST"),
+        flow_handle="nope",
+        session_user_id="u1",
+        cache=DualCache(),
     )
     assert missing.status_code == 400
 
-    tampered = complete_connect_flow(
+    tampered = await complete_connect_flow(
         request=_request("/authorize/complete", cookies={f"{CONNECT_FLOW_COOKIE_PREFIX}h1": "garbage"}, method="POST"),
         flow_handle="h1",
         session_user_id="u1",
+        cache=DualCache(),
     )
     assert tampered.status_code == 400
 
@@ -353,10 +362,11 @@ async def test_token_gates_on_live_user_revalidation(failure, expected_status, e
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     authorize_response = _authorize(client_id, session_user_id="deactivated-user")
     handle, cookies = _flow_cookie_from(authorize_response)
-    completed = complete_connect_flow(
+    completed = await complete_connect_flow(
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="deactivated-user",
+        cache=DualCache(),
     )
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
 
@@ -377,3 +387,103 @@ async def test_token_gates_on_live_user_revalidation(failure, expected_status, e
     )
     assert response.status_code == expected_status
     assert json.loads(response.body)["error"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_flow_is_single_use_shared_cache_rejects_second_complete():
+    """A double-submit of the finish step mints only ONE code: the second complete over the
+    same cache fails invalid_request (atomic flow claim), so one sign-in cannot yield two codes."""
+    cache = DualCache()
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1"))
+
+    first = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=cache,
+    )
+    assert first.status_code == 303
+    second = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=cache,
+    )
+    assert second.status_code == 400
+    assert json.loads(second.body)["error"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_token_rejects_out_of_range_code_verifier():
+    """RFC 7636: a code_verifier outside 43-128 chars is invalid_request, not a confusing
+    invalid_grant PKCE-mismatch."""
+    for bad in ["short", "x" * 200]:
+        response = await aggregate_token(
+            request=_request("/token", method="POST"),
+            grant_type="authorization_code",
+            code="llm_gcode_whatever",
+            redirect_uri=REDIRECT_URI,
+            client_id="llm_dcrc_x",
+            code_verifier=bad,
+            refresh_token=None,
+            master_key=MASTER_KEY,
+            reload_user=_reload_user_active,
+            cache=DualCache(),
+        )
+        assert response.status_code == 400
+        assert json.loads(response.body)["error"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_authorize_rejects_over_long_state():
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = aggregate_authorize(
+        request=_request(query=f"client_id={client_id}"),
+        client_id=client_id,
+        redirect_uri=REDIRECT_URI,
+        state="s" * 2000,
+        code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256",
+        response_type="code",
+        session_user_id="u1",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_code_challenge_fails_grant_not_500():
+    """A non-ASCII code_challenge (unvalidated from the client) must yield a clean
+    invalid_grant, never a TypeError-driven 500 (bytes comparison, not str)."""
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    # Seal a code carrying a non-ASCII challenge directly (authorize requires S256 shape,
+    # but the challenge charset is not validated there, so this state is reachable).
+    from datetime import datetime, timezone
+
+    code = _seal(
+        GATEWAY_AUTH_CODE_PREFIX,
+        _GatewayAuthCode(
+            user_id="u1",
+            client_id=client_id,
+            redirect_uri=REDIRECT_URI,
+            code_challenge="challenge-with-€-non-ascii",
+            jti="jti-x",
+            iat=int(datetime.now(timezone.utc).timestamp()),
+            exp=int(datetime.now(timezone.utc).timestamp()) + 120,
+        ),
+    )
+    response = await aggregate_token(
+        request=_request("/token", method="POST"),
+        grant_type="authorization_code",
+        code=code,
+        redirect_uri=REDIRECT_URI,
+        client_id=client_id,
+        code_verifier=CODE_VERIFIER,
+        refresh_token=None,
+        master_key=MASTER_KEY,
+        reload_user=_reload_user_active,
+        cache=DualCache(),
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_grant"
