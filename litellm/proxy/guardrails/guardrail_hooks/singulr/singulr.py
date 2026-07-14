@@ -208,7 +208,7 @@ class SingulrGuardrail(CustomGuardrail):
         payload = self._build_payload(
             request_data, inputs, input_type
         )
-        verbose_proxy_logger.debug("Singulr: payload=%s", payload)
+        verbose_proxy_logger.debug("Singulr: scanning %s input", input_type)
         if not payload:
             return inputs
 
