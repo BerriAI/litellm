@@ -50,7 +50,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
           fieldsMap[field.field_name] = {
             ui_field_name: field.ui_field_name,
             field_description: field.field_description,
-            field_type: field.field_type,
             options: field.options,
             link: field.link,
           };

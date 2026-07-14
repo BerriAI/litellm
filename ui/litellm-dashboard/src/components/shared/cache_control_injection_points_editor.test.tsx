@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -52,10 +53,44 @@ describe("CacheControlInjectionPointsEditor", () => {
       />,
     );
 
-    const removeIcons = document.querySelectorAll(".anticon-minus-circle");
-    expect(removeIcons).toHaveLength(2);
-    await user.click(removeIcons[0] as HTMLElement);
+    const removeButtons = screen.getAllByRole("button", { name: /remove injection point/i });
+    expect(removeButtons).toHaveLength(2);
+    await user.click(removeButtons[0]);
 
     expect(onChange).toHaveBeenCalledWith([{ location: "message", role: "user" }]);
+  });
+
+  it("should accept an integer index", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+
+    const ControlledEditor = () => {
+      const [points, setPoints] = React.useState([{ location: "message" as const }]);
+      const handleChange = (updatedPoints: typeof points) => {
+        setPoints(updatedPoints);
+        onChange(updatedPoints);
+      };
+      return <CacheControlInjectionPointsEditor value={points} onChange={handleChange} />;
+    };
+
+    render(<ControlledEditor />);
+
+    const indexInput = screen.getByTestId("cache-control-index-input-0");
+    await user.type(indexInput, "-1");
+
+    expect(indexInput).toHaveValue("-1");
+    expect(onChange).toHaveBeenLastCalledWith([{ location: "message", index: -1 }]);
+  });
+
+  it("should increment the index with the stepper", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<CacheControlInjectionPointsEditor value={[{ location: "message", index: 0 }]} onChange={onChange} />);
+
+    const incrementButton = document.querySelector(".ant-input-number-handler-up");
+    expect(incrementButton).not.toBeNull();
+    await user.click(incrementButton as HTMLElement);
+
+    expect(onChange).toHaveBeenLastCalledWith([{ location: "message", index: 1 }]);
   });
 });

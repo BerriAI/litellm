@@ -6,59 +6,104 @@ import CacheControlInjectionPointsEditor, {
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface DefaultLitellmParamsSectionProps {
-  value: { [key: string]: any };
-  routerFieldsMetadata: { [key: string]: any };
-  onChange: (value: { [key: string]: any }) => void;
+  value: Record<string, unknown>;
+  onChange: (value: Record<string, unknown>) => void;
 }
 
-const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = ({
-  value,
-  routerFieldsMetadata,
-  onChange,
-}) => {
-  const meta = routerFieldsMetadata["default_litellm_params"];
-  const { cache_control_injection_points, ...otherParams } = value || {};
+type ParsedDefaultParams = { status: "valid"; value: Record<string, unknown> } | { status: "invalid"; message: string };
+
+const CACHE_CONTROL_ROLES = ["user", "system", "assistant"] as const;
+
+const parseDefaultParams = (text: string): ParsedDefaultParams => {
+  try {
+    const parsed: unknown = JSON.parse(text || "{}");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { status: "invalid", message: "Expected a JSON object" };
+    }
+    return { status: "valid", value: parsed as Record<string, unknown> };
+  } catch (error) {
+    return { status: "invalid", message: error instanceof Error ? error.message : "Invalid JSON" };
+  }
+};
+
+const isCacheControlInjectionPoint = (value: unknown): value is CacheControlInjectionPoint => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  if (!("location" in value) || value.location !== "message") {
+    return false;
+  }
+  const role = "role" in value ? value.role : undefined;
+  const index = "index" in value ? value.index : undefined;
+  const hasValidRole = role === undefined || CACHE_CONTROL_ROLES.some((validRole) => validRole === role);
+  const hasValidIndex = index === undefined || (typeof index === "number" && Number.isInteger(index));
+  return hasValidRole && hasValidIndex;
+};
+
+const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = ({ value, onChange }) => {
+  const cacheControlInjectionPoints = React.useMemo(
+    () =>
+      Array.isArray(value.cache_control_injection_points) &&
+      value.cache_control_injection_points.every(isCacheControlInjectionPoint)
+        ? value.cache_control_injection_points
+        : undefined,
+    [value.cache_control_injection_points],
+  );
+  const otherParams = React.useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(value).filter(
+          ([key]) => key !== "cache_control_injection_points" || cacheControlInjectionPoints === undefined,
+        ),
+      ),
+    [value, cacheControlInjectionPoints],
+  );
 
   const [otherParamsText, setOtherParamsText] = React.useState(() => JSON.stringify(otherParams, null, 2));
-  const [showCacheControl, setShowCacheControl] = React.useState((cache_control_injection_points?.length ?? 0) > 0);
   const [hasInvalidJson, setHasInvalidJson] = React.useState(false);
-
-  const parseOtherParams = (): { [key: string]: any } => {
-    try {
-      return JSON.parse(otherParamsText || "{}");
-    } catch {
-      return otherParams;
-    }
-  };
+  const showCacheControl = (cacheControlInjectionPoints?.length ?? 0) > 0;
 
   const handleOtherParamsBlur = () => {
-    try {
-      const parsed = JSON.parse(otherParamsText || "{}");
-      setHasInvalidJson(false);
-      onChange({ ...parsed, cache_control_injection_points });
-    } catch (error) {
+    const parsed = parseDefaultParams(otherParamsText);
+    if (parsed.status === "invalid") {
       setHasInvalidJson(true);
-      NotificationsManager.warning(`Default LiteLLM Params is not valid JSON, change not saved: ${error}`);
+      NotificationsManager.warning(`Default LiteLLM Params is not valid JSON: ${parsed.message}`);
+      return;
     }
+    setHasInvalidJson(false);
+    onChange(
+      cacheControlInjectionPoints
+        ? { ...parsed.value, cache_control_injection_points: cacheControlInjectionPoints }
+        : parsed.value,
+    );
   };
 
   const handleCacheControlPointsChange = (points: CacheControlInjectionPoint[]) => {
-    const base = parseOtherParams();
+    const parsed = parseDefaultParams(otherParamsText);
+    const base = parsed.status === "valid" ? parsed.value : otherParams;
     onChange(points.length > 0 ? { ...base, cache_control_injection_points: points } : base);
   };
 
   const handleCacheControlToggle = (checked: boolean) => {
-    setShowCacheControl(checked);
     handleCacheControlPointsChange(checked ? [{ location: "message" }] : []);
   };
 
   return (
     <div className="space-y-6">
       <div className="max-w-3xl space-y-2">
-        <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-          {meta?.ui_field_name || "default_litellm_params"}
-        </span>
-        <p className="text-xs text-gray-500 mt-0.5 mb-2">{meta?.field_description || ""}</p>
+        <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">Default LiteLLM Params</span>
+        <p className="text-xs text-gray-500 mt-0.5 mb-2">
+          Default parameters for Router.chat.completion.create. Set cache control injection points to enable prompt
+          caching for every model on this proxy.{" "}
+          <a
+            href="https://docs.litellm.ai/docs/tutorials/claude_code_prompt_cache_routing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 underline"
+          >
+            Learn more
+          </a>
+        </p>
         <Input.TextArea
           value={otherParamsText}
           onChange={(e) => {
@@ -87,7 +132,7 @@ const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = 
         {showCacheControl && (
           <div className="ml-6 pl-4 border-l-2 border-gray-200">
             <CacheControlInjectionPointsEditor
-              value={cache_control_injection_points || [{ location: "message" }]}
+              value={cacheControlInjectionPoints || [{ location: "message" }]}
               onChange={handleCacheControlPointsChange}
             />
           </div>

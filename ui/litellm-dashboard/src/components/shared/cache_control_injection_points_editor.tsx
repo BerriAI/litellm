@@ -1,7 +1,8 @@
 import React from "react";
-import { Select } from "antd";
+import { Button, Flex, InputNumber, Select, Typography } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
-import NumericalInput from "./numerical_input";
+
+const { Text } = Typography;
 
 export interface CacheControlInjectionPoint {
   location: "message";
@@ -24,9 +25,11 @@ const CacheControlInjectionPointsEditor: React.FC<CacheControlInjectionPointsEdi
   return (
     <>
       {points.map((point, index) => (
-        <div key={index} className="flex items-center mb-4 gap-4">
-          <div style={{ width: "180px" }}>
-            <span className="text-xs text-gray-500">Type</span>
+        <Flex key={index} align="end" gap="middle" wrap className="mb-4">
+          <div className="flex-1 min-w-40">
+            <Text type="secondary" className="block text-xs mb-1">
+              Type
+            </Text>
             <Select
               disabled
               value="message"
@@ -36,8 +39,10 @@ const CacheControlInjectionPointsEditor: React.FC<CacheControlInjectionPointsEdi
             />
           </div>
 
-          <div style={{ width: "180px" }}>
-            <span className="text-xs text-gray-500">Role</span>
+          <div className="flex-1 min-w-40">
+            <Text type="secondary" className="block text-xs mb-1">
+              Role
+            </Text>
             <Select
               placeholder="Select a role"
               allowClear
@@ -53,36 +58,41 @@ const CacheControlInjectionPointsEditor: React.FC<CacheControlInjectionPointsEdi
             />
           </div>
 
-          <div style={{ width: "180px" }}>
-            <span className="text-xs text-gray-500">Index</span>
-            <NumericalInput
-              type="number"
+          <div className="flex-1 min-w-40">
+            <Text type="secondary" className="block text-xs mb-1">
+              Index
+            </Text>
+            <InputNumber
               placeholder="Optional"
               step={1}
+              precision={0}
               value={point.index}
-              onChange={(newIndex: string) =>
-                updatePoint(index, { index: newIndex === "" ? undefined : Number(newIndex) })
-              }
+              onChange={(newIndex) => updatePoint(index, { index: newIndex ?? undefined })}
+              className="w-full"
+              data-testid={`cache-control-index-input-${index}`}
             />
           </div>
 
           {points.length > 1 && (
-            <MinusCircleOutlined
-              className="text-red-500 cursor-pointer text-lg ml-12"
+            <Button
+              type="text"
+              danger
+              aria-label={`Remove injection point ${index + 1}`}
+              icon={<MinusCircleOutlined />}
               onClick={() => onChange(points.filter((_, i) => i !== index))}
             />
           )}
-        </div>
+        </Flex>
       ))}
 
-      <button
-        type="button"
-        className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded"
+      <Button
+        type="dashed"
+        block
+        icon={<PlusOutlined />}
         onClick={() => onChange([...points, { location: "message" as const }])}
       >
-        <PlusOutlined className="mr-2" />
         Add Injection Point
-      </button>
+      </Button>
     </>
   );
 };

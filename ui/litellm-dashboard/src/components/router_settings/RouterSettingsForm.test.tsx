@@ -119,7 +119,7 @@ describe("RouterSettingsForm", () => {
     const user = userEvent.setup();
     render(<RouterSettingsForm {...baseProps} onChange={onChange} />);
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getAllByRole("switch")[0]);
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enableTagFiltering: true }));
   });
@@ -129,26 +129,13 @@ describe("RouterSettingsForm", () => {
     expect(screen.getByText("Reliability & Retries")).toBeInTheDocument();
   });
 
-  it("should not show the optional pre-call checks selector when no options are known", () => {
+  it("should show frontend-defined optional pre-call checks without backend field metadata", () => {
     render(<RouterSettingsForm {...baseProps} />);
-    expect(screen.queryByTestId("optional-pre-call-checks-select")).not.toBeInTheDocument();
-  });
-
-  it("should show the optional pre-call checks selector populated from field metadata options", () => {
-    const props = {
-      ...baseProps,
-      routerFieldsMetadata: {
-        optional_pre_call_checks: {
-          ui_field_name: "Optional Pre-call Checks",
-          options: ["prompt_caching", "router_budget_limiting"],
-        },
-      },
-    };
-    render(<RouterSettingsForm {...props} />);
 
     const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
     const optionValues = Array.from(select.options).map((o) => o.value);
-    expect(optionValues).toEqual(["prompt_caching", "router_budget_limiting"]);
+    expect(optionValues).toContain("prompt_caching");
+    expect(optionValues).toContain("router_budget_limiting");
   });
 
   it("should call onChange with the updated optional_pre_call_checks when the selector changes", async () => {
@@ -157,9 +144,6 @@ describe("RouterSettingsForm", () => {
     const props = {
       ...baseProps,
       onChange,
-      routerFieldsMetadata: {
-        optional_pre_call_checks: { ui_field_name: "Optional Pre-call Checks", options: ["prompt_caching"] },
-      },
     };
     render(<RouterSettingsForm {...props} />);
 
@@ -172,17 +156,8 @@ describe("RouterSettingsForm", () => {
     );
   });
 
-  it("should not show the Default LiteLLM Params section before router_settings has loaded", () => {
+  it("should show frontend-defined Default LiteLLM Params without backend field metadata", () => {
     render(<RouterSettingsForm {...baseProps} />);
-    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
-  });
-
-  it("should show the Default LiteLLM Params section once router_settings has loaded", () => {
-    const props = {
-      ...baseProps,
-      value: { ...defaultValue, routerSettings: { default_litellm_params: { timeout: 30 } } },
-    };
-    render(<RouterSettingsForm {...props} />);
     expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
   });
 

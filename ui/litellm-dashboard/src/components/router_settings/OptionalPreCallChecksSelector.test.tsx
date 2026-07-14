@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import OptionalPreCallChecksSelector from "./OptionalPreCallChecksSelector";
+import OptionalPreCallChecksSelector, { OPTIONAL_PRE_CALL_CHECK_OPTIONS } from "./OptionalPreCallChecksSelector";
 
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
@@ -24,57 +24,29 @@ vi.mock("antd", async (importOriginal) => {
   };
 });
 
-const baseMetadata = {
-  optional_pre_call_checks: {
-    ui_field_name: "Optional Pre-call Checks",
-    field_description: "Extra checks the router runs before picking a deployment",
-    link: null,
-  },
-};
-
-const options = ["prompt_caching", "router_budget_limiting", "session_affinity"];
-
 describe("OptionalPreCallChecksSelector", () => {
-  it("should render one option per entry in options", () => {
-    render(<OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />);
+  it("should render the frontend-defined options", () => {
+    render(<OptionalPreCallChecksSelector value={[]} onChange={vi.fn()} />);
     const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(options);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(OPTIONAL_PRE_CALL_CHECK_OPTIONS);
   });
 
-  it("should display default label when no metadata is provided", () => {
-    render(<OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={vi.fn()} />);
+  it("should display the frontend-defined label and description", () => {
+    render(<OptionalPreCallChecksSelector value={[]} onChange={vi.fn()} />);
     expect(screen.getByText("Optional Pre-call Checks")).toBeInTheDocument();
+    expect(screen.getByText(/extra checks the router runs before picking a deployment/i)).toBeInTheDocument();
   });
 
-  it("should display the label and description from metadata when provided", () => {
-    render(
-      <OptionalPreCallChecksSelector
-        value={[]}
-        options={options}
-        routerFieldsMetadata={baseMetadata}
-        onChange={vi.fn()}
-      />,
-    );
-    expect(screen.getByText("Extra checks the router runs before picking a deployment")).toBeInTheDocument();
-  });
-
-  it("should render a Learn more link when metadata provides one", () => {
-    const metadata = {
-      optional_pre_call_checks: { ...baseMetadata.optional_pre_call_checks, link: "https://docs.example.com/checks" },
-    };
-    render(
-      <OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={metadata} onChange={vi.fn()} />,
-    );
+  it("should render the prompt caching documentation link", () => {
+    render(<OptionalPreCallChecksSelector value={[]} onChange={vi.fn()} />);
     const link = screen.getByRole("link", { name: /learn more/i });
-    expect(link).toHaveAttribute("href", "https://docs.example.com/checks");
+    expect(link).toHaveAttribute("href", "https://docs.litellm.ai/docs/tutorials/claude_code_prompt_cache_routing");
   });
 
   it("should call onChange with the selected checks", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
-    render(
-      <OptionalPreCallChecksSelector value={[]} options={options} routerFieldsMetadata={{}} onChange={onChange} />,
-    );
+    render(<OptionalPreCallChecksSelector value={[]} onChange={onChange} />);
 
     await user.selectOptions(screen.getByTestId("optional-pre-call-checks-select"), "prompt_caching");
 
@@ -82,14 +54,7 @@ describe("OptionalPreCallChecksSelector", () => {
   });
 
   it("should reflect an already-selected value", () => {
-    render(
-      <OptionalPreCallChecksSelector
-        value={["router_budget_limiting"]}
-        options={options}
-        routerFieldsMetadata={{}}
-        onChange={vi.fn()}
-      />,
-    );
+    render(<OptionalPreCallChecksSelector value={["router_budget_limiting"]} onChange={vi.fn()} />);
     const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
     const selected = Array.from(select.selectedOptions).map((o) => o.value);
     expect(selected).toEqual(["router_budget_limiting"]);

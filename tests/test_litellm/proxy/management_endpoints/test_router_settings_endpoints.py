@@ -79,46 +79,6 @@ class TestRouterSettingsEndpoints:
         assert len(routing_strategy_field["options"]) > 0
 
     @pytest.mark.asyncio
-    async def test_get_router_fields_includes_optional_pre_call_checks(self):
-        """
-        Regression test: `optional_pre_call_checks` (e.g. "prompt_caching", used for
-        Claude Code prompt cache routing) must be exposed as a configurable field so
-        the Admin UI can render and save it, not just `default_litellm_params`.
-        """
-        response = client.get(
-            "/router/fields", headers={"Authorization": "Bearer sk-1234"}
-        )
-        assert response.status_code == 200
-
-        fields = response.json()["fields"]
-        field = next(
-            (f for f in fields if f["field_name"] == "optional_pre_call_checks"), None
-        )
-        assert field is not None
-        assert "prompt_caching" in field["options"]
-
-    @pytest.mark.asyncio
-    async def test_get_router_fields_excludes_unimplemented_forward_client_headers_check(self):
-        """
-        Regression test: "forward_client_headers_by_model_group" is a literal in the
-        OptionalPreCallChecks type union, but Router.add_optional_pre_call_checks has
-        no handler for it - selecting it from the Admin UI's multi-select would save
-        successfully and show as enabled while doing nothing. It must not be offered
-        as an option until it's actually implemented.
-        """
-        response = client.get(
-            "/router/fields", headers={"Authorization": "Bearer sk-1234"}
-        )
-        assert response.status_code == 200
-
-        fields = response.json()["fields"]
-        field = next(
-            (f for f in fields if f["field_name"] == "optional_pre_call_checks"), None
-        )
-        assert field is not None
-        assert "forward_client_headers_by_model_group" not in field["options"]
-
-    @pytest.mark.asyncio
     async def test_get_router_settings_includes_routing_groups_from_live_router(
         self, monkeypatch
     ):

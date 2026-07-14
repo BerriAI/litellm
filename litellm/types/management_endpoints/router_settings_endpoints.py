@@ -224,36 +224,9 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_name="default_litellm_params",
         field_type="Dictionary",
         field_value=None,
-        field_description=(
-            "Default parameters for Router.chat.completion.create. E.g. set "
-            "cache_control_injection_points here to enable Anthropic/Bedrock "
-            "prompt caching for every model on this proxy."
-        ),
+        field_description="Default parameters for Router.chat.completion.create",
         field_default=None,
         ui_field_name="Default LiteLLM Params",
-        link="https://docs.litellm.ai/docs/tutorials/claude_code_prompt_cache_routing",
-    ),
-    RouterSettingsField(
-        field_name="optional_pre_call_checks",
-        field_type="List",
-        field_value=None,
-        field_description=(
-            "Extra checks the router runs before picking a deployment. Add "
-            "'prompt_caching' to route repeat requests back to the deployment "
-            "that cached the prompt."
-        ),
-        field_default=[],
-        options=[
-            "prompt_caching",
-            "router_budget_limiting",
-            "responses_api_deployment_check",
-            "deployment_affinity",
-            "session_affinity",
-            "enforce_model_rate_limits",
-            "encrypted_content_affinity",
-        ],
-        ui_field_name="Optional Pre-call Checks",
-        link="https://docs.litellm.ai/docs/tutorials/claude_code_prompt_cache_routing",
     ),
     RouterSettingsField(
         field_name="set_verbose",

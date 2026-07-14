@@ -210,7 +210,9 @@ describe("RouterSettings", () => {
     vi.mocked(getCallbacksCall).mockResolvedValue({
       router_settings: {
         ...mockCallbacksResponse.router_settings,
-        default_litellm_params: { cache_control_injection_points: [{ location: "message", role: "system" }] },
+        default_litellm_params: {
+          cache_control_injection_points: [{ location: "message", role: "system", index: 2 }],
+        },
         optional_pre_call_checks: ["prompt_caching"],
       },
     });
@@ -228,7 +230,9 @@ describe("RouterSettings", () => {
         "test-token",
         expect.objectContaining({
           router_settings: expect.objectContaining({
-            default_litellm_params: { cache_control_injection_points: [{ location: "message", role: "system" }] },
+            default_litellm_params: {
+              cache_control_injection_points: [{ location: "message", role: "system", index: 2 }],
+            },
             optional_pre_call_checks: ["prompt_caching"],
           }),
         }),
@@ -242,19 +246,6 @@ describe("RouterSettings", () => {
         ...mockCallbacksResponse.router_settings,
         optional_pre_call_checks: [],
       },
-    });
-    vi.mocked(getRouterSettingsCall).mockResolvedValue({
-      ...mockRouterSettingsResponse,
-      fields: [
-        ...mockRouterSettingsResponse.fields,
-        {
-          field_name: "optional_pre_call_checks",
-          ui_field_name: "Optional Pre-call Checks",
-          field_description: "Extra checks the router runs before picking a deployment",
-          options: ["prompt_caching", "router_budget_limiting"],
-          link: null,
-        },
-      ],
     });
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);

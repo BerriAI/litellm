@@ -48,14 +48,12 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
     });
   };
 
-  const handleDefaultLitellmParamsChange = (params: { [key: string]: any }) => {
+  const handleDefaultLitellmParamsChange = (params: Record<string, unknown>) => {
     onChange({
       ...value,
       routerSettings: { ...value.routerSettings, default_litellm_params: params },
     });
   };
-
-  const optionalPreCallCheckOptions: string[] = routerFieldsMetadata["optional_pre_call_checks"]?.options || [];
 
   return (
     <div className="w-full space-y-8 py-2">
@@ -85,14 +83,10 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
         />
 
         {/* Optional Pre-call Checks */}
-        {optionalPreCallCheckOptions.length > 0 && (
-          <OptionalPreCallChecksSelector
-            value={value.routerSettings.optional_pre_call_checks || []}
-            options={optionalPreCallCheckOptions}
-            routerFieldsMetadata={routerFieldsMetadata}
-            onChange={handleOptionalPreCallChecksChange}
-          />
-        )}
+        <OptionalPreCallChecksSelector
+          value={value.routerSettings.optional_pre_call_checks || []}
+          onChange={handleOptionalPreCallChecksChange}
+        />
       </div>
 
       {/* Divider */}
@@ -104,16 +98,12 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       )}
 
       {/* Default LiteLLM Params */}
-      {"default_litellm_params" in value.routerSettings && (
-        <>
-          <DefaultLitellmParamsSection
-            value={value.routerSettings.default_litellm_params || {}}
-            routerFieldsMetadata={routerFieldsMetadata}
-            onChange={handleDefaultLitellmParamsChange}
-          />
-          <div className="border-t border-gray-200" />
-        </>
-      )}
+      <DefaultLitellmParamsSection
+        key={JSON.stringify(value.routerSettings.default_litellm_params || {})}
+        value={value.routerSettings.default_litellm_params || {}}
+        onChange={handleDefaultLitellmParamsChange}
+      />
+      <div className="border-t border-gray-200" />
 
       {/* Other Settings */}
       <ReliabilityRetriesSection routerSettings={value.routerSettings} routerFieldsMetadata={routerFieldsMetadata} />
