@@ -94,6 +94,14 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
+            request_metadata = request_data.get("metadata")
+            request_data_with_ip = {
+                **request_data,
+                "metadata": {
+                    **(request_metadata if isinstance(request_metadata, dict) else {}),
+                    "requester_ip_address": requester_ip,
+                },
+            }
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
                     str(e),
@@ -134,7 +142,7 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
-                request_data=request_data,
+                request_data=request_data_with_ip,
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

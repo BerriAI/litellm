@@ -423,6 +423,18 @@ async def test_auth_failure_without_resolved_identity_still_logs():
     the handler must still log a usable object carrying the raw api key and
     route, not crash on the missing identity."""
     handler = UserAPIKeyAuthExceptionHandler()
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "client": ("203.0.113.42", 45678),
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "query_string": b"",
+        }
+    )
 
     with (
         patch(
@@ -445,7 +457,7 @@ async def test_auth_failure_without_resolved_identity_still_logs():
                     param=None,
                     code=status.HTTP_401_UNAUTHORIZED,
                 ),
-                MagicMock(),
+                request,
                 {},
                 "/v1/chat/completions",
                 None,
@@ -453,8 +465,10 @@ async def test_auth_failure_without_resolved_identity_still_logs():
             )
 
     logged = mock_hook.call_args[1]["user_api_key_dict"]
+    logged_request_data = mock_hook.call_args[1]["request_data"]
     # Raw key must NOT land on the object — it would be promoted into telemetry
     # as litellm.api_key.hash and leak a real sk-... to anyone reading the trace.
     assert logged.api_key != "sk-unknown"
     assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
     assert logged.request_route == "/v1/chat/completions"
+    assert logged_request_data["metadata"]["requester_ip_address"] == "203.0.113.42"
