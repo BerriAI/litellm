@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
+from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds, load_phoenix_creds
 from otel_client import OtelReader, build_otel_reader
 
 
