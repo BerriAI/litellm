@@ -51,7 +51,6 @@ from models import (
     OcrBody,
     OcrResponse,
     SpendLogRow,
-    SpendLogs,
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
