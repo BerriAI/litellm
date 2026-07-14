@@ -30236,9 +30236,32 @@ export interface components {
             /** Version */
             version?: string | null;
         };
+        /** RelayCodexConfig */
+        RelayCodexConfig: {
+            /**
+             * Channel
+             * @default pinned
+             */
+            channel: string;
+            /** Model */
+            model?: string | null;
+            /**
+             * Package
+             * @default @openai/codex
+             */
+            package: string;
+            /**
+             * Registry
+             * @default npm
+             */
+            registry: string;
+            /** Version */
+            version?: string | null;
+        };
         /** RelayManagedConfigResponse */
         RelayManagedConfigResponse: {
             claude_code?: components["schemas"]["RelayClaudeCodeConfig"];
+            codex?: components["schemas"]["RelayCodexConfig"];
             /** Policy Version */
             policy_version?: number | null;
             /** Updated At */

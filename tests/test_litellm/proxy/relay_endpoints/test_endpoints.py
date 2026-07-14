@@ -30,10 +30,47 @@ def test_load_managed_config_parses_pinned_version(tmp_path: Path) -> None:
     assert config.policy_version == 7
 
 
+def test_load_managed_config_parses_claude_and_codex_together(tmp_path: Path) -> None:
+    path = tmp_path / "relay_settings.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "claude_code:",
+                "  version: 2.1.206",
+                "  model: claude-sonnet-4-5",
+                "codex:",
+                "  version: 0.144.2",
+                "  package: '@openai/codex'",
+                "  model: gpt-5-codex",
+                "policy_version: 3",
+            ]
+        )
+    )
+
+    config = _load_managed_config(path)
+
+    assert config.claude_code.version == "2.1.206"
+    assert config.codex.version == "0.144.2"
+    assert config.codex.package == "@openai/codex"
+    assert config.codex.model == "gpt-5-codex"
+    assert config.policy_version == 3
+
+
+def test_load_managed_config_codex_defaults_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "relay_settings.yaml"
+    path.write_text("claude_code:\n  version: 2.1.206\n")
+
+    config = _load_managed_config(path)
+
+    assert config.codex.version is None
+    assert config.codex.package == "@openai/codex"
+
+
 def test_load_managed_config_missing_file_returns_empty_policy(tmp_path: Path) -> None:
     config = _load_managed_config(tmp_path / "does_not_exist.yaml")
 
     assert config.claude_code.version is None
+    assert config.codex.version is None
     assert config.policy_version is None
 
 

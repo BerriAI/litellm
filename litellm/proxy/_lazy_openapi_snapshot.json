@@ -23880,10 +23880,56 @@
           "title": "RelayClaudeCodeConfig",
           "type": "object"
         },
+        "RelayCodexConfig": {
+          "properties": {
+            "channel": {
+              "default": "pinned",
+              "title": "Channel",
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "package": {
+              "default": "@openai/codex",
+              "title": "Package",
+              "type": "string"
+            },
+            "registry": {
+              "default": "npm",
+              "title": "Registry",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "title": "RelayCodexConfig",
+          "type": "object"
+        },
         "RelayManagedConfigResponse": {
           "properties": {
             "claude_code": {
               "$ref": "#/components/schemas/RelayClaudeCodeConfig"
+            },
+            "codex": {
+              "$ref": "#/components/schemas/RelayCodexConfig"
             },
             "policy_version": {
               "anyOf": [
