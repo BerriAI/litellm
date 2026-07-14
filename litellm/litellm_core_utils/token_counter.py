@@ -732,11 +732,25 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] == "file":
+                # OpenAI file content block (document understanding), e.g.
+                # {"type": "file", "file": {"file_id" | "file_data" | "filename", ...}}.
+                # The real token cost is the provider's server-side extraction of
+                # the document and cannot be derived client-side; counting the
+                # base64 file_data blob would wildly overcount. Count only the
+                # lightweight textual fields so token_counter/trim_messages
+                # accept valid payloads instead of raising (issue #28409).
+                file_obj = c.get("file")
+                if isinstance(file_obj, dict):
+                    for file_field in ("file_id", "filename", "format"):
+                        file_field_value = file_obj.get(file_field)
+                        if isinstance(file_field_value, str) and file_field_value:
+                            num_tokens += count_function(file_field_value)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference, file)."
                 )
         return num_tokens
     except Exception as e:
