@@ -960,6 +960,7 @@ def test_anthropic_structured_output_beta_header():
         "claude-opus-4-8",
         "claude-opus-4-6-20260205",
         "claude-opus-4-5-20251101",
+        "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
