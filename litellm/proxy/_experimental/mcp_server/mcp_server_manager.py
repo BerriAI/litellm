@@ -51,6 +51,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -440,44 +441,17 @@ def _extract_upstream_auth_failure(
     upstream MCP server.
 
     The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
-    may chain through ``__cause__`` / ``__context__``. We inspect all of those
-    layers for an ``httpx.Response``-bearing exception (typically
-    ``httpx.HTTPStatusError``) and extract the status code and any upstream
-    ``WWW-Authenticate`` header.
+    may chain through ``__cause__`` / ``__context__``; ``iter_exception_tree``
+    visits all of those layers, explicit links first. The first exception
+    bearing a real ``httpx.Response`` with a 401/403 wins, and its status code
+    and upstream ``WWW-Authenticate`` header are extracted.
 
     Returns ``(status_code, www_authenticate)`` on match, else ``None``.
     """
-    seen: set[int] = set()
-    stack: list[BaseException] = [exc]
-    while stack:
-        current = stack.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-
+    for current in iter_exception_tree(exc):
         response = getattr(current, "response", None)
-        if response is not None:
-            status_code = getattr(response, "status_code", None)
-            if isinstance(status_code, int) and status_code in (401, 403):
-                www_authenticate: Optional[str] = None
-                headers = getattr(response, "headers", None)
-                if headers is not None:
-                    try:
-                        www_authenticate = headers.get("www-authenticate")
-                    except Exception:
-                        www_authenticate = None
-                return status_code, www_authenticate
-
-        # anyio / PEP 654 ExceptionGroup
-        sub_exceptions = getattr(current, "exceptions", None)
-        if sub_exceptions:
-            stack.extend(sub_exceptions)
-
-        if current.__cause__ is not None:
-            stack.append(current.__cause__)
-        if current.__context__ is not None and current.__context__ is not current.__cause__:
-            stack.append(current.__context__)
-
+        if isinstance(response, httpx.Response) and response.status_code in (401, 403):
+            return response.status_code, response.headers.get("www-authenticate")
     return None
 
 
