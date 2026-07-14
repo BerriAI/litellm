@@ -3664,7 +3664,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
 def resolve_complexity_router_plugins(
     model_name: str,
     complexity_router_config: dict,
-    config_file_path: Optional[str],
+    config_file_path: str | None,
 ) -> None:
     """
     Resolves `complexity_router_config["plugins"]` dotted-path strings to live
