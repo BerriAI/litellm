@@ -50,6 +50,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
           fieldsMap[field.field_name] = {
             ui_field_name: field.ui_field_name,
             field_description: field.field_description,
+            field_type: field.field_type,
             options: field.options,
             link: field.link,
           };
@@ -87,7 +88,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const router_settings = formValue.routerSettings;
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
-    const jsonKeys = new Set(["model_group_alias"]);
+    const jsonKeys = new Set(["model_group_alias", "default_litellm_params", "optional_pre_call_checks"]);
     // retry_policy and model_group_retry_policy are owned by the Model Retry Settings tab;
     // routing_groups is owned by the Routing Groups tab. This page must not read or write them.
     const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy", "routing_groups"]);

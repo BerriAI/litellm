@@ -26,6 +26,19 @@ class ConfigurableClientsideParamsCustomAuth(TypedDict):
 
 CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = Optional[List[Union[str, ConfigurableClientsideParamsCustomAuth]]]
 
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "deployment_affinity",
+        "session_affinity",
+        "forward_client_headers_by_model_group",
+        "enforce_model_rate_limits",
+        "encrypted_content_affinity",
+    ]
+]
+
 
 class ModelConfig(BaseModel):
     model_name: str
@@ -117,6 +130,8 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    default_litellm_params: Optional[Dict[str, Any]] = None
+    optional_pre_call_checks: Optional[OptionalPreCallChecks] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -766,20 +781,6 @@ class GenericBudgetWindowDetails(BaseModel):
     spend_key: str
     start_time_key: str
     ttl_seconds: int
-
-
-OptionalPreCallChecks = List[
-    Literal[
-        "prompt_caching",
-        "router_budget_limiting",
-        "responses_api_deployment_check",
-        "deployment_affinity",
-        "session_affinity",
-        "forward_client_headers_by_model_group",
-        "enforce_model_rate_limits",
-        "encrypted_content_affinity",
-    ]
-]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

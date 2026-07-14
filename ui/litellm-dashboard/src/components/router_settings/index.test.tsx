@@ -187,4 +187,38 @@ describe("RouterSettings", () => {
     });
     expect(NotificationsManager.success).not.toHaveBeenCalled();
   });
+
+  it("should round-trip default_litellm_params and optional_pre_call_checks as JSON on save", async () => {
+    // Regression test: these two fields hold dicts/lists (e.g. cache_control_injection_points,
+    // ["prompt_caching"]), not plain strings. Without listing them in the save handler's
+    // jsonKeys set, they'd be persisted as raw stringified text instead of parsed JSON,
+    // silently corrupting the setting the next time the router reads it.
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: { cache_control_injection_points: [{ location: "message", role: "system" }] },
+        optional_pre_call_checks: ["prompt_caching"],
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
+            default_litellm_params: { cache_control_injection_points: [{ location: "message", role: "system" }] },
+            optional_pre_call_checks: ["prompt_caching"],
+          }),
+        }),
+      ),
+    );
+  });
 });

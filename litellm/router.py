@@ -683,6 +683,7 @@ class Router:
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
+        self.optional_pre_call_checks: OptionalPreCallChecks = []
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
 
@@ -1503,6 +1504,8 @@ class Router:
     def add_optional_pre_call_checks(self, optional_pre_call_checks: Optional[OptionalPreCallChecks]):
         if optional_pre_call_checks is None:
             return
+
+        self.optional_pre_call_checks = list(dict.fromkeys([*self.optional_pre_call_checks, *optional_pre_call_checks]))
 
         # ---------------------------------------------------------------------
         # Unified deployment affinity (session stickiness)
@@ -9686,6 +9689,8 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "default_litellm_params",
+            "optional_pre_call_checks",
         ]
 
         for var in vars_to_include:
@@ -9722,6 +9727,8 @@ class Router:
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "default_litellm_params",
+            "optional_pre_call_checks",
         ]
 
         _int_settings = [
@@ -9749,6 +9756,12 @@ class Router:
                         value = RetryPolicy(**value)
                     if value is None or isinstance(value, RetryPolicy):
                         setattr(self, var, value)
+                elif var == "default_litellm_params":
+                    self.default_litellm_params = {**self.default_litellm_params, **kwargs[var]}
+                elif var == "optional_pre_call_checks":
+                    new_checks = [check for check in kwargs[var] if check not in self.optional_pre_call_checks]
+                    if new_checks:
+                        self.add_optional_pre_call_checks(new_checks)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed

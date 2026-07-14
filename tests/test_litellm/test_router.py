@@ -5304,3 +5304,100 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+def _make_router_for_settings_tests(**kwargs):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": "fake-key",
+                    "api_base": "https://fake.openai.azure.com",
+                },
+            }
+        ],
+        **kwargs,
+    )
+
+
+def test_update_settings_merges_default_litellm_params_without_dropping_existing_keys():
+    """
+    Regression test: `update_settings(default_litellm_params=...)` must merge into
+    the existing dict, not replace it wholesale. A naive `setattr` replace would
+    silently drop keys the Router set at init (e.g. `timeout`, `max_retries`,
+    `metadata`) whenever an admin edits `default_litellm_params` from the UI to
+    add something like `cache_control_injection_points`.
+    """
+    router = _make_router_for_settings_tests(timeout=42)
+    assert router.default_litellm_params.get("timeout") == 42
+
+    router.update_settings(
+        default_litellm_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"}
+            ]
+        }
+    )
+
+    assert router.default_litellm_params["timeout"] == 42
+    assert router.default_litellm_params["cache_control_injection_points"] == [
+        {"location": "message", "role": "system"}
+    ]
+
+
+def test_update_settings_optional_pre_call_checks_is_idempotent():
+    """
+    Regression test: `add_optional_pre_call_checks` has no built-in guard against
+    registering the same check twice (unlike `router_budget_limiting`, which
+    checks for an existing budget limiter). `_add_router_settings_from_db_config`
+    re-applies the full `optional_pre_call_checks` list on every config sync, so
+    without diffing against already-applied checks in `update_settings`, saving
+    the same setting twice from the UI would register a second
+    `PromptCachingDeploymentCheck` callback on every save.
+    """
+    from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+        PromptCachingDeploymentCheck,
+    )
+
+    router = _make_router_for_settings_tests()
+    assert router.optional_pre_call_checks == []
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    assert router.optional_pre_call_checks == ["prompt_caching"]
+    prompt_caching_callbacks = [
+        cb
+        for cb in (router.optional_callbacks or [])
+        if isinstance(cb, PromptCachingDeploymentCheck)
+    ]
+    assert len(prompt_caching_callbacks) == 1
+
+    # Re-applying the same setting (e.g. a second Save click, or the periodic
+    # config-sync re-running update_settings with the combined config) must not
+    # register a duplicate callback.
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    assert router.optional_pre_call_checks == ["prompt_caching"]
+    prompt_caching_callbacks = [
+        cb
+        for cb in (router.optional_callbacks or [])
+        if isinstance(cb, PromptCachingDeploymentCheck)
+    ]
+    assert len(prompt_caching_callbacks) == 1
+
+
+def test_get_settings_includes_default_litellm_params_and_optional_pre_call_checks():
+    """
+    Regression test: the Admin UI's Router Settings page reads its current
+    values from `Router.get_settings()` (via `GET /get/config/callbacks`). If a
+    setting isn't in `get_settings()`'s `vars_to_include`, it can never be
+    displayed or edited from the UI even though the Router attribute exists.
+    """
+    router = _make_router_for_settings_tests()
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    settings = router.get_settings()
+
+    assert settings["optional_pre_call_checks"] == ["prompt_caching"]
+    assert "default_litellm_params" in settings
+    assert isinstance(settings["default_litellm_params"], dict)
