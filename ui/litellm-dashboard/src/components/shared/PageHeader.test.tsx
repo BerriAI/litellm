@@ -23,6 +23,26 @@ describe("PageHeader", () => {
     expect(screen.getByRole("button", { name: "Create New Key" })).toBeInTheDocument();
   });
 
+  it("renders leadingActions in the same row as the title, before the trailing actions", () => {
+    render(
+      <PageHeader
+        title="Virtual Keys"
+        leadingActions={<button>Create New Key</button>}
+        actions={<button>Refresh</button>}
+      />,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+    const leading = screen.getByRole("button", { name: "Create New Key" });
+    const trailing = screen.getByRole("button", { name: "Refresh" });
+
+    const titleGroup = heading.parentElement?.parentElement;
+    expect(titleGroup).not.toBeNull();
+    expect(titleGroup?.contains(leading)).toBe(true);
+    expect(titleGroup?.contains(trailing)).toBe(false);
+    expect(leading.compareDocumentPosition(trailing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("omits the optional slots when not provided", () => {
     render(<PageHeader title="Virtual Keys" />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
