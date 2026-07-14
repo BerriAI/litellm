@@ -57,6 +57,7 @@ def _valid_claims(**overrides) -> dict:
         "iss": SESSION_ISSUER,
         "iat": int(NOW.timestamp()),
         "exp": int((NOW + timedelta(seconds=600)).timestamp()),
+        "jti": "jti-fixed",
         "kind": "session",
         "user_id": "user-123",
         "client_id": "llm_client_abc",
@@ -198,6 +199,13 @@ def test_empty_principal_fields_rejected_at_construction():
 def test_short_signing_key_rejected_at_construction():
     with pytest.raises(ValidationError):
         SessionKeys(signing_key=SecretStr("short"))
+
+
+def test_two_mints_of_the_same_principal_are_distinct_tokens():
+    first = mint_session_token(PRINCIPAL, KEYS, NOW)
+    second = mint_session_token(PRINCIPAL, KEYS, NOW)
+    assert isinstance(first, MintedSessionToken) and isinstance(second, MintedSessionToken)
+    assert first.token.get_secret_value() != second.token.get_secret_value()
 
 
 def test_minted_token_repr_never_leaks_value():
