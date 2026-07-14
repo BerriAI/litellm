@@ -2534,6 +2534,23 @@
         "messages": true,
         "responses": true
       }
+    },
+    "mixlayer": {
+      "display_name": "Mixlayer (`mixlayer`)",
+      "url": "https://docs.litellm.ai/docs/providers/mixlayer",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
     }
   },
   "endpoints": {
