@@ -7,9 +7,10 @@ interface PageHeaderProps {
   subtitle?: React.ReactNode;
   icon?: React.ReactNode;
   actions?: React.ReactNode;
+  leadingActions?: React.ReactNode;
 }
 
-export function PageHeader({ title, subtitle, icon, actions }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, icon, actions, leadingActions }: PageHeaderProps) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="flex items-center gap-2.5">
@@ -18,6 +19,7 @@ export function PageHeader({ title, subtitle, icon, actions }: PageHeaderProps) 
           <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
           {subtitle != null && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
         </div>
+        {leadingActions != null && <div className="flex items-center gap-2">{leadingActions}</div>}
       </div>
       {actions != null && <div className="flex items-center gap-2">{actions}</div>}
     </div>

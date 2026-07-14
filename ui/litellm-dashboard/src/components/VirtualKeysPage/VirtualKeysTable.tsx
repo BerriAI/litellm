@@ -162,7 +162,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         icon={<KeyRound className="size-5" />}
         title="Virtual Keys"
         subtitle="Every key that authenticates requests to the gateway."
-        actions={headerActions}
+        leadingActions={headerActions}
       />
       <DataTable
         data={keyList}
