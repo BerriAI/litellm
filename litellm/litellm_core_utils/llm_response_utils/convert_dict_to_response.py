@@ -3,7 +3,7 @@ import json
 import re
 import time
 import traceback
-from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
+from typing import Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -50,6 +50,24 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
+    status_values = (response_object.get(field) for field in ("status", "status_code"))
+    status_code = next(
+        (
+            value
+            for value in status_values
+            if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599
+        ),
+        500,
+    )
+    message_values = (response_object.get(field) for field in ("response", "message"))
+    message = next(
+        (value for value in message_values if isinstance(value, str) and value.strip()),
+        (f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"),
+    )
+    return status_code, message
 
 
 def _normalize_images_for_message(
@@ -181,11 +199,10 @@ async def convert_to_streaming_response_async(
     if not response_object.get("choices"):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_missing_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -291,11 +308,10 @@ def convert_to_streaming_response(
     if not response_object.get("choices"):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_missing_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -631,12 +647,10 @@ def convert_to_model_response_object(
             if not response_object.get("choices") or not isinstance(response_object["choices"], Iterable):
                 from litellm.exceptions import APIError
 
+                status_code, message = _get_missing_choices_error_args(response_object)
                 raise APIError(
-                    status_code=500,
-                    message=(
-                        "LiteLLM: provider returned a response with no 'choices'. "
-                        f"Raw keys: {list(response_object.keys())}"
-                    ),
+                    status_code=status_code,
+                    message=message,
                     llm_provider="",
                     model="",
                 )
