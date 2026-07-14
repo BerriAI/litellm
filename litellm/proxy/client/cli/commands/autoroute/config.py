@@ -103,7 +103,9 @@ class AutorouteConfig(BaseModel):
 
     base_url: str
     api_key: str
-    tiers: Dict[str, str]
+    # Each tier maps to a pool of one or more models; complexity_router picks randomly among
+    # them per request (or, in adaptive mode, learns which to prefer within the pool).
+    tiers: Dict[str, Tuple[str, ...]]
     default_model: str
     classifier: ClassifierChoice = Field(default_factory=HeuristicClassifier)
     semantic_matching: SemanticMatchingChoice = Field(default_factory=NoSemanticMatching)
@@ -115,9 +117,10 @@ def validate_config(config: AutorouteConfig, discovered: Tuple[DiscoveredModel, 
     chat_names: FrozenSet[str] = frozenset(m.name for m in chat_models(discovered))
     embedding_names: FrozenSet[str] = frozenset(m.name for m in embedding_models(discovered))
 
-    for tier, model in config.tiers.items():
-        if model not in chat_names:
-            raise ConfigGenerationError(f"Tier {tier} references unknown chat model '{model}'")
+    for tier, models in config.tiers.items():
+        for model in models:
+            if model not in chat_names:
+                raise ConfigGenerationError(f"Tier {tier} references unknown chat model '{model}'")
 
     if config.default_model not in chat_names:
         raise ConfigGenerationError(f"default_model '{config.default_model}' is not a known chat model")
@@ -152,7 +155,8 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
     to exactly one `litellm_proxy/<name>` deployment forwarding to the customer's real proxy,
     plus one `auto_router/complexity_router` deployment tying the tiers together.
     """
-    referenced_names = {*config.tiers.values(), config.default_model}
+    referenced_names = {model for models in config.tiers.values() for model in models}
+    referenced_names.add(config.default_model)
     if isinstance(config.classifier, LLMClassifier):
         referenced_names.add(config.classifier.model)
     if isinstance(config.semantic_matching, SemanticMatching):
@@ -163,7 +167,7 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
     ]
 
     complexity_router_config: Dict[str, JsonValue] = {
-        "tiers": dict(config.tiers),
+        "tiers": {tier: list(models) for tier, models in config.tiers.items()},
         "default_model": config.default_model,
     }
     if isinstance(config.classifier, LLMClassifier):

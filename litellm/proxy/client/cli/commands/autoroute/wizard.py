@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 import click
 import yaml
@@ -25,25 +25,52 @@ from .config import (
 from .process import CONFIG_PATH
 
 
-def _render_and_prompt_for_model(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> str:
+def _render_model_table(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> None:
     console = Console()
-    table = Table(title=f"Pick a model for {prompt_label}")
+    table = Table(title=f"Pick model(s) for {prompt_label}")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Model", style="magenta")
     for i, model in enumerate(models):
         table.add_row(str(i + 1), model.name)
     console.print(table)
 
+
+def _parse_indices(choice: str, count: int) -> Optional[Tuple[int, ...]]:
+    raw_parts = [part.strip() for part in choice.split(",") if part.strip()]
+    if not raw_parts:
+        return None
+    indices: List[int] = []
+    for part in raw_parts:
+        try:
+            index = int(part) - 1
+        except ValueError:
+            return None
+        if not (0 <= index < count):
+            return None
+        indices.append(index)
+    return tuple(dict.fromkeys(indices))
+
+
+def _render_and_prompt_for_model(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> str:
+    _render_model_table(models, prompt_label)
     while True:
         choice = click.prompt(f"\nSelect a model for {prompt_label} by index", type=str).strip()
-        try:
-            index = int(choice) - 1
-        except ValueError:
-            click.echo("Invalid input. Please enter a number.")
-            continue
-        if 0 <= index < len(models):
-            return models[index].name
-        click.echo(f"Invalid selection. Please enter a number between 1 and {len(models)}")
+        indices = _parse_indices(choice, len(models))
+        if indices is not None and len(indices) == 1:
+            return models[indices[0]].name
+        click.echo(f"Invalid selection. Please enter a single number between 1 and {len(models)}")
+
+
+def _render_and_prompt_for_models(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> Tuple[str, ...]:
+    _render_model_table(models, prompt_label)
+    while True:
+        choice = click.prompt(
+            f"\nSelect model(s) for {prompt_label} by index (comma-separated for multiple)", type=str
+        ).strip()
+        indices = _parse_indices(choice, len(models))
+        if indices is not None:
+            return tuple(models[i].name for i in indices)
+        click.echo(f"Invalid selection. Please enter number(s) between 1 and {len(models)}, comma-separated")
 
 
 def run_configure_wizard(ctx: click.Context) -> Path:
@@ -61,9 +88,9 @@ def run_configure_wizard(ctx: click.Context) -> Path:
     if not chat_pool:
         raise click.ClickException("Your key has no chat-capable models available on this proxy.")
 
-    click.echo("Assign a model to each complexity tier (from what your key can access):")
-    tiers = {tier: _render_and_prompt_for_model(chat_pool, tier) for tier in TIER_NAMES}
-    default_model = tiers["MEDIUM"]
+    click.echo("Assign model(s) to each complexity tier (from what your key can access):")
+    tiers = {tier: _render_and_prompt_for_models(chat_pool, tier) for tier in TIER_NAMES}
+    default_model = tiers["MEDIUM"][0]
 
     classifier = HeuristicClassifier()
     if click.confirm("\nUse an LLM classifier instead of the free heuristic scorer?", default=False):
@@ -98,8 +125,8 @@ def run_configure_wizard(ctx: click.Context) -> Path:
     CONFIG_PATH.chmod(0o600)
 
     click.echo(f"\nWrote {CONFIG_PATH}")
-    for tier, model in tiers.items():
-        click.echo(f"  {tier}: {model}")
+    for tier, models in tiers.items():
+        click.echo(f"  {tier}: {', '.join(models)}")
     return CONFIG_PATH
 
 

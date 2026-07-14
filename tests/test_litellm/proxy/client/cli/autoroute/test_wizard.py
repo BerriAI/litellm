@@ -71,16 +71,28 @@ class TestRunConfigureWizardHappyPath:
         assert result.exit_code == 0, result.output
         router_config = _router_config(config_path)
         assert router_config["tiers"] == {
-            "SIMPLE": "gpt-4o-mini",
-            "MEDIUM": "gpt-4o",
-            "COMPLEX": "claude-opus",
-            "REASONING": "o1",
+            "SIMPLE": ["gpt-4o-mini"],
+            "MEDIUM": ["gpt-4o"],
+            "COMPLEX": ["claude-opus"],
+            "REASONING": ["o1"],
         }
         assert router_config["default_model"] == "gpt-4o"
         assert "classifier_type" not in router_config
         assert "classifier_llm_config" not in router_config
         assert "semantic_keyword_matching" not in router_config
         assert "adaptive" not in router_config
+
+    def test_assigns_multiple_models_to_a_single_tier(self, tmp_path):
+        result, config_path = _run(
+            tmp_path,
+            CHAT_AND_EMBEDDING_GROUPS,
+            input_str="1,2\n2\n3\n4\nn\nn\nn\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        router_config = _router_config(config_path)
+        assert router_config["tiers"]["SIMPLE"] == ["gpt-4o-mini", "gpt-4o"]
+        assert router_config["default_model"] == "gpt-4o"
 
     def test_writes_config_file_with_restricted_permissions(self, tmp_path):
         result, config_path = _run(

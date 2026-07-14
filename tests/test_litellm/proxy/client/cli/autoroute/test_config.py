@@ -31,10 +31,10 @@ def _base_config(**overrides: Any) -> AutorouteConfig:
         "base_url": "http://real-proxy.internal:4000",
         "api_key": "sk-real-key",
         "tiers": {
-            "SIMPLE": "gpt-4o-mini",
-            "MEDIUM": "gpt-4o",
-            "COMPLEX": "gpt-4o",
-            "REASONING": "o1",
+            "SIMPLE": ("gpt-4o-mini",),
+            "MEDIUM": ("gpt-4o",),
+            "COMPLEX": ("gpt-4o",),
+            "REASONING": ("o1",),
         },
         "default_model": "gpt-4o",
     }
@@ -146,7 +146,12 @@ class TestValidateConfig:
 
     def test_raises_for_tier_referencing_unknown_model(self):
         config = _base_config(
-            tiers={"SIMPLE": "unknown-model", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o", "REASONING": "o1"}
+            tiers={
+                "SIMPLE": ("unknown-model",),
+                "MEDIUM": ("gpt-4o",),
+                "COMPLEX": ("gpt-4o",),
+                "REASONING": ("o1",),
+            }
         )
         with pytest.raises(ConfigGenerationError, match="unknown-model"):
             validate_config(config, DISCOVERED)
