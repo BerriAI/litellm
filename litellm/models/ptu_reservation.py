@@ -4,10 +4,10 @@ PTU Reservation table model.
 Canonical definition for ``litellm_ptureservation``.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -31,6 +31,15 @@ class LiteLLM_PTUReservation(LiteLLMPydanticObjectBase):
     effective_to: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @field_validator("effective_from", "effective_to", mode="after")
+    @classmethod
+    def _coerce_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     @model_validator(mode="after")
     def _enforce_cost_source_fields(self) -> "LiteLLM_PTUReservation":

@@ -1,11 +1,19 @@
 """Request/response types for /ptu_reservation/* endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+
+def _to_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class PTUReservationNewRequest(LiteLLMPydanticObjectBase):
@@ -37,6 +45,11 @@ class PTUReservationNewRequest(LiteLLMPydanticObjectBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
+    @field_validator("effective_from", "effective_to", mode="after")
+    @classmethod
+    def _coerce_utc(cls, value: datetime | None) -> datetime | None:
+        return _to_utc(value)
+
 
 class PTUReservationListRequest(LiteLLMPydanticObjectBase):
     """Query params for GET /ptu_reservation/list."""
@@ -54,3 +67,8 @@ class PTUReservationCloseRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Timestamp to set as effective_to. Defaults to now (UTC) if omitted.",
     )
+
+    @field_validator("effective_to", mode="after")
+    @classmethod
+    def _coerce_utc(cls, value: datetime | None) -> datetime | None:
+        return _to_utc(value)

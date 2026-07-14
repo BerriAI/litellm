@@ -413,3 +413,48 @@ async def test_create_after_close_of_same_team_model(client_and_mocks):
     )
     assert resp.status_code == 200, resp.text
     mock_table.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_reservation_accepts_naive_datetime_and_coerces_to_utc(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/ptu_reservation/new",
+        json=_valid_new_payload(effective_from="2026-08-01T00:00:00"),
+    )
+    assert resp.status_code == 200, resp.text
+    mock_table.create.assert_awaited_once()
+    created = mock_table.create.await_args.kwargs["data"]["effective_from"]
+    assert created.tzinfo is not None
+    assert created.utcoffset() == timedelta(0)
+
+
+@pytest.mark.asyncio
+async def test_close_with_naive_datetime_does_not_500(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+    existing = _row(id="res_1", effective_from=_dt(), effective_to=None)
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.post(
+        "/ptu_reservation/close",
+        json={"id": "res_1", "effective_to": "2026-07-16T00:00:00"},
+    )
+    assert resp.status_code == 200, resp.text
+    stored = mock_table.update.await_args.kwargs["data"]["effective_to"]
+    assert stored.tzinfo is not None
+    assert stored.utcoffset() == timedelta(0)
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_naive_effective_to_before_from(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+    existing = _row(id="res_1", effective_from=_dt(days=10), effective_to=None)
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.post(
+        "/ptu_reservation/close",
+        json={"id": "res_1", "effective_to": "2026-07-05T00:00:00"},
+    )
+    assert resp.status_code == 400, resp.text
+    mock_table.update.assert_not_awaited()
