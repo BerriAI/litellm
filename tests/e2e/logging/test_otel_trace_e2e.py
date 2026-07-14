@@ -194,25 +194,16 @@ class TestOtelTraceCompleteness:
     def test_messages_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful non-streaming /v1/messages call must export ONE
-        complete OTEL trace: a single root SERVER span ("POST /v1/messages")
-        with auth/db/cost children and the gen-AI CLIENT span in the same tree,
-        exactly one trace for the call at the destination.
+        """This test verifies that one successful non-streaming /v1/messages request
+        produces exactly one complete OTEL trace.
 
-        A split trace hits Anthropic-native users hardest during incidents:
-        teams running Claude Code or the Anthropic SDK through the proxy see
-        their LLM spans detached from the request that caused them, so "which
-        request was slow/expensive and why" becomes unanswerable from the
-        destination UI even though data is flowing.
+        The trace must have a single root span named "POST /v1/messages". The
+        authentication, database, cost-writing, and model-call spans must all belong to
+        the same trace and have valid parent relationships leading back to that root.
 
-        /v1/messages is a separate handler path from /chat/completions
-        (Anthropic-native body, its own pre/post hooks), so completeness proven
-        on chat does not transfer; the orphan bug class is route-agnostic and
-        must be pinned on each live route (verified: at the pre-fix foil commit
-        1bd603d1ac this route orphans exactly like chat does). The gen-AI span
-        keeps the semconv operation name "chat" even on this surface, so the
-        expected span is "chat <model>", not "messages <model>".
-        """
+        The model-call span is expected to be named "chat <model>". The test fails if
+        the request is split across multiple traces, if any span references a missing
+        parent, or if the model-call span cannot be connected back to the root."""
         route = "/v1/messages"
         _assert_otel_destination_configured(client)
 
