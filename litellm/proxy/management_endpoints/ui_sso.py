@@ -588,11 +588,11 @@ def _render_cli_sso_verification_page(
 
 @router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
 async def cli_sso_start(request: Request):
-    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache, general_settings
 
     _check_cli_sso_start_rate_limit(
         request=request,
-        cache=user_api_key_cache,
+        cache=cli_sso_session_cache,
         use_x_forwarded_for=bool((general_settings or {}).get("use_x_forwarded_for", False)),
     )
 
@@ -607,7 +607,7 @@ async def cli_sso_start(request: Request):
         "user_code_verified": False,
         "session_data": None,
     }
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     verification_uri_complete: str | None = (
         (
@@ -639,9 +639,9 @@ async def cli_sso_complete(request: Request, login_id: str):
     from litellm.proxy.common_utils.html_forms.cli_sso_success import (
         render_cli_sso_success_page,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache
 
-    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cli_sso_session_cache)
     if not flow.get("sso_complete") or not flow.get("session_data"):
         raise HTTPException(status_code=400, detail="CLI login is not ready")
 
@@ -665,7 +665,7 @@ async def cli_sso_complete(request: Request, login_id: str):
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
     flow["user_code_verified"] = True
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     html_content = render_cli_sso_success_page()
     return HTMLResponse(content=html_content, status_code=200)
@@ -856,10 +856,10 @@ async def google_login(
     Example:
     """
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         premium_user,
         prisma_client,
-        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -907,7 +907,7 @@ async def google_login(
     )
 
     if source == LITELLM_CLI_SOURCE_IDENTIFIER:
-        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+        _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
@@ -1941,6 +1941,7 @@ async def _complete_cli_sso_callback_session(
     user_defined_values: Optional[SSOUserDefinedValues],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    cli_sso_session_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
     prefill_user_code: str | None = None,
 ):
@@ -1987,7 +1988,7 @@ async def _complete_cli_sso_callback_session(
     flow["sso_complete"] = True
     browser_complete_token = secrets.token_urlsafe(32)
     flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
         f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
@@ -2017,13 +2018,14 @@ async def cli_sso_callback(
     verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -2063,6 +2065,7 @@ async def cli_sso_callback(
             user_defined_values=user_defined_values,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            cli_sso_session_cache=cli_sso_session_cache,
             proxy_logging_obj=proxy_logging_obj,
             prefill_user_code=prefill_user_code,
         )
@@ -2097,10 +2100,10 @@ async def cli_poll_key(
         get_team_object,
         get_user_object,
     )
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache, prisma_client, user_api_key_cache
 
     try:
-        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=cli_sso_session_cache)
         if not _verify_cli_sso_poll_secret(flow=flow, poll_secret=x_litellm_cli_poll_secret):
             raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
@@ -2207,7 +2210,7 @@ async def cli_poll_key(
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
+            cli_sso_session_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
             poll_response = {

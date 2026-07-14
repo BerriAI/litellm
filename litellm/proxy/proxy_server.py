@@ -224,6 +224,7 @@ from litellm.constants import (
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
+    CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -1955,6 +1956,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+cli_sso_session_cache = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=user_api_key_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -3679,12 +3681,21 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
 def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
     """
     Wires an established coordination Redis into the proxy-level caches that
-    consume it directly: the spend counter cache, the cluster-wide config
-    cache, and (only when opted in) the virtual-key auth cache.
+    consume it directly: the spend counter cache, the CLI SSO login-session
+    cache, the cluster-wide config cache, and (only when opted in) the
+    virtual-key auth cache.
+
+    The CLI SSO login-session cache is always backed by Redis when available so
+    that the browser SSO flow behind `lite login` survives landing on different
+    workers; it must not be gated behind enable_redis_auth_cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
+    )
+    cli_sso_session_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
