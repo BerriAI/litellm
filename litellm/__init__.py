@@ -2038,6 +2038,7 @@ if TYPE_CHECKING:
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
+    supports_embedding: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
