@@ -193,7 +193,11 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     during re-discovery downgrades a working server (``authorization_url`` set) to a broken one
     (``None``, /authorize 400s) with no configuration change. Mirrors the ``short_prefix``
     carry-forward. Skipped when the server's ``url`` or ``auth_type`` changed, since the previous
-    endpoints may then belong to a different upstream.
+    endpoints may then belong to a different upstream. ``registration_url`` IS carried here even
+    though ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only
+    restores the same in-memory value the previous build already ran with, while persisting it
+    would flip ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for
+    dcr_bridge servers that never had one configured.
     """
     if previous_server is None:
         return
@@ -3099,7 +3103,7 @@ class MCPServerManager:
 
             return metadata
         except Exception as exc:  # pragma: no cover - network/transient issues
-            verbose_logger.warning("MCP OAuth discovery failed for %s: %s", server_url, exc)
+            verbose_logger.debug("MCP OAuth discovery failed for %s: %s", server_url, exc)
             return None
 
     def _parse_www_authenticate_header(self, header_value: Optional[str]) -> tuple[Optional[str], Optional[list[str]]]:
