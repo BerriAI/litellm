@@ -198,23 +198,15 @@ export function LogDetailsDrawer({
     if (selectedSessionRequestId) {
       return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
     }
-    if (logEntry?.request_id) {
-      const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || fallbackLog;
-    }
     return fallbackLog;
   }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
     if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
-      const fallbackRequestId =
-        logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
-          ? logEntry.request_id
-          : (mostRecentLog ?? sessionLogs[0]).request_id;
-      setSelectedSessionRequestId(fallbackRequestId);
+      setSelectedSessionRequestId((mostRecentLog ?? sessionLogs[0]).request_id);
     }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
+  }, [isSessionMode, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
