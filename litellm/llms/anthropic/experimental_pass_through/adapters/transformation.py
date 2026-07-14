@@ -330,6 +330,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "thinking",
             "output_format",
             "output_config",
+            "stop_sequences",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -1030,6 +1031,23 @@ class LiteLLMAnthropicMessagesAdapter:
         if response_format:
             new_kwargs["response_format"] = response_format
 
+    def _translate_stop_sequences_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic's ``stop_sequences`` to OpenAI's ``stop`` field.
+
+        Anthropic-native backends (e.g. Bedrock/Anthropic) accept
+        ``stop_sequences`` as-is, but OpenAI-format providers (e.g.
+        azure_ai) reject it as an unknown parameter. Without this, only the
+        inverse OpenAI->Anthropic ``stop``->``stop_sequences`` mapping
+        existed, leaving this direction unhandled (see #33075).
+        """
+        stop_sequences = anthropic_message_request.get("stop_sequences")
+        if stop_sequences:
+            new_kwargs["stop"] = stop_sequences
+
     def _copy_untranslated_anthropic_params(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -1099,6 +1117,11 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
         self._translate_output_format_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        ## CONVERT STOP_SEQUENCES to STOP
+        self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
         )

@@ -2616,6 +2616,48 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
     assert tool_name_mapping == {}
 
 
+def test_translate_anthropic_to_openai_translates_stop_sequences_to_stop():
+    """
+    Regression test for #33075.
+
+    Anthropic's /v1/messages request uses `stop_sequences`, but OpenAI-format
+    providers (e.g. azure_ai) reject that field name with a 400 "Unknown
+    parameter" error. `stop_sequences` must be translated to OpenAI's `stop`
+    field, mirroring the existing inverse `stop` -> `stop_sequences` mapping
+    on the OpenAI -> Anthropic response path.
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="my-openai-format-model",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Reply with the single word SAFE."}],
+        stop_sequences=["STOP"],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request.get("stop") == ["STOP"]
+    assert "stop_sequences" not in openai_request
+
+
+def test_translate_anthropic_to_openai_without_stop_sequences():
+    """`stop` should not appear in the translated request when stop_sequences is absent."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="my-openai-format-model",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Reply with the single word SAFE."}],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert "stop" not in openai_request
+
+
 class TestTranslateAnthropicOutputFormatToOpenAI:
     """Tests for translate_anthropic_output_format_to_openai adding additionalProperties: false."""
 
