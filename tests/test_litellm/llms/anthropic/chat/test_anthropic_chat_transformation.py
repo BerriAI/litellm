@@ -1005,6 +1005,43 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
+def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "claude-opus-4-8"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {model: {"supports_response_schema": True}},
+    )
+    litellm.get_model_info.cache_clear()
+
+    try:
+        optional_params = AnthropicConfig().map_openai_params(
+            non_default_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                }
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
+
+
 def test_non_structured_output_model_uses_tool_workaround():
     """
     Test that models NOT in the native structured output list still use the
