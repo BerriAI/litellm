@@ -213,6 +213,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         register_fn=_include_router("claude_code_marketplace_router"),
     ),
     LazyFeature(
+        name="relay",
+        module_path="litellm.proxy.relay_endpoints.endpoints",
+        path_prefixes=("/relay",),
+    ),
+    LazyFeature(
         name="scim",
         module_path="litellm.proxy.management_endpoints.scim.scim_v2",
         path_prefixes=("/scim",),

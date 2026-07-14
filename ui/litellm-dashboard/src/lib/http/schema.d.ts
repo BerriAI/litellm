@@ -11071,6 +11071,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/relay/managed-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Relay Managed Config */
+        get: operations["get_relay_managed_config_relay_managed_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reload/anthropic_beta_headers": {
         parameters: {
             query?: never;
@@ -24541,6 +24558,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -30191,6 +30209,42 @@ export interface components {
         RejectMCPServerRequest: {
             /** Review Notes */
             review_notes?: string | null;
+        };
+        /** RelayClaudeCodeConfig */
+        RelayClaudeCodeConfig: {
+            /**
+             * Channel
+             * @default pinned
+             */
+            channel: string;
+            /** Managed Settings */
+            managed_settings?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Model */
+            model?: string | null;
+            /**
+             * Package
+             * @default @anthropic-ai/claude-code
+             */
+            package: string;
+            /**
+             * Registry
+             * @default npm
+             */
+            registry: string;
+            /** Version */
+            version?: string | null;
+        };
+        /** RelayManagedConfigResponse */
+        RelayManagedConfigResponse: {
+            claude_code?: components["schemas"]["RelayClaudeCodeConfig"];
+            /** Policy Version */
+            policy_version?: number | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
         };
         /** ResetSpendRequest */
         ResetSpendRequest: {
@@ -47447,6 +47501,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeClientSecretResponse"];
+                };
+            };
+        };
+    };
+    get_relay_managed_config_relay_managed_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelayManagedConfigResponse"];
                 };
             };
         };
