@@ -20,7 +20,7 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
-from litellm.types.mcp import MCPPublicServer
+from litellm.types.mcp import MCPPublicServer, MCPPublicServerInfo
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -237,7 +237,16 @@ async def get_mcp_servers():
     public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
     return [
         MCPPublicServer(
-            **server.model_dump(),
+            server_id=server.server_id,
+            name=server.name,
+            alias=server.alias,
+            server_name=server.server_name,
+            transport=server.transport,
+            mcp_info=(
+                MCPPublicServerInfo(description=server.mcp_info["description"])
+                if server.mcp_info and server.mcp_info.get("description")
+                else None
+            ),
         )
         for server in public_mcp_servers
     ]

@@ -875,12 +875,16 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     client = TestClient(app)
 
     secret_url = "https://internal-only.example.com/mcp"
+    secret_mcp_info_url = "https://internal-only.example.com/metadata"
+    public_description = "Public server description"
     server = MCPServer(
         server_id="listed",
         name="listed",
         server_name="listed",
         url=secret_url,
         transport=MCPTransport.http,
+        auth_type="api_key",
+        mcp_info={"description": public_description, "upstream_url": secret_mcp_info_url},
         available_on_public_internet=True,
     )
 
@@ -899,6 +903,9 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     assert response.status_code == 200
     data = response.json()
     assert [item["server_id"] for item in data] == ["listed"]
+    assert data[0]["mcp_info"] == {"description": public_description}
     assert all("url" not in item for item in data)
+    assert all("auth_type" not in item for item in data)
     assert secret_url not in response.text
+    assert secret_mcp_info_url not in response.text
     app.dependency_overrides.clear()

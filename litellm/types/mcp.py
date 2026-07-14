@@ -70,6 +70,10 @@ MCPAuthType = Optional[
 ]
 
 
+class MCPPublicServerInfo(BaseModel):
+    description: Optional[str] = None
+
+
 class MCPPublicServer(BaseModel):
     """
     Safe params for public MCP servers
@@ -80,9 +84,7 @@ class MCPPublicServer(BaseModel):
     alias: Optional[str] = None
     server_name: Optional[str] = None
     transport: MCPTransportType
-    spec_path: Optional[str] = None
-    auth_type: Optional[MCPAuthType] = None
-    mcp_info: Optional[Dict[str, Any]] = None
+    mcp_info: Optional[MCPPublicServerInfo] = None
 
 
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).

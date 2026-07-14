@@ -27302,25 +27302,23 @@ export interface components {
         MCPPublicServer: {
             /** Alias */
             alias?: string | null;
-            /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
-            /** Mcp Info */
-            mcp_info?: {
-                [key: string]: unknown;
-            } | null;
+            mcp_info?: components["schemas"]["MCPPublicServerInfo"] | null;
             /** Name */
             name: string;
             /** Server Id */
             server_id: string;
             /** Server Name */
             server_name?: string | null;
-            /** Spec Path */
-            spec_path?: string | null;
             /**
              * Transport
              * @enum {string}
              */
             transport: "sse" | "http" | "stdio";
+        };
+        /** MCPPublicServerInfo */
+        MCPPublicServerInfo: {
+            /** Description */
+            description?: string | null;
         };
         /**
          * MCPSemanticFilterSettings
