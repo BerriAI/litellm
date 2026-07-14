@@ -564,18 +564,23 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               icon={<Users className="size-5" />}
               title="Teams"
               subtitle="Manage teams, members, and their access to models and budgets"
-              actions={
-                canCreateOrManageTeams(userRole, userID, organizations) ? (
+            />
+          </div>
+
+          <Tabs
+            items={tabItems}
+            tabBarExtraContent={{
+              left: canCreateOrManageTeams(userRole, userID, organizations) ? (
+                <div className="flex items-center gap-4 pr-4">
                   <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
                     <Plus className="size-4" />
                     Create Team
                   </UIButton>
-                ) : undefined
-              }
-            />
-          </div>
-
-          <Tabs items={tabItems} />
+                  <div className="h-6 w-px bg-gray-200" />
+                </div>
+              ) : undefined,
+            }}
+          />
         </>
       )}
 
