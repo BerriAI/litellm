@@ -152,7 +152,7 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
     """
     When a provider sends tool name/id WITHOUT arguments in the first chunk
     (OpenAI-style), the wrapper should NOT emit an extra input_json_delta
-    after content_block_start. This verifies backward compatibility.
+    from the trigger chunk — only the follow-up chunk with real args.
     """
     # Chunk 1: text
     text_chunk = _make_chunk(Delta(content="Hi", role="assistant", tool_calls=None))
@@ -221,9 +221,8 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
 
     assert tool_start_idx is not None
 
-    # Count how many input_json_delta events appear after the tool_use block start.
-    # With empty args in the trigger chunk, only the subsequent tool_args_chunk
-    # should produce one — not the trigger chunk itself.
+    # Count input_json_delta events after the tool_use block start. Only the
+    # follow-up chunk with real arguments should produce a delta.
     input_json_deltas = [
         e
         for e in events[tool_start_idx + 1 :]

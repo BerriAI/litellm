@@ -402,6 +402,82 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ), "Tool message should be placed before user message"
 
 
+def test_translate_streaming_openai_text_delta_no_tool_calls():
+    """When tool_calls is None, a text delta with content should be text_delta."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Hello",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices  # type: ignore[arg-type]
+    )
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Hello"  # type: ignore[typeddict-unknown-key]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Hello from DeepSeek",
+        "Let me think about that.",
+    ],
+)
+def test_translate_streaming_openai_text_delta_empty_tool_calls(content: str):
+    """When tool_calls is an empty list (len==0), content should still be text_delta.
+
+    This reproduces the bug where DeepSeek/vLLM sends tool_calls: []
+    instead of tool_calls: None. Before the fix, the `is not None` guard
+    let this into the tool_calls branch, and a stray partial_json="" caused
+    an empty input_json_delta to be emitted instead of the text content.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content=content,
+                role="assistant",
+                function_call=None,
+                tool_calls=[],  # empty list — the exact pattern from vLLM/DeepSeek
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices  # type: ignore[arg-type]
+    )
+
+    assert type_of_content == "text_delta", (
+        f"Expected text_delta but got {type_of_content} — "
+        "empty tool_calls list should not trigger input_json_delta"
+    )
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == content  # type: ignore[typeddict-unknown-key]
+
+
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
     """Test that empty function arguments are handled safely and don't cause JSON parsing errors."""
 
@@ -1837,6 +1913,65 @@ def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without
     assert type_of_content == "thinking_delta"
     assert content_block_delta["type"] == "thinking_delta"
     assert content_block_delta["thinking"] == "I need to analyze this carefully..."
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_content_block_empty_reasoning_content():
+    """Empty reasoning_content must not open a thinking block without thinking_delta."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "text"
+    assert content_block_start == {"type": "text", "text": ""}
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_empty_reasoning_content_no_thinking_delta():
+    """Empty reasoning_content must not emit thinking_delta on a text block."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == ""
 
 
 def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
