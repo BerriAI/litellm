@@ -1643,13 +1643,13 @@
   },
   "src/components/Teams.tsx": {
     "no-nested-ternary": {
-      "count": 4
+      "count": 2
     },
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/ToolDetail.tsx": {
