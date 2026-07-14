@@ -28,7 +28,8 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
               param != "enable_tag_filtering" &&
               param != "retry_policy" &&
               param != "model_group_retry_policy" &&
-              param != "routing_groups",
+              param != "routing_groups" &&
+              param != "optional_pre_call_checks",
           )
           .map(([param, value]) => (
             <div key={param} className="space-y-2">

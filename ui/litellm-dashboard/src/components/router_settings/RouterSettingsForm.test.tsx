@@ -11,11 +11,29 @@ vi.mock("antd", async (importOriginal) => {
   return {
     ...actual,
     Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      ),
+      ({ value, onChange, children, mode, options, "data-testid": testId }: any) =>
+        mode === "multiple" ? (
+          <select
+            multiple
+            data-testid={testId || "multi-select"}
+            value={value ?? []}
+            onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o: any) => o.value))}
+          >
+            {(options || []).map((option: any) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            data-testid={testId || "strategy-select"}
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {children}
+          </select>
+        ),
       {
         Option: ({ value, children }: any) => <option value={value}>{children}</option>,
       },
@@ -109,5 +127,45 @@ describe("RouterSettingsForm", () => {
   it("should show the Reliability & Retries section", () => {
     render(<RouterSettingsForm {...baseProps} />);
     expect(screen.getByText("Reliability & Retries")).toBeInTheDocument();
+  });
+
+  it("should not show the optional pre-call checks selector when no options are known", () => {
+    render(<RouterSettingsForm {...baseProps} />);
+    expect(screen.queryByTestId("optional-pre-call-checks-select")).not.toBeInTheDocument();
+  });
+
+  it("should show the optional pre-call checks selector populated from field metadata options", () => {
+    const props = {
+      ...baseProps,
+      routerFieldsMetadata: {
+        optional_pre_call_checks: { ui_field_name: "Optional Pre-call Checks", options: ["prompt_caching", "router_budget_limiting"] },
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
+    const optionValues = Array.from(select.options).map((o) => o.value);
+    expect(optionValues).toEqual(["prompt_caching", "router_budget_limiting"]);
+  });
+
+  it("should call onChange with the updated optional_pre_call_checks when the selector changes", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps,
+      onChange,
+      routerFieldsMetadata: {
+        optional_pre_call_checks: { ui_field_name: "Optional Pre-call Checks", options: ["prompt_caching"] },
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    await user.selectOptions(screen.getByTestId("optional-pre-call-checks-select"), "prompt_caching");
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerSettings: expect.objectContaining({ optional_pre_call_checks: ["prompt_caching"] }),
+      }),
+    );
   });
 });

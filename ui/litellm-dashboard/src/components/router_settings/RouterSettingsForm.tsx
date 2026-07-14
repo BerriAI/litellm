@@ -1,5 +1,6 @@
 import React from "react";
 import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
+import OptionalPreCallChecksSelector from "./OptionalPreCallChecksSelector";
 import ReliabilityRetriesSection from "./ReliabilityRetriesSection";
 import RoutingStrategySelector from "./RoutingStrategySelector";
 import TagFilteringToggle from "./TagFilteringToggle";
@@ -39,6 +40,15 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
     });
   };
 
+  const handleOptionalPreCallChecksChange = (checks: string[]) => {
+    onChange({
+      ...value,
+      routerSettings: { ...value.routerSettings, optional_pre_call_checks: checks },
+    });
+  };
+
+  const optionalPreCallCheckOptions: string[] = routerFieldsMetadata["optional_pre_call_checks"]?.options || [];
+
   return (
     <div className="w-full space-y-8 py-2">
       {/* Routing Settings Section */}
@@ -65,6 +75,16 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
           routerFieldsMetadata={routerFieldsMetadata}
           onToggle={handleTagFilteringToggle}
         />
+
+        {/* Optional Pre-call Checks */}
+        {optionalPreCallCheckOptions.length > 0 && (
+          <OptionalPreCallChecksSelector
+            value={value.routerSettings.optional_pre_call_checks || []}
+            options={optionalPreCallCheckOptions}
+            routerFieldsMetadata={routerFieldsMetadata}
+            onChange={handleOptionalPreCallChecksChange}
+          />
+        )}
       </div>
 
       {/* Divider */}

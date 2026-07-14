@@ -41,6 +41,18 @@ describe("ReliabilityRetriesSection", () => {
     expect(inputNames).not.toContain("model_group_retry_policy");
   });
 
+  it("should not render a raw-text input for optional_pre_call_checks (owned by its own multi-select)", () => {
+    render(
+      <ReliabilityRetriesSection
+        routerSettings={{ ...baseSettings, optional_pre_call_checks: ["prompt_caching"] }}
+        routerFieldsMetadata={{}}
+      />,
+    );
+    const inputs = screen.queryAllByRole("textbox");
+    const inputNames = inputs.map((el) => el.getAttribute("name"));
+    expect(inputNames).not.toContain("optional_pre_call_checks");
+  });
+
   it("should use ui_field_name from metadata as the label", () => {
     const metadata = {
       num_retries: { ui_field_name: "Number of Retries", field_description: "How many times to retry" },

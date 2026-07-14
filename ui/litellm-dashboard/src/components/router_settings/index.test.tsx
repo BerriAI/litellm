@@ -8,11 +8,29 @@ vi.mock("antd", async (importOriginal) => {
   return {
     ...actual,
     Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      ),
+      ({ value, onChange, children, mode, options, "data-testid": testId }: any) =>
+        mode === "multiple" ? (
+          <select
+            multiple
+            data-testid={testId || "multi-select"}
+            value={value ?? []}
+            onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o: any) => o.value))}
+          >
+            {(options || []).map((option: any) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            data-testid={testId || "strategy-select"}
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {children}
+          </select>
+        ),
       {
         Option: ({ value, children }: any) => <option value={value}>{children}</option>,
       },
@@ -188,11 +206,12 @@ describe("RouterSettings", () => {
     expect(NotificationsManager.success).not.toHaveBeenCalled();
   });
 
-  it("should round-trip default_litellm_params and optional_pre_call_checks as JSON on save", async () => {
-    // Regression test: these two fields hold dicts/lists (e.g. cache_control_injection_points,
-    // ["prompt_caching"]), not plain strings. Without listing them in the save handler's
-    // jsonKeys set, they'd be persisted as raw stringified text instead of parsed JSON,
-    // silently corrupting the setting the next time the router reads it.
+  it("should round-trip default_litellm_params and optional_pre_call_checks unmodified on save", async () => {
+    // Regression test: default_litellm_params holds a dict (e.g. cache_control_injection_points),
+    // not a plain string - without listing it in the save handler's jsonKeys set, it'd be persisted
+    // as raw stringified text instead of parsed JSON. optional_pre_call_checks is a list owned by
+    // its own multi-select (no DOM input); without the fallback-to-state path in parseInputValue,
+    // an untouched value would be silently dropped instead of round-tripping through Save.
     vi.mocked(getCallbacksCall).mockResolvedValue({
       router_settings: {
         ...mockCallbacksResponse.router_settings,
@@ -215,6 +234,48 @@ describe("RouterSettings", () => {
         expect.objectContaining({
           router_settings: expect.objectContaining({
             default_litellm_params: { cache_control_injection_points: [{ location: "message", role: "system" }] },
+            optional_pre_call_checks: ["prompt_caching"],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should save a newly-selected optional pre-call check picked from the multi-select", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        optional_pre_call_checks: [],
+      },
+    });
+    vi.mocked(getRouterSettingsCall).mockResolvedValue({
+      ...mockRouterSettingsResponse,
+      fields: [
+        ...mockRouterSettingsResponse.fields,
+        {
+          field_name: "optional_pre_call_checks",
+          ui_field_name: "Optional Pre-call Checks",
+          field_description: "Extra checks the router runs before picking a deployment",
+          options: ["prompt_caching", "router_budget_limiting"],
+          link: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("optional-pre-call-checks-select")).toBeInTheDocument();
+    });
+
+    await user.selectOptions(screen.getByTestId("optional-pre-call-checks-select"), "prompt_caching");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
             optional_pre_call_checks: ["prompt_caching"],
           }),
         }),
