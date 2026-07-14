@@ -435,8 +435,8 @@ async def acompletion(
     verbosity: Optional[Literal["low", "medium", "high"]] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
-    store: Optional[bool] = None,
-    prompt_cache_key: Optional[str] = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -4832,8 +4832,8 @@ def completion(  # type: ignore
     extra_headers: Optional[dict] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
-    store: Optional[bool] = None,
-    prompt_cache_key: Optional[str] = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
