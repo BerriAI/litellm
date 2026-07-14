@@ -28,7 +28,14 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
-from endpoints_client import AnthropicContentBlock, EndpointsClient
+from endpoints_client import (
+    CacheControl,
+    EndpointsClient,
+    MessagesResult,
+    RichMessage,
+    RichMessagesRequest,
+    TextBlock,
+)
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 
@@ -41,45 +48,6 @@ CACHE_PRIMING_DEADLINE_SECONDS = 60.0
 CACHE_PRIMING_INTERVAL_SECONDS = 3.0
 
 
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class MessageTurn(BaseModel):
-    role: str
-    content: list[TextBlock]
-
-
-class MessagesBody(BaseModel):
-    model: str
-    max_tokens: int = 64
-    system: list[TextBlock]
-    messages: list[MessageTurn]
-
-
-class MessagesUsage(BaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
-
-
-class MessagesCompletion(BaseModel):
-    role: str | None = None
-    content: list[AnthropicContentBlock] = []
-    usage: MessagesUsage = MessagesUsage()
-
-    @property
-    def text(self) -> str:
-        return "".join(block.text or "" for block in self.content)
-
-
 def _cacheable_system_block(marker: str) -> TextBlock:
     """A system prompt comfortably above Sonnet's 1024-token minimum cacheable
     size, unique per run so no other run's cache entry can satisfy the read."""
@@ -89,13 +57,13 @@ def _cacheable_system_block(marker: str) -> TextBlock:
     return TextBlock(text=text, cache_control=CacheControl())
 
 
-def _user_turn(text: str, *, cached: bool = False) -> MessageTurn:
+def _user_turn(text: str, *, cached: bool = False) -> RichMessage:
     block = TextBlock(text=text, cache_control=CacheControl() if cached else None)
-    return MessageTurn(role="user", content=[block])
+    return RichMessage(role="user", content=[block])
 
 
-def _system_reminder_turn() -> MessageTurn:
-    return MessageTurn(
+def _system_reminder_turn() -> RichMessage:
+    return RichMessage(
         role="system",
         content=[
             TextBlock(
@@ -106,13 +74,13 @@ def _system_reminder_turn() -> MessageTurn:
 
 
 def _post_messages(
-    client: EndpointsClient, key: str, body: MessagesBody
-) -> Result[MessagesCompletion]:
+    client: EndpointsClient, key: str, body: RichMessagesRequest
+) -> Result[MessagesResult]:
     return client.gateway.transport.post(
         "/v1/messages",
         headers=client.gateway.transport.bearer(key),
         json=body,
-        response_type=MessagesCompletion,
+        response_type=MessagesResult,
     )
 
 
@@ -157,7 +125,7 @@ def _prime_prompt_cache(
     deadline = time.monotonic() + CACHE_PRIMING_DEADLINE_SECONDS
     while True:
         user_text = _first_turn_user_text(unique_marker())
-        body = MessagesBody(
+        body = RichMessagesRequest(
             model=model,
             system=[system_block],
             messages=[_user_turn(user_text, cached=True)],
@@ -193,13 +161,13 @@ class TestBedrockInvokeMidConversationSystem:
 
         primed = _prime_prompt_cache(endpoints_client, key, model, system_block)
 
-        reminder_turn_body = MessagesBody(
+        reminder_turn_body = RichMessagesRequest(
             model=model,
             system=[system_block],
             messages=[
                 _user_turn(primed.first_user_text, cached=True),
                 _system_reminder_turn(),
-                MessageTurn(role="assistant", content=[TextBlock(text="OK.")]),
+                RichMessage(role="assistant", content=[TextBlock(text="OK.")]),
                 _user_turn("Reply with one word again.", cached=True),
             ],
         )
@@ -230,13 +198,13 @@ class TestBedrockInvokeMidConversationSystem:
         )
         key = resources.key()
 
-        body = MessagesBody(
+        body = RichMessagesRequest(
             model=model,
             system=[TextBlock(text="You are terse.")],
             messages=[
                 _user_turn(f"Say hi. Run {unique_marker()}."),
                 _system_reminder_turn(),
-                MessageTurn(role="assistant", content=[TextBlock(text="Hi.")]),
+                RichMessage(role="assistant", content=[TextBlock(text="Hi.")]),
                 _user_turn("Say bye."),
             ],
         )
