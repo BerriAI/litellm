@@ -4710,3 +4710,53 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+
+
+class TestVertexEmbeddingEncodingFormat:
+    """vertex_ai/gemini embeddings must accept encoding_format="float" — it's
+    the OpenAI SDK default and float lists are exactly what the vertex API
+    returns. Other values keep the unsupported-param behavior (drop with
+    drop_params, raise otherwise). Issue #33173."""
+
+    def test_encoding_format_float_is_accepted_and_dropped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="vertex_ai",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_float_accepted_for_gemini_provider(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="gemini",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_base64_still_rejected_without_drop_params(self):
+        with pytest.raises(Exception) as excinfo:
+            litellm.utils.get_optional_params_embeddings(
+                model="gemini-embedding-001",
+                encoding_format="base64",
+                custom_llm_provider="vertex_ai",
+            )
+        assert "encoding_format" in str(excinfo.value)
+
+    def test_encoding_format_base64_dropped_with_drop_params(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="base64",
+            custom_llm_provider="vertex_ai",
+            drop_params=True,
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_dimensions_still_mapped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            dimensions=256,
+            custom_llm_provider="vertex_ai",
+        )
+        assert optional_params.get("outputDimensionality") == 256
