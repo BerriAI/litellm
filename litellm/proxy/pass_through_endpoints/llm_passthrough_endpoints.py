@@ -10,6 +10,7 @@ import json
 import os
 import re
 from typing import Any, Optional, Tuple, Union, cast
+from urllib.parse import parse_qs
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -2280,6 +2281,55 @@ def create_generic_websocket_passthrough_endpoint(
         custom_headers=custom_headers,
         _forward_headers=forward_headers,
         cost_per_request=cost_per_request,
+    )
+
+
+DEEPGRAM_LIVE_DEFAULT_MODEL = "nova-3"
+DEEPGRAM_LIVE_ENDPOINT = "/deepgram/v1/listen"
+
+
+async def deepgram_listen_websocket_passthrough(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Deepgram streaming Speech-to-Text (`/v1/listen`) WebSocket passthrough.
+
+    Routes a realtime `/listen` connection (interim results, endpointing, etc.) through the
+    proxy so the Deepgram key never leaves the gateway, and bills the connection by audio
+    duration once it closes. Query parameters (model, language, encoding, ...) are forwarded
+    verbatim to Deepgram; the `model` parameter drives cost tracking and defaults to
+    `nova-3` when omitted.
+    """
+    deepgram_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="deepgram",
+        region_name=None,
+    )
+    if not deepgram_api_key:
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Deepgram API key not configured")
+        return None
+
+    query_string = websocket.url.query
+    parsed_query = parse_qs(query_string)
+    model = parsed_query.get("model", [DEEPGRAM_LIVE_DEFAULT_MODEL])[0]
+
+    api_base = get_secret_str("DEEPGRAM_API_BASE") or "wss://api.deepgram.com"
+    api_base = api_base.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+    target = f"{api_base}/v1/listen"
+    if query_string:
+        target = f"{target}?{query_string}"
+
+    return await websocket_passthrough_request(
+        websocket=websocket,
+        target=target,
+        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=DEEPGRAM_LIVE_ENDPOINT,
+        accept_websocket=True,
+        model=model,
+        custom_llm_provider="deepgram",
     )
 
 
