@@ -227,25 +227,16 @@ class TestOtelTraceCompleteness:
     def test_responses_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful non-streaming /v1/responses call must export ONE
-        complete OTEL trace: a single root SERVER span ("POST /v1/responses")
-        with auth/db/cost children and the gen-AI CLIENT span in the same tree,
-        exactly one trace for the call at the destination.
+        """This test verifies that one successful non-streaming /v1/responses request
+        produces exactly one complete OTEL trace.
 
-        If the trace splits, agentic workloads lose observability at the worst
-        spot: the Responses API is the route agent frameworks increasingly
-        default to, and an orphaned gen-AI span means every agent step appears
-        in the destination with no originating request, no auth identity, and
-        no cost linkage - multi-step runs become untraceable.
+        The trace must have a single root span named "POST /v1/responses". The
+        authentication, database, cost-writing, and model-call spans must all belong to
+        the same trace and have valid parent relationships leading back to that root.
 
-        /v1/responses is the newest of the three handlers with its own
-        translation layer; it's exactly where span-anchor plumbing regressions
-        land first, so it needs its own completeness pin rather than inheriting
-        confidence from the older routes (verified: at the pre-fix foil commit
-        1bd603d1ac this route orphans exactly like chat does). The gen-AI span
-        keeps the semconv operation name "chat" even on this surface, so the
-        expected span is "chat <model>", not "responses <model>".
-        """
+        The model-call span is expected to be named "chat <model>". The test fails if
+        the request is split across multiple traces, if any span references a missing
+        parent, or if the model-call span cannot be connected back to the root."""
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
