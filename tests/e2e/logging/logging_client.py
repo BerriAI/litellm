@@ -271,6 +271,15 @@ def observation_mentions_tool(obs: LangfuseObservation, tool_name: str) -> bool:
     return tool_name in blob
 
 
+def observation_has_guardrail(obs: LangfuseObservation, *, guardrail_name: str) -> bool:
+    blob = json.dumps(obs.metadata, default=str) if obs.metadata is not None else ""
+    if guardrail_name in blob or "guardrail" in blob.lower():
+        return True
+    if obs.name is not None and "guardrail" in obs.name.lower():
+        return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class LoggingClient:
     gateway: Gateway
@@ -390,6 +399,44 @@ class LoggingClient:
             f"POST /team/{team_id}/callback must return status=success; got {response.status!r}"
         )
 
+    def create_tool_permission_guardrail(self, name: str, *, allowed_tool: str) -> str:
+        """Register a tool_permission guardrail that allows one tool and denies the rest."""
+        response = unwrap(
+            self.gateway.transport.post(
+                "/guardrails",
+                headers=self.gateway.transport.master,
+                json=RootModel[JsonValue].model_validate(
+                    {
+                        "guardrail": {
+                            "guardrail_name": name,
+                            "litellm_params": {
+                                "guardrail": "tool_permission",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "default_action": "deny",
+                                "on_disallowed_action": "block",
+                                "rules": [{"id": "allow-named-tool", "tool_name": allowed_tool, "decision": "allow"}],
+                            },
+                        }
+                    }
+                ),
+                response_type=RootModel[JsonValue],
+            )
+        ).root
+        guardrail_id = response.get("guardrail_id") if isinstance(response, dict) else None
+        assert isinstance(guardrail_id, str) and guardrail_id, (
+            f"POST /guardrails must return a guardrail_id; got {response!r}"
+        )
+        return guardrail_id
+
+    def delete_guardrail(self, guardrail_id: str) -> None:
+        _ = self.gateway.transport.delete(
+            f"/guardrails/{guardrail_id}",
+            headers=self.gateway.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
         return self.gateway.create_model(model_name, litellm_params)
 
@@ -417,6 +464,7 @@ class LoggingClient:
         stream: bool = False,
         tools: list[ChatTool] | None = None,
         tool_choice: str | None = None,
+        guardrails: list[str] | None = None,
         max_tokens: int = 64,
     ) -> StreamingResponse:
         body = ChatBody(
@@ -426,6 +474,7 @@ class LoggingClient:
             stream=stream,
             tools=tools,
             tool_choice=tool_choice,
+            guardrails=guardrails,
         )
         if stream:
             return self.gateway.chat_stream(key, body)
