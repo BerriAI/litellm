@@ -1240,3 +1240,47 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+    @pytest.mark.parametrize(
+        "model_id,input_cost,cache_write_cost,cache_read_cost,output_cost",
+        [
+            ("openai.gpt-5.6-sol", 5e-06, 6.25e-06, 5e-07, 3e-05),
+            ("openai.gpt-5.6-terra", 2.5e-06, 3.125e-06, 2.5e-07, 1.5e-05),
+            ("openai.gpt-5.6-luna", 1e-06, 1.25e-06, 1e-07, 6e-06),
+        ],
+    )
+    def test_gpt_5_6_pricing_and_mode(
+        self, local_cost_map, model_id, input_cost, cache_write_cost, cache_read_cost, output_cost
+    ):
+        # GPT-5.6 Sol / Terra / Luna launched on Mantle 2026-07-13, Responses-only
+        # on the /openai/v1 base (AWS model cards). Pricing matches OpenAI
+        # first-party rates per the AWS launch note, with a 30m cache write
+        # surcharge and 90% cache-read discount.
+        full_model_name = f"bedrock_mantle/{model_id}"
+        assert full_model_name in litellm.bedrock_mantle_models
+        info = litellm.get_model_info(full_model_name)
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(input_cost)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(cache_write_cost)
+        assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
+        assert info["output_cost_per_token"] == pytest.approx(output_cost)
+        assert info["max_input_tokens"] == 272000
+        assert info["max_output_tokens"] == 128000
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"],
+    )
+    def test_gpt_5_6_routes_to_openai_responses_path(self, local_cost_map, model_id):
+        # The customer-facing bug: without a price-map entry the gate returned
+        # None, completion() fell back to POSTing /v1/chat/completions, and Mantle
+        # rejected the request. The entry must route gpt-5.6 to the native
+        # Responses config on the /openai/v1 base.
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model_id,
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True

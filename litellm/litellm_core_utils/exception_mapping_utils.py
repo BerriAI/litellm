@@ -2272,6 +2272,7 @@ def exception_type(  # type: ignore
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
                 or custom_llm_provider == "mistral"
+                or custom_llm_provider == "bedrock_mantle"
             ):
                 _map_openai_exception(
                     model=model,

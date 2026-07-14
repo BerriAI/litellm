@@ -663,6 +663,30 @@ def test_upstream_4xx_without_model_maps_to_bad_request():
     assert "Cannot cancel a synchronous response." in excinfo.value.message
 
 
+def test_bedrock_mantle_401_maps_to_authentication_error():
+    """Bedrock Mantle rejects a bad Bearer token with a 401 ``invalid_api_key`` /
+    ``permission_denied_error`` body. Before ``bedrock_mantle`` was wired into the
+    OpenAI-compatible mapping branch, that 401 fell through to the generic 500
+    APIConnectionError, hiding the auth failure from callers and retry policies."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=401,
+        message='{"error":{"code":"invalid_api_key","message":"Invalid bearer token","param":null,"type":"permission_denied_error"}}',
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="openai.gpt-oss-120b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.llm_provider == "bedrock_mantle"
+    assert "Invalid bearer token" in excinfo.value.message
+
+
 def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
