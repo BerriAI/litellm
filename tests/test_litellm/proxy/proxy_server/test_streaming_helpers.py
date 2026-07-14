@@ -36,7 +36,13 @@ from litellm.proxy.proxy_server import (
     data_generator,
     select_data_generator,
 )
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 from .conftest import normalize
 
@@ -664,6 +670,77 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
                 "delta": {"role": "assistant", "content": "hello"},
             }
         ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_adapts_completed_model_response(monkeypatch):
+    _patch_logging_flags(monkeypatch, needs_wrap=True)
+
+    completed_response = ModelResponse(
+        id="chatcmpl-completed",
+        model="gpt-5.6",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "OK"},
+                "finish_reason": "stop",
+            }
+        ],
+        usage={
+            "prompt_tokens": 36,
+            "completion_tokens": 22,
+            "total_tokens": 58,
+        },
+    )
+    iterator_hook_responses = []
+
+    def iterator_hook(*, response, **_kwargs):
+        iterator_hook_responses.append(response)
+        return response
+
+    async def failure_hook(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        ps.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        iterator_hook,
+    )
+    monkeypatch.setattr(
+        ps.proxy_logging_obj,
+        "post_call_failure_hook",
+        failure_hook,
+    )
+
+    output = [
+        chunk
+        async for chunk in async_data_generator(
+            response=completed_response,
+            user_api_key_dict=_user_auth(),
+            request_data={"model": "gpt-5.6"},
+        )
+    ]
+
+    assert len(iterator_hook_responses) == 1
+    assert iterator_hook_responses[0] is not completed_response
+    assert hasattr(iterator_hook_responses[0], "__aiter__")
+    assert output[-1] == "data: [DONE]\n\n"
+    first_chunk = output[0]
+    assert isinstance(first_chunk, str)
+    payload = json.loads(first_chunk.removeprefix("data: ").removesuffix("\n\n"))
+    assert payload["id"] == completed_response.id
+    assert payload["model"] == completed_response.model
+    assert payload["object"] == "chat.completion.chunk"
+    assert payload["choices"][0]["delta"] == {
+        "role": "assistant",
+        "content": "OK",
+    }
+    assert payload["choices"][0]["finish_reason"] == "stop"
+    assert payload["usage"] == {
+        "prompt_tokens": 36,
+        "completion_tokens": 22,
+        "total_tokens": 58,
     }
 
 
