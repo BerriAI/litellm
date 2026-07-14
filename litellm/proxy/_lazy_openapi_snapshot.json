@@ -17,6 +17,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -234,27 +241,149 @@
             "a2a"
           ]
         }
-      },
-      "/v1/a2a/{agent_id}/message/send": {
-        "post": {
-          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
-          "operationId": "invoke_agent_a2a_v1_a2a__agent_id__message_send_post",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "agent_id",
-              "required": true,
-              "schema": {
-                "title": "Agent Id",
-                "type": "string"
-              }
+      }
+    }
+  },
+  "a2a_registration": {
+    "components": {
+      "schemas": {
+        "DiscoverAgentRequest": {
+          "properties": {
+            "discovery_mode": {
+              "$ref": "#/components/schemas/DiscoveryMode",
+              "default": "well_known_fallback",
+              "description": "How to locate the upstream card. ``well_known_fallback`` for pure A2A agents (try standard paths); ``langgraph_platform`` for LangGraph Platform deployments where the card is shared across assistants and disambiguated by a query parameter."
+            },
+            "params": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Mode-specific parameters. ``langgraph_platform`` requires ``{'assistant_id': <id>}``. ``well_known_fallback`` ignores this.",
+              "title": "Params"
+            },
+            "url": {
+              "description": "Base URL of the upstream agent. Behavior depends on ``discovery_mode``: ``well_known_fallback`` (default) tries /.well-known/agent-card.json, /.well-known/agent.json, /agent.json under this URL in order; ``langgraph_platform`` hits ``/.well-known/agent-card.json?assistant_id=<id>`` instead.",
+              "title": "Url",
+              "type": "string"
             }
+          },
+          "required": [
+            "url"
           ],
+          "title": "DiscoverAgentRequest",
+          "type": "object"
+        },
+        "DiscoverAgentResponse": {
+          "properties": {
+            "agent_card": {
+              "additionalProperties": true,
+              "title": "Agent Card",
+              "type": "object"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "agent_card"
+          ],
+          "title": "DiscoverAgentResponse",
+          "type": "object"
+        },
+        "DiscoveryMode": {
+          "description": "How to locate the upstream agent card.\n\nString-valued so it serializes cleanly over JSON / Pydantic.",
+          "enum": [
+            "well_known_fallback",
+            "langgraph_platform"
+          ],
+          "title": "DiscoveryMode",
+          "type": "string"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v1/a2a/discover": {
+        "post": {
+          "description": "Fetch the upstream agent's well-known card so the UI can show the admin\nwhich skills/capabilities the agent exposes.\n\nOnly proxy admins can call this \u2014 the UI uses it during agent registration,\nand we don't want arbitrary keys probing internal URLs.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1/a2a/discover\" \\\n    -H \"Authorization: Bearer <admin_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\"url\": \"https://upstream-agent.example.com\"}'\n```",
+          "operationId": "discover_agent_card_v1_a2a_discover_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverAgentRequest"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/DiscoverAgentResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -275,9 +404,9 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Invoke Agent A2A",
+          "summary": "Discover Agent Card",
           "tags": [
-            "a2a"
+            "a2a_registration"
           ]
         }
       }
@@ -782,6 +911,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -1939,6 +2075,41 @@
           "title": "AgentInterface",
           "type": "object"
         },
+        "AgentKeySummary": {
+          "properties": {
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "key_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Name"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "title": "AgentKeySummary",
+          "type": "object"
+        },
         "AgentMakePublicResponse": {
           "properties": {
             "message": {
@@ -2110,6 +2281,20 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "keys": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentKeySummary"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keys"
             },
             "litellm_params": {
               "anyOf": [
@@ -2927,6 +3112,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -3171,7 +3363,7 @@
           ]
         },
         "post": {
-          "description": "Create a new agent\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/v1/agents\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_name\": \"my-custom-agent\",\n            \"agent_card_params\": {\n                \"protocolVersion\": \"1.0\",\n                \"name\": \"Hello World Agent\",\n                \"description\": \"Just a hello world agent\",\n                \"url\": \"http://localhost:9999/\",\n                \"version\": \"1.0.0\",\n                \"defaultInputModes\": [\"text\"],\n                \"defaultOutputModes\": [\"text\"],\n                \"capabilities\": {\n                    \"streaming\": true\n                },\n                \"skills\": [\n                    {\n                        \"id\": \"hello_world\",\n                        \"name\": \"Returns hello world\",\n                        \"description\": \"just returns hello world\",\n                        \"tags\": [\"hello world\"],\n                        \"examples\": [\"hi\", \"hello world\"]\n                    }\n                ]\n            },\n            \"litellm_params\": {\n                \"make_public\": true\n       }\n    }'\n```",
+          "description": "Create a new agent\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/v1/agents\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_name\": \"my-custom-agent\",\n        \"agent_card_params\": {\n            \"protocolVersion\": \"1.0\",\n            \"name\": \"Hello World Agent\",\n            \"description\": \"Just a hello world agent\",\n            \"url\": \"http://localhost:9999/\",\n            \"version\": \"1.0.0\",\n            \"defaultInputModes\": [\"text\"],\n            \"defaultOutputModes\": [\"text\"],\n            \"capabilities\": {\n                \"streaming\": true\n            },\n            \"skills\": [\n                {\n                    \"id\": \"hello_world\",\n                    \"name\": \"Returns hello world\",\n                    \"description\": \"just returns hello world\",\n                    \"tags\": [\"hello world\"],\n                    \"examples\": [\"hi\", \"hello world\"]\n                }\n            ]\n        },\n        \"litellm_params\": {\n            \"make_public\": true\n        }\n    }'\n```",
           "operationId": "create_agent_v1_agents_post",
           "requestBody": {
             "content": {
@@ -3265,7 +3457,7 @@
       },
       "/v1/agents/{agent_id}": {
         "delete": {
-          "description": "Delete an agent\n\nExample Request:\n```bash\ncurl -X DELETE \"http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"message\": \"Agent 123e4567-e89b-12d3-a456-426614174000 deleted successfully\"\n}\n```",
+          "description": "Delete an agent\n\nExample Request:\n```bash\ncurl -X DELETE \"http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"message\": \"Agent 123e4567-e89b-12d3-a456-426614174000 deleted successfully\"\n}\n```",
           "operationId": "delete_agent_v1_agents__agent_id__delete",
           "parameters": [
             {
@@ -3309,7 +3501,7 @@
           ]
         },
         "get": {
-          "description": "Get a specific agent by ID\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```",
+          "description": "Get a specific agent by ID\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```",
           "operationId": "get_agent_by_id_v1_agents__agent_id__get",
           "parameters": [
             {
@@ -3355,7 +3547,7 @@
           ]
         },
         "patch": {
-          "description": "Update an existing agent\n\nExample Request:\n```bash\ncurl -X PUT \"http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent\": {\n            \"agent_name\": \"updated-agent\",\n            \"agent_card_params\": {\n                \"protocolVersion\": \"1.0\",\n                \"name\": \"Updated Agent\",\n                \"description\": \"Updated description\",\n                \"url\": \"http://localhost:9999/\",\n                \"version\": \"1.1.0\",\n                \"defaultInputModes\": [\"text\"],\n                \"defaultOutputModes\": [\"text\"],\n                \"capabilities\": {\n                    \"streaming\": true\n                },\n                \"skills\": []\n            },\n            \"litellm_params\": {\n                \"make_public\": false\n            }\n        }\n    }'\n```",
+          "description": "Update an existing agent\n\nExample Request:\n```bash\ncurl -X PATCH \"http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_name\": \"updated-agent\",\n        \"agent_card_params\": {\n            \"protocolVersion\": \"1.0\",\n            \"name\": \"Updated Agent\",\n            \"description\": \"Updated description\",\n            \"url\": \"http://localhost:9999/\",\n            \"version\": \"1.1.0\",\n            \"defaultInputModes\": [\"text\"],\n            \"defaultOutputModes\": [\"text\"],\n            \"capabilities\": {\n                \"streaming\": true\n            },\n            \"skills\": []\n        },\n        \"litellm_params\": {\n            \"make_public\": false\n        }\n    }'\n```",
           "operationId": "patch_agent_v1_agents__agent_id__patch",
           "parameters": [
             {
@@ -3411,7 +3603,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing agent\n\nExample Request:\n```bash\ncurl -X PUT \"http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent\": {\n            \"agent_name\": \"updated-agent\",\n            \"agent_card_params\": {\n                \"protocolVersion\": \"1.0\",\n                \"name\": \"Updated Agent\",\n                \"description\": \"Updated description\",\n                \"url\": \"http://localhost:9999/\",\n                \"version\": \"1.1.0\",\n                \"defaultInputModes\": [\"text\"],\n                \"defaultOutputModes\": [\"text\"],\n                \"capabilities\": {\n                    \"streaming\": true\n                },\n                \"skills\": []\n            },\n            \"litellm_params\": {\n                \"make_public\": false\n            }\n        }\n    }'\n```",
+          "description": "Update an existing agent\n\nExample Request:\n```bash\ncurl -X PUT \"http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_name\": \"updated-agent\",\n        \"agent_card_params\": {\n            \"protocolVersion\": \"1.0\",\n            \"name\": \"Updated Agent\",\n            \"description\": \"Updated description\",\n            \"url\": \"http://localhost:9999/\",\n            \"version\": \"1.1.0\",\n            \"defaultInputModes\": [\"text\"],\n            \"defaultOutputModes\": [\"text\"],\n            \"capabilities\": {\n                \"streaming\": true\n            },\n            \"skills\": []\n        },\n        \"litellm_params\": {\n            \"make_public\": false\n        }\n    }'\n```",
           "operationId": "update_agent_v1_agents__agent_id__put",
           "parameters": [
             {
@@ -3535,6 +3727,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -3989,6 +4188,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -4651,6 +4857,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -5250,6 +5463,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -5662,6 +5882,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -5978,6 +6205,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -6016,6 +6250,26 @@
         "delete": {
           "description": "Delete Hashicorp Vault configuration. Idempotent.",
           "operationId": "delete_hashicorp_vault_config_config_overrides_hashicorp_vault_delete",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -6024,6 +6278,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [
@@ -6064,6 +6328,26 @@
         "post": {
           "description": "Update Hashicorp Vault secret manager configuration.\nSets environment variables, encrypts sensitive fields, and stores in DB.\nReinitializes the secret manager on this pod.",
           "operationId": "update_hashicorp_vault_config_config_overrides_hashicorp_vault_post",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
           "requestBody": {
             "content": {
               "application/json": {
@@ -6665,6 +6949,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -7559,6 +7850,251 @@
       }
     }
   },
+  "gemini_agents": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v1beta/agents": {
+        "get": {
+          "description": "List all custom agents on the Gemini side.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "operationId": "list_gemini_agents_v1beta_agents_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Gemini Agents",
+          "tags": [
+            "gemini_agents"
+          ]
+        },
+        "post": {
+          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"name\": \"my-custom-slides-agent\",\n        \"base_agent\": \"waverunner\",\n        \"instructions\": \"You are a helpful assistant that creates slides.\",\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
+          "operationId": "create_gemini_agent_v1beta_agents_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Gemini Agent",
+          "tags": [
+            "gemini_agents"
+          ]
+        }
+      },
+      "/v1beta/agents/{name}": {
+        "delete": {
+          "description": "Delete a custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl -X DELETE \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "operationId": "delete_gemini_agent_v1beta_agents__name__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Gemini Agent",
+          "tags": [
+            "gemini_agents"
+          ]
+        },
+        "get": {
+          "description": "Get a specific custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "operationId": "get_gemini_agent_v1beta_agents__name__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Gemini Agent",
+          "tags": [
+            "gemini_agents"
+          ]
+        }
+      },
+      "/v1beta/agents/{name}/versions": {
+        "get": {
+          "description": "List versions of a custom agent.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "operationId": "list_gemini_agent_versions_v1beta_agents__name__versions_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Gemini Agent Versions",
+          "tags": [
+            "gemini_agents"
+          ]
+        }
+      }
+    }
+  },
   "guardrails": {
     "components": {
       "schemas": {
@@ -7638,7 +8174,7 @@
           "title": "ApplyGuardrailResponse",
           "type": "object"
         },
-        "BaseLitellmParams-Input": {
+        "BaseLitellmParams": {
           "additionalProperties": true,
           "properties": {
             "additional_provider_specific_params": {
@@ -7842,7 +8378,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "guard_name": {
@@ -7916,6 +8452,22 @@
               ],
               "description": "Optional field if guardrail requires a 'model' parameter",
               "title": "Model"
+            },
+            "on_sensitive_data": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block",
+                    "route"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.",
+              "title": "On Sensitive Data"
             },
             "on_violation": {
               "anyOf": [
@@ -7996,6 +8548,18 @@
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
             },
+            "sensitive_data_route_to_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.",
+              "title": "Sensitive Data Route To Model"
+            },
             "severity_threshold": {
               "anyOf": [
                 {
@@ -8020,174 +8584,7 @@
               "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
               "title": "Skip System Message In Guardrail"
             },
-            "template_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ID of your Model Armor template",
-              "title": "Template Id"
-            },
-            "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
-              ],
-              "title": "Unreachable Fallback",
-              "type": "string"
-            },
-            "violation_message_template": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
-              "title": "Violation Message Template"
-            }
-          },
-          "title": "BaseLitellmParams",
-          "type": "object"
-        },
-        "BaseLitellmParams-Output": {
-          "additionalProperties": true,
-          "properties": {
-            "additional_provider_specific_params": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Additional provider-specific parameters for generic guardrail APIs",
-              "title": "Additional Provider Specific Params"
-            },
-            "api_base": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Base URL for the guardrail service API",
-              "title": "Api Base"
-            },
-            "api_endpoint": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional custom API endpoint for Model Armor",
-              "title": "Api Endpoint"
-            },
-            "api_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "API key for the guardrail service",
-              "title": "Api Key"
-            },
-            "blocked_words": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/BlockedWord"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of blocked words with individual actions",
-              "title": "Blocked Words"
-            },
-            "blocked_words_file": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Path to YAML file containing blocked_words list",
-              "title": "Blocked Words File"
-            },
-            "categories": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/ContentFilterCategoryConfig"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of prebuilt categories to enable (harmful_*, bias_*)",
-              "title": "Categories"
-            },
-            "category_thresholds": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/LakeraCategoryThresholds"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Threshold configuration for Lakera guardrail categories"
-            },
-            "credentials": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Path to Google Cloud credentials JSON file or JSON string",
-              "title": "Credentials"
-            },
-            "custom_code": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Python-like code containing the apply_guardrail function for custom guardrail logic",
-              "title": "Custom Code"
-            },
-            "default_on": {
+            "skip_tool_message_in_guardrail": {
               "anyOf": [
                 {
                   "type": "boolean"
@@ -8196,63 +8593,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Whether the guardrail is enabled by default",
-              "title": "Default On"
+              "description": "When True, unified guardrails skip tool-role messages when building evaluation inputs (texts and structured_messages). When False, tool messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_tool_message_in_guardrail setting.",
+              "title": "Skip Tool Message In Guardrail"
             },
-            "detect_secrets_config": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Configuration for detect-secrets guardrail",
-              "title": "Detect Secrets Config"
-            },
-            "end_session_after_n_fails": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
-              "title": "End Session After N Fails"
-            },
-            "experimental_use_latest_role_message_only": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": false,
-              "description": "When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
-              "title": "Experimental Use Latest Role Message Only"
-            },
-            "extra_headers": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Header names to forward from the client request to the guardrail (e.g. x-request-id). Only these headers' values are sent; others may be omitted or sent as [present]. Used by generic_guardrail_api (similar to MCP extra_headers).",
-              "title": "Extra Headers"
-            },
-            "fail_on_error": {
+            "sticky_session_routing": {
               "anyOf": [
                 {
                   "type": "boolean"
@@ -8262,183 +8606,8 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
-              "title": "Fail On Error"
-            },
-            "guard_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Name of the guardrail in guardrails.ai",
-              "title": "Guard Name"
-            },
-            "keyword_redaction_tag": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Tag to use for keyword redaction",
-              "title": "Keyword Redaction Tag"
-            },
-            "location": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Google Cloud location/region (e.g., us-central1)",
-              "title": "Location"
-            },
-            "mask_request_content": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Will mask request content if guardrail makes any changes",
-              "title": "Mask Request Content"
-            },
-            "mask_response_content": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Will mask response content if guardrail makes any changes",
-              "title": "Mask Response Content"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional field if guardrail requires a 'model' parameter",
-              "title": "Model"
-            },
-            "on_violation": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "warn",
-                    "end_session"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
-              "title": "On Violation"
-            },
-            "pangea_input_recipe": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Recipe for input (LLM request)",
-              "title": "Pangea Input Recipe"
-            },
-            "pangea_output_recipe": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Recipe for output (LLM response)",
-              "title": "Pangea Output Recipe"
-            },
-            "pattern_redaction_format": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Format string for pattern redaction (use {pattern_name} placeholder)",
-              "title": "Pattern Redaction Format"
-            },
-            "patterns": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/ContentFilterPattern"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of patterns (prebuilt or custom regex) to detect",
-              "title": "Patterns"
-            },
-            "realtime_violation_message": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
-              "title": "Realtime Violation Message"
-            },
-            "severity_threshold": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Minimum severity to block (high, medium, low)",
-              "title": "Severity Threshold"
-            },
-            "skip_system_message_in_guardrail": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
-              "title": "Skip System Message In Guardrail"
+              "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
+              "title": "Sticky Session Routing"
             },
             "template_id": {
               "anyOf": [
@@ -8452,9 +8621,21 @@
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
             },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.",
+              "title": "Timeout"
+            },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', and 'headroom'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -8508,6 +8689,187 @@
             "action"
           ],
           "title": "BlockedWord",
+          "type": "object"
+        },
+        "CiscoAIDefenseGuardrailConfigModelOptionalParams": {
+          "additionalProperties": true,
+          "description": "Optional parameters for the Cisco AI Defense guardrail.",
+          "properties": {
+            "enabled_rules": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/CiscoAIDefenseRule"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit list of Cisco AI Defense rules to evaluate. If omitted, the policies configured for the API key in the Cisco AI Defense UI are used.",
+              "title": "Enabled Rules"
+            },
+            "fallback_on_error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "block"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "block",
+              "description": "Behaviour when the Cisco AI Defense API is unavailable: 'allow' proceeds without scanning (high availability), 'block' rejects the request (maximum security).",
+              "title": "Fallback On Error"
+            },
+            "inspect_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Override for the inspection endpoint path. Defaults to /api/v1/inspect/chat when inspection_type='chat' and /api/v1/inspect/mcp when inspection_type='mcp'.",
+              "title": "Inspect Path"
+            },
+            "inspection_type": {
+              "default": "chat",
+              "description": "Which Cisco AI Defense inspection surface to use. 'chat' scans LLM model conversations via /api/v1/inspect/chat. 'mcp' scans MCP tool calls via /api/v1/inspect/mcp. Each guardrail instance targets exactly one surface; configure two guardrails to scan both chat and MCP traffic.",
+              "enum": [
+                "chat",
+                "mcp"
+              ],
+              "title": "Inspection Type",
+              "type": "string"
+            },
+            "integration_profile_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration profile id to apply (advanced).",
+              "title": "Integration Profile Id"
+            },
+            "integration_profile_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration profile version to apply (advanced).",
+              "title": "Integration Profile Version"
+            },
+            "integration_tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration tenant id to apply (advanced).",
+              "title": "Integration Tenant Id"
+            },
+            "integration_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration type to apply (advanced).",
+              "title": "Integration Type"
+            },
+            "on_flagged_action": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "block",
+              "description": "Action to take when Cisco AI Defense flags content. 'block' raises an HTTPException; 'monitor' logs the detection and lets the request continue.",
+              "title": "On Flagged Action"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "maximum": 60.0,
+                  "minimum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 10.0,
+              "description": "Timeout (seconds) for Cisco AI Defense API calls (1-60).",
+              "title": "Timeout"
+            }
+          },
+          "title": "CiscoAIDefenseGuardrailConfigModelOptionalParams",
+          "type": "object"
+        },
+        "CiscoAIDefenseRule": {
+          "description": "A single rule to enable for Cisco AI Defense inspection.",
+          "properties": {
+            "entity_types": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional list of entity types for the rule (e.g. 'Email Address', 'Phone Number'). Applies to rules such as PII, PCI, and PHI.",
+              "title": "Entity Types"
+            },
+            "rule_name": {
+              "description": "The canonical Cisco AI Defense rule name to evaluate.",
+              "enum": [
+                "Code Detection",
+                "Harassment",
+                "Hate Speech",
+                "PCI",
+                "PHI",
+                "PII",
+                "Prompt Injection",
+                "Profanity",
+                "Sexual Content & Exploitation",
+                "Social Division & Polarization",
+                "Violence & Public Safety Threats"
+              ],
+              "title": "Rule Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_name"
+          ],
+          "title": "CiscoAIDefenseRule",
           "type": "object"
         },
         "ContentFilterAction": {
@@ -8654,106 +9016,6 @@
           "title": "GUARDRAIL_DEFINITION_LOCATION",
           "type": "string"
         },
-        "GraySwanGuardrailConfigModelOptionalParams": {
-          "description": "Optional parameters for the Gray Swan guardrail.",
-          "properties": {
-            "categories": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Default Gray Swan category definitions to send with each request.",
-              "title": "Categories"
-            },
-            "fail_open": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": true,
-              "description": "If true (default), errors contacting Gray Swan are logged and the request proceeds. If false, errors propagate and block the request.",
-              "title": "Fail Open"
-            },
-            "guardrail_timeout": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": 30.0,
-              "description": "Timeout in seconds for calling the Gray Swan guardrail service.",
-              "title": "Guardrail Timeout"
-            },
-            "on_flagged_action": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": "passthrough",
-              "description": "Action when a violation is detected: 'block' rejects the call (400 error), 'monitor' logs only, 'passthrough' replaces response content with violation message (200 status).",
-              "title": "On Flagged Action"
-            },
-            "policy_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Gray Swan policy identifier to apply during monitoring.",
-              "title": "Policy Id"
-            },
-            "reasoning_mode": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Gray Swan reasoning mode override. Accepted values: 'off', 'hybrid', 'thinking'.",
-              "title": "Reasoning Mode"
-            },
-            "violation_threshold": {
-              "anyOf": [
-                {
-                  "maximum": 1.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": 0.5,
-              "description": "Threshold between 0 and 1 at which Gray Swan violations trigger the configured action.",
-              "title": "Violation Threshold"
-            }
-          },
-          "title": "GraySwanGuardrailConfigModelOptionalParams",
-          "type": "object"
-        },
         "Guardrail": {
           "properties": {
             "created_at": {
@@ -8877,7 +9139,7 @@
             "litellm_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/BaseLitellmParams-Output"
+                  "$ref": "#/components/schemas/BaseLitellmParams"
                 },
                 {
                   "type": "null"
@@ -9227,7 +9489,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Base URL for the Lakera AI API",
+              "description": "Regional base URL for the Cisco AI Defense Inspection API. Defaults to https://us.api.inspect.aidefense.security.cisco.com. Supported regions: us (us-west-2), ap (ap-ne-1), eu (eu-central-1). The environment variable `CISCO_AI_DEFENSE_API_BASE` is consulted as a fallback. The endpoint path is derived from inspection_type (/api/v1/inspect/chat for 'chat', /api/v1/inspect/mcp for 'mcp').",
               "title": "Api Base"
             },
             "api_endpoint": {
@@ -9263,7 +9525,7 @@
                   "type": "null"
                 }
               ],
-              "description": "API key for the Lakera AI service",
+              "description": "API key for the Cisco AI Defense inspection endpoint. If not provided, the `CISCO_AI_DEFENSE_API_KEY` environment variable is used. Sent in the `X-Cisco-AI-Defense-API-Key` header. Both the chat and MCP endpoints use this key.",
               "title": "Api Key"
             },
             "api_version": {
@@ -9317,6 +9579,18 @@
               ],
               "description": "Custom assertions to validate against the output. Each assertion is a string describing a condition.",
               "title": "Assertions"
+            },
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repello asset ID whose dashboard policies are enforced. Required; the guardrail raises at init if it is missing.",
+              "title": "Asset Id"
             },
             "async_mode": {
               "anyOf": [
@@ -9836,7 +10110,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "grounding_check": {
@@ -10109,7 +10383,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Optional field if guardrail requires a 'model' parameter",
+              "description": "Model name forwarded to the headroom /v1/compress endpoint.",
               "title": "Model"
             },
             "monitor_mode": {
@@ -10164,6 +10438,22 @@
               "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
               "title": "On Flagged Action"
             },
+            "on_sensitive_data": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block",
+                    "route"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.",
+              "title": "On Sensitive Data"
+            },
             "on_violation": {
               "anyOf": [
                 {
@@ -10183,7 +10473,7 @@
             "optional_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/GraySwanGuardrailConfigModelOptionalParams"
+                  "$ref": "#/components/schemas/CiscoAIDefenseGuardrailConfigModelOptionalParams"
                 },
                 {
                   "type": "null"
@@ -10354,6 +10644,30 @@
               ],
               "title": "Policy Names",
               "ui_type": "multiselect"
+            },
+            "post_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Post-checkpoint ID for the Ovalix Tracker service.",
+              "title": "Post Checkpoint Id"
+            },
+            "pre_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pre-checkpoint ID for the Ovalix Tracker service.",
+              "title": "Pre Checkpoint Id"
             },
             "presidio_ad_hoc_recognizers": {
               "anyOf": [
@@ -10565,6 +10879,18 @@
               "description": "Whether to send user_API_key_user_id in headers",
               "title": "Send User Api Key User Id"
             },
+            "sensitive_data_route_to_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.",
+              "title": "Sensitive Data Route To Model"
+            },
             "severity_threshold": {
               "anyOf": [
                 {
@@ -10589,6 +10915,31 @@
               "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
               "title": "Skip System Message In Guardrail"
             },
+            "skip_tool_message_in_guardrail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, unified guardrails skip tool-role messages when building evaluation inputs (texts and structured_messages). When False, tool messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_tool_message_in_guardrail setting.",
+              "title": "Skip Tool Message In Guardrail"
+            },
+            "sticky_session_routing": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
+              "title": "Sticky Session Routing"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -10600,6 +10951,18 @@
               ],
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.",
+              "title": "Timeout"
             },
             "tool_selection_quality_check": {
               "anyOf": [
@@ -10613,9 +10976,33 @@
               "description": "Enable tool selection quality check to evaluate quality of tool/function calls.",
               "title": "Tool Selection Quality Check"
             },
+            "tracker_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Base URL for the Ovalix Tracker service.",
+              "title": "Tracker Api Base"
+            },
+            "tracker_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "API key for the Ovalix Tracker service.",
+              "title": "Tracker Api Key"
+            },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "What to do when Akto is unreachable. 'fail_open' = allow, 'fail_closed' = block.",
+              "description": "Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -10767,7 +11154,7 @@
             "litellm_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/BaseLitellmParams-Input"
+                  "$ref": "#/components/schemas/BaseLitellmParams"
                 },
                 {
                   "type": "null"
@@ -10807,6 +11194,9 @@
             "US_SSN",
             "UK_NHS",
             "UK_NINO",
+            "UK_PASSPORT",
+            "UK_POSTCODE",
+            "UK_VEHICLE_REGISTRATION",
             "ES_NIF",
             "ES_NIE",
             "IT_FISCAL_CODE",
@@ -11403,6 +11793,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -12923,6 +13320,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -13223,6 +13627,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -13474,6 +13885,17 @@
         },
         "MCPCredentials": {
           "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_value": {
               "anyOf": [
                 {
@@ -13584,6 +14006,20 @@
               ],
               "title": "Client Secret"
             },
+            "redirect_uris": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Redirect Uris"
+            },
             "scopes": {
               "anyOf": [
                 {
@@ -13597,10 +14033,101 @@
                 }
               ],
               "title": "Scopes"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "token_endpoint_auth_method": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_secret_basic",
+                    "client_secret_post"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Endpoint Auth Method"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             }
           },
           "title": "MCPCredentials",
           "type": "object"
+        },
+        "MCPEnvVar": {
+          "description": "One environment variable for an MCP server.\n\nVariables can be interpolated into ``static_headers`` using ``${NAME}``\nsyntax. ``scope=global`` values are stored on the server. ``scope=user``\nvalues are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by\neach user.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/components/schemas/MCPEnvVarScope",
+              "default": "global"
+            },
+            "value": {
+              "default": "",
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPEnvVar",
+          "type": "object"
+        },
+        "MCPEnvVarScope": {
+          "description": "Scope for an MCP server environment variable.\n\n- ``global``: value is provided by the admin and used for all users.\n- ``user``: each user must provide their own value via the per-user\n  env-var endpoint. The admin-supplied ``value`` is treated as a\n  placeholder/hint and is not used at request time.",
+          "enum": [
+            "global",
+            "user"
+          ],
+          "title": "MCPEnvVarScope",
+          "type": "string"
         },
         "NewMCPServerRequest": {
           "properties": {
@@ -13653,6 +14180,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -13664,7 +14202,10 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -13729,6 +14270,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -13746,6 +14303,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -13776,6 +14347,17 @@
               "default": false,
               "title": "Is Byok",
               "type": "boolean"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
             },
             "mcp_access_groups": {
               "items": {
@@ -13810,6 +14392,11 @@
                 }
               ],
               "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -13880,6 +14467,17 @@
               ],
               "title": "Static Headers"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -13904,6 +14502,39 @@
               ],
               "description": "Server-managed: set by the endpoint; caller values are overridden.",
               "title": "Submitted By"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -13971,6 +14602,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -14122,7 +14760,7 @@
       },
       "/mcp-rest/tools/list": {
         "get": {
-          "description": "List all available tools with information about the server they belong to.\n\nExample response:\n{\n    \"tools\": [\n        {\n            \"name\": \"create_zap\",\n            \"description\": \"Create a new zap\",\n            \"inputSchema\": \"tool_input_schema\",\n            \"mcp_info\": {\n                \"server_name\": \"zapier\",\n                \"logo_url\": \"https://www.zapier.com/logo.png\",\n            }\n        }\n    ],\n    \"error\": null,\n    \"message\": \"Successfully retrieved tools\"\n}",
+          "description": "List all available tools with information about the server they belong to.\n\nExample response:\n{\n    \"tools\": [\n        {\n            \"name\": \"create_zap\",\n            \"description\": \"Create a new zap\",\n            \"inputSchema\": \"tool_input_schema\",\n            \"mcp_info\": {\n                \"server_name\": \"zapier\",\n                \"logo_url\": \"https://www.zapier.com/logo.png\",\n                \"server_id\": \"a1b2c3d4-...\",\n                \"alias\": \"zapier_prod\",\n            }\n        }\n    ],\n    \"error\": null,\n    \"message\": \"Successfully retrieved tools\"\n}",
           "operationId": "list_tool_rest_api_mcp_rest_tools_list_get_2",
           "parameters": [
             {
@@ -14141,6 +14779,54 @@
                 ],
                 "description": "The server id to list tools for",
                 "title": "Server Id"
+              }
+            },
+            {
+              "description": "Filter tools to a single MCP server by name or alias",
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter tools to a single MCP server by name or alias",
+                "title": "Mcp Server Name"
+              }
+            },
+            {
+              "description": "Filter tools to a single toolset by name",
+              "in": "query",
+              "name": "toolset_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter tools to a single toolset by name",
+                "title": "Toolset Name"
+              }
+            },
+            {
+              "description": "Admin only. Return the full server tool catalog without the allowed_tools filter or per-key tool permissions, so the MCP settings UI can configure the allowlist. Ignored for non-admins.",
+              "in": "query",
+              "name": "include_disabled_tools",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Admin only. Return the full server tool catalog without the allowed_tools filter or per-key tool permissions, so the MCP settings UI can configure the allowlist. Ignored for non-admins.",
+                "title": "Include Disabled Tools",
+                "type": "boolean"
               }
             }
           ],
@@ -14341,6 +15027,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -14352,7 +15049,10 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -14440,6 +15140,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -14457,6 +15173,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "items": {
@@ -14515,6 +15245,17 @@
               ],
               "title": "Last Health Check"
             },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
+            },
             "mcp_access_groups": {
               "items": {
                 "type": "string"
@@ -14533,6 +15274,26 @@
                 }
               ],
               "title": "Mcp Info"
+            },
+            "oauth2_flow": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_credentials",
+                    "authorization_code"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -14637,6 +15398,17 @@
               "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
               "title": "Status"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -14676,6 +15448,39 @@
               },
               "title": "Teams",
               "type": "array"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -14769,6 +15574,17 @@
         },
         "MCPCredentials": {
           "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_value": {
               "anyOf": [
                 {
@@ -14879,6 +15695,20 @@
               ],
               "title": "Client Secret"
             },
+            "redirect_uris": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Redirect Uris"
+            },
             "scopes": {
               "anyOf": [
                 {
@@ -14892,10 +15722,101 @@
                 }
               ],
               "title": "Scopes"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "token_endpoint_auth_method": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_secret_basic",
+                    "client_secret_post"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Endpoint Auth Method"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             }
           },
           "title": "MCPCredentials",
           "type": "object"
+        },
+        "MCPEnvVar": {
+          "description": "One environment variable for an MCP server.\n\nVariables can be interpolated into ``static_headers`` using ``${NAME}``\nsyntax. ``scope=global`` values are stored on the server. ``scope=user``\nvalues are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by\neach user.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/components/schemas/MCPEnvVarScope",
+              "default": "global"
+            },
+            "value": {
+              "default": "",
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPEnvVar",
+          "type": "object"
+        },
+        "MCPEnvVarScope": {
+          "description": "Scope for an MCP server environment variable.\n\n- ``global``: value is provided by the admin and used for all users.\n- ``user``: each user must provide their own value via the per-user\n  env-var endpoint. The admin-supplied ``value`` is treated as a\n  placeholder/hint and is not used at request time.",
+          "enum": [
+            "global",
+            "user"
+          ],
+          "title": "MCPEnvVarScope",
+          "type": "string"
         },
         "MCPOAuthUserCredentialRequest": {
           "description": "Stores a user's OAuth2 token for an OpenAPI MCP server.",
@@ -15151,6 +16072,112 @@
           "title": "MCPUserCredentialResponse",
           "type": "object"
         },
+        "MCPUserEnvVarSpec": {
+          "description": "Describes one per-user env var slot for the calling user.\n\nStored values are write-only: the status only reports whether a value\n``is_set`` and never echoes the decrypted secret back to the client.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "is_set": {
+              "default": false,
+              "title": "Is Set",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPUserEnvVarSpec",
+          "type": "object"
+        },
+        "MCPUserEnvVarsRequest": {
+          "description": "Payload for storing the calling user's per-user env var values.",
+          "properties": {
+            "values": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "values"
+          ],
+          "title": "MCPUserEnvVarsRequest",
+          "type": "object"
+        },
+        "MCPUserEnvVarsStatus": {
+          "description": "Per-user env var status for a single MCP server.",
+          "properties": {
+            "alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Alias"
+            },
+            "missing_count": {
+              "default": 0,
+              "title": "Missing Count",
+              "type": "integer"
+            },
+            "required": {
+              "items": {
+                "$ref": "#/components/schemas/MCPUserEnvVarSpec"
+              },
+              "title": "Required",
+              "type": "array"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "server_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Name"
+            },
+            "setup_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Setup Url"
+            }
+          },
+          "required": [
+            "server_id"
+          ],
+          "title": "MCPUserEnvVarsStatus",
+          "type": "object"
+        },
         "MakeMCPServersPublicRequest": {
           "properties": {
             "mcp_server_ids": {
@@ -15218,6 +16245,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -15229,7 +16267,10 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -15294,6 +16335,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -15311,6 +16368,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -15341,6 +16412,17 @@
               "default": false,
               "title": "Is Byok",
               "type": "boolean"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
             },
             "mcp_access_groups": {
               "items": {
@@ -15375,6 +16457,11 @@
                 }
               ],
               "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -15445,6 +16532,17 @@
               ],
               "title": "Static Headers"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -15469,6 +16567,39 @@
               ],
               "description": "Server-managed: set by the endpoint; caller values are overridden.",
               "title": "Submitted By"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -15622,6 +16753,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -15633,7 +16775,10 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -15698,6 +16843,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -15715,6 +16876,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -15746,6 +16921,17 @@
               "title": "Is Byok",
               "type": "boolean"
             },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
+            },
             "mcp_access_groups": {
               "items": {
                 "type": "string"
@@ -15764,6 +16950,26 @@
                 }
               ],
               "title": "Mcp Info"
+            },
+            "oauth2_flow": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_credentials",
+                    "authorization_code"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -15826,6 +17032,50 @@
                 }
               ],
               "title": "Static Headers"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -15945,6 +17195,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -17052,6 +18309,156 @@
           ]
         }
       },
+      "/v1/mcp/server/{server_id}/user-env-vars": {
+        "delete": {
+          "description": "Clear the calling user's per-user MCP env var values for this server.",
+          "operationId": "clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Clear Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "get": {
+          "description": "Return the calling user's per-user MCP env var status for this server.",
+          "operationId": "get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "post": {
+          "description": "Store the calling user's per-user MCP env var values for this server. Submitted values are merged over any previously stored values, so you only send the fields you want to set or change; a variable omitted (or sent empty) keeps its stored value. Use DELETE to clear all stored values.",
+          "operationId": "store_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPUserEnvVarsRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Store Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
       "/v1/mcp/tools": {
         "get": {
           "description": "Get all MCP tools available for the current key, including those from access groups",
@@ -17360,6 +18767,37 @@
             "mcp_management"
           ]
         }
+      },
+      "/v1/mcp/user-env-vars/status": {
+        "get": {
+          "description": "Per-user MCP env var status across every server the user can access. Used by the dashboard to highlight servers with missing per-user vars.",
+          "operationId": "list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                    },
+                    "title": "Response List Mcp User Env Var Status V1 Mcp User Env Vars Status Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Mcp User Env Var Status",
+          "tags": [
+            "mcp_management"
+          ]
+        }
       }
     }
   },
@@ -17381,6 +18819,17 @@
         },
         "MCPCredentials": {
           "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_value": {
               "anyOf": [
                 {
@@ -17491,6 +18940,20 @@
               ],
               "title": "Client Secret"
             },
+            "redirect_uris": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Redirect Uris"
+            },
             "scopes": {
               "anyOf": [
                 {
@@ -17504,10 +18967,101 @@
                 }
               ],
               "title": "Scopes"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "token_endpoint_auth_method": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_secret_basic",
+                    "client_secret_post"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Endpoint Auth Method"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             }
           },
           "title": "MCPCredentials",
           "type": "object"
+        },
+        "MCPEnvVar": {
+          "description": "One environment variable for an MCP server.\n\nVariables can be interpolated into ``static_headers`` using ``${NAME}``\nsyntax. ``scope=global`` values are stored on the server. ``scope=user``\nvalues are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by\neach user.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/components/schemas/MCPEnvVarScope",
+              "default": "global"
+            },
+            "value": {
+              "default": "",
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPEnvVar",
+          "type": "object"
+        },
+        "MCPEnvVarScope": {
+          "description": "Scope for an MCP server environment variable.\n\n- ``global``: value is provided by the admin and used for all users.\n- ``user``: each user must provide their own value via the per-user\n  env-var endpoint. The admin-supplied ``value`` is treated as a\n  placeholder/hint and is not used at request time.",
+          "enum": [
+            "global",
+            "user"
+          ],
+          "title": "MCPEnvVarScope",
+          "type": "string"
         },
         "NewMCPServerRequest": {
           "properties": {
@@ -17560,6 +19114,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -17571,7 +19136,10 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -17636,6 +19204,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -17653,6 +19237,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -17683,6 +19281,17 @@
               "default": false,
               "title": "Is Byok",
               "type": "boolean"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
             },
             "mcp_access_groups": {
               "items": {
@@ -17717,6 +19326,11 @@
                 }
               ],
               "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -17787,6 +19401,17 @@
               ],
               "title": "Static Headers"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -17811,6 +19436,39 @@
               ],
               "description": "Server-managed: set by the endpoint; caller values are overridden.",
               "title": "Submitted By"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -17878,6 +19536,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -18029,7 +19694,7 @@
       },
       "/mcp-rest/tools/list": {
         "get": {
-          "description": "List all available tools with information about the server they belong to.\n\nExample response:\n{\n    \"tools\": [\n        {\n            \"name\": \"create_zap\",\n            \"description\": \"Create a new zap\",\n            \"inputSchema\": \"tool_input_schema\",\n            \"mcp_info\": {\n                \"server_name\": \"zapier\",\n                \"logo_url\": \"https://www.zapier.com/logo.png\",\n            }\n        }\n    ],\n    \"error\": null,\n    \"message\": \"Successfully retrieved tools\"\n}",
+          "description": "List all available tools with information about the server they belong to.\n\nExample response:\n{\n    \"tools\": [\n        {\n            \"name\": \"create_zap\",\n            \"description\": \"Create a new zap\",\n            \"inputSchema\": \"tool_input_schema\",\n            \"mcp_info\": {\n                \"server_name\": \"zapier\",\n                \"logo_url\": \"https://www.zapier.com/logo.png\",\n                \"server_id\": \"a1b2c3d4-...\",\n                \"alias\": \"zapier_prod\",\n            }\n        }\n    ],\n    \"error\": null,\n    \"message\": \"Successfully retrieved tools\"\n}",
           "operationId": "list_tool_rest_api_mcp_rest_tools_list_get",
           "parameters": [
             {
@@ -18048,6 +19713,54 @@
                 ],
                 "description": "The server id to list tools for",
                 "title": "Server Id"
+              }
+            },
+            {
+              "description": "Filter tools to a single MCP server by name or alias",
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter tools to a single MCP server by name or alias",
+                "title": "Mcp Server Name"
+              }
+            },
+            {
+              "description": "Filter tools to a single toolset by name",
+              "in": "query",
+              "name": "toolset_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter tools to a single toolset by name",
+                "title": "Toolset Name"
+              }
+            },
+            {
+              "description": "Admin only. Return the full server tool catalog without the allowed_tools filter or per-key tool permissions, so the MCP settings UI can configure the allowlist. Ignored for non-admins.",
+              "in": "query",
+              "name": "include_disabled_tools",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Admin only. Return the full server tool catalog without the allowed_tools filter or per-key tool permissions, so the MCP settings UI can configure the allowlist. Ignored for non-admins.",
+                "title": "Include Disabled Tools",
+                "type": "boolean"
               }
             }
           ],
@@ -18667,8 +20380,15 @@
               "title": "Cache Control"
             },
             "signature": {
-              "title": "Signature",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signature"
             },
             "thinking": {
               "title": "Thinking",
@@ -18790,6 +20510,13 @@
         },
         "ChatCompletionToolParam": {
           "properties": {
+            "allowed_callers": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Allowed Callers",
+              "type": "array"
+            },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
             },
@@ -19710,6 +21437,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -21231,6 +22965,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -22484,6 +24225,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -22634,7 +24382,7 @@
         "Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post": {
           "properties": {
             "file": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "title": "File",
               "type": "string"
             }
@@ -23040,6 +24788,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -23685,6 +25440,26 @@
           ],
           "title": "RealtimeClientSecretResponse",
           "type": "object"
+        },
+        "RealtimeTranscriptionSessionResponse": {
+          "additionalProperties": true,
+          "description": "Response from POST /v1/realtime/transcription_sessions.\n\n`client_secret.value` contains the encrypted token instead of the raw\nephemeral key. Unknown fields pass through unchanged.",
+          "properties": {
+            "client_secret": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Secret"
+            }
+          },
+          "title": "RealtimeTranscriptionSessionResponse",
+          "type": "object"
         }
       }
     },
@@ -23729,6 +25504,33 @@
             }
           ],
           "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
           "tags": [
             "realtime"
           ]
@@ -23779,6 +25581,33 @@
           ]
         }
       },
+      "/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/v1/realtime/calls": {
         "post": {
           "operationId": "proxy_realtime_calls_v1_realtime_calls_post",
@@ -23823,6 +25652,33 @@
             "realtime"
           ]
         }
+      },
+      "/v1/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_v1_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
       }
     }
   },
@@ -23840,6 +25696,77 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "SCIMEnterpriseUser": {
+          "properties": {
+            "costCenter": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Costcenter"
+            },
+            "department": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Department"
+            },
+            "division": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Division"
+            },
+            "employeeNumber": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Employeenumber"
+            },
+            "manager": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SCIMUserManager"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "organization": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization"
+            }
+          },
+          "title": "SCIMEnterpriseUser",
           "type": "object"
         },
         "SCIMFeature": {
@@ -23963,7 +25890,7 @@
               "anyOf": [
                 {
                   "items": {
-                    "$ref": "#/components/schemas/SCIMUser"
+                    "$ref": "#/components/schemas/SCIMUser-Output"
                   },
                   "type": "array"
                 },
@@ -24184,7 +26111,7 @@
           "title": "SCIMServiceProviderConfig",
           "type": "object"
         },
-        "SCIMUser": {
+        "SCIMUser-Input": {
           "properties": {
             "active": {
               "default": true,
@@ -24281,6 +26208,16 @@
               "title": "Schemas",
               "type": "array"
             },
+            "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SCIMEnterpriseUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "userName": {
               "anyOf": [
                 {
@@ -24297,6 +26234,10 @@
             "schemas"
           ],
           "title": "SCIMUser",
+          "type": "object"
+        },
+        "SCIMUser-Output": {
+          "additionalProperties": true,
           "type": "object"
         },
         "SCIMUserEmail": {
@@ -24369,6 +26310,45 @@
             "value"
           ],
           "title": "SCIMUserGroup",
+          "type": "object"
+        },
+        "SCIMUserManager": {
+          "properties": {
+            "$ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "$Ref"
+            },
+            "displayName": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Displayname"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "title": "SCIMUserManager",
           "type": "object"
         },
         "SCIMUserName": {
@@ -24445,6 +26425,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -25355,7 +27342,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SCIMUser"
+                  "$ref": "#/components/schemas/SCIMUser-Input"
                 }
               }
             },
@@ -25366,7 +27353,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/SCIMUser"
+                    "$ref": "#/components/schemas/SCIMUser-Output"
                   }
                 }
               },
@@ -25485,7 +27472,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/SCIMUser"
+                    "$ref": "#/components/schemas/SCIMUser-Output"
                   }
                 }
               },
@@ -25557,7 +27544,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/SCIMUser"
+                    "$ref": "#/components/schemas/SCIMUser-Output"
                   }
                 }
               },
@@ -25618,7 +27605,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SCIMUser"
+                  "$ref": "#/components/schemas/SCIMUser-Input"
                 }
               }
             },
@@ -25629,7 +27616,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/SCIMUser"
+                    "$ref": "#/components/schemas/SCIMUser-Output"
                   }
                 }
               },
@@ -25925,6 +27912,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -26846,6 +28840,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -27645,6 +29646,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -27744,6 +29752,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -28292,6 +30307,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -29540,756 +31562,6 @@
       }
     }
   },
-  "vector_store_management": {
-    "components": {
-      "schemas": {
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "LiteLLM_ManagedVectorStore": {
-          "description": "LiteLLM managed vector store object - this is is the object stored in the database",
-          "properties": {
-            "created_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Created At"
-            },
-            "custom_llm_provider": {
-              "title": "Custom Llm Provider",
-              "type": "string"
-            },
-            "litellm_credential_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Litellm Credential Name"
-            },
-            "litellm_params": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Litellm Params"
-            },
-            "team_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            },
-            "updated_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Updated At"
-            },
-            "user_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            },
-            "vector_store_description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Description"
-            },
-            "vector_store_id": {
-              "title": "Vector Store Id",
-              "type": "string"
-            },
-            "vector_store_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Metadata"
-            },
-            "vector_store_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Name"
-            }
-          },
-          "title": "LiteLLM_ManagedVectorStore",
-          "type": "object"
-        },
-        "LiteLLM_ManagedVectorStoreListResponse": {
-          "description": "Response format for listing vector stores",
-          "properties": {
-            "current_page": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Current Page"
-            },
-            "data": {
-              "items": {
-                "$ref": "#/components/schemas/LiteLLM_ManagedVectorStore"
-              },
-              "title": "Data",
-              "type": "array"
-            },
-            "object": {
-              "const": "list",
-              "title": "Object",
-              "type": "string"
-            },
-            "total_count": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Total Count"
-            },
-            "total_pages": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Total Pages"
-            }
-          },
-          "title": "LiteLLM_ManagedVectorStoreListResponse",
-          "type": "object"
-        },
-        "LiteLLM_ManagedVectorStoresTable": {
-          "properties": {
-            "created_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Created At"
-            },
-            "custom_llm_provider": {
-              "title": "Custom Llm Provider",
-              "type": "string"
-            },
-            "litellm_credential_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Litellm Credential Name"
-            },
-            "litellm_params": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Litellm Params"
-            },
-            "team_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            },
-            "updated_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Updated At"
-            },
-            "user_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            },
-            "vector_store_description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Description"
-            },
-            "vector_store_id": {
-              "title": "Vector Store Id",
-              "type": "string"
-            },
-            "vector_store_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Metadata"
-            },
-            "vector_store_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Name"
-            }
-          },
-          "required": [
-            "vector_store_id",
-            "custom_llm_provider",
-            "vector_store_name",
-            "vector_store_description",
-            "vector_store_metadata",
-            "created_at",
-            "updated_at",
-            "litellm_credential_name",
-            "litellm_params",
-            "team_id",
-            "user_id"
-          ],
-          "title": "LiteLLM_ManagedVectorStoresTable",
-          "type": "object"
-        },
-        "ResponseLiteLLM_ManagedVectorStore": {
-          "properties": {
-            "vector_store": {
-              "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoresTable"
-            }
-          },
-          "title": "ResponseLiteLLM_ManagedVectorStore",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        },
-        "VectorStoreDeleteRequest": {
-          "properties": {
-            "vector_store_id": {
-              "title": "Vector Store Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "vector_store_id"
-          ],
-          "title": "VectorStoreDeleteRequest",
-          "type": "object"
-        },
-        "VectorStoreInfoRequest": {
-          "properties": {
-            "vector_store_id": {
-              "title": "Vector Store Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "vector_store_id"
-          ],
-          "title": "VectorStoreInfoRequest",
-          "type": "object"
-        },
-        "VectorStoreUpdateRequest": {
-          "properties": {
-            "custom_llm_provider": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Custom Llm Provider"
-            },
-            "vector_store_description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Description"
-            },
-            "vector_store_id": {
-              "title": "Vector Store Id",
-              "type": "string"
-            },
-            "vector_store_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Metadata"
-            },
-            "vector_store_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Vector Store Name"
-            }
-          },
-          "required": [
-            "vector_store_id"
-          ],
-          "title": "VectorStoreUpdateRequest",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/v1/vector_store/list": {
-        "get": {
-          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
-          "operationId": "list_vector_stores_v1_vector_store_list_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "page",
-              "required": false,
-              "schema": {
-                "default": 1,
-                "title": "Page",
-                "type": "integer"
-              }
-            },
-            {
-              "in": "query",
-              "name": "page_size",
-              "required": false,
-              "schema": {
-                "default": 100,
-                "title": "Page Size",
-                "type": "integer"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoreListResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "List Vector Stores",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      },
-      "/vector_store/delete": {
-        "post": {
-          "description": "Delete a vector store from both database and in-memory registry.\n\nParameters:\n- vector_store_id: str - ID of the vector store to delete",
-          "operationId": "delete_vector_store_vector_store_delete_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VectorStoreDeleteRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Delete Vector Store",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      },
-      "/vector_store/info": {
-        "post": {
-          "description": "Return a single vector store's details",
-          "operationId": "get_vector_store_info_vector_store_info_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VectorStoreInfoRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ResponseLiteLLM_ManagedVectorStore"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Vector Store Info",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      },
-      "/vector_store/list": {
-        "get": {
-          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
-          "operationId": "list_vector_stores_vector_store_list_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "page",
-              "required": false,
-              "schema": {
-                "default": 1,
-                "title": "Page",
-                "type": "integer"
-              }
-            },
-            {
-              "in": "query",
-              "name": "page_size",
-              "required": false,
-              "schema": {
-                "default": 100,
-                "title": "Page Size",
-                "type": "integer"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/LiteLLM_ManagedVectorStoreListResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "List Vector Stores",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      },
-      "/vector_store/new": {
-        "post": {
-          "description": "Create a new vector store.\n\nParameters:\n- vector_store_id: str - Unique identifier for the vector store\n- custom_llm_provider: str - Provider of the vector store\n- vector_store_name: Optional[str] - Name of the vector store\n- vector_store_description: Optional[str] - Description of the vector store\n- vector_store_metadata: Optional[Dict] - Additional metadata for the vector store",
-          "operationId": "new_vector_store_vector_store_new_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LiteLLM_ManagedVectorStore"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "New Vector Store",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      },
-      "/vector_store/update": {
-        "post": {
-          "description": "Update vector store details in both database and in-memory registry.\nThe updated data is immediately synchronized to the in-memory registry.",
-          "operationId": "update_vector_store_vector_store_update_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VectorStoreUpdateRequest"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Vector Store",
-          "tags": [
-            "vector_store_management"
-          ]
-        }
-      }
-    }
-  },
   "vector_stores": {
     "components": {
       "schemas": {
@@ -30355,6 +31627,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [

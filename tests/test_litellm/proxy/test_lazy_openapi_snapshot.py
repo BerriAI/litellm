@@ -1,7 +1,16 @@
 import sys
 from types import ModuleType, SimpleNamespace
 
-from litellm.proxy._lazy_openapi_snapshot import _normalize_operation_ids
+import pytest
+
+from litellm.proxy import _lazy_openapi_snapshot as snapshot_module
+from litellm.proxy._lazy_openapi_snapshot import (
+    _normalize_operation_ids,
+    _register_lazy_feature,
+    check_snapshot,
+    drifted_features,
+    serialize_snapshot,
+)
 
 
 def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
@@ -35,9 +44,7 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
             register_fn=lambda app, module: None,
         ),
     ]
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module
-    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module)
 
     def fake_get_openapi(title, version, routes):
         path = routes[0].path
@@ -58,30 +65,16 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
 
     fake_proxy_server_module = ModuleType("litellm.proxy.proxy_server")
     fake_proxy_server_module.app = fake_app
-    fake_proxy_server_module.ensure_unique_openapi_operation_ids = (
-        fake_ensure_unique_openapi_operation_ids
-    )
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy.proxy_server", fake_proxy_server_module
-    )
+    fake_proxy_server_module.ensure_unique_openapi_operation_ids = fake_ensure_unique_openapi_operation_ids
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy_server_module)
     monkeypatch.setattr("fastapi.openapi.utils.get_openapi", fake_get_openapi)
 
     fragments = _lazy_openapi_snapshot.generate_snapshot()
 
-    assert (
-        fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["operationId"]
-        == "shared_operation_id_get"
-    )
-    assert (
-        fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["operationId"]
-        == "shared_operation_id_get_2"
-    )
-    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["tags"] == [
-        "feature-a"
-    ]
-    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == [
-        "feature-b"
-    ]
+    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["operationId"] == "shared_operation_id_get"
+    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["operationId"] == "shared_operation_id_get_2"
+    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["tags"] == ["feature-a"]
+    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == ["feature-b"]
 
 
 def test_normalize_operation_ids_uses_each_http_method():
@@ -116,3 +109,105 @@ def test_normalize_operation_ids_preserves_custom_ids():
     operations = paths["/proxy/{endpoint}"]
     assert operations["get"]["operationId"] == "custom_operation"
     assert operations["post"]["operationId"] == "custom_operation"
+
+
+class TestDriftedFeatures:
+    def test_reports_changed_added_and_removed_fragments(self):
+        committed = {"kept": {"paths": {}}, "changed": {"paths": {"/a": {}}}, "removed": {"paths": {}}}
+        fresh = {"kept": {"paths": {}}, "changed": {"paths": {"/b": {}}}, "added": {"paths": {}}}
+
+        assert drifted_features(committed, fresh) == ("added", "changed", "removed")
+
+    def test_identical_snapshots_have_no_drift(self):
+        fragments = {"a": {"paths": {"/a": {}}, "components": {"schemas": {}}}}
+
+        assert drifted_features(fragments, dict(fragments)) == ()
+
+
+class TestRegisterLazyFeature:
+    def test_skips_a_module_that_is_already_imported(self):
+        feature = SimpleNamespace(name="ok", module_path="json", register_fn=lambda app, module: None)
+
+        assert _register_lazy_feature(SimpleNamespace(), feature) is None
+
+    def test_registers_a_module_that_imports_cleanly(self, monkeypatch):
+        registered = []
+        feature = SimpleNamespace(
+            name="ok", module_path="json", register_fn=lambda app, module: registered.append(module.__name__)
+        )
+        monkeypatch.delitem(sys.modules, "json", raising=False)
+
+        assert _register_lazy_feature(SimpleNamespace(), feature) is None
+        assert registered == ["json"]
+
+    def test_reports_the_feature_and_error_when_the_module_is_missing(self):
+        feature = SimpleNamespace(
+            name="broken", module_path="litellm_no_such_module", register_fn=lambda app, module: None
+        )
+
+        result = _register_lazy_feature(SimpleNamespace(), feature)
+
+        assert result is not None
+        name, error = result
+        assert name == "broken"
+        assert "ModuleNotFoundError" in error
+
+    def test_reports_the_error_when_registration_raises(self, monkeypatch):
+        def _raise(app, module):
+            raise ValueError("router blew up")
+
+        feature = SimpleNamespace(name="broken", module_path="json", register_fn=_raise)
+        monkeypatch.delitem(sys.modules, "json", raising=False)
+
+        assert _register_lazy_feature(SimpleNamespace(), feature) == ("broken", "ValueError: router blew up")
+
+
+class TestCheckSnapshot:
+    """The check exists to fail when the committed file drifts; prove it does."""
+
+    def test_passes_when_the_committed_file_matches(self, monkeypatch):
+        fragments = {"guardrails": {"paths": {"/g": {}}, "components": {"schemas": {}}}}
+        monkeypatch.setattr(snapshot_module, "generate_snapshot", lambda *, strict=False: fragments)
+        monkeypatch.setattr(snapshot_module, "load_snapshot", lambda: dict(fragments))
+
+        assert check_snapshot() == 0
+
+    def test_fails_when_a_fragment_drifted(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            snapshot_module,
+            "generate_snapshot",
+            lambda *, strict=False: {"guardrails": {"paths": {"/new": {}}, "components": {"schemas": {}}}},
+        )
+        monkeypatch.setattr(
+            snapshot_module,
+            "load_snapshot",
+            lambda: {"guardrails": {"paths": {"/old": {}}, "components": {"schemas": {}}}},
+        )
+
+        assert check_snapshot() == 1
+        assert "guardrails" in capsys.readouterr().err
+
+    def test_fails_when_the_file_is_absent(self, monkeypatch):
+        monkeypatch.setattr(snapshot_module, "generate_snapshot", lambda *, strict=False: {"a": {"paths": {}}})
+        monkeypatch.setattr(snapshot_module, "load_snapshot", lambda: None)
+
+        assert check_snapshot() == 1
+
+    def test_verification_refuses_to_run_on_an_incomplete_regen(self, monkeypatch):
+        """A feature that fails to import would silently look like a deleted fragment."""
+
+        def _boom(*, strict: bool = False):
+            raise RuntimeError("cannot verify the snapshot: mcp_app (ImportError: no module)")
+
+        monkeypatch.setattr(snapshot_module, "generate_snapshot", _boom)
+
+        with pytest.raises(RuntimeError, match="cannot verify the snapshot"):
+            check_snapshot()
+
+
+class TestSerializeSnapshot:
+    def test_is_stable_regardless_of_key_order(self):
+        assert serialize_snapshot({"b": {"x": 1}, "a": {"y": 2}}) == serialize_snapshot({"a": {"y": 2}, "b": {"x": 1}})
+
+    def test_ends_with_a_trailing_newline(self):
+        assert serialize_snapshot({"a": {}}).endswith("}\n")
