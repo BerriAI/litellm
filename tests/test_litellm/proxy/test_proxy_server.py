@@ -924,6 +924,62 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
 
+def _get_config_with_default_litellm_params(monkeypatch, user_role):
+    """
+    default_litellm_params is merged into every completion call, so an admin
+    can put a shared api_key/extra_headers Authorization token there. Router
+    exposes it verbatim via get_settings(); /get/config/callbacks must not
+    forward that verbatim to callers who aren't full proxy admins.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {
+        "default_litellm_params": {
+            "api_key": "sk-super-secret-upstream-key",
+            "timeout": 30,
+        },
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config,
+        "get_config",
+        AsyncMock(return_value={"litellm_settings": {}, "general_settings": {}, "environment_variables": {}}),
+    )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=user_role, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        return client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+def test_get_config_masks_default_litellm_params_secrets_for_non_admin(monkeypatch):
+    response = _get_config_with_default_litellm_params(
+        monkeypatch, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+
+    assert response.status_code == 200
+    default_litellm_params = response.json()["router_settings"]["default_litellm_params"]
+    assert "sk-super-secret-upstream-key" not in json.dumps(default_litellm_params)
+    # non-sensitive keys are unaffected
+    assert default_litellm_params["timeout"] == 30
+
+
+def test_get_config_returns_default_litellm_params_unmasked_for_full_admin(monkeypatch):
+    response = _get_config_with_default_litellm_params(monkeypatch, LitellmUserRoles.PROXY_ADMIN)
+
+    assert response.status_code == 200
+    default_litellm_params = response.json()["router_settings"]["default_litellm_params"]
+    assert default_litellm_params["api_key"] == "sk-super-secret-upstream-key"
+    assert default_litellm_params["timeout"] == 30
+
+
 def test_get_config_returns_email_settings(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/19221
