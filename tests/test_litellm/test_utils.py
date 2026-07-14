@@ -162,6 +162,23 @@ def test_supports_function_calling_unknown_github_alias_returns_false():
     )
 
 
+def test_supports_embedding_top_level_export():
+    assert litellm.supports_embedding is litellm.utils.supports_embedding
+
+
+def test_supports_embedding_true_for_embedding_model():
+    assert litellm.supports_embedding(model="text-embedding-3-small") is True
+
+
+def test_supports_embedding_false_for_chat_model():
+    assert litellm.supports_embedding(model="gpt-3.5-turbo") is False
+    assert litellm.supports_embedding(model="claude-sonnet-5") is False
+
+
+def test_supports_embedding_false_for_unknown_model():
+    assert litellm.supports_embedding(model="non-existent-model-for-embedding-check") is False
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
