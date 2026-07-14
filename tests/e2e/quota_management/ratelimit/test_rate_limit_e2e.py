@@ -102,7 +102,9 @@ class _CrossedLimit:
     spent: int
 
 
-def _spend_until_blocked_or_crossed(client: QuotaClient, key: str, first: _FirstOk) -> _BlockedByReservation | _CrossedLimit:
+def _spend_until_blocked_or_crossed(
+    client: QuotaClient, key: str, first: _FirstOk
+) -> _BlockedByReservation | _CrossedLimit:
     """Drive chat traffic, summing each body's actual usage.total_tokens, until
     the limiter blocks (which the reservation may do before the actual spend
     crosses the limit) or the actual spend reaches the limit."""
@@ -238,8 +240,8 @@ class TestKeyRateLimits:
             f"success response must report the key's request limit, headers: "
             f"{ {k: v for k, v in first.headers.items() if 'ratelimit' in k} }"
         )
-        assert first.headers.get("x-ratelimit-api_key-remaining-requests") == "4", (
-            f"first call against rpm_limit=5 must leave 4 remaining, got "
+        assert first.headers.get("x-ratelimit-api_key-remaining-requests") == str(5 - 1), (
+            f"first call against rpm_limit=5 must leave {5 - 1} remaining, got "
             f"{first.headers.get('x-ratelimit-api_key-remaining-requests')!r}"
         )
         assert first.headers.get("x-ratelimit-api_key-limit-tokens") == "100000", (
