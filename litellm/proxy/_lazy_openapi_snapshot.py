@@ -8,8 +8,10 @@ features without importing them.
 The snapshot is also an *input* to the dashboard's generated types: `npm run gen:api`
 dumps the proxy spec without loading the lazy features, so their paths and schemas
 come from this file verbatim. A stale fragment therefore ships stale `schema.d.ts`
-types, and the UI types-sync check cannot catch it (it regenerates from this same
-file). `--check` closes that loop; the Lazy OpenAPI Snapshot Sync workflow runs it.
+types, and the UI types-sync check cannot catch it on its own (it regenerates from
+this same file, so both end up agreeing with each other and disagreeing with the
+code). `--check` closes that loop, and the Check UI API Types Sync workflow runs it
+before regenerating the types.
 """
 
 import json

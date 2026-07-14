@@ -5,6 +5,8 @@ on:
     paths:
       - "litellm/proxy/**"
       - "litellm/types/**"
+      - "enterprise/**"
+      - "uv.lock"
       - "ui/litellm-dashboard/src/lib/http/schema.d.ts"
       - "ui/litellm-dashboard/scripts/gen-api-types.mjs"
       - "ui/litellm-dashboard/package.json"
@@ -52,6 +54,30 @@ jobs:
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      # Runs before gen:api because the snapshot is an *input* to schema.d.ts: for
+      # lazy features the types are copied out of it verbatim. A stale snapshot
+      # therefore regenerates matching-but-wrong types, so the check below would pass
+      # while both files disagreed with the code. Report the root cause first.
+      - name: Fail if the lazy OpenAPI snapshot is stale
+        run: |
+          set +e
+          uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot --check
+          status=$?
+          set -e
+
+          case "$status" in
+            0)
+              ;;
+            2)
+              echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::Could not verify the lazy OpenAPI snapshot: a lazy feature failed to import, so the regenerated snapshot would be incomplete. This is a missing dependency in this job, not snapshot drift. See the log for the feature and error."
+              exit 1
+              ;;
+            *)
+              echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::Lazy OpenAPI snapshot is out of sync with the proxy routes. Run 'python -m litellm.proxy._lazy_openapi_snapshot', commit the result, and re-run 'npm run gen:api' if schema.d.ts changes."
+              exit 1
+              ;;
+          esac
 
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
