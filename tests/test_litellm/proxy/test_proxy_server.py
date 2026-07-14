@@ -9686,3 +9686,280 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_token_counter_malformed_message_returns_400_without_reflection():
+    """`/utils/token_counter` must map a malformed message payload to HTTP 400.
+
+    A content block that survives Pydantic validation but breaks the tokenizer
+    (e.g. a bare int inside `content`) used to raise an unhandled ValueError,
+    which FastAPI surfaces as a 500. It should now be a 400 whose body does not
+    leak the internal exception text or a traceback.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": [123]}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "int" not in detail
+    assert "subscriptable" not in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
+async def test_token_counter_tokenizer_attribute_error_returns_400_without_reflection():
+    """An AttributeError raised deep inside the tokenizer must also map to 400.
+
+    Only ValueError/TypeError used to be caught, so an AttributeError from a
+    content block of an unexpected shape escaped the handler and surfaced as a
+    500. It must now be a 400 whose body carries no internal exception text.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch(
+        "litellm.token_counter",
+        side_effect=AttributeError("'dict' object has no attribute 'startswith'"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            )
+
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "attribute" not in detail
+    assert "startswith" not in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
+async def test_token_counter_wellformed_message_still_counts():
+    """A well-formed request must still return a positive token count."""
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello world"}],
+        )
+    )
+
+    assert response.total_tokens > 0
+    assert response.request_model == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_token_counter_offloads_counting_to_executor():
+    """The synchronous, CPU-bound count must run off the event loop.
+
+    We spy on the running loop's `run_in_executor` and assert the handler
+    dispatches the count through it rather than blocking the loop inline.
+    """
+    loop = asyncio.get_running_loop()
+    real_run_in_executor = loop.run_in_executor
+    calls = []
+
+    def spy_run_in_executor(executor, func, *args):
+        calls.append(func)
+        return real_run_in_executor(executor, func, *args)
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch.object(loop, "run_in_executor", side_effect=spy_run_in_executor):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert response.total_tokens > 0
+    assert len(calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_token_counter_selects_tokenizer_off_the_event_loop():
+    """Tokenizer selection must run inside the executor, not on the event loop.
+
+    `_select_tokenizer` can synchronously load a HuggingFace tokenizer for some
+    model names (a blocking download/parse), so running it inline before the
+    executor dispatch would block the loop. We spy on `_select_tokenizer` and
+    assert every call happens on a thread other than the event-loop's.
+    """
+    import threading
+
+    import litellm.utils as litellm_utils
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    loop_thread_ident = threading.get_ident()
+    select_thread_idents = []
+    real_select_tokenizer = litellm_utils._select_tokenizer
+
+    def spy_select_tokenizer(*args, **kwargs):
+        select_thread_idents.append(threading.get_ident())
+        return real_select_tokenizer(*args, **kwargs)
+
+    with patch.object(litellm_utils, "_select_tokenizer", side_effect=spy_select_tokenizer):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert response.total_tokens > 0
+    assert len(select_thread_idents) >= 1
+    assert all(ident != loop_thread_ident for ident in select_thread_idents)
+
+
+@pytest.mark.asyncio
+async def test_token_counter_oversized_payload_returns_400():
+    """A payload whose combined string size exceeds the cap must map to 400.
+
+    The cap bounds per-request memory/CPU before the count is offloaded to the
+    executor; the body must carry only the generic error message.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_content = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": oversized_content}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
+async def test_token_counter_oversized_dict_key_returns_400():
+    """An oversized string hidden in a dict KEY must also trip the size cap.
+
+    Dict keys (e.g. property names in a tool JSON schema) are tokenized just
+    like values, so counting only `dict.values()` would let a caller bypass
+    the cap while still consuming the full tokenization cost.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_key = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {oversized_key: {"type": "string"}},
+                            },
+                        },
+                    }
+                ],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
+async def test_token_counter_oversized_model_name_returns_400():
+    """An oversized `model` string must also trip the size cap.
+
+    The model name becomes a key in the tokenizer selection LRU cache, so
+    excluding it from the cap would let a caller pin arbitrarily large strings
+    in memory across requests via distinct oversized model names.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    oversized_model = "a" * (proxy_server_module.TOKEN_COUNTER_MAX_REQUEST_CHARS + 1)
+    with pytest.raises(HTTPException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(
+                model=oversized_model,
+                messages=[{"role": "user", "content": "Hello world"}],
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+
+@pytest.mark.asyncio
+async def test_token_counter_saturated_concurrency_returns_429():
+    """When the tokenization concurrency bound is saturated, excess requests get 429.
+
+    The bound try-acquires: it must reject immediately instead of queueing more
+    payloads into the default executor's unbounded work queue.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import TokenCountRequest
+    from litellm.proxy.proxy_server import token_counter
+
+    setattr(proxy_server_module, "llm_router", None)
+
+    with patch.object(proxy_server_module, "_token_count_semaphore", asyncio.Semaphore(0)):
+        with pytest.raises(HTTPException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                )
+            )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == {"error": "Too many concurrent token counting requests. Please retry later."}

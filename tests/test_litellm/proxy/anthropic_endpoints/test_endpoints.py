@@ -233,3 +233,256 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+class TestCountTokensErrorHandling:
+    """`/v1/messages/count_tokens` must not leak internal errors on bad input."""
+
+    @pytest.mark.asyncio
+    async def test_malformed_messages_returns_400_without_reflection(self):
+        """A malformed messages payload should map to 400, not a reflected 500.
+
+        `messages=[123]` fails TokenCountRequest validation; previously the
+        terminal `except Exception` echoed the raw internal error at status 500.
+        It must now be a 400 whose body carries no internal exception text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [123],
+            }
+
+        with patch.object(ep, "_read_request_body", new=mock_read_request_body):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "validation error" not in detail.lower()
+        assert "TokenCountRequest" not in detail
+        assert "pydantic" not in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_malformed_content_block_returns_400_without_reflection(self):
+        """A content block that breaks the tokenizer must surface as 400.
+
+        The internal proxy token_counter now raises HTTPException(400) for such
+        input; the wrapper's `except HTTPException: raise` passes it through so
+        the client never sees the raw ValueError text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": [123]}],
+            }
+
+        with patch.object(ep, "_read_request_body", new=mock_read_request_body):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "subscriptable" not in detail
+        assert "Traceback" not in detail
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tokenizer_error",
+        [
+            AttributeError("'NoneType' object has no attribute 'get'"),
+            KeyError("type"),
+            IndexError("list index out of range"),
+        ],
+    )
+    async def test_tokenizer_attribute_error_returns_400_not_500(self, tokenizer_error):
+        """Non-(ValueError/TypeError) tokenizer failures must also map to 400.
+
+        AttributeError/KeyError/IndexError raised deep inside the tokenizer
+        used to fall through to the terminal `except Exception` and surface as
+        a 500. They must now be a 400 whose body carries no internal exception
+        text.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            raise tokenizer_error
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "NoneType" not in detail
+        assert "attribute" not in detail
+        assert "Internal server error" not in detail
+
+    @pytest.mark.asyncio
+    async def test_wellformed_request_still_counts(self):
+        """A valid request must still return the Anthropic-shaped token count."""
+        from fastapi import Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.types.utils import TokenCountResponse
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello Claude!"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            return TokenCountResponse(
+                total_tokens=15,
+                request_model="claude-3-sonnet-20240229",
+                model_used="claude-3-sonnet-20240229",
+                tokenizer_type="openai_tokenizer",
+            )
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            response = await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert response == {"input_tokens": 15}
+
+    @pytest.mark.asyncio
+    async def test_oversized_payload_returns_400(self):
+        """A payload exceeding the token-counting size cap must surface as 400.
+
+        The internal token_counter raises HTTPException(400) before offloading
+        the count; the wrapper's `except HTTPException: raise` passes it through.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "a" * 200}],
+            }
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "TOKEN_COUNTER_MAX_REQUEST_CHARS", 100),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == {"error": "Request payload too large for token counting"}
+
+    @pytest.mark.asyncio
+    async def test_saturated_concurrency_returns_429(self):
+        """A saturated tokenization concurrency bound must surface as 429.
+
+        The internal token_counter raises ProxyRateLimitError (an HTTPException
+        subclass) when the bound cannot be acquired; the wrapper's
+        `except HTTPException: raise` passes the 429 through untouched.
+        """
+        import asyncio
+
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        setattr(proxy_server, "llm_router", None)
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "_token_count_semaphore", asyncio.Semaphore(0)),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail == {"error": "Too many concurrent token counting requests. Please retry later."}
+
+    @pytest.mark.asyncio
+    async def test_unexpected_internal_error_returns_generic_500(self):
+        """An unexpected internal failure must map to a generic 500.
+
+        The terminal `except Exception` handler must not reflect the internal
+        exception text back to the client.
+        """
+        from fastapi import HTTPException, Request
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        mock_request = MagicMock(spec=Request)
+        mock_user_api_key_dict = MagicMock()
+
+        async def mock_read_request_body(request):
+            return {
+                "model": "claude-3-sonnet-20240229",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+
+        async def mock_token_counter(request, call_endpoint=False):
+            raise RuntimeError("secret internal failure detail")
+
+        with (
+            patch.object(ep, "_read_request_body", new=mock_read_request_body),
+            patch.object(proxy_server, "token_counter", new=mock_token_counter),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == {"error": "Internal server error"}
+        assert "secret internal failure detail" not in str(exc_info.value.detail)
