@@ -4,12 +4,12 @@ Date: 23/06/26
 
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from openai.types.chat import ChatCompletionMessageToolCall
 from pydantic import BaseModel, Field
 
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import ChatCompletionToolParam, ChatCompletionToolCallChunk
 
 from .base import GuardrailConfigModel
 
@@ -19,7 +19,14 @@ class SingulrGuardrailRequest(BaseModel):
     prompts: Optional[dict[str, list[str]]] = None
     completions: Optional[list[str]] = None
     tools: Optional[List[ChatCompletionToolParam]] = None
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+    tool_calls: Optional[
+        List[
+            Union[
+                ChatCompletionToolCallChunk,
+                ChatCompletionMessageToolCall,
+            ]
+        ]
+    ] = None
 
 
 class SingulrGuardrailPayload(BaseModel):
