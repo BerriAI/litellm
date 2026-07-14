@@ -130,7 +130,10 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   },
   "tensormesh": {
     "base_url": "https://serverless.tensormesh.ai/v1",
@@ -140,13 +143,19 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   },
   "parasail": {
     "base_url": "https://api.parasail.io/v1",
     "api_key_env": "PARASAIL_API_KEY",
     "api_base_env": "PARASAIL_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ],
     "special_handling": {
       "force_store_false": true
     }
@@ -166,14 +175,21 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
     "api_base_env": "META_API_BASE",
     "base_class": "openai_gpt",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
@@ -182,6 +198,22 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/embeddings"
+    ]
+  },
+  "stepfun": {
+    "base_url": "https://api.stepfun.ai/v1",
+    "api_key_env": "STEPFUN_API_KEY",
+    "api_base_env": "STEPFUN_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }
