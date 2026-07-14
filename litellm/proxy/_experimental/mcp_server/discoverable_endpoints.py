@@ -24,6 +24,15 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
     build_token_endpoint_client_auth,
 )
+from litellm.proxy._experimental.mcp_server.faults import (
+    CallerRejected,
+    CredentialSource,
+    UpstreamProtocolFault,
+    classify_upstream_dcr_rejection,
+    classify_upstream_token_rejection,
+    dcr_fault_detail,
+    render_token_fault,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
@@ -1281,6 +1290,13 @@ def _finish_bridge_mint(
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
 
 
+def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
+    """Mirrors the resolved-client rule in :func:`exchange_token_with_server`: when the server has a
+    stored client_id the gateway presents its own credentials upstream, so a credential rejection is
+    the operator's fault, not the caller's."""
+    return "gateway_stored" if mcp_server.client_id else "caller_supplied"
+
+
 def _upstream_refresh_credential(token_response: object) -> "RefreshCredential | None":
     """Extract the upstream refresh grant from a token response, or ``None`` when there is none to seal.
     Each field is isinstance-checked so nothing untyped reaches the refresh envelope; ``refresh_expires_in``
@@ -1336,21 +1352,6 @@ def _mint_refresh_envelope_value(
         mcp_server.server_id,
     )
     return None
-
-
-def _upstream_oauth_error(response: httpx.Response) -> str | None:
-    """The RFC 6749 5.2 ``error`` code from an upstream token-endpoint error body, or ``None`` when the
-    body is not a JSON object carrying a string ``error``. Reading the field beats substring-matching the
-    raw text, which would false-match a code that only appears inside ``error_description`` (a false
-    invalid_grant would trigger a needless authorization_code re-run)."""
-    try:
-        body = json.loads(response.text)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(body, dict):
-        return None
-    error = body.get("error")
-    return error if isinstance(error, str) else None
 
 
 async def exchange_token_with_server(
@@ -1469,32 +1470,25 @@ async def exchange_token_with_server(
                 return _bridge_mint_error_response(prepared)
             bridge_mint_ready = prepared
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json", **client_auth.headers},
-        data=token_data,
-    )
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream token endpoint returned no response",
-        )
-
     try:
-        response.raise_for_status()
+        response = await async_client.post(
+            mcp_server.token_url,
+            headers={"Accept": "application/json", **client_auth.headers},
+            data=token_data,
+        )
+        if response is not None:
+            response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        if "invalid_target" in exc.response.text:
-            verbose_logger.warning(
-                "MCP server %s: the upstream authorization server rejected the token request with "
-                "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
-                "does not send yet (tracked as LIT-4339)",
-                mcp_server.server_id,
-            )
+        fault = classify_upstream_token_rejection(
+            exc.response,
+            credential_source=_token_credential_source(mcp_server),
+            log_context=mcp_server.server_id,
+        )
         upstream_rejected_bridge_refresh = (
             is_bridge
             and grant_type == "refresh_token"
-            and exc.response.status_code == 400
-            and _upstream_oauth_error(exc.response) == "invalid_grant"
+            and isinstance(fault, CallerRejected)
+            and fault.code == "invalid_grant"
         )
         if upstream_rejected_bridge_refresh:
             verbose_logger.info(
@@ -1504,7 +1498,12 @@ async def exchange_token_with_server(
                 mcp_server.server_id,
             )
             return _bridge_mint_error_response("invalid_refresh")
-        raise
+        return render_token_fault(fault)
+    if response is None:
+        raise HTTPException(
+            status_code=502,
+            detail="MCP upstream token endpoint returned no response",
+        )
     token_response = response.json()
 
     # Validate token response against server-configured rules before any storage.
@@ -1556,8 +1555,12 @@ async def exchange_token_with_server(
         minted = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
         return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
 
+    raw_access_token = token_response.get("access_token") if isinstance(token_response, dict) else None
+    if not isinstance(raw_access_token, str) or not raw_access_token:
+        return render_token_fault(UpstreamProtocolFault(note="the upstream token response has no usable access_token"))
+
     result = {
-        "access_token": token_response["access_token"],
+        "access_token": raw_access_token,
         "token_type": token_response.get("token_type", "Bearer"),
     }
 
@@ -1813,21 +1816,6 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
-_MAX_UPSTREAM_ERROR_CHARS = 500
-
-
-def _safe_upstream_error_detail(response: httpx.Response) -> str:
-    """Bounded plaintext summary of an upstream registration failure for the client.
-
-    RFC 7591 error bodies are small JSON objects (``error`` / ``error_description``); relaying the
-    text lets the client read the real reason instead of a bare 500, and the length bound keeps a
-    hostile or oversized upstream body from bloating the gateway response."""
-    body = response.text
-    if not body:
-        return response.reason_phrase or "upstream registration failed"
-    return body[:_MAX_UPSTREAM_ERROR_CHARS]
-
-
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1887,19 +1875,24 @@ async def register_client_with_server(
     }
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Register)
-    response = await async_client.post(
-        mcp_server.registration_url,
-        headers=headers,
-        json=register_data,
-    )
+    try:
+        response = await async_client.post(
+            mcp_server.registration_url,
+            headers=headers,
+            json=register_data,
+        )
+        if response is not None:
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code, detail = dcr_fault_detail(
+            classify_upstream_dcr_rejection(exc.response, log_context=mcp_server.server_id)
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     if response is None:
         raise HTTPException(
             status_code=502,
             detail="MCP upstream registration endpoint returned no response",
         )
-    if bridge_relay and response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=_safe_upstream_error_detail(response))
-    response.raise_for_status()
 
     token_response = response.json()
 
