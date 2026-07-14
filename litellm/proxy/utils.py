@@ -4749,38 +4749,18 @@ class PrismaClient:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
     def _prisma_wrappers(self) -> tuple[PrismaWrapper, ...]:
-        """Underlying writer (and reader, when read-replica routing is on)
-        wrappers, so callers can inspect their planned-recreate coordination
-        state regardless of routing."""
         if isinstance(self.db, RoutingPrismaWrapper):
             return (self.db.writer, self.db.reader)
-        if isinstance(self.db, PrismaWrapper):
-            return (self.db,)
-        return ()
+        return (self.db,)
 
     def _engine_generations(self) -> tuple[int, ...]:
         return tuple(w._engine_generation for w in self._prisma_wrappers())
 
     def _is_planned_engine_recreate_error(self, e: Exception, generations_before: tuple[int, ...]) -> bool:
-        """True iff ``e`` is a transient connection error that raced a planned
-        Prisma engine recreate rather than a real DB outage.
-
-        Every `recreate_prisma_client` (RDS IAM token refresh, guarded
-        reconnect) kills the query engine on purpose and holds the wrapper's
-        `_reconnection_lock` while it spawns and connects a replacement, bumping
-        `_engine_generation` on success. A `SELECT 1` probe that races that
-        ~0.5-1s window fails with a connection error that should not surface as
-        a DB exception. We treat the error as planned when a recreate is still
-        in flight (a lock is held) or when the engine generation moved while the
-        probe ran. Real outages persist past the recreate window with the lock
-        free and the generation unchanged, so they are still reported.
-        """
         if not PrismaDBExceptionHandler.is_database_transport_error(e):
             return False
-        for wrapper in self._prisma_wrappers():
-            lock = getattr(wrapper, "_reconnection_lock", None)
-            if isinstance(lock, asyncio.Lock) and lock.locked():
-                return True
+        if any(w._reconnection_lock.locked() for w in self._prisma_wrappers()):
+            return True
         return self._engine_generations() != generations_before
 
     @backoff.on_exception(
