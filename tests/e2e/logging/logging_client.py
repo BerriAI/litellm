@@ -494,7 +494,7 @@ class LoggingClient:
         still a 200 and still exports the trace. With ``stream=True`` the SSE
         body is consumed and its events counted."""
         body = ResponsesRequestBody(
-            model=model, input=text, max_output_tokens=max_output_tokens, stream=stream or None
+            model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
         )
         if stream:
             return self.gateway.transport.stream(

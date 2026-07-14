@@ -151,7 +151,7 @@ def _assert_complete_trace(
 
 def _settled_names(*, route: str, genai_span: str, require_cost_span: bool = True) -> set[str]:
     names = {f"POST {route}", f"auth {route}", genai_span}
-    return names | {COST_SPAN} if require_cost_span else names
+    return (names | {COST_SPAN}) if require_cost_span else names
 
 
 def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
