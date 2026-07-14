@@ -1,5 +1,4 @@
 import React from "react";
-import DefaultLitellmParamsSection from "./DefaultLitellmParamsSection";
 import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
 import OptionalPreCallChecksSelector from "./OptionalPreCallChecksSelector";
 import ReliabilityRetriesSection from "./ReliabilityRetriesSection";
@@ -48,13 +47,6 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
     });
   };
 
-  const handleDefaultLitellmParamsChange = (params: Record<string, unknown>) => {
-    onChange({
-      ...value,
-      routerSettings: { ...value.routerSettings, default_litellm_params: params },
-    });
-  };
-
   return (
     <div className="w-full space-y-8 py-2">
       {/* Routing Settings Section */}
@@ -89,20 +81,11 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
         />
       </div>
 
-      {/* Divider */}
-      <div className="border-t border-gray-200" />
-
       {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
       {value.selectedStrategy === "latency-based-routing" && (
         <LatencyBasedConfiguration routingStrategyArgs={value.routerSettings["routing_strategy_args"]} />
       )}
 
-      {/* Default LiteLLM Params */}
-      <DefaultLitellmParamsSection
-        key={JSON.stringify(value.routerSettings.default_litellm_params || {})}
-        value={value.routerSettings.default_litellm_params || {}}
-        onChange={handleDefaultLitellmParamsChange}
-      />
       <div className="border-t border-gray-200" />
 
       {/* Other Settings */}

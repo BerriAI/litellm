@@ -139,6 +139,8 @@ describe("RouterSettings", () => {
     await waitFor(() => {
       expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 

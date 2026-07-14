@@ -156,29 +156,14 @@ describe("RouterSettingsForm", () => {
     );
   });
 
-  it("should show frontend-defined Default LiteLLM Params without backend field metadata", () => {
-    render(<RouterSettingsForm {...baseProps} />);
-    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
-  });
-
-  it("should call onChange with the updated default_litellm_params when the section changes", async () => {
-    const onChange = vi.fn();
-    const user = userEvent.setup();
+  it("should not render Default LiteLLM Params when persisted values exist", () => {
     const props = {
       ...baseProps,
-      onChange,
       value: { ...defaultValue, routerSettings: { default_litellm_params: { timeout: 30 } } },
     };
     render(<RouterSettingsForm {...props} />);
 
-    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
-
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        routerSettings: expect.objectContaining({
-          default_litellm_params: { timeout: 30, cache_control_injection_points: [{ location: "message" }] },
-        }),
-      }),
-    );
+    expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cache Control Injection Points")).not.toBeInTheDocument();
   });
 });
