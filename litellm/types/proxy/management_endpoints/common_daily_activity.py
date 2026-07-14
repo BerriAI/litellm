@@ -18,6 +18,7 @@ class GroupByDimension(str, Enum):
 
 class SpendMetrics(BaseModel):
     spend: float = Field(default=0.0)
+    flat_cost: float = Field(default=0.0)
     prompt_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
     cache_read_input_tokens: int = Field(default=0)
@@ -71,6 +72,7 @@ class DailySpendData(BaseModel):
 
 class DailySpendMetadata(BaseModel):
     total_spend: float = Field(default=0.0)
+    total_flat_cost: float = Field(default=0.0)
     total_prompt_tokens: int = Field(default=0)
     total_completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)

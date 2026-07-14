@@ -23333,6 +23333,11 @@ export interface components {
              */
             total_failed_requests: number;
             /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -31022,6 +31027,11 @@ export interface components {
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
             /**
              * Prompt Tokens
              * @default 0

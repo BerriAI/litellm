@@ -936,3 +936,300 @@ def test_update_metrics_handles_none_values():
     assert metrics.failed_requests == 0
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: ptu_flat_cost surfacing on team daily activity read path
+# ---------------------------------------------------------------------------
+
+from litellm.constants import PTU_SENTINEL_API_KEY  # noqa: E402
+from litellm.proxy.management_endpoints.common_daily_activity import (  # noqa: E402
+    update_breakdown_metrics,
+)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (  # noqa: E402
+    BreakdownMetrics,
+)
+
+
+def _team_row(
+    *,
+    date="2026-08-01",
+    api_key="sk-real",
+    model="gpt-4",
+    model_group=None,
+    custom_llm_provider="azure",
+    endpoint=None,
+    mcp_namespaced_tool_name=None,
+    spend=0.0,
+    ptu_flat_cost=0.0,
+    prompt_tokens=0,
+    completion_tokens=0,
+    cache_read_input_tokens=0,
+    cache_creation_input_tokens=0,
+    api_requests=0,
+    successful_requests=0,
+    failed_requests=0,
+    team_id="team_x",
+):
+    return SimpleNamespace(
+        date=date,
+        api_key=api_key,
+        model=model,
+        model_group=model_group,
+        custom_llm_provider=custom_llm_provider,
+        endpoint=endpoint,
+        mcp_namespaced_tool_name=mcp_namespaced_tool_name,
+        spend=spend,
+        ptu_flat_cost=ptu_flat_cost,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        api_requests=api_requests,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+        team_id=team_id,
+    )
+
+
+def test_spend_metrics_flat_cost_defaults_zero():
+    assert SpendMetrics().flat_cost == 0.0
+
+
+def test_update_metrics_adds_ptu_flat_cost():
+    metrics = SpendMetrics()
+    update_metrics(metrics, _team_row(ptu_flat_cost=6.45))
+    update_metrics(metrics, _team_row(ptu_flat_cost=3.55))
+    assert metrics.flat_cost == pytest.approx(10.0)
+
+
+def test_update_metrics_ignores_missing_ptu_flat_cost_attr():
+    """User/org/tag daily rows don't carry ptu_flat_cost — must not raise."""
+    row_without_field = SimpleNamespace(
+        spend=1.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+    )
+    metrics = SpendMetrics()
+    update_metrics(metrics, row_without_field)
+    assert metrics.spend == pytest.approx(1.0)
+    assert metrics.flat_cost == 0.0
+
+
+def test_update_metrics_treats_none_ptu_flat_cost_as_zero():
+    row = _team_row(ptu_flat_cost=None)
+    metrics = SpendMetrics()
+    update_metrics(metrics, row)
+    assert metrics.flat_cost == 0.0
+
+
+def test_record_to_spend_metrics_reads_ptu_flat_cost():
+    row = _team_row(ptu_flat_cost=42.0)
+    m = _record_to_spend_metrics(row)
+    assert m.flat_cost == pytest.approx(42.0)
+
+
+def test_record_to_spend_metrics_defaults_ptu_flat_cost_when_absent():
+    row_without = SimpleNamespace(
+        spend=1.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+    )
+    m = _record_to_spend_metrics(row_without)
+    assert m.flat_cost == 0.0
+
+
+def test_sentinel_row_skipped_from_top_level_api_keys_breakdown():
+    breakdown = BreakdownMetrics()
+    sentinel_row = _team_row(
+        api_key=PTU_SENTINEL_API_KEY,
+        ptu_flat_cost=6.45,
+        custom_llm_provider=None,
+    )
+    update_breakdown_metrics(breakdown, sentinel_row, {}, {}, {})
+    assert PTU_SENTINEL_API_KEY not in breakdown.api_keys
+    assert breakdown.api_keys == {}
+
+
+def test_sentinel_row_contributes_to_model_breakdown_flat_cost():
+    breakdown = BreakdownMetrics()
+    sentinel_row = _team_row(
+        api_key=PTU_SENTINEL_API_KEY,
+        model="gpt-4",
+        ptu_flat_cost=6.45,
+    )
+    update_breakdown_metrics(breakdown, sentinel_row, {}, {}, {})
+    assert "gpt-4" in breakdown.models
+    assert breakdown.models["gpt-4"].metrics.flat_cost == pytest.approx(6.45)
+    # And it must not leak into api_key_breakdown under the model
+    assert PTU_SENTINEL_API_KEY not in breakdown.models["gpt-4"].api_key_breakdown
+
+
+def test_real_key_and_sentinel_row_share_a_model_bucket():
+    breakdown = BreakdownMetrics()
+    real_row = _team_row(api_key="sk-real", model="gpt-4", spend=1.5)
+    sentinel_row = _team_row(api_key=PTU_SENTINEL_API_KEY, model="gpt-4", ptu_flat_cost=6.45)
+    update_breakdown_metrics(breakdown, real_row, {}, {}, {})
+    update_breakdown_metrics(breakdown, sentinel_row, {}, {}, {})
+
+    model_bucket = breakdown.models["gpt-4"]
+    assert model_bucket.metrics.spend == pytest.approx(1.5)
+    assert model_bucket.metrics.flat_cost == pytest.approx(6.45)
+
+    # api_keys only surfaces the real key
+    assert list(breakdown.api_keys.keys()) == ["sk-real"]
+    # and the api_key_breakdown under the model also only holds the real key
+    assert list(model_bucket.api_key_breakdown.keys()) == ["sk-real"]
+
+
+def test_sentinel_row_contributes_to_provider_and_endpoint_breakdowns():
+    breakdown = BreakdownMetrics()
+    sentinel_row = _team_row(
+        api_key=PTU_SENTINEL_API_KEY,
+        model="gpt-4",
+        custom_llm_provider="azure",
+        endpoint="/v1/chat/completions",
+        ptu_flat_cost=6.45,
+    )
+    update_breakdown_metrics(breakdown, sentinel_row, {}, {}, {})
+    assert breakdown.providers["azure"].metrics.flat_cost == pytest.approx(6.45)
+    assert PTU_SENTINEL_API_KEY not in breakdown.providers["azure"].api_key_breakdown
+    assert breakdown.endpoints["/v1/chat/completions"].metrics.flat_cost == pytest.approx(6.45)
+    assert PTU_SENTINEL_API_KEY not in breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
+
+
+def test_sentinel_row_contributes_to_entity_breakdown():
+    breakdown = BreakdownMetrics()
+    sentinel_row = _team_row(
+        api_key=PTU_SENTINEL_API_KEY,
+        team_id="team_x",
+        ptu_flat_cost=6.45,
+    )
+    update_breakdown_metrics(
+        breakdown,
+        sentinel_row,
+        {},
+        {},
+        {},
+        entity_id_field="team_id",
+    )
+    assert breakdown.entities["team_x"].metrics.flat_cost == pytest.approx(6.45)
+    assert PTU_SENTINEL_API_KEY not in breakdown.entities["team_x"].api_key_breakdown
+
+
+def test_get_api_key_metadata_excludes_sentinel_from_lookup():
+    """The sentinel api_key is not a real hashed token; skip the Prisma lookup for it."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _aggregate_spend_records,
+    )
+    import asyncio
+
+    mock_prisma = MagicMock()
+    mock_vt_table = MagicMock()
+    mock_vt_table.find_many = AsyncMock(return_value=[])
+    mock_deleted_table = MagicMock()
+    mock_deleted_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_verificationtoken = mock_vt_table
+    mock_prisma.db.litellm_deletedverificationtoken = mock_deleted_table
+
+    real_row = _team_row(api_key="sk-real")
+    sentinel_row = _team_row(api_key=PTU_SENTINEL_API_KEY, ptu_flat_cost=6.45)
+
+    asyncio.run(
+        _aggregate_spend_records(
+            prisma_client=mock_prisma,
+            records=[real_row, sentinel_row],
+            entity_id_field="team_id",
+            entity_metadata_field=None,
+        )
+    )
+
+    mock_vt_table.find_many.assert_called_once()
+    where = mock_vt_table.find_many.await_args.kwargs["where"]
+    queried = set(where["token"]["in"])
+    assert "sk-real" in queried
+    assert PTU_SENTINEL_API_KEY not in queried
+
+
+def test_build_aggregated_sql_query_selects_ptu_flat_cost_only_for_team_table():
+    sql_team, _ = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        model=None,
+        api_key=None,
+    )
+    assert "SUM(ptu_flat_cost)::float AS ptu_flat_cost" in sql_team
+
+    sql_user, _ = _build_aggregated_sql_query(
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        model=None,
+        api_key=None,
+    )
+    assert "SUM(ptu_flat_cost)" not in sql_user
+    assert "0::float AS ptu_flat_cost" in sql_user
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_returns_total_flat_cost_for_team():
+    """End-to-end: seed team daily rows (one real + one sentinel), assert response shape."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=2)
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            _team_row(api_key="sk-real", spend=1.5, ptu_flat_cost=0.0),
+            _team_row(api_key=PTU_SENTINEL_API_KEY, spend=0.0, ptu_flat_cost=6.45),
+        ]
+    )
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    mock_vt_table = MagicMock()
+    mock_vt_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_verificationtoken = mock_vt_table
+    mock_deleted_table = MagicMock()
+    mock_deleted_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken = mock_deleted_table
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-08-01",
+        end_date="2026-08-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+    )
+
+    assert result.metadata.total_spend == pytest.approx(1.5)
+    assert result.metadata.total_flat_cost == pytest.approx(6.45)
+    assert len(result.results) == 1
+    day = result.results[0]
+    assert day.metrics.spend == pytest.approx(1.5)
+    assert day.metrics.flat_cost == pytest.approx(6.45)
+    # api_keys breakdown must not contain the sentinel
+    assert PTU_SENTINEL_API_KEY not in day.breakdown.api_keys
+    assert "sk-real" in day.breakdown.api_keys
