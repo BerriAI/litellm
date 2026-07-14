@@ -13,6 +13,7 @@ interface DefaultLitellmParamsSectionProps {
 type ParsedDefaultParams = { status: "valid"; value: Record<string, unknown> } | { status: "invalid"; message: string };
 
 const CACHE_CONTROL_ROLES = ["user", "system", "assistant"] as const;
+type CacheControlRole = (typeof CACHE_CONTROL_ROLES)[number];
 
 const parseDefaultParams = (text: string): ParsedDefaultParams => {
   try {
@@ -26,27 +27,47 @@ const parseDefaultParams = (text: string): ParsedDefaultParams => {
   }
 };
 
-const isCacheControlInjectionPoint = (value: unknown): value is CacheControlInjectionPoint => {
+const isCacheControlRole = (value: unknown): value is CacheControlRole =>
+  CACHE_CONTROL_ROLES.some((validRole) => validRole === value);
+
+const parseCacheControlInjectionPoint = (value: unknown): CacheControlInjectionPoint | undefined => {
   if (typeof value !== "object" || value === null) {
-    return false;
+    return undefined;
   }
   if (!("location" in value) || value.location !== "message") {
-    return false;
+    return undefined;
   }
   const role = "role" in value ? value.role : undefined;
   const index = "index" in value ? value.index : undefined;
-  const hasValidRole = role === undefined || CACHE_CONTROL_ROLES.some((validRole) => validRole === role);
-  const hasValidIndex = index === undefined || (typeof index === "number" && Number.isInteger(index));
-  return hasValidRole && hasValidIndex;
+  const hasInvalidRole = role !== undefined && role !== null && !isCacheControlRole(role);
+  if (hasInvalidRole) {
+    return undefined;
+  }
+  const hasIndex = index !== undefined && index !== null;
+  const hasInvalidIndex = hasIndex && (typeof index !== "number" || !Number.isInteger(index));
+  if (hasInvalidIndex) {
+    return undefined;
+  }
+  return {
+    location: "message",
+    ...(isCacheControlRole(role) ? { role } : {}),
+    ...(typeof index === "number" ? { index } : {}),
+  };
+};
+
+const parseCacheControlInjectionPoints = (value: unknown): CacheControlInjectionPoint[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const points = value.map(parseCacheControlInjectionPoint);
+  return points.every((point) => point !== undefined)
+    ? points.filter((point): point is CacheControlInjectionPoint => point !== undefined)
+    : undefined;
 };
 
 const DefaultLitellmParamsSection: React.FC<DefaultLitellmParamsSectionProps> = ({ value, onChange }) => {
   const cacheControlInjectionPoints = React.useMemo(
-    () =>
-      Array.isArray(value.cache_control_injection_points) &&
-      value.cache_control_injection_points.every(isCacheControlInjectionPoint)
-        ? value.cache_control_injection_points
-        : undefined,
+    () => parseCacheControlInjectionPoints(value.cache_control_injection_points),
     [value.cache_control_injection_points],
   );
   const otherParams = React.useMemo(

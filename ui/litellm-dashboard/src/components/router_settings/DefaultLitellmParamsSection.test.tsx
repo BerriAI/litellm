@@ -26,6 +26,18 @@ describe("DefaultLitellmParamsSection", () => {
     expect(screen.getByTestId("cache-control-location-select-0")).toBeInTheDocument();
   });
 
+  it("should normalize nullable cache control fields from persisted settings", () => {
+    render(
+      <DefaultLitellmParamsSection
+        value={{ cache_control_injection_points: [{ location: "message", role: null, index: null }] }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("cache-control-location-select-0")).toBeInTheDocument();
+    expect(screen.getByTestId("cache-control-index-input-0")).toHaveValue("");
+  });
+
   it("should preserve unsupported cache control points in the JSON editor", () => {
     render(
       <DefaultLitellmParamsSection
