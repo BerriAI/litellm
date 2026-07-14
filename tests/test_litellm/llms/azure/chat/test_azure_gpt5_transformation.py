@@ -59,6 +59,8 @@ def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
         "azure/gpt-5.6-luna",
         "azure/gpt-5.6-sol",
         "azure/gpt-5.6-terra",
+        "azure/us/gpt-5.6-sol",
+        "azure/eu/gpt-5.5-2026-04-23",
         "gpt5_series/gpt-5.6-luna",
     ],
 )

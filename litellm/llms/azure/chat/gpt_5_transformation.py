@@ -9,6 +9,7 @@ from litellm.llms.openai.chat.gpt_5_transformation import (
     _get_effort_level,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import _is_explicitly_disabled_factory
 
 from .gpt_transformation import AzureOpenAIConfig
 
@@ -20,8 +21,15 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def _rejects_non_default_temperature(cls, model: str) -> bool:
-        model_name = model.split("/")[-1]
-        return model_name.startswith(("gpt-5.5", "gpt-5.6"))
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        elif not model.startswith("azure/"):
+            model = "azure/" + model
+        return _is_explicitly_disabled_factory(
+            model=model,
+            custom_llm_provider=None,
+            key="supports_non_default_temperature",
+        )
 
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:

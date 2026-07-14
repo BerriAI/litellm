@@ -6104,6 +6104,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6149,6 +6150,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6194,6 +6196,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6239,6 +6242,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6281,6 +6285,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6323,6 +6328,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6365,6 +6371,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6407,6 +6414,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6449,6 +6457,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6491,6 +6500,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6533,6 +6543,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6575,6 +6586,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6620,6 +6632,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6662,6 +6675,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6704,6 +6718,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_non_default_temperature": false,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
@@ -6748,7 +6763,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_non_default_temperature": false
     },
     "azure/us/gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -6787,7 +6803,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_non_default_temperature": false
     },
     "azure/eu/gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -6826,7 +6843,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_non_default_temperature": false
     },
     "azure/gpt-5.5-pro": {
         "cache_read_input_token_cost": 3e-06,
