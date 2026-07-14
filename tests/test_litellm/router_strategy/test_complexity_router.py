@@ -2700,3 +2700,152 @@ class TestSessionAffinity:
             spy_aclassify.assert_not_called()
         assert second.model == "cheap"
         assert request_kwargs_2["metadata"]["adaptive_router_chosen_model"] == "cheap"
+
+
+class _DummyPlugin:
+    async def run(self, context):
+        return context
+
+
+class TestRoutingPlugins:
+    """Test the `complexity_router_config.plugins` field: narrows the classified
+    tier's candidate pool before a model is picked. Discussion:
+    https://github.com/BerriAI/litellm/discussions/32168"""
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrows_tier_candidates(self, mock_router_instance):
+        class ExcludeGpt4oMini:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-mini"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "plugins": [ExcludeGpt4oMini()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrowing_to_zero_falls_back_to_default_model(self, mock_router_instance):
+        class BlockEverything:
+            async def run(self, context):
+                context.candidate_models = []
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "default_model": "gpt-4o-fallback",
+                "plugins": [BlockEverything()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-fallback"
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrowing_to_zero_without_default_model_raises(self, mock_router_instance):
+        class BlockEverything:
+            async def run(self, context):
+                context.candidate_models = []
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "plugins": [BlockEverything()],
+            },
+        )
+        with pytest.raises(ValueError, match="No candidate models left for tier"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_plugin_receives_metadata_from_request_kwargs(self, mock_router_instance):
+        captured = {}
+
+        class CaptureMetadata:
+            async def run(self, context):
+                captured.update(context.metadata)
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "plugins": [CaptureMetadata()],
+            },
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {"tenant": "acme-corp"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert captured.get("tenant") == "acme-corp"
+
+    @pytest.mark.asyncio
+    async def test_plugin_applies_to_keyword_tier_override(self, mock_router_instance):
+        """A policy plugin must not be bypassable via the keyword_tier_rules override path."""
+
+        class ExcludeGpt4oMini:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-mini"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}],
+                "plugins": [ExcludeGpt4oMini()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
+    def test_plugins_and_adaptive_together_raises(self):
+        with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": ["gpt-4o-mini"]},
+                adaptive=True,
+                plugins=[_DummyPlugin()],
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_plugins_configured_is_unaffected(self, complexity_router):
+        """Regression guard: a ComplexityRouter with no `plugins` configured behaves exactly as before."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"

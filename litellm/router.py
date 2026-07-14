@@ -7299,14 +7299,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k))
+                parts.append(json.dumps(k, default=str))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v))
+                parts.append(json.dumps(v, default=str))
             else:
                 parts.append(str(v))
 

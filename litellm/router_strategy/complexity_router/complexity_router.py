@@ -468,6 +468,38 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
+    async def _pick_model_for_tier(
+        self,
+        tier: ComplexityTier,
+        raw_messages: list[dict[str, Any]] | None,
+        resolved_messages: list[dict[str, Any]] | None,
+        request_kwargs: dict,
+    ) -> str:
+        if not self.config.plugins:
+            return self.get_model_for_tier(tier)
+
+        from litellm.types.router import RoutingContext
+
+        tier_key = tier.value
+        metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        context = RoutingContext(
+            raw_messages=raw_messages or [],
+            structured_messages=resolved_messages or [],
+            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            metadata=request_kwargs.get(metadata_key) or {},
+        )
+        for plugin in self.config.plugins:
+            context = await plugin.run(context)
+
+        if not context.candidate_models:
+            if self.config.default_model:
+                return self.config.default_model
+            raise ValueError(
+                f"No candidate models left for tier {tier_key} after routing-plugin filtering, "
+                "and no default_model configured"
+            )
+        return self._pick_from_tier_value(context.candidate_models, tier_key)
+
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
             return None
@@ -947,14 +979,17 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
+            routed_model = self.config.default_model or await self._pick_model_for_tier(
+                ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
+            )
             return PreRoutingHookResponse(
-                model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                model=routed_model,
                 messages=messages if has_original_messages else None,
             )
 
         override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
         if override_tier is not None:
-            routed_model = self.get_model_for_tier(override_tier)
+            routed_model = await self._pick_model_for_tier(override_tier, messages, resolved_messages, request_kwargs)
             cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             verbose_router_logger.info(
                 f"ComplexityRouter: routing decision cause={cause}, "
@@ -980,7 +1015,7 @@ class ComplexityRouter(CustomLogger):
                 f"signals={signals}, routed_model={routed_model}"
             )
         else:
-            routed_model = self.get_model_for_tier(tier)
+            routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
             verbose_router_logger.info(
                 f"ComplexityRouter: routing decision cause=complexity_scorer, tier={tier.value}, "
                 f"score={score:.3f}, signals={signals}, routed_model={routed_model}"

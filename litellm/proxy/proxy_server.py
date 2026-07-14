@@ -4720,6 +4720,16 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                complexity_router_config = model["litellm_params"].get("complexity_router_config")
+                if isinstance(complexity_router_config, dict):
+                    plugin_paths = complexity_router_config.get("plugins")
+                    if isinstance(plugin_paths, list):
+                        complexity_router_config["plugins"] = [
+                            get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+                            if isinstance(plugin_path, str)
+                            else plugin_path
+                            for plugin_path in plugin_paths
+                        ]
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
