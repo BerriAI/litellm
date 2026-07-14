@@ -364,6 +364,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         if capped_thinking is not None:
             optional_params["thinking"] = capped_thinking
+            if capped_thinking.get("type") == "enabled" and optional_params.get("temperature") != 1:
+                optional_params.pop("temperature", None)
         else:
             verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
             optional_params.pop("thinking", None)

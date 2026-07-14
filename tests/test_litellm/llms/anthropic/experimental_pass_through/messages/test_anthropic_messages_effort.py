@@ -45,6 +45,32 @@ def test_effort_translated_to_legacy_thinking_for_haiku_4_5():
     assert "output_config" not in result
 
 
+def test_non_1_temperature_dropped_for_legacy_thinking_on_haiku_4_5():
+    result = _transform(
+        "claude-haiku-4-5",
+        {**_claude_code_payload(effort="medium"), "temperature": 0},
+    )
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "temperature" not in result
+
+
+def test_temperature_1_preserved_for_legacy_thinking_on_haiku_4_5():
+    result = _transform(
+        "claude-haiku-4-5",
+        {**_claude_code_payload(effort="medium"), "temperature": 1},
+    )
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert result["temperature"] == 1
+
+
 def test_effort_high_maps_to_high_budget_for_sonnet_4_5():
     result = _transform("claude-sonnet-4-5", _claude_code_payload(effort="high"))
 
@@ -61,6 +87,17 @@ def test_adaptive_effort_passes_through_untouched_for_4_6():
 
     assert result["thinking"] == {"type": "adaptive"}
     assert result["output_config"] == {"effort": "high"}
+
+
+def test_non_1_temperature_preserved_for_adaptive_thinking_on_4_6():
+    result = _transform(
+        "claude-sonnet-4-6",
+        {**_claude_code_payload(effort="high"), "temperature": 0},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
+    assert result["temperature"] == 0
 
 
 def test_thinking_and_effort_dropped_for_non_reasoning_model():
