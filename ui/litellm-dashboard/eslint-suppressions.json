@@ -515,6 +515,152 @@
       "count": 2
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
+    "unused-imports/no-unused-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
+    "react-hooks/immutability": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    },
+    "unused-imports/no-unused-imports": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
+    "no-nested-ternary": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/static-components": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 5
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1497,13 +1643,13 @@
   },
   "src/components/Teams.tsx": {
     "no-nested-ternary": {
-      "count": 4
+      "count": 2
     },
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/ToolDetail.tsx": {
@@ -1541,14 +1687,6 @@
       "count": 1
     },
     "react-hooks/static-components": {
-      "count": 1
-    }
-  },
-  "src/components/VirtualKeysPage/VirtualKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1796,11 +1934,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/user_search_modal.tsx": {
-    "react-hooks/use-memo": {
-      "count": 1
-    }
-  },
   "src/components/constants.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1860,43 +1993,9 @@
       "count": 1
     }
   },
-  "src/components/mcp_tools/ByokCredentialModal.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
-    "react-hooks/immutability": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
       "count": 5
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   },
   "src/components/mcp_tools/McpCrudPermissionPanel.tsx": {
@@ -1905,123 +2004,6 @@
     },
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 5
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/components/model_add/AddCredentialModal.tsx": {
@@ -2117,9 +2099,6 @@
   "src/components/molecules/filter.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/molecules/models/columns.test.tsx": {
@@ -2181,9 +2160,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/organization/organization_view.tsx": {

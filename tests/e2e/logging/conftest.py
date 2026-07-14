@@ -11,14 +11,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from logging_client import (
-    LangfuseCreds,
-    LoggingClient,
-    PhoenixCreds,
-    build_logging_client,
-    load_langfuse_creds,
-    load_phoenix_creds,
-)
+from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
+from otel_client import OtelReader, build_otel_reader
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -37,6 +31,12 @@ def client() -> Iterator[LoggingClient]:
     logging_client, model_cleanup = build_logging_client()
     yield logging_client
     model_cleanup.teardown()
+
+
+@pytest.fixture(scope="session")
+def otel_reader() -> OtelReader:
+    """Read-back client for the compose stack's Jaeger trace destination."""
+    return build_otel_reader()
 
 
 @pytest.fixture
