@@ -26,6 +26,7 @@ def initialize_guardrail(
         singulr_application_id=getattr(litellm_params, "singulr_application_id", None),
         singulr_guardrail_id=getattr(litellm_params, "singulr_guardrail_id", None),
         block_on_error=getattr(litellm_params, "block_on_error", None),
+        timeout=litellm_params.timeout,
         guardrail_name=guardrail.get(
             "guardrail_name",
             "",

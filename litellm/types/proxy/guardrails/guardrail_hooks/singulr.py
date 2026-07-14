@@ -4,42 +4,33 @@ Date: 23/06/26
 
 """
 
-from typing import Any, List, Literal, Optional, Union
+from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from openai.types.chat import ChatCompletionMessageToolCall
+from pydantic import BaseModel, Field
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import ChatCompletionToolParam
 
 from .base import GuardrailConfigModel
 
 
 class SingulrGuardrailRequest(BaseModel):
-    """OpenAI-compatible request fields forwarded to Singulr.
-
-    Only fields explicitly declared here are sent. Unknown fields --
-    including LiteLLM-internal ones the proxy attaches to the request dict
-    (auth state, http sessions, logging objects, ...) -- are dropped by
-    Pydantic rather than forwarded to this third-party API.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
     model: Optional[str] = None
-    messages: Optional[List[AllMessageValues]] = None
+    prompts: Optional[List[str]] = None
+    completions: Optional[List[str]] = None
     tools: Optional[List[ChatCompletionToolParam]] = None
-    functions: Optional[List[dict[str, Any]]] = None
-    tool_choice: Optional[Union[str, dict[str, Any]]] = None
-    response_format: Optional[dict[str, Any]] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    stream: Optional[bool] = None
-
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
 
 class SingulrGuardrailPayload(BaseModel):
     """Payload sent to the Singulr guardrail API."""
-
     request: SingulrGuardrailRequest
     input_type: str
+
+
+class SingulrGuardrailResponse(BaseModel):
+    """Response returned by the Singulr guardrail API."""
+    should_block: bool = False
+    blocking_due_to: Optional[str] = None
 
 
 class SingulrGuardrailConfigModel(GuardrailConfigModel):
