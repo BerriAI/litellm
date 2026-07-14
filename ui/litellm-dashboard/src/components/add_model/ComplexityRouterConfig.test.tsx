@@ -12,10 +12,10 @@ const mockModelInfo = [
 
 const defaultValue: ComplexityRouterConfigValue = {
   tiers: {
-    SIMPLE: "gpt-3.5-turbo",
-    MEDIUM: "gpt-3.5-turbo",
-    COMPLEX: "gpt-4",
-    REASONING: "claude-3-opus",
+    SIMPLE: ["gpt-3.5-turbo"],
+    MEDIUM: ["gpt-3.5-turbo"],
+    COMPLEX: ["gpt-4"],
+    REASONING: ["claude-3-opus"],
   },
   classifier_type: "heuristic",
 };
@@ -263,7 +263,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
-        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: "" } }}
+        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: [] } }}
         showValidationErrors={true}
       />,
     );

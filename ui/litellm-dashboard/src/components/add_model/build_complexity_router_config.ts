@@ -1,12 +1,11 @@
 import { KeywordTierRule } from "./KeywordTierRules";
-import { AdaptiveEligible, AdaptiveRouterWeights, ClassifierLLMConfig, ClassifierType } from "./ComplexityRouterConfig";
-
-export interface ComplexityTiers {
-  SIMPLE: string;
-  MEDIUM: string;
-  COMPLEX: string;
-  REASONING: string;
-}
+import {
+  AdaptiveEligible,
+  AdaptiveRouterWeights,
+  ClassifierLLMConfig,
+  ClassifierType,
+  ComplexityTiers,
+} from "./ComplexityRouterConfig";
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
@@ -41,7 +40,7 @@ export interface ComplexityRouterConfigPayload {
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
-  const missing = TIER_KEYS.filter((tier) => !tiers[tier]);
+  const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };

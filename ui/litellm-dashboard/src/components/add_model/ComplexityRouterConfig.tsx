@@ -12,11 +12,14 @@ const { Text } = Typography;
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 
+// A tier maps to one or more models. With more than one, the backend randomly
+// picks among them (or Thompson-samples within the pool when adaptive routing
+// is on) instead of always calling the same model.
 export interface ComplexityTiers {
-  SIMPLE: string;
-  MEDIUM: string;
-  COMPLEX: string;
-  REASONING: string;
+  SIMPLE: string[];
+  MEDIUM: string[];
+  COMPLEX: string[];
+  REASONING: string[];
 }
 
 export interface ClassifierLLMConfig {
@@ -111,10 +114,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       label: model.model_group,
     }));
 
-  const handleTierChange = (tier: keyof ComplexityTiers, model: string) => {
+  const handleTierChange = (tier: keyof ComplexityTiers, models: string[]) => {
     onChange({
       ...value,
-      tiers: { ...value.tiers, [tier]: model },
+      tiers: { ...value.tiers, [tier]: models },
     });
   };
 
@@ -124,20 +127,20 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         <Typography.Title level={4} style={{ margin: 0 }}>
           Complexity Tier Configuration
         </Typography.Title>
-        <Tooltip title="Map each complexity tier to a model. Simple queries use cheaper/faster models, complex queries use more capable models.">
+        <Tooltip title="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
           <InfoCircleOutlined className="text-gray-400" />
         </Tooltip>
       </Space>
 
       <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
         The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls,
-        &lt;1ms latency). Configure which model handles each tier.
+        &lt;1ms latency). Configure which model(s) handle each tier.
       </Text>
 
       <Card>
         {(Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>).map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
-          const tierMissing = showValidationErrors && !value.tiers[tier];
+          const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
           return (
             <div key={tier}>
               {index > 0 && <Divider style={{ margin: "16px 0" }} />}
@@ -154,14 +157,21 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   Examples: {tierInfo.examples}
                 </Text>
                 <AntdSelect
+                  mode="multiple"
                   value={value.tiers[tier]}
-                  onChange={(model) => handleTierChange(tier, model)}
-                  placeholder={`Select model for ${tierInfo.label.toLowerCase()} queries`}
+                  onChange={(models) => handleTierChange(tier, models)}
+                  placeholder={`Select model(s) for ${tierInfo.label.toLowerCase()} queries`}
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
                   status={tierMissing ? "error" : undefined}
                 />
+                {value.tiers[tier].length > 1 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Multiple models selected — the router randomly picks among them per request (or Thompson-samples
+                    within the pool when adaptive routing is on).
+                  </Text>
+                )}
                 {tierMissing && (
                   <Text type="danger" style={{ fontSize: 12 }}>
                     This tier is required

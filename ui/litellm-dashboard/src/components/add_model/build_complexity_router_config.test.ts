@@ -6,10 +6,10 @@ import {
 } from "./build_complexity_router_config";
 
 const tiers = {
-  SIMPLE: "gpt-4o-mini",
-  MEDIUM: "gpt-4o",
-  COMPLEX: "claude-sonnet-4",
-  REASONING: "o1-preview",
+  SIMPLE: ["gpt-4o-mini"],
+  MEDIUM: ["gpt-4o"],
+  COMPLEX: ["claude-sonnet-4"],
+  REASONING: ["o1-preview"],
 };
 
 const baseParams: BuildComplexityRouterConfigParams = {
@@ -31,6 +31,14 @@ describe("buildComplexityRouterConfig", () => {
   it("emits only tiers and classifier_type when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     expect(config).toEqual({ tiers, classifier_type: "heuristic" });
+  });
+
+  it("passes through a tier configured with more than one model as a pool", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"] },
+    });
+    expect(config.tiers.SIMPLE).toEqual(["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"]);
   });
 
   it("includes classifier_llm_config only when classifier_type is llm", () => {
@@ -176,22 +184,26 @@ describe("getMissingTiersError", () => {
   });
 
   it("names the specific missing tier when only one is blank", () => {
-    expect(getMissingTiersError({ ...tiers, REASONING: "" })).toBe(
+    expect(getMissingTiersError({ ...tiers, REASONING: [] })).toBe(
       "Select a model for the following tier(s): REASONING",
     );
   });
 
   it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
-    expect(getMissingTiersError({ ...tiers, SIMPLE: "", REASONING: "" })).toBe(
+    expect(getMissingTiersError({ ...tiers, SIMPLE: [], REASONING: [] })).toBe(
       "Select a model for the following tier(s): SIMPLE, REASONING",
     );
   });
 
   it("names all four tiers when none are filled", () => {
-    const noTiers = { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" };
+    const noTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
     expect(getMissingTiersError(noTiers)).toBe(
       "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
     );
+  });
+
+  it("treats a tier with more than one model as filled", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] })).toBeNull();
   });
 });
 

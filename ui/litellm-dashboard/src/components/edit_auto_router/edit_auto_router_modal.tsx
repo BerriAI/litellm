@@ -15,6 +15,14 @@ const isComplexityRouterModel = (modelData: any): boolean =>
   modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
   modelData?.litellm_params?.complexity_router_config != null;
 
+// Backend tiers accept a single model (string) or a pool (string[]); routers saved
+// before multi-model tiers existed still have the string form, so normalize on load.
+const normalizeTierModels = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value) return [value];
+  return [];
+};
+
 interface EditAutoRouterModalProps {
   isVisible: boolean;
   onCancel: () => void;
@@ -92,7 +100,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
-    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
   const isComplexityRouter = isComplexityRouterModel(modelData);
@@ -141,10 +149,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
         setComplexityRouterConfig({
           tiers: {
-            SIMPLE: parsedConfig.tiers?.SIMPLE || "",
-            MEDIUM: parsedConfig.tiers?.MEDIUM || "",
-            COMPLEX: parsedConfig.tiers?.COMPLEX || "",
-            REASONING: parsedConfig.tiers?.REASONING || "",
+            SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
+            MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
+            COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
+            REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
           },
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
@@ -201,7 +209,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
       if (isComplexityRouter) {
         const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
-        if (Object.values(tiers).filter(Boolean).length === 0) {
+        if (Object.values(tiers).every((models) => models.length === 0)) {
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
           return;
         }
@@ -210,7 +218,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           return;
         }
 
-        const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+        const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
         const updatedLitellmParams = {
           ...modelData.litellm_params,
           complexity_router_config: buildUpdatedComplexityRouterConfig(

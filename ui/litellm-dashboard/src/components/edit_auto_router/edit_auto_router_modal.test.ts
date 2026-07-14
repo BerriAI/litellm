@@ -23,10 +23,10 @@ const storedConfigValue = {
 const storedConfig = JSON.stringify(storedConfigValue);
 
 const tiers = {
-  SIMPLE: "gpt-4o-mini",
-  MEDIUM: "gpt-4o-mini",
-  COMPLEX: "anthropic-sonnet-4-5",
-  REASONING: "anthropic-sonnet-4-5",
+  SIMPLE: ["gpt-4o-mini"],
+  MEDIUM: ["gpt-4o-mini"],
+  COMPLEX: ["anthropic-sonnet-4-5"],
+  REASONING: ["anthropic-sonnet-4-5"],
 };
 
 const classifiedTierValue = {
@@ -90,5 +90,15 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, classifiedTierValue, []);
 
     expect(updatedConfig.custom_technical_keywords).toBeUndefined();
+  });
+
+  it("preserves a tier configured with more than one model as a pool", () => {
+    const multiModelValue = {
+      ...classifiedTierValue,
+      tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "claude-haiku-4-5"] },
+    };
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, multiModelValue);
+
+    expect(updatedConfig.tiers).toMatchObject({ SIMPLE: ["gpt-4o-mini", "claude-haiku-4-5"] });
   });
 });
