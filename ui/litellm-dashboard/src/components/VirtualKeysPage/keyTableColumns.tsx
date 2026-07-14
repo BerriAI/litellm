@@ -4,7 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { ColumnDef } from "@tanstack/react-table";
 import { Popover, Typography } from "antd";
 
-import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
@@ -25,6 +25,11 @@ interface KeyStatus {
   label: string;
   tooltip?: string;
 }
+
+const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
+  { id: "spend", label: "Spend" },
+  { id: "max_budget", label: "Budget" },
+];
 
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (key.blocked === true) {
@@ -291,7 +296,7 @@ export const getKeyTableColumns = ({
     id: "spend",
     accessorKey: "spend",
     meta: { title: "Spend / Budget", skeleton: "meter" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Spend / Budget" variant="header-cycle" />,
+    header: ({ table }) => <DataTableMultiSortHeader table={table} fields={SPEND_BUDGET_SORT_FIELDS} />,
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {

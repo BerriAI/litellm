@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import Teams from "./Teams";
@@ -1140,5 +1140,70 @@ describe("Teams - LIT-2530 organization stays optional for proxy admin with a si
         expect.objectContaining({ team_alias: "No Org Team", organization_id: null }),
       );
     });
+  });
+});
+
+describe("Teams - search debounce", () => {
+  const emptyTeamList = { teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamListCall).mockResolvedValue(emptyTeamList);
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  const typeSearch = (value: string) => {
+    fireEvent.change(screen.getByPlaceholderText("Search teams by name or ID..."), { target: { value } });
+  };
+
+  it("fires a single search request with the last value only after the wait elapses", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await act(async () => {});
+    vi.mocked(teamListCall).mockClear();
+
+    act(() => {
+      typeSearch("a");
+      typeSearch("ab");
+      typeSearch("abc");
+    });
+    expect(teamListCall).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
+    expect(teamListCall).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(teamListCall).toHaveBeenCalledTimes(1);
+    expect(teamListCall).toHaveBeenCalledWith("test-token", 1, 10, expect.objectContaining({ search: "abc" }));
+  });
+
+  it("does not fire the search request when unmounted mid-wait", async () => {
+    const { unmount } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await act(async () => {});
+    vi.mocked(teamListCall).mockClear();
+
+    act(() => {
+      typeSearch("abc");
+    });
+    unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(teamListCall).not.toHaveBeenCalled();
   });
 });

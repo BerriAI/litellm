@@ -702,6 +702,38 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
+    """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
+    re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
+    exception type. The MCP dcr_bridge admission and refresh paths depend on this to tell a transient
+    outage (retry, 503) from a missing user (fail closed), which is why they classify across the cause
+    chain instead of the top exception's type. If this wrapping ever changes, that classification must
+    change with it, so this test guards the contract the callers rely on."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=ConnectionError("can't reach database server")
+    )
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(ValueError) as exc_info:
+            await get_user_object(
+                user_id="outage-contract-probe-user",
+                prisma_client=mock_prisma_client,
+                user_api_key_cache=mock_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=None,
+            )
+
+    assert isinstance(exc_info.value.__context__, ConnectionError)
+
+
+@pytest.mark.asyncio
 async def test_get_user_object_upsert_includes_user_email():
     """Test that user_email is included when creating a new user via get_user_object upsert"""
     # Mock the necessary dependencies

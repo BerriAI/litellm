@@ -3210,6 +3210,16 @@ all_litellm_params = (
         "_litellm_tpm_reserved_model",
         "_litellm_tpm_reserved_scopes",
         "_litellm_tpm_reservation_released",
+        "auto_router_config_path",
+        "auto_router_config",
+        "auto_router_default_model",
+        "auto_router_embedding_model",
+        "complexity_router_config",
+        "complexity_router_default_model",
+        "adaptive_router_config",
+        "adaptive_router_default_model",
+        "quality_router_config",
+        "quality_router_default_model",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
