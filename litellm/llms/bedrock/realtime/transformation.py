@@ -1025,7 +1025,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Parse the tool input. Nova 2 Sonic sends arguments in `content`;
         # fall back to `input` for backward compatibility.
         tool_input = {}
-        raw_input = tool_use.get("content") or tool_use.get("input")
+        raw_input = tool_use["content"] if "content" in tool_use else tool_use.get("input")
         if raw_input:
             try:
                 tool_input = json.loads(raw_input) if isinstance(raw_input, str) else raw_input
