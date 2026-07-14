@@ -18,6 +18,8 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD,
+    MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX,
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
@@ -654,6 +656,123 @@ async def test_async_log_failure_event_v3():
     assert op["key"] == f"{{api_key:{_api_key}}}:max_parallel_requests"
     assert op["increment_value"] == -1
     assert op["ttl"] == 60  # default window size
+
+
+@pytest.mark.asyncio
+async def test_max_parallel_requests_zset_acquire_allows_and_rejects():
+    """
+    ZSET MPR acquire should store a lease id only for admitted requests.
+    Rejected requests should not consume a slot or require a later release.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def mock_batch_rate_limiter(*args, **kwargs):
+        return []
+
+    active_leases = set()
+    acquire_calls = []
+
+    async def mock_max_parallel_requests_acquire(*args, **kwargs):
+        keys = kwargs["keys"]
+        args_list = kwargs["args"]
+        limit = int(args_list[0])
+        request_id = args_list[2]
+        acquire_calls.append((keys[0], request_id))
+
+        current_count = len(active_leases)
+        if current_count >= limit:
+            return [0, current_count, current_count, 0, 0, 0]
+
+        active_leases.add(request_id)
+        return [1, current_count, current_count + 1, 0, 0, 0]
+
+    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler.max_parallel_requests_script = (
+        mock_max_parallel_requests_acquire
+    )
+
+    descriptors = [
+        {
+            "key": "api_key",
+            "value": _api_key,
+            "rate_limit": {"max_parallel_requests": 1},
+        }
+    ]
+
+    first_request_data = {"litellm_call_id": "call-1", "metadata": {}}
+    first_response = await parallel_request_handler.should_rate_limit(
+        descriptors=descriptors,
+        request_data=first_request_data,
+    )
+
+    assert first_response["overall_code"] == "OK"
+    assert MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD not in first_request_data
+    assert (
+        first_request_data["metadata"][MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD]
+        == "call-1"
+    )
+    assert acquire_calls[0][0] == (
+        f"{{api_key:{_api_key}}}:{MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX}"
+    )
+
+    second_request_data = {"litellm_call_id": "call-2", "metadata": {}}
+    second_response = await parallel_request_handler.should_rate_limit(
+        descriptors=descriptors,
+        request_data=second_request_data,
+    )
+
+    assert second_response["overall_code"] == "OVER_LIMIT"
+    assert MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD not in second_request_data
+    assert len(active_leases) == 1
+
+
+@pytest.mark.asyncio
+async def test_max_parallel_requests_release_uses_stored_zset_lease_id():
+    """
+    Failure release should remove the exact ZSET member acquired during pre-call.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    release_calls = []
+
+    async def mock_max_parallel_requests_release(*args, **kwargs):
+        release_calls.append((kwargs["keys"], kwargs["args"]))
+        return [1, 1, 0, 0]
+
+    parallel_request_handler.max_parallel_requests_decrement_script = (
+        mock_max_parallel_requests_release
+    )
+
+    await parallel_request_handler.async_post_call_failure_hook(
+        request_data={
+            "is_centralized_redis_cache_incremented": True,
+            "metadata": {MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD: "call-1"},
+        },
+        original_exception=Exception("boom"),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=_api_key,
+            key_alias="test-key",
+            max_parallel_requests=1,
+        ),
+    )
+
+    assert release_calls == [
+        (
+            [f"{{api_key:{_api_key}}}:{MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX}"],
+            [
+                "call-1",
+                parallel_request_handler._get_max_parallel_requests_key_ttl_ms(),
+            ],
+        )
+    ]
 
 
 @pytest.mark.asyncio

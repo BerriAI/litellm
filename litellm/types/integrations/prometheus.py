@@ -140,6 +140,28 @@ LATENCY_BUCKETS = (
     float("inf"),
 )
 
+PARALLEL_REQUESTS_REDIS_SCRIPT_LATENCY_MICROSECONDS_BUCKETS = (
+    10.0,
+    25.0,
+    50.0,
+    100.0,
+    250.0,
+    500.0,
+    1000.0,
+    2500.0,
+    5000.0,
+    10000.0,
+    25000.0,
+    50000.0,
+    100000.0,
+    250000.0,
+    500000.0,
+    1000000.0,
+    2500000.0,
+    5000000.0,
+    float("inf"),
+)
+
 # Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
 BATCH_DURATION_BUCKETS = (
     60.0,
@@ -275,6 +297,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     # Redis pool metrics
     "litellm_redis_pool_active_connections",
     "litellm_redis_pool_max_connections",
+    # Max parallel requests metrics
+    "litellm_parallel_requests_redis_script_latency_microseconds",
 ]
 
 
@@ -780,10 +804,18 @@ class PrometheusMetricLabels:
     ]
     litellm_redis_pool_max_connections = litellm_redis_pool_active_connections
 
+    litellm_parallel_requests_redis_script_latency_microseconds = [
+        "operation",
+        "outcome",
+        "token",
+        "key_alias",
+    ]
+
     _metrics_without_global_custom_labels: ClassVar[frozenset[str]] = frozenset(
         {
             "litellm_redis_pool_active_connections",
             "litellm_redis_pool_max_connections",
+            "litellm_parallel_requests_redis_script_latency_microseconds",
         }
     )
 

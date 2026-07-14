@@ -2603,7 +2603,10 @@ class ProxyBaseLLMRequestProcessing:
             # on disconnect, so the nested iterator hook (which only sees
             # GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
-                proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict)
+                proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
                 client_disconnected = True
             if not delivered_chunk:
                 from litellm.proxy.spend_tracking.budget_reservation import (

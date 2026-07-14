@@ -7,6 +7,8 @@ This is currently in development and not yet ready for production.
 import asyncio
 import binascii
 import os
+import time
+import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -232,65 +234,147 @@ end
 return results
 """
 
-# Lua script for atomic check-and-increment of max_parallel_requests
-# This does NOT use sliding window - it's a simple counter with TTL safety net
+# Lua script for atomic max_parallel_requests acquire.
+#
+# The limiter stores active request leases in a Redis ZSET:
+#   member = request lease id
+#   score  = lease expiry timestamp in milliseconds
+#
+# Every acquire first removes expired leases, then admits a new request only if
+# the active cardinality is below the configured limit. Rejected requests do not
+# add a member, so they do not need a later release.
 MAX_PARALLEL_REQUESTS_SCRIPT = """
-local counter_key = KEYS[1]
+-- Return shape for every branch:
+-- {allowed, previous_count, current_count, lease_expiry_ms, now_ms, already_present}
+-- allowed: 1 when admitted, 0 when rejected.
+-- previous_count/current_count: active lease count before/after this decision.
+-- already_present: 1 when this request id was already in the ZSET and renewed.
+
+-- ZSET key that stores active request leases for one API key.
+local lease_key = KEYS[1]
+
+-- Max number of active leases allowed for this API key.
 local limit = tonumber(ARGV[1])
-local ttl_seconds = tonumber(ARGV[2])
 
--- Get current counter value
-local current = redis.call('GET', counter_key)
-local current_count = 0
-if current then
-    current_count = tonumber(current)
+-- How long one request is allowed to hold a slot if the normal release path
+-- never runs. This becomes the ZSET member score.
+local lease_ttl_ms = tonumber(ARGV[2])
+
+-- Unique id for this request. This is the ZSET member value.
+local request_id = ARGV[3]
+
+-- TTL for the whole Redis key. It is slightly longer than the lease TTL so the
+-- ZSET key does not disappear before its newest member is logically expired.
+local key_ttl_ms = tonumber(ARGV[4])
+
+-- Use Redis server time so all proxy workers agree on the same clock.
+local time_parts = redis.call('TIME')
+local now_ms = (tonumber(time_parts[1]) * 1000) + math.floor(tonumber(time_parts[2]) / 1000)
+local expires_at_ms = now_ms + lease_ttl_ms
+
+-- Redis does not auto-expire individual ZSET members. Remove stale request
+-- leases before counting active requests.
+redis.call('ZREMRANGEBYSCORE', lease_key, '-inf', now_ms)
+local current_count = redis.call('ZCARD', lease_key)
+
+-- A limit of 0 means no requests should be admitted.
+if limit <= 0 then
+    if current_count == 0 then
+        redis.call('DEL', lease_key)
+    end
+    return {0, current_count, current_count, expires_at_ms, now_ms, 0}
 end
 
--- Check if over limit
+-- Idempotency guard: if the same request id is already present, renew its lease
+-- and report success without increasing active count again.
+if redis.call('ZSCORE', lease_key, request_id) then
+    redis.call('ZADD', lease_key, 'XX', expires_at_ms, request_id)
+    redis.call('PEXPIRE', lease_key, key_ttl_ms)
+    return {1, current_count, current_count, expires_at_ms, now_ms, 1}
+end
+
+-- If the active lease count is already at/above the limit, reject this request.
+-- Do not add a ZSET member; rejected requests do not need a later release.
 if current_count >= limit then
-    -- Always refresh TTL even when rate limited (counter stays alive)
-    redis.call('EXPIRE', counter_key, ttl_seconds)
-    -- Return: was_incremented (0), previous_count, current_count
-    return {0, current_count, current_count}
-else
-    -- Increment atomically
-    local new_count = redis.call('INCR', counter_key)
-    -- Always refresh TTL after increment (key now exists)
-    redis.call('EXPIRE', counter_key, ttl_seconds)
-    -- Return: was_incremented (1), previous_count, new_count
-    return {1, current_count, new_count}
+    redis.call('PEXPIRE', lease_key, key_ttl_ms)
+    return {0, current_count, current_count, expires_at_ms, now_ms, 0}
 end
+
+-- Admit the request by adding one lease member. The member's score is when this
+-- lease becomes stale and can be removed by a later acquire/release.
+redis.call('ZADD', lease_key, 'NX', expires_at_ms, request_id)
+redis.call('PEXPIRE', lease_key, key_ttl_ms)
+
+-- Return: allowed, previous_count, current_count, lease_expiry_ms, now_ms,
+-- already_present.
+return {1, current_count, current_count + 1, expires_at_ms, now_ms, 0}
 """
 
-# Lua script for atomic decrement of max_parallel_requests
-# Note: TTL is NOT refreshed on decrement to avoid counter drift.
-# The TTL set on INCR is the authority; DECR should not extend key lifetime.
+# Lua script for atomic max_parallel_requests release.
+#
+# Release removes only the member for the completed request. This avoids the
+# fixed-counter drift where an old request can decrement a newer counter
+# generation after the original key expired.
 MAX_PARALLEL_REQUESTS_DECREMENT_SCRIPT = """
-local counter_key = KEYS[1]
+-- ZSET key that stores active request leases for one API key.
+local lease_key = KEYS[1]
 
--- Get current counter value
-local current = redis.call('GET', counter_key)
-if not current then
-    return {-1, -1}
+-- Unique id for the request that finished.
+local request_id = ARGV[1]
+
+-- TTL for the whole Redis key, refreshed only if leases remain after release.
+local key_ttl_ms = tonumber(ARGV[2])
+
+-- Use Redis server time so expiry cleanup is consistent across proxy workers.
+local time_parts = redis.call('TIME')
+local now_ms = (tonumber(time_parts[1]) * 1000) + math.floor(tonumber(time_parts[2]) / 1000)
+
+-- Clean up stale leases first so the returned counts reflect active requests.
+redis.call('ZREMRANGEBYSCORE', lease_key, '-inf', now_ms)
+local previous_count = redis.call('ZCARD', lease_key)
+local removed = 0
+
+-- Release only this request's own lease. This is the key difference from a
+-- shared counter decrement: an old request cannot decrement a newer request.
+if request_id and request_id ~= '' then
+    removed = redis.call('ZREM', lease_key, request_id)
 end
 
-local current_count = tonumber(current)
-if current_count <= 0 then
-    return {current_count, current_count}
+local current_count = redis.call('ZCARD', lease_key)
+
+-- If no active leases remain, delete the key immediately. Otherwise keep the
+-- ZSET key alive long enough for its remaining leases to expire naturally.
+if current_count == 0 then
+    redis.call('DEL', lease_key)
+else
+    redis.call('PEXPIRE', lease_key, key_ttl_ms)
 end
 
--- Only decrement if counter is positive (avoid negative values)
--- Negative counters don't make sense for "parallel requests"
-local previous_count = current_count
-current_count = redis.call('DECR', counter_key)
-
--- Return: previous_count, current_count
-return {previous_count, current_count}
+-- Return: removed, previous_count, current_count, now_ms.
+return {removed, previous_count, current_count, now_ms}
 """
 
 # Redis cluster slot count
 REDIS_CLUSTER_SLOTS = 16384
 REDIS_NODE_HASHTAG_NAME = "all_keys"
+
+# TTL for max_parallel_requests request leases (5 minutes in seconds, configurable via env)
+MAX_PARALLEL_REQUESTS_TTL_SECONDS = int(
+    os.getenv("LITELLM_MAX_PARALLEL_REQUESTS_TTL_SECONDS", "300")
+)
+MAX_PARALLEL_REQUESTS_KEY_TTL_BUFFER_SECONDS = int(
+    os.getenv("LITELLM_MAX_PARALLEL_REQUESTS_KEY_TTL_BUFFER_SECONDS", "60")
+)
+MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX = "max_parallel_requests_leases"
+MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD = "_litellm_max_parallel_requests_lease_id"
+
+# Global env to enable/disable max_parallel_requests rate limiter
+_ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER_RAW = os.getenv(
+    "LITELLM_ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER", "true"
+)
+ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER = (
+    _ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER_RAW.lower().strip() == "true"
+)
 
 # TPM token reservation tuning constants.
 # When max_tokens is not specified in the request we still need to reserve
@@ -329,6 +413,7 @@ _LITELLM_STASH_KEYS: Tuple[str, ...] = (
     TPM_RESERVED_SCOPES_KEY,
     TPM_RESERVATION_RELEASED_KEY,
     RATE_LIMIT_DESCRIPTORS_KEY,
+    MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD,
 )
 
 
@@ -635,6 +720,103 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return counter_key
 
+    def create_max_parallel_requests_lease_key(self, key: str, value: str) -> str:
+        """
+        Create the Redis ZSET key used to track active max_parallel_requests leases.
+
+        This intentionally uses a different suffix than the legacy string counter
+        key to avoid Redis WRONGTYPE errors during rollout.
+        """
+        return f"{{{key}:{value}}}:{MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX}"
+
+    def _get_max_parallel_requests_key_ttl_ms(self) -> int:
+        return (
+            MAX_PARALLEL_REQUESTS_TTL_SECONDS
+            + MAX_PARALLEL_REQUESTS_KEY_TTL_BUFFER_SECONDS
+        ) * 1000
+
+    def _get_max_parallel_requests_lease_id_from_dict(
+        self, data: Optional[Dict[str, Any]]
+    ) -> Optional[str]:
+        if not isinstance(data, dict):
+            return None
+
+        direct_value = data.get(MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD)
+        if isinstance(direct_value, str) and direct_value:
+            return direct_value
+
+        for metadata_key in ("metadata", "litellm_metadata"):
+            metadata = data.get(metadata_key)
+            if isinstance(metadata, dict):
+                metadata_value = metadata.get(MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD)
+                if isinstance(metadata_value, str) and metadata_value:
+                    return metadata_value
+
+        litellm_params = data.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            params_value = litellm_params.get(MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD)
+            if isinstance(params_value, str) and params_value:
+                return params_value
+
+            for metadata_key in ("metadata", "litellm_metadata"):
+                metadata = litellm_params.get(metadata_key)
+                if isinstance(metadata, dict):
+                    metadata_value = metadata.get(
+                        MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD
+                    )
+                    if isinstance(metadata_value, str) and metadata_value:
+                        return metadata_value
+
+        standard_logging_object = data.get("standard_logging_object")
+        if isinstance(standard_logging_object, dict):
+            standard_metadata = standard_logging_object.get("metadata")
+            if isinstance(standard_metadata, dict):
+                metadata_value = standard_metadata.get(
+                    MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD
+                )
+                if isinstance(metadata_value, str) and metadata_value:
+                    return metadata_value
+
+        return None
+
+    def _create_max_parallel_requests_lease_id(
+        self, request_data: Optional[Dict[str, Any]]
+    ) -> str:
+        existing_lease_id = self._get_max_parallel_requests_lease_id_from_dict(
+            request_data
+        )
+        if existing_lease_id is not None:
+            return existing_lease_id
+
+        if isinstance(request_data, dict):
+            litellm_call_id = request_data.get("litellm_call_id")
+            if litellm_call_id:
+                return str(litellm_call_id)
+
+        return str(uuid.uuid4())
+
+    def _store_max_parallel_requests_lease_id(
+        self,
+        request_data: Optional[Dict[str, Any]],
+        lease_id: str,
+    ) -> None:
+        if not isinstance(request_data, dict):
+            return
+
+        self._stash_value_in_metadata_channels(
+            data=request_data,
+            key=MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD,
+            value=lease_id,
+        )
+
+        litellm_params = request_data.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            self._stash_value_in_metadata_channels(
+                data=litellm_params,
+                key=MAX_PARALLEL_REQUESTS_LEASE_ID_FIELD,
+                value=lease_id,
+            )
+
     def is_cache_list_over_limit(
         self,
         keys_to_fetch: List[str],
@@ -814,6 +996,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         read_only: bool = False,
         skip_tpm_check: bool = False,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        request_data: Optional[Dict[str, Any]] = None,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -830,6 +1014,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ``reserve_tpm_tokens`` reservation path should set this to
                 avoid the +1-per-key Lua / in-memory increment double-charging
                 the tokens counter.
+            user_api_key_dict: Optional auth object used for MPR Redis script metrics.
+            request_data: Optional request data used to stash the acquired MPR lease id.
         """
 
         current_time = self._get_current_time()
@@ -841,6 +1027,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_metadata = {}  # Store metadata for each key
         counter_key_to_limit: Dict[str, int] = {}  # Store limit for each counter key
         was_incremented_values: List[int] = []  # Track if each counter was incremented
+        use_zset_max_parallel_requests = (
+            self.max_parallel_requests_script is not None and not read_only
+        )
+        api_key_max_parallel_requests: Optional[Tuple[str, str, int]] = None
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
@@ -866,12 +1056,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 counter_key_to_limit[tpm_key] = int(tokens_limit)
                 rate_limit_set = True
             if max_parallel_requests_limit is not None:
-                max_parallel_requests_key = self.create_rate_limit_keys(
-                    descriptor_key, descriptor_value, "max_parallel_requests"
-                )
-                keys_to_fetch.extend([window_key, max_parallel_requests_key])
-                counter_key_to_limit[max_parallel_requests_key] = int(max_parallel_requests_limit)
-                rate_limit_set = True
+                use_legacy_max_parallel_requests_counter = True
+                if descriptor_key == "api_key":
+                    if not ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER:
+                        use_legacy_max_parallel_requests_counter = False
+                    elif use_zset_max_parallel_requests:
+                        api_key_max_parallel_requests = (
+                            descriptor_key,
+                            descriptor_value,
+                            int(max_parallel_requests_limit),
+                        )
+                        use_legacy_max_parallel_requests_counter = False
+                        rate_limit_set = True
+
+                if use_legacy_max_parallel_requests_counter:
+                    max_parallel_requests_key = self.create_rate_limit_keys(
+                        descriptor_key, descriptor_value, "max_parallel_requests"
+                    )
+                    keys_to_fetch.extend([window_key, max_parallel_requests_key])
+                    counter_key_to_limit[max_parallel_requests_key] = int(max_parallel_requests_limit)
+                    rate_limit_set = True
 
             if not rate_limit_set:
                 continue
@@ -962,6 +1166,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 cache_values_for_limit_check.append(cache_values[i])      # window_start
                 cache_values_for_limit_check.append(cache_values[i + 1])  # counter
             cache_values = cache_values_for_limit_check
+
+            # Process API key max_parallel_requests with separate Lua script
+            if api_key_max_parallel_requests is not None:
+                (
+                    descriptor_key,
+                    descriptor_value,
+                    max_parallel_requests_limit,
+                ) = api_key_max_parallel_requests
+                result = await self._execute_max_parallel_requests_increment(
+                    descriptor_key=descriptor_key,
+                    descriptor_value=descriptor_value,
+                    max_parallel_requests_limit=max_parallel_requests_limit,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+                if result is not None:
+                    new_count = result[1]
+                    was_incremented_values.append(1 if result[2] else 0)
+
+                    window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
+                    counter_key = self.create_rate_limit_keys(
+                        descriptor_key, descriptor_value, "max_parallel_requests"
+                    )
+
+                    # Add to keys_to_fetch and cache_values for limit checking
+                    # Use window_key placeholder and counter_key for is_cache_list_over_limit
+                    keys_to_fetch.extend([window_key, counter_key])
+                    cache_values.extend(["0", new_count])  # window is unused, counter is what matters
+                    key_metadata[window_key] = {
+                        "requests_limit": None,
+                        "tokens_limit": None,
+                        "max_parallel_requests_limit": max_parallel_requests_limit,
+                        "window_size": MAX_PARALLEL_REQUESTS_TTL_SECONDS,
+                        "descriptor_key": descriptor_key,
+                    }
+
+                    # Update in-memory cache with new count
+                    await self.internal_usage_cache.async_set_cache(
+                        key=counter_key,
+                        value=new_count,
+                        ttl=MAX_PARALLEL_REQUESTS_TTL_SECONDS,
+                        litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
         else:
             # NORMAL MODE: In-memory sliding window (no Redis)
             cache_values = await self.in_memory_cache_sliding_window(
@@ -2138,53 +2386,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rate_limit_type="max_parallel_requests",
         )
 
-        # Use dedicated Lua script for atomic check-and-increment (no window logic)
-        if self.max_parallel_requests_script is not None:
-            try:
-                results = await self.max_parallel_requests_script(
-                    keys=[counter_key],
-                    args=[max_parallel_requests, self.max_parallel_requests_ttl],
-                )
-                # Results: [was_incremented, previous_count, current_count]
-                was_incremented = results[0]
-                previous_count = results[1]
-                current_count = results[2]
-
-                verbose_proxy_logger.debug(
-                    f"max_parallel_requests incremented for {api_key}: previous={previous_count}, current={current_count}, limit={max_parallel_requests}"
-                )
-
-                # Emit Prometheus metric
-                if user_api_key_dict:
-                    await self._emit_parallel_requests_metric(
-                        user_api_key_dict=user_api_key_dict,
-                        current_count=current_count,
-                        previous_count=previous_count,
-                        operation="increment",
-                    )
-
-                if was_incremented == 0:
-                    # Counter was NOT incremented - limit exceeded
-                    raise HTTPException(
-                        status_code=429,
-                        detail=(
-                            f"Rate limit exceeded for api_key: {api_key}. "
-                            f"Limit type: max_parallel_requests. "
-                            f"Current limit: {max_parallel_requests}, Current: {current_count}."
-                        ),
-                        headers={
-                            "rate_limit_type": "max_parallel_requests",
-                        },
-                    )
-                return (previous_count, current_count)
-            except HTTPException:
-                raise
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Max parallel requests Lua script failed, falling back: {str(e)}"
-                )
-
-        # Fallback: use cache operations (non-atomic, may have race conditions)
+        # Legacy fallback: use cache operations (non-atomic, may have race
+        # conditions). The active Redis path uses ZSET leases via
+        # _execute_max_parallel_requests_increment(), which needs request data
+        # to stash the acquired lease id.
         current_value = await self.internal_usage_cache.async_get_cache(
             key=counter_key,
             litellm_parent_otel_span=parent_otel_span,
@@ -2258,41 +2463,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rate_limit_type="max_parallel_requests",
         )
 
-        # Use Lua script for atomic decrement (no TTL refresh to avoid counter drift)
-        if self.max_parallel_requests_decrement_script is not None:
-            try:
-                results = await self.max_parallel_requests_decrement_script(
-                    keys=[counter_key],
-                    args=[],
-                )
-                # Results: [previous_count, current_count]
-                previous_count = results[0]
-                current_count = results[1]
-                verbose_proxy_logger.debug(
-                    f"max_parallel_requests decremented for {api_key}: previous={previous_count}, current={current_count}"
-                )
-                if previous_count == -1 and current_count == -1:
-                    verbose_proxy_logger.debug(
-                        "max_parallel_requests decrement skipped because counter key expired or does not exist: "
-                        "api_key=%s, counter_key=%s",
-                        api_key,
-                        counter_key,
-                    )
-                # Emit Prometheus metric
-                if user_api_key_dict:
-                    await self._emit_parallel_requests_metric(
-                        user_api_key_dict=user_api_key_dict,
-                        current_count=current_count,
-                        previous_count=previous_count,
-                        operation="decrement",
-                    )
-                return (previous_count, current_count)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Max parallel requests decrement Lua script failed, falling back: {str(e)}"
-                )
-
-        # Fallback: use cache operations (non-atomic)
+        # Legacy fallback: use cache operations (non-atomic). The active Redis
+        # path uses ZSET leases via _execute_max_parallel_requests_decrement(),
+        # which needs the stored request lease id.
         current_value = await self.internal_usage_cache.async_get_cache(
             key=counter_key,
             litellm_parent_otel_span=parent_otel_span,
@@ -2416,6 +2589,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
             )
 
             max_parallel_was_incremented = self._get_max_parallel_was_incremented(
@@ -2665,6 +2840,291 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 args=args,
             )
 
+    def _observe_max_parallel_requests_redis_script_latency(
+        self,
+        operation: Literal["increment", "decrement"],
+        outcome: str,
+        latency_microseconds: float,
+        token: Optional[str],
+        key_alias: Optional[str],
+    ) -> None:
+        """
+        Observe Redis Lua script latency for max_parallel_requests acquire/release.
+
+        Prometheus computes p50/p95/p99 from the histogram buckets. This helper is
+        intentionally best-effort so metrics failures never affect rate limiting.
+        """
+        try:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            prometheus_logger = PrometheusLogger.get_instance()
+            if prometheus_logger is None:
+                return
+
+            latency_histogram = getattr(
+                prometheus_logger,
+                "litellm_parallel_requests_redis_script_latency_microseconds",
+                None,
+            )
+            if latency_histogram is None:
+                return
+
+            latency_histogram.labels(
+                operation=operation,
+                outcome=outcome,
+                token=str(token) if token is not None else "None",
+                key_alias=str(key_alias) if key_alias is not None else "None",
+            ).observe(latency_microseconds)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to observe max_parallel_requests Redis script latency metric: {str(e)}"
+            )
+
+    async def _execute_max_parallel_requests_increment(
+        self,
+        descriptor_key: str,
+        descriptor_value: str,
+        max_parallel_requests_limit: int,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+    ) -> Optional[List[Any]]:
+        """
+        Execute max_parallel_requests acquire script for a single descriptor.
+
+        Uses a Redis ZSET lease per admitted request. The returned count remains
+        shaped like the old counter result so the existing limit-check path can
+        continue to use is_cache_list_over_limit.
+
+        Args:
+            descriptor_key: The descriptor key (e.g., "api_key")
+            descriptor_value: The descriptor value (e.g., the API key hash)
+            max_parallel_requests_limit: Configured max_parallel_requests limit
+            user_api_key_dict: Optional UserAPIKeyAuth for metrics emission
+            request_data: Optional request data used to store the acquired lease id
+
+        Returns:
+            List containing [previous_count, effective_count, allowed, lease_id, active_count]
+            or None if script unavailable.
+        """
+        if self.max_parallel_requests_script is None:
+            return None
+
+        lease_key = self.create_max_parallel_requests_lease_key(
+            descriptor_key, descriptor_value
+        )
+        request_id = self._create_max_parallel_requests_lease_id(request_data)
+        metric_token = user_api_key_dict.token if user_api_key_dict else None
+        metric_key_alias = user_api_key_dict.key_alias if user_api_key_dict else None
+        script_start_time: Optional[float] = None
+
+        try:
+            script_start_time = time.perf_counter()
+            result = await self.max_parallel_requests_script(
+                keys=[lease_key],
+                args=[
+                    max_parallel_requests_limit,
+                    MAX_PARALLEL_REQUESTS_TTL_SECONDS * 1000,
+                    request_id,
+                    self._get_max_parallel_requests_key_ttl_ms(),
+                ],
+            )
+            script_latency_seconds = time.perf_counter() - script_start_time
+            allowed = int(result[0]) == 1
+            previous_count = int(result[1])
+            active_count = int(result[2])
+            already_present = len(result) > 5 and int(result[5]) == 1
+            effective_count = (
+                active_count if allowed else max_parallel_requests_limit + 1
+            )
+
+            if allowed:
+                self._store_max_parallel_requests_lease_id(
+                    request_data=request_data,
+                    lease_id=request_id,
+                )
+
+            # Emit metric for every max_parallel_requests acquire decision.
+            current_ts = datetime.now().isoformat()
+            acquire_outcome = (
+                "already_present"
+                if already_present
+                else "allowed"
+                if allowed
+                else "rejected"
+            )
+            self._observe_max_parallel_requests_redis_script_latency(
+                operation="increment",
+                outcome=acquire_outcome,
+                latency_microseconds=script_latency_seconds * 1_000_000,
+                token=metric_token,
+                key_alias=metric_key_alias,
+            )
+            print(
+                f"[METRICS] Emitting parallel_requests metric: "
+                f"token={metric_token}, "
+                f"key_alias={metric_key_alias}, "
+                f"previous_count={previous_count}, "
+                f"current_count={active_count}, "
+                f"operation=increment, "
+                f"timestamp={current_ts}"
+            )
+
+            verbose_proxy_logger.debug(
+                f"Max parallel requests acquire: key={descriptor_key}:{descriptor_value}, "
+                f"allowed={allowed}, previous={previous_count}, active={active_count}"
+            )
+            return [
+                previous_count,
+                effective_count,
+                allowed,
+                request_id,
+                active_count,
+            ]
+        except Exception as e:
+            if script_start_time is not None:
+                self._observe_max_parallel_requests_redis_script_latency(
+                    operation="increment",
+                    outcome="error",
+                    latency_microseconds=(
+                        time.perf_counter() - script_start_time
+                    )
+                    * 1_000_000,
+                    token=metric_token,
+                    key_alias=metric_key_alias,
+                )
+            print(
+                f"[EXCEPTION] _execute_max_parallel_requests_increment failed: "
+                f"key={descriptor_key}:{descriptor_value}, "
+                f"lease_key={lease_key}, "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}"
+            )
+            verbose_proxy_logger.warning(
+                f"Max parallel requests acquire script failed: {str(e)}"
+            )
+            return None
+
+    async def _execute_max_parallel_requests_decrement(
+        self,
+        descriptor_key: str,
+        descriptor_value: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        token: Optional[str] = None,
+        key_alias: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Optional[List[Any]]:
+        """
+        Execute max_parallel_requests release script for a single descriptor.
+
+        This removes only the request's own ZSET member. A missing request_id is
+        treated as a no-op because rejected requests do not acquire a lease.
+
+        Args:
+            descriptor_key: The descriptor key (e.g., "api_key")
+            descriptor_value: The descriptor value (e.g., the API key hash)
+            user_api_key_dict: Optional UserAPIKeyAuth for metrics emission
+            token: Optional token for metrics (used when user_api_key_dict is not available)
+            key_alias: Optional key alias for metrics (used when user_api_key_dict is not available)
+            request_id: Request lease id to remove from the ZSET
+
+        Returns:
+            List containing [removed, previous_count, current_count, now_ms] or None.
+        """
+        if self.max_parallel_requests_decrement_script is None:
+            return None
+
+        # Skip if max_parallel_requests rate limiter is globally disabled
+        # This handles the edge case where the feature was disabled but
+        # Redis MPR state from previous requests may still exist until TTL expires.
+        if not ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER:
+            return None
+
+        if not request_id:
+            print(
+                f"[DECR-SKIP] Max parallel requests release skipped: "
+                f"key={descriptor_key}:{descriptor_value}, "
+                f"request_id missing"
+            )
+            return None
+
+        lease_key = self.create_max_parallel_requests_lease_key(
+            descriptor_key, descriptor_value
+        )
+        metric_token = token or (user_api_key_dict.token if user_api_key_dict else None)
+        metric_key_alias = key_alias or (
+            user_api_key_dict.key_alias if user_api_key_dict else None
+        )
+        script_start_time: Optional[float] = None
+
+        try:
+            script_start_time = time.perf_counter()
+            result = await self.max_parallel_requests_decrement_script(
+                keys=[lease_key],
+                args=[request_id, self._get_max_parallel_requests_key_ttl_ms()],
+            )
+            script_latency_seconds = time.perf_counter() - script_start_time
+            removed = int(result[0])
+            previous_count = int(result[1])
+            new_count = int(result[2])
+
+            if removed == 0:
+                print(
+                    f"[DECR-MISSING] Max parallel requests release did not remove a lease: "
+                    f"key={descriptor_key}:{descriptor_value}, "
+                    f"lease_key={lease_key}, "
+                    f"request_id={request_id}, "
+                    f"previous_count={previous_count}, "
+                    f"current_count={new_count}"
+                )
+
+            # Emit metric for every max_parallel_requests release result.
+            current_ts = datetime.now().isoformat()
+            self._observe_max_parallel_requests_redis_script_latency(
+                operation="decrement",
+                outcome="removed" if removed > 0 else "missing",
+                latency_microseconds=script_latency_seconds * 1_000_000,
+                token=metric_token,
+                key_alias=metric_key_alias,
+            )
+            print(
+                f"[METRICS] Emitting parallel_requests metric: "
+                f"token={metric_token}, "
+                f"key_alias={metric_key_alias}, "
+                f"previous_count={previous_count}, "
+                f"current_count={new_count}, "
+                f"operation=decrement, "
+                f"timestamp={current_ts}"
+            )
+
+            verbose_proxy_logger.debug(
+                f"Max parallel requests release: key={descriptor_key}:{descriptor_value}, "
+                f"removed={removed}, previous={previous_count}, current={new_count}"
+            )
+            return result
+        except Exception as e:
+            if script_start_time is not None:
+                self._observe_max_parallel_requests_redis_script_latency(
+                    operation="decrement",
+                    outcome="error",
+                    latency_microseconds=(
+                        time.perf_counter() - script_start_time
+                    )
+                    * 1_000_000,
+                    token=metric_token,
+                    key_alias=metric_key_alias,
+                )
+            print(
+                f"[EXCEPTION] _execute_max_parallel_requests_decrement failed: "
+                f"key={descriptor_key}:{descriptor_value}, "
+                f"lease_key={lease_key}, "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}"
+            )
+            verbose_proxy_logger.warning(
+                f"Max parallel requests release script failed: {str(e)}"
+            )
+            return None
+
     async def async_increment_tokens_with_ttl_preservation(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -2866,6 +3326,116 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if isinstance(slo_meta, dict):
                 slo_meta[TPM_RESERVATION_RELEASED_KEY] = True
 
+    async def _release_max_parallel_requests_after_increment(
+        self,
+        request_data: Optional[Dict[str, Any]],
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        standard_logging_metadata: Optional[Dict[str, Any]] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> bool:
+        """
+        Release the API-key max_parallel_requests slot acquired during pre-call.
+
+        Redis deployments acquire a ZSET lease id; local/no-Redis tests still use
+        the legacy string counter path. This helper handles both so every cleanup
+        path stays symmetric with the pre-call increment that actually happened.
+        """
+        if not isinstance(request_data, dict):
+            return False
+
+        is_centralized_redis_cache_incremented = request_data.get(
+            "is_centralized_redis_cache_incremented",
+            request_data.get("litellm_params", {}).get(
+                "is_centralized_redis_cache_incremented", False
+            ),
+        )
+        if not is_centralized_redis_cache_incremented:
+            return False
+
+        standard_logging_metadata = standard_logging_metadata or {}
+        user_api_key = (
+            getattr(user_api_key_dict, "api_key", None)
+            or standard_logging_metadata.get("user_api_key_hash")
+        )
+        if not user_api_key:
+            _litellm_params = request_data.get("litellm_params") or {}
+            _lp_metadata = _litellm_params.get("metadata") or {}
+            _lp_litellm_metadata = _litellm_params.get("litellm_metadata") or {}
+            verbose_proxy_logger.debug(
+                "MPR release skipped because user_api_key_hash was not resolved. "
+                "standard_logging_metadata_present=%s, stream=%r, call_type=%r, "
+                "cache_hit=%r, model=%r, litellm_params.metadata.user_api_key=%r, "
+                "litellm_params.litellm_metadata.user_api_key=%r",
+                bool(standard_logging_metadata),
+                request_data.get("stream"),
+                request_data.get("call_type"),
+                request_data.get("cache_hit"),
+                request_data.get("model"),
+                _lp_metadata.get("user_api_key"),
+                _lp_litellm_metadata.get("user_api_key"),
+            )
+            return False
+
+        if user_api_key_dict is not None and user_api_key_dict.max_parallel_requests is None:
+            return False
+
+        if user_api_key_dict is None:
+            from litellm.litellm_core_utils.core_helpers import (
+                get_litellm_metadata_from_kwargs,
+            )
+
+            litellm_metadata_for_auth = (
+                get_litellm_metadata_from_kwargs(kwargs=request_data) or {}
+            )
+            user_api_key_auth_obj = litellm_metadata_for_auth.get(
+                "user_api_key_auth"
+            )
+            if (
+                user_api_key_auth_obj is not None
+                and getattr(user_api_key_auth_obj, "max_parallel_requests", None)
+                is None
+            ):
+                return False
+
+        max_parallel_requests_lease_id = (
+            self._get_max_parallel_requests_lease_id_from_dict(request_data)
+        )
+        if (
+            ENABLE_MAX_PARALLEL_REQUESTS_RATE_LIMITER
+            and max_parallel_requests_lease_id
+            and self.max_parallel_requests_decrement_script is not None
+        ):
+            result = await self._execute_max_parallel_requests_decrement(
+                descriptor_key="api_key",
+                descriptor_value=user_api_key,
+                user_api_key_dict=user_api_key_dict,
+                token=(
+                    getattr(user_api_key_dict, "api_key", None)
+                    or standard_logging_metadata.get("user_api_key_hash")
+                ),
+                key_alias=(
+                    getattr(user_api_key_dict, "key_alias", None)
+                    or standard_logging_metadata.get("user_api_key_alias")
+                ),
+                request_id=max_parallel_requests_lease_id,
+            )
+            released = result is not None
+        else:
+            await self._decrement_max_parallel_requests(
+                api_key=user_api_key,
+                parent_otel_span=parent_otel_span
+                or getattr(user_api_key_dict, "parent_otel_span", None),
+                user_api_key_dict=user_api_key_dict,
+            )
+            released = True
+
+        if released:
+            request_data["is_centralized_redis_cache_incremented"] = False
+            litellm_params = request_data.get("litellm_params")
+            if isinstance(litellm_params, dict):
+                litellm_params["is_centralized_redis_cache_incremented"] = False
+        return released
+
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: Dict[str, Any],
@@ -2971,9 +3541,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_type: Literal["output", "input", "total"],
     ) -> List[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
-        from litellm.litellm_core_utils.core_helpers import (
-            get_litellm_metadata_from_kwargs,
-        )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -3019,52 +3586,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reconcile_model = reserved_model or model_group
 
         pipeline_operations: List[RedisPipelineIncrementOperation] = []
-
-        is_centralized_redis_cache_incremented = kwargs.get(
-            "litellm_params", {}
-        ).get("is_centralized_redis_cache_incremented", False)
-        litellm_metadata_for_auth = get_litellm_metadata_from_kwargs(kwargs=kwargs) or {}
-        user_api_key_auth_obj = litellm_metadata_for_auth.get("user_api_key_auth")
-        max_parallel_requests_configured = not (
-            user_api_key_auth_obj is not None
-            and getattr(user_api_key_auth_obj, "max_parallel_requests", None) is None
-        )
-
-        # max_parallel_requests is its own counter (api-key only). Only
-        # decrement when pre-call actually incremented it.
-        if user_api_key and is_centralized_redis_cache_incremented and max_parallel_requests_configured:
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=self.create_rate_limit_keys(
-                        key="api_key",
-                        value=user_api_key,
-                        rate_limit_type="max_parallel_requests",
-                    ),
-                    increment_value=-1,
-                    ttl=self.window_size,
-                )
-            )
-        elif is_centralized_redis_cache_incremented:
-            _litellm_params = kwargs.get("litellm_params") or {}
-            _lp_metadata = _litellm_params.get("metadata") or {}
-            _lp_litellm_metadata = _litellm_params.get("litellm_metadata") or {}
-            verbose_proxy_logger.debug(
-                "MPR success-path decrement skipped because user_api_key_hash was not resolved. "
-                "standard_logging_object_present=%s, standard_logging_metadata_present=%s, "
-                "stream=%r, call_type=%r, cache_hit=%r, async_complete_streaming_response_present=%s, "
-                "model=%r, max_parallel_requests_configured=%s, litellm_params.metadata.user_api_key=%r, "
-                "litellm_params.litellm_metadata.user_api_key=%r",
-                bool(kwargs.get("standard_logging_object")),
-                bool(standard_logging_metadata),
-                kwargs.get("stream"),
-                kwargs.get("call_type"),
-                kwargs.get("cache_hit"),
-                "async_complete_streaming_response" in kwargs,
-                kwargs.get("model"),
-                max_parallel_requests_configured,
-                _lp_metadata.get("user_api_key"),
-                _lp_litellm_metadata.get("user_api_key"),
-            )
 
         # ----------------------------------------------------------------
         # TPM reconciliation
@@ -3119,6 +3640,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 rate_limit_type=rate_limit_type,
             )
 
+            standard_logging_object = kwargs.get("standard_logging_object") or {}
+            standard_logging_metadata = standard_logging_object.get("metadata") or {}
+            await self._release_max_parallel_requests_after_increment(
+                request_data=kwargs,
+                standard_logging_metadata=standard_logging_metadata,
+                parent_otel_span=litellm_parent_otel_span,
+            )
+
             if pipeline_operations:
                 await self.async_increment_tokens_with_ttl_preservation(
                     pipeline_operations=pipeline_operations,
@@ -3160,17 +3689,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 user_api_key_dict is not None and user_api_key_dict.max_parallel_requests is None
             )
             if user_api_key and is_centralized_redis_cache_incremented and max_parallel_requests_configured:
-                counter_key = self.create_rate_limit_keys(
-                    key="api_key",
-                    value=user_api_key,
-                    rate_limit_type="max_parallel_requests",
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=counter_key,
-                        increment_value=-1,
-                        ttl=self.window_size,
-                    )
+                await self._release_max_parallel_requests_after_increment(
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    standard_logging_metadata=standard_logging_metadata,
+                    parent_otel_span=litellm_parent_otel_span,
                 )
 
             # Skip the reservation refund if async_post_call_failure_hook
@@ -3221,7 +3744,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in rate limit failure hook: {str(e)}")
 
-    async def async_release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+    async def async_release_max_parallel_requests_on_disconnect(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Release the api-key ``max_parallel_requests`` slot that
         ``async_pre_call_hook`` reserved, for a request that ended without
@@ -3237,23 +3764,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not user_api_key_dict.api_key or user_api_key_dict.max_parallel_requests is None:
             return
 
-        await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-            increment_list=[
-                RedisPipelineIncrementOperation(
-                    key=self.create_rate_limit_keys(
-                        key="api_key",
-                        value=user_api_key_dict.api_key,
-                        rate_limit_type="max_parallel_requests",
-                    ),
-                    increment_value=-1,
-                    # Refresh the window TTL on the decrement, matching the
-                    # failure path. max_parallel_requests is a concurrency
-                    # gauge, not a rolling-window count, so the key must
-                    # outlive in-flight requests rather than expire mid-stream.
-                    ttl=self.window_size,
-                )
-            ],
-            litellm_parent_otel_span=None,
+        release_data = (
+            request_data
+            if isinstance(request_data, dict)
+            else {"is_centralized_redis_cache_incremented": True}
+        )
+        await self._release_max_parallel_requests_after_increment(
+            request_data=release_data,
+            user_api_key_dict=user_api_key_dict,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
@@ -3319,6 +3838,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         first refund applies.
         """
         try:
+            standard_logging_object = request_data.get("standard_logging_object") or {}
+            standard_logging_metadata = standard_logging_object.get("metadata") or {}
+            await self._release_max_parallel_requests_after_increment(
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                standard_logging_metadata=standard_logging_metadata,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+
             if self._is_reservation_released(kwargs=request_data):
                 return
             reserved_tokens = self._get_reserved_tokens_from_kwargs(kwargs=request_data)

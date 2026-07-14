@@ -53,6 +53,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
+    PARALLEL_REQUESTS_REDIS_SCRIPT_LATENCY_MICROSECONDS_BUCKETS,
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
 )
@@ -358,6 +359,17 @@ class PrometheusLogger(CustomLogger):
                 "litellm_current_parallel_requests_timestamp",
                 "Unix timestamp when the parallel requests gauge was last updated",
                 labelnames=["token", "key_name", "key_alias", "team_alias"],
+            )
+
+            self.litellm_parallel_requests_redis_script_latency_microseconds = (
+                self._histogram_factory(
+                    "litellm_parallel_requests_redis_script_latency_microseconds",
+                    "Redis Lua script latency in microseconds for max_parallel_requests acquire/release operations",
+                    labelnames=self.get_labels_for_metric(
+                        "litellm_parallel_requests_redis_script_latency_microseconds"
+                    ),
+                    buckets=PARALLEL_REQUESTS_REDIS_SCRIPT_LATENCY_MICROSECONDS_BUCKETS,
+                )
             )
 
             ########################################

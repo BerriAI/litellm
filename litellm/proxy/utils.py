@@ -1491,8 +1491,9 @@ class ProxyLogging:
                             verbose_proxy_logger.info(
                                 f"DEBUG Decrementing max_parallel_requests for api_key: {user_api_key_dict.api_key}"
                             )
-                            await callback._decrement_max_parallel_requests(
-                                api_key=user_api_key_dict.api_key,
+                            await callback._release_max_parallel_requests_after_increment(
+                                request_data=data,
+                                user_api_key_dict=user_api_key_dict,
                                 parent_otel_span=user_api_key_dict.parent_otel_span,
                             )
                             data["is_centralized_redis_cache_incremented"] = False
@@ -2677,7 +2678,11 @@ class ProxyLogging:
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
 
-    def _release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+    def _release_max_parallel_requests_on_disconnect(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: Optional[dict] = None,
+    ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
         response is cancelled mid-flight (client disconnect). Neither the
@@ -2697,7 +2702,12 @@ class ProxyLogging:
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
         try:
-            asyncio.create_task(limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict))
+            asyncio.create_task(
+                limiter.async_release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+            )
         except RuntimeError:
             # No running event loop (e.g. interpreter/loop shutdown); the
             # counter's window TTL will reclaim the slot.
