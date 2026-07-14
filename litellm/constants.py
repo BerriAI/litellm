@@ -550,6 +550,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "iflytek",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -714,6 +715,7 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
+    "https://spark-api-open.xf-yun.com/v1",
 ]
 
 
@@ -779,6 +781,7 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "iflytek",
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",

@@ -289,6 +289,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+iflytek_key: Optional[str] = None
 wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
@@ -626,6 +627,7 @@ llama_models: Set = set()
 nscale_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
+iflytek_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
@@ -1123,6 +1125,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
+    "iflytek": iflytek_models,
     "aiml": aiml_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
@@ -1948,6 +1951,7 @@ if TYPE_CHECKING:
         GigaChatEmbeddingConfig as GigaChatEmbeddingConfig,
     )
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
+    from .llms.iflytek.chat.transformation import IFlytekConfig as IFlytekConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,

@@ -301,6 +301,7 @@ LLM_CONFIG_NAMES = (
     "ManusResponsesAPIConfig",
     "GithubCopilotEmbeddingConfig",
     "NebiusConfig",
+    "IFlytekConfig",
     "WandbConfig",
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
@@ -1148,6 +1149,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "ChatGPTResponsesAPIConfig",
     ),
     "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
+    "IFlytekConfig": (".llms.iflytek.chat.transformation", "IFlytekConfig"),
     "WandbConfig": (".llms.wandb.chat.transformation", "WandbConfig"),
     "GigaChatConfig": (".llms.gigachat.chat.transformation", "GigaChatConfig"),
     "GigaChatEmbeddingConfig": (

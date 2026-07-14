@@ -274,6 +274,9 @@ def get_llm_provider(
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
+                    elif endpoint == "https://spark-api-open.xf-yun.com/v1":
+                        custom_llm_provider = "iflytek"
+                        dynamic_api_key = get_secret_str("IFLYTEK_API_KEY")
                     elif endpoint == "ollama.com":
                         custom_llm_provider = "ollama"
                         dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
@@ -608,6 +611,9 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "nebius":
         api_base = api_base or get_secret("NEBIUS_API_BASE") or "https://api.studio.nebius.ai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
+    elif custom_llm_provider == "iflytek":
+        api_base = api_base or get_secret("IFLYTEK_API_BASE") or "https://spark-api-open.xf-yun.com/v1"  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("IFLYTEK_API_KEY")
     elif custom_llm_provider == "ollama":
         api_base = api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
