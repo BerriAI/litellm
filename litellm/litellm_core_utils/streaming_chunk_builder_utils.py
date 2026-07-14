@@ -299,7 +299,7 @@ class ChunkProcessor:
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
-            if tool_call_data["id"] and tool_call_data["name"]:
+            if tool_call_data["name"]:
                 combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level
@@ -310,7 +310,7 @@ class ChunkProcessor:
 
                 # Prepare params for ChatCompletionMessageToolCall
                 tool_call_params = {
-                    "id": tool_call_data["id"],
+                    "id": tool_call_data["id"] or None,
                     "function": function,
                     "type": tool_call_data["type"] or "function",
                 }
