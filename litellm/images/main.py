@@ -100,7 +100,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(image_generation, *args, **kwargs)
@@ -109,9 +109,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=kwargs.get("api_base", None),
+            )
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)

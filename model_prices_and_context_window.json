@@ -18312,6 +18312,14 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-image-2": {
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
     "gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 1.25e-06,

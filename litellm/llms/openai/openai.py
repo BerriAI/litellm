@@ -381,10 +381,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cached_client, AsyncOpenAI
                 ):
                     return cached_client
+            # Ensure base_url is never an empty string; if not provided, use the
+            # OpenAI default. This prevents OpenAI SDK v2 from inheriting an
+            # empty OPENAI_BASE_URL environment variable and building relative
+            # request paths that aiohttp cannot resolve.
+            resolved_base_url = api_base if api_base else "https://api.openai.com/v1"
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
-                    base_url=api_base,
+                    base_url=resolved_base_url,
                     http_client=OpenAIChatCompletion._get_async_http_client(
                         shared_session=shared_session
                     ),
@@ -395,7 +400,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 _new_client = OpenAI(
                     api_key=api_key,
-                    base_url=api_base,
+                    base_url=resolved_base_url,
                     http_client=OpenAIChatCompletion._get_sync_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
