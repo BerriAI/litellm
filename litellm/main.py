@@ -2347,6 +2347,8 @@ def _complete_custom_openai(
     stream = ctx.stream
     timeout = ctx.timeout
 
+    dynamic_api_key = api_key
+
     api_base = (
         api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
         or litellm.api_base
@@ -2379,7 +2381,9 @@ def _complete_custom_openai(
         )
 
         copilot_auth = Authenticator()
-        copilot_api_key = api_key if isinstance(api_key, str) and api_key else copilot_auth.get_api_key()
+        copilot_api_key = (
+            dynamic_api_key if isinstance(dynamic_api_key, str) and dynamic_api_key else copilot_auth.get_api_key()
+        )
         copilot_headers = get_copilot_default_headers(copilot_api_key)
         if extra_headers:
             copilot_headers.update(extra_headers)

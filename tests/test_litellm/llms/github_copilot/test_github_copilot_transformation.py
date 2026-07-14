@@ -31,6 +31,14 @@ from litellm.llms.github_copilot.common_utils import (
 )
 
 
+def _get_invoked_completion_kwargs(mock_class_completion, mock_instance_completion):
+    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
+    assert len(invoked) == 1
+    invoked[0].assert_called_once()
+    _, kwargs = invoked[0].call_args
+    return kwargs
+
+
 def test_github_copilot_config_get_openai_compatible_provider_info():
     """Test the GitHub Copilot configuration provider info retrieval."""
 
@@ -41,9 +49,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = mock_api_key
     # Test with dynamic endpoint
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -105,9 +111,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info_explicit_api_
 
     config = GithubCopilotConfig()
     config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
 
     explicit_api_key = "gh.explicit-account-key-456"
     (
@@ -124,8 +128,6 @@ def test_github_copilot_config_get_openai_compatible_provider_info_explicit_api_
     assert dynamic_api_key == explicit_api_key
     config.authenticator.get_api_key.assert_not_called()
 
-    # Even if the account's own Authenticator is completely broken, an
-    # explicit api_key must still get through rather than raising.
     config.authenticator.get_api_key.side_effect = GetAPIKeyError(
         message="Failed to get API key",
         status_code=401,
@@ -186,11 +188,7 @@ def test_completion_github_copilot_mock_response(
 
     assert mock_get_api_key.call_count >= 1
 
-    # Exactly one of the two patched targets should have been used.
-    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
-    assert len(invoked) == 1
-    invoked[0].assert_called_once()
-    _, kwargs = invoked[0].call_args
+    kwargs = _get_invoked_completion_kwargs(mock_class_completion, mock_instance_completion)
 
     assert "headers" in kwargs
     assert kwargs.get("model") == "gpt-4"
@@ -232,14 +230,43 @@ def test_completion_github_copilot_explicit_api_key_bypasses_authenticator(
 
     assert response is not None
 
-    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
-    assert len(invoked) == 1
-    _, kwargs = invoked[0].call_args
+    kwargs = _get_invoked_completion_kwargs(mock_class_completion, mock_instance_completion)
     assert kwargs["api_key"] == explicit_api_key
-    assert (
-        kwargs["optional_params"]["extra_headers"]["Authorization"]
-        == f"Bearer {explicit_api_key}"
+    assert kwargs["optional_params"]["extra_headers"]["Authorization"] == f"Bearer {explicit_api_key}"
+
+
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
+@patch("litellm.main.openai_chat_completions.completion")
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
+def test_completion_github_copilot_without_api_key_uses_authenticator_not_global_openai_key(
+    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch
+):
+    """A global OpenAI key must not be treated as an explicit Copilot api_key."""
+
+    monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
+    monkeypatch.setattr(litellm, "api_key", "sk-global-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    copilot_api_key = "gh.authenticator-account-key-123"
+    mock_get_api_key.return_value = copilot_api_key
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "Hello from the authenticator account!"
+    mock_class_completion.return_value = mock_response
+    mock_instance_completion.return_value = mock_response
+
+    response = completion(
+        model="github_copilot/gpt-4",
+        messages=[{"role": "user", "content": "Hello, who are you?"}],
     )
+
+    assert response is not None
+
+    kwargs = _get_invoked_completion_kwargs(mock_class_completion, mock_instance_completion)
+    assert kwargs["api_key"] == copilot_api_key
+    assert kwargs["optional_params"]["extra_headers"]["Authorization"] == f"Bearer {copilot_api_key}"
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
@@ -257,25 +284,19 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
             {"role": "system", "content": "System message."},
             {"role": "user", "content": "User message."},
         ]
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
 
         # Case 2: Flag is True (conversion does not happen)
         litellm.disable_copilot_system_to_assistant = True
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "system"
         assert out[1]["role"] == "user"
 
         # Case 3: Flag is False again (conversion happens)
         litellm.disable_copilot_system_to_assistant = False
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
     finally:
@@ -480,9 +501,7 @@ def test_get_supported_openai_params_claude_model():
     assert "reasoning_effort" in supported_params
 
     # Test Claude 3-7 model supports thinking and reasoning_effort parameters
-    supported_params_claude37 = config.get_supported_openai_params(
-        "claude-3-7-sonnet-20250219"
-    )
+    supported_params_claude37 = config.get_supported_openai_params("claude-3-7-sonnet-20250219")
     assert "thinking" in supported_params_claude37
     assert "reasoning_effort" in supported_params_claude37
 
@@ -509,16 +528,12 @@ def test_get_supported_openai_params_case_insensitive():
     config = GithubCopilotConfig()
 
     # Test uppercase Claude 4 model with full model name
-    supported_params_upper = config.get_supported_openai_params(
-        "CLAUDE-SONNET-4-20250514"
-    )
+    supported_params_upper = config.get_supported_openai_params("CLAUDE-SONNET-4-20250514")
     assert "thinking" in supported_params_upper
     assert "reasoning_effort" in supported_params_upper
 
     # Test mixed case Claude 3-7 model (has extended thinking) with full model name
-    supported_params_mixed = config.get_supported_openai_params(
-        "Claude-3-7-Sonnet-20250219"
-    )
+    supported_params_mixed = config.get_supported_openai_params("Claude-3-7-Sonnet-20250219")
     assert "thinking" in supported_params_mixed
     assert "reasoning_effort" in supported_params_mixed
 
@@ -852,13 +867,8 @@ class TestGithubCopilotTransformResponse:
         assert result.choices[0].message.tool_calls is not None
         assert len(result.choices[0].message.tool_calls) == 1
         assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
-        assert (
-            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
-        )
-        assert (
-            '"Boston, MA"'
-            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
-        )
+        assert result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        assert '"Boston, MA"' in result.choices[0].message.tool_calls[0]["function"]["arguments"]
 
     def test_transform_response_anthropic_native_multiple_text_blocks(self):
         """All text blocks must be concatenated, not only the first."""
@@ -1026,12 +1036,8 @@ class TestGithubCopilotTransformParsedResponseDict:
 
 
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
-@patch(
-    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
-)
-def test_openai_handler_repairs_github_copilot_empty_choices(
-    mock_request, mock_get_client
-):
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request")
+def test_openai_handler_repairs_github_copilot_empty_choices(mock_request, mock_get_client):
     """
     The OpenAI SDK handler calls convert_to_model_response_object directly on the
     SDK's parsed output, bypassing transform_response. convert raises APIError on
