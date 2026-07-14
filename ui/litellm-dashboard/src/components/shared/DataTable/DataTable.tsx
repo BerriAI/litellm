@@ -338,11 +338,35 @@ const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", 
 function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown> | undefined; index: number }) {
   const meta = column?.columnDef.meta;
   const width = SKELETON_WIDTHS[index % SKELETON_WIDTHS.length];
-  if (meta?.skeleton === "twoLine") {
+  const shape = meta?.skeleton;
+  if (meta?.renderSkeleton !== undefined) {
+    return <>{meta.renderSkeleton()}</>;
+  }
+  if (shape === "twoLine") {
     return (
       <div className="flex flex-col gap-2">
         <Skeleton className={cn("h-3.5", width)} />
         <Skeleton className="h-2.5 w-2/5 opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "badge") {
+    return <Skeleton className={cn("h-5 w-16 rounded-full", meta?.numeric ? "ml-auto" : "")} />;
+  }
+  if (shape === "chips") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="h-5 w-14 rounded-full" />
+        <Skeleton className="h-5 w-20 rounded-full" />
+        <Skeleton className="h-5 w-9 rounded-full opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "meter") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Skeleton className="h-3.5 w-24" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
       </div>
     );
   }
@@ -508,7 +532,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined;
-  const tableStyle = enableColumnResizing ? { width: table.getTotalSize() } : undefined;
+  const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
     if (paginationSlot !== undefined) {
