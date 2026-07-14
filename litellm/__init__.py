@@ -613,6 +613,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -842,6 +843,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.add(key)
+        elif value.get("litellm_provider") == "nadir":
+            nadir_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
@@ -1017,6 +1020,7 @@ model_list = list(
     | azure_anthropic_models
     | anyscale_models
     | cerebras_models
+    | nadir_models
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
@@ -1120,6 +1124,7 @@ models_by_provider: dict = {
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "nadir": nadir_models,
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
     "nvidia_riva": nvidia_riva_models,
@@ -1879,6 +1884,7 @@ if TYPE_CHECKING:
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
+    from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
     from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig
     from .llms.sambanova.embedding.transformation import (
