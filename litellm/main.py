@@ -1014,8 +1014,10 @@ def responses_api_bridge_check(
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and reasoning_effort is not None
-        and (reasoning_summary is not None or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools))
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools)
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
