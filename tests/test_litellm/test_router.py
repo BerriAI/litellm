@@ -5386,6 +5386,77 @@ def test_update_settings_optional_pre_call_checks_is_idempotent():
     assert len(prompt_caching_callbacks) == 1
 
 
+@pytest.mark.asyncio
+async def test_update_settings_optional_pre_call_checks_removes_unregistered_checks():
+    """
+    Regression test: `update_settings(optional_pre_call_checks=...)` only ever
+    unioned new checks into `self.optional_pre_call_checks` - it never removed
+    anything absent from the incoming list. Unchecking "prompt_caching" in the
+    Admin UI's new multi-select and clicking Save would silently do nothing:
+    the DB got the smaller list, but the live router kept both
+    `optional_pre_call_checks` and the registered `PromptCachingDeploymentCheck`
+    callback unchanged, showing "saved" while the router kept enforcing the
+    removed check until a restart.
+    """
+    from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+        PromptCachingDeploymentCheck,
+    )
+
+    router = _make_router_for_settings_tests()
+    router.update_settings(
+        optional_pre_call_checks=["prompt_caching", "router_budget_limiting"]
+    )
+    assert router.optional_pre_call_checks == [
+        "prompt_caching",
+        "router_budget_limiting",
+    ]
+    assert router.router_budget_logger is not None
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    assert router.optional_pre_call_checks == ["prompt_caching"]
+    assert router.router_budget_logger is None
+    callbacks = router.optional_callbacks or []
+    assert any(isinstance(cb, PromptCachingDeploymentCheck) for cb in callbacks)
+    assert not any(cb.__class__.__name__ == "RouterBudgetLimiting" for cb in callbacks)
+    assert not any(
+        cb.__class__.__name__ == "RouterBudgetLimiting" for cb in litellm.callbacks
+    )
+
+
+def test_update_settings_optional_pre_call_checks_removes_affinity_flags():
+    """
+    Regression test: deployment_affinity/session_affinity/responses_api_deployment_check
+    share one `DeploymentAffinityCheck` callback instance keyed by boolean flags, not a
+    dedicated callback per check. Removing one of these three from
+    optional_pre_call_checks must clear only its flag, leaving the shared callback (and
+    any other still-enabled flag) intact rather than removing the whole callback.
+    """
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = _make_router_for_settings_tests()
+    router.update_settings(
+        optional_pre_call_checks=["deployment_affinity", "session_affinity"]
+    )
+    affinity_callback = next(
+        cb
+        for cb in (router.optional_callbacks or [])
+        if isinstance(cb, DeploymentAffinityCheck)
+    )
+    assert affinity_callback.enable_user_key_affinity is True
+    assert affinity_callback.enable_session_id_affinity is True
+
+    router.update_settings(optional_pre_call_checks=["session_affinity"])
+
+    assert router.optional_pre_call_checks == ["session_affinity"]
+    assert affinity_callback.enable_user_key_affinity is False
+    assert affinity_callback.enable_session_id_affinity is True
+    # The shared callback stays registered - session_affinity is still enabled.
+    assert affinity_callback in (router.optional_callbacks or [])
+
+
 def test_get_settings_includes_default_litellm_params_and_optional_pre_call_checks():
     """
     Regression test: the Admin UI's Router Settings page reads its current

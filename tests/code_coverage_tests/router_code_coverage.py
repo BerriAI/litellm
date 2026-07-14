@@ -82,6 +82,7 @@ ignored_function_names = [
     "_invalidate_access_groups_cache",  # Tested indirectly via set_model_list, upsert_model etc. (test files lack "router" in name)
     "_merge_default_litellm_params_setting",  # Tested indirectly via update_settings(default_litellm_params=...)
     "_apply_optional_pre_call_checks_setting",  # Tested indirectly via update_settings(optional_pre_call_checks=...)
+    "_remove_optional_pre_call_checks",  # Tested indirectly via update_settings(optional_pre_call_checks=...)
 ]
 
 

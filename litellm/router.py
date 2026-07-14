@@ -9710,12 +9710,63 @@ class Router:
         if value is not None:
             self.default_litellm_params = {**self.default_litellm_params, **value}
 
+    def _remove_optional_pre_call_checks(self, removed_checks: OptionalPreCallChecks) -> None:
+        """
+        Reverse of `add_optional_pre_call_checks` for the subset of checks that can be
+        safely turned off at runtime: clears the corresponding flag(s) on shared
+        affinity callbacks, or unregisters the dedicated callback instance entirely.
+        """
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+
+        if any(
+            check in removed_checks
+            for check in ("deployment_affinity", "responses_api_deployment_check", "session_affinity")
+        ):
+            for callback in self.optional_callbacks:
+                if not isinstance(callback, DeploymentAffinityCheck):
+                    continue
+                if "deployment_affinity" in removed_checks:
+                    callback.enable_user_key_affinity = False
+                if "responses_api_deployment_check" in removed_checks:
+                    callback.enable_responses_api_affinity = False
+                if "session_affinity" in removed_checks:
+                    callback.enable_session_id_affinity = False
+                break
+
+        if "encrypted_content_affinity" in removed_checks:
+            for callback in self.optional_callbacks:
+                if isinstance(callback, EncryptedContentAffinityCheck):
+                    callback.enable_global_affinity = False
+                    break
+
+        removable_callback_types = {
+            "prompt_caching": PromptCachingDeploymentCheck,
+            "enforce_model_rate_limits": ModelRateLimitingCheck,
+            "router_budget_limiting": RouterBudgetLimiting,
+        }
+        for check, callback_type in removable_callback_types.items():
+            if check not in removed_checks:
+                continue
+            litellm.logging_callback_manager.remove_callbacks_by_type(self.optional_callbacks, callback_type)
+            litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, callback_type)
+            if check == "router_budget_limiting":
+                self.router_budget_logger = None
+
     def _apply_optional_pre_call_checks_setting(self, value: OptionalPreCallChecks | None) -> None:
         if value is None:
             return
         new_checks = [check for check in value if check not in self.optional_pre_call_checks]
+        removed_checks = [check for check in self.optional_pre_call_checks if check not in value]
         if new_checks:
             self.add_optional_pre_call_checks(new_checks)
+        if removed_checks:
+            self._remove_optional_pre_call_checks(removed_checks)
+        self.optional_pre_call_checks = list(value)
 
     # Settings whose update logic doesn't fit `setattr(self, var, value)` (e.g.
     # merge-not-replace, or side effects beyond storing the value). Dispatched via
