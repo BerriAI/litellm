@@ -3592,7 +3592,10 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
+            verbose_proxy_logger.debug(
+                "PrismaClient: insert_data: %s",
+                {**data, "token": self.hash_token(token=data["token"])} if "token" in data else data,
+            )
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
