@@ -7628,3 +7628,64 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+def test_gateway_dcr_flow_routing_engages_only_for_llm_dcrc_clients(monkeypatch):
+    """The aggregate DCR arms engage for llm_dcrc_ client_ids (register always mints one,
+    authorize/token route into the aggregate flow); a non-gateway client_id keeps the
+    per-server behavior, and /authorize/complete exists but 400s without a valid flow."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-lit3637")
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637", raising=False)
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    registered = client.post("/register", json={"redirect_uris": ["https://claude.ai/cb"]})
+    assert registered.status_code == 201
+    assert registered.json()["client_id"].startswith("llm_dcrc_")
+    assert registered.json()["token_endpoint_auth_method"] == "none"
+
+    authorize_params = {
+        "client_id": "llm_dcrc_bogus",
+        "redirect_uri": "https://claude.ai/cb",
+        "response_type": "code",
+        "code_challenge": "c" * 43,
+        "code_challenge_method": "S256",
+    }
+    bogus_client = client.get("/authorize", params=authorize_params)
+    assert bogus_client.status_code == 400
+    assert bogus_client.json()["error"] == "invalid_client"
+
+    no_cookie = client.post("/authorize/complete", data={"flow": "h"})
+    assert no_cookie.status_code == 400
+    assert no_cookie.json()["error"] == "invalid_request"
+
+    token_response = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": "llm_dcrc_bogus",
+            "code": "x",
+            "redirect_uri": "https://claude.ai/cb",
+            "code_verifier": "v" * 43,
+        },
+    )
+    assert token_response.status_code == 400
+    assert token_response.json()["error"] == "invalid_grant"
+
+    # a non-gateway (upstream-issued) client_id is not routed into the aggregate arm; it
+    # falls to the per-server exchange, which 404s for an unknown server
+    upstream_shaped = client.post(
+        "/token",
+        data={"grant_type": "authorization_code", "client_id": "regular-upstream-client", "code": "x"},
+    )
+    assert upstream_shaped.status_code == 404
