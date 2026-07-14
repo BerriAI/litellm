@@ -517,7 +517,8 @@ class LoggingClient:
             )
         return self.gateway.transport.send(
             "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
-    
+        )
+
     def responses_raw(
         self, key: str, model: str, text: str, *, max_output_tokens: int = 64
     ) -> StreamingResponse:
