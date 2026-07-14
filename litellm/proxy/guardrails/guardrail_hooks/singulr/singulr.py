@@ -218,7 +218,7 @@ class SingulrGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         payload = self._build_payload(request_data, inputs, input_type)
-        #verbose_proxy_logger.debug("Singulr: payload=%s", payload)
+        # verbose_proxy_logger.debug("Singulr: payload=%s", payload)
         if not payload:
             return inputs
 
