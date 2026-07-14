@@ -1,0 +1,143 @@
+"""Per-server outcomes for the aggregate MCP tools/list fan-out.
+
+The aggregate listing deliberately keeps serving the healthy subset when one server fails, but a
+failed server must contribute a classified outcome instead of silently shrinking the list: an empty
+contribution with no signal makes a broken upstream indistinguishable from a healthy server with no
+tools. Outcomes carry only machine fields (category and status code) so nothing from an upstream
+body crosses the trust boundary; classification is total, so any exception out of a server fetch
+becomes an outcome, never a second failure.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, NamedTuple, TypeAlias
+
+import httpx
+from mcp.types import Tool as MCPTool
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import assert_never
+
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+
+ListFaultCategory: TypeAlias = Literal[
+    "auth_required",
+    "forbidden",
+    "timeout",
+    "unreachable",
+    "upstream_error",
+    "internal",
+]
+
+
+class ServerListOk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["ok"] = "ok"
+    tool_count: int
+
+
+class ServerListFault(BaseModel):
+    """Why a server contributed nothing to a listing: the caller must authenticate upstream
+    (``auth_required``/``forbidden``), the upstream did not answer (``timeout``/``unreachable``),
+    the upstream answered outside its contract (``upstream_error``), or the gateway itself failed
+    (``internal``). ``status_code`` is the upstream HTTP status when one exists."""
+
+    model_config = ConfigDict(frozen=True)
+    tag: ListFaultCategory
+    status_code: int | None = None
+
+
+ServerOutcome: TypeAlias = ServerListOk | ServerListFault
+
+SERVER_OUTCOMES_META_KEY = "litellm.ai/server_outcomes"
+"""The tools/list result ``_meta`` key carrying per-server outcomes. Prefixed with the litellm.ai
+domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-reserved names."""
+
+
+class AggregateToolListing(NamedTuple):
+    tools: list[MCPTool]
+    outcomes: dict[str, ServerOutcome]
+
+
+def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
+    """Walk the exception tree (``__cause__``/``__context__``/ExceptionGroup members) for an
+    ``httpx.Response``, mirroring how upstream failures surface through the MCP SDK's task groups."""
+    seen: set[int] = set()
+    stack = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        response = getattr(current, "response", None)
+        if isinstance(response, httpx.Response):
+            return response
+        exceptions = getattr(current, "exceptions", None)
+        if isinstance(exceptions, tuple):
+            stack.extend(exceptions)
+        for link in (current.__cause__, current.__context__):
+            if link is not None:
+                stack.append(link)
+    return None
+
+
+def classify_list_exception(exc: BaseException) -> ServerListFault:
+    """Classify a per-server listing failure into exactly one outcome. Total: an exception this
+    function cannot recognize is the gateway's own fault (``internal``), never a re-raise."""
+    if isinstance(exc, MCPServerListError) and isinstance(exc.fault, ServerListFault):
+        return exc.fault
+    if isinstance(exc, MCPUpstreamAuthError):
+        tag = "forbidden" if exc.status_code == 403 else "auth_required"
+        return ServerListFault(tag=tag, status_code=exc.status_code)
+    if isinstance(exc, TimeoutError):
+        return ServerListFault(tag="timeout")
+    if isinstance(exc, ConnectionError):
+        return ServerListFault(tag="unreachable")
+    response = _find_upstream_response(exc)
+    if response is not None:
+        if response.status_code == 401:
+            return ServerListFault(tag="auth_required", status_code=401)
+        if response.status_code == 403:
+            return ServerListFault(tag="forbidden", status_code=403)
+        return ServerListFault(tag="upstream_error", status_code=response.status_code)
+    if isinstance(exc, (httpx.TimeoutException,)):
+        return ServerListFault(tag="timeout")
+    if isinstance(exc, httpx.TransportError):
+        return ServerListFault(tag="unreachable")
+    return ServerListFault(tag="internal")
+
+
+def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
+    """The client-visible form of one outcome, for the tools/list result ``_meta`` and the REST
+    response: category plus status code only, never upstream prose or URLs."""
+    match outcome.tag:
+        case "ok":
+            return {"status": "ok", "tool_count": outcome.tool_count}
+        case "auth_required" | "forbidden" | "timeout" | "unreachable" | "upstream_error" | "internal":
+            return {
+                "status": outcome.tag,
+                **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
+            }
+        case _:
+            assert_never(outcome.tag)
+
+
+def list_fault_http_status(fault: ServerListFault) -> int:
+    """The truthful HTTP status for a single-upstream listing fault per RFC 9110: the upstream's own
+    401/403 for auth, 504 for a timeout, 502 for an unreachable or misbehaving upstream, and 500 only
+    for the gateway's own failure."""
+    match fault.tag:
+        case "auth_required":
+            return fault.status_code or 401
+        case "forbidden":
+            return 403
+        case "timeout":
+            return 504
+        case "unreachable" | "upstream_error":
+            return 502
+        case "internal":
+            return 500
+        case _:
+            assert_never(fault.tag)
