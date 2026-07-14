@@ -2216,6 +2216,45 @@ class TestCLIKeyRegenerationFlow:
         assert "session not found or expired" in expired_exc.value.detail
         assert "enable_redis_auth_cache" in expired_exc.value.detail
 
+    def test_cli_sso_flow_is_redis_authoritative_when_redis_attached(self):
+        """
+        When Redis is attached, the CLI SSO flow must be read from and written to
+        Redis directly, never the in-memory layer. Otherwise the worker that served
+        /sso/cli/start keeps serving its stale in-memory flow and never sees the
+        sso_complete/session_data update another worker wrote, which is exactly the
+        multi-worker failure this fix targets.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_SESSION_TTL_SECONDS,
+            _get_cli_sso_flow_cache_key,
+            _get_cli_sso_flow_or_raise,
+            _set_cli_sso_flow,
+        )
+
+        login_id = "cli-redis_authoritative_1234567890"
+        cache_key = _get_cli_sso_flow_cache_key(login_id)
+        fresh_flow = {"poll_secret_hash": "fresh", "sso_complete": True}
+        stale_flow = {"poll_secret_hash": "stale", "sso_complete": False}
+
+        redis_cache = MagicMock()
+        redis_cache.get_cache.return_value = fresh_flow
+        cache = MagicMock()
+        cache.redis_cache = redis_cache
+        cache.get_cache.return_value = stale_flow
+
+        result = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cache)
+
+        assert result == fresh_flow
+        redis_cache.get_cache.assert_called_once_with(key=cache_key)
+        cache.get_cache.assert_not_called()
+
+        _set_cli_sso_flow(login_id=login_id, cache=cache, flow=fresh_flow)
+
+        redis_cache.set_cache.assert_called_once_with(
+            key=cache_key, value=fresh_flow, ttl=CLI_SSO_SESSION_TTL_SECONDS
+        )
+        cache.set_cache.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):
         """Test CLI SSO start creates a polling secret bound flow"""
@@ -2228,7 +2267,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock(spec=Request)
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.increment_cache.return_value = 1
 
         with (
@@ -2262,7 +2301,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock(spec=Request)
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.increment_cache.return_value = 31
 
         with (
@@ -2287,7 +2326,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.increment_cache.return_value = 1
 
         with (
@@ -2321,7 +2360,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.client = SimpleNamespace(host="127.0.0.1")
         mock_request.headers = {}
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.increment_cache.return_value = 1
 
         with (
@@ -2355,7 +2394,7 @@ class TestCLIKeyRegenerationFlow:
 
         mock_request = MagicMock(spec=Request)
         mock_request.base_url = "https://proxy.example.com/"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {"poll_secret_hash": "h"}
 
         async def drive(enabled: bool):
@@ -2532,7 +2571,7 @@ class TestCLIKeyRegenerationFlow:
         )
         mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
@@ -2576,7 +2615,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.body = AsyncMock(
             return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
         )
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
@@ -2615,7 +2654,7 @@ class TestCLIKeyRegenerationFlow:
 
         mock_request = MagicMock(spec=Request)
         mock_request.body = AsyncMock(return_value=b"user_code=ABCD-EFGH")
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
@@ -2652,7 +2691,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request.body = AsyncMock(
             return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
         )
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "user_code_hash": _hash_cli_sso_secret(
@@ -2702,7 +2741,7 @@ class TestCLIKeyRegenerationFlow:
         mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
 
         # Mock cache
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
@@ -2785,7 +2824,7 @@ class TestCLIKeyRegenerationFlow:
         }
 
         # Mock cache
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -2822,7 +2861,7 @@ class TestCLIKeyRegenerationFlow:
             cli_poll_key,
         )
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -2852,7 +2891,7 @@ class TestCLIKeyRegenerationFlow:
             cli_poll_key,
         )
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -3034,7 +3073,7 @@ class TestCLIKeyRegenerationFlow:
         )
 
         # Mock cache
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -3110,7 +3149,7 @@ class TestCLIKeyRegenerationFlow:
             models=["gpt-4"],
             max_budget=100.0,
         )
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -3173,7 +3212,7 @@ class TestCLIKeyRegenerationFlow:
             max_budget=None,
         )
         mock_team = LiteLLM_TeamTableCachedObj(team_id="team-x", max_budget=None)
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -4125,7 +4164,7 @@ class TestPKCEFunctionality:
         mock_request.query_params = {"state": test_state}
 
         # Mock cache with async methods — use dict format (primary path)
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         test_code_verifier = "test_code_verifier_abc123xyz"
         mock_cache.async_get_cache = AsyncMock(
             return_value={"code_verifier": test_code_verifier}
@@ -4176,7 +4215,7 @@ class TestPKCEFunctionality:
         mock_sso.__exit__ = MagicMock(return_value=False)
 
         test_state = "test456"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
 
         mock_cache.async_set_cache = AsyncMock()
 
@@ -4700,7 +4739,7 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
 
         mock_request = MagicMock(spec=Request)
@@ -4826,7 +4865,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
         mock_cache.async_delete_cache = AsyncMock()
 
@@ -4868,7 +4907,7 @@ class TestPKCEFunctionality:
 
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.async_get_cache = AsyncMock(return_value=None)  # verifier not found
 
         mock_request = MagicMock(spec=Request)
@@ -4956,7 +4995,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.async_get_cache = AsyncMock(return_value=12345)
         mock_cache.async_delete_cache = AsyncMock()
 
@@ -5008,7 +5047,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         legacy_verifier = "legacy_plain_string_verifier_abc123"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.async_get_cache = AsyncMock(return_value=legacy_verifier)
 
         mock_request = MagicMock(spec=Request)
@@ -6292,7 +6331,7 @@ class TestCliSsoAttributionMetadata:
             provider="generic",
             team_ids=[],
         )
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
@@ -6334,7 +6373,7 @@ class TestCliSsoAttributionMetadata:
 
         mock_request = MagicMock(spec=Request)
         mock_request.base_url = "http://internal-proxy.local/"
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
@@ -6404,7 +6443,7 @@ class TestCliSsoAttributionMetadata:
             "user_id": "test-user-123",
             "employment_type": "contractor",
         }
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
@@ -6474,7 +6513,7 @@ class TestCliSsoAttributionMetadata:
                 "org": {"cost_center": "CC-42"},
             },
         }
-        mock_cache = MagicMock()
+        mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
             "sso_complete": True,
@@ -7336,7 +7375,7 @@ async def test_cli_poll_key_tolerates_missing_user_row():
         "models": ["gpt-4"],
     }
 
-    mock_cache = MagicMock()
+    mock_cache = MagicMock(redis_cache=None)
     mock_cache.get_cache.return_value = {
         "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
         "sso_complete": True,
