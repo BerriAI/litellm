@@ -189,3 +189,13 @@ def test_endpoint_requires_authentication() -> None:
         response = client.get("/relay/managed-config")
 
     assert response.status_code == 401
+
+
+def test_relay_feature_is_registered_lazily() -> None:
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    relay = next((f for f in LAZY_FEATURES if f.name == "relay"), None)
+
+    assert relay is not None
+    assert relay.module_path == "litellm.proxy.relay_endpoints.endpoints"
+    assert relay.matches("/relay/managed-config")
