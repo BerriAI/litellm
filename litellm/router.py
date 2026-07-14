@@ -9720,14 +9720,13 @@ class Router:
             EncryptedContentAffinityCheck,
         )
 
-        if self.optional_callbacks is None:
-            self.optional_callbacks = []
+        optional_callbacks = self.optional_callbacks or []
 
         if any(
             check in removed_checks
             for check in ("deployment_affinity", "responses_api_deployment_check", "session_affinity")
         ):
-            for callback in self.optional_callbacks:
+            for callback in optional_callbacks:
                 if not isinstance(callback, DeploymentAffinityCheck):
                     continue
                 if "deployment_affinity" in removed_checks:
@@ -9739,7 +9738,7 @@ class Router:
                 break
 
         if "encrypted_content_affinity" in removed_checks:
-            for callback in self.optional_callbacks:
+            for callback in optional_callbacks:
                 if isinstance(callback, EncryptedContentAffinityCheck):
                     callback.enable_global_affinity = False
                     break
@@ -9752,7 +9751,7 @@ class Router:
         for check, callback_type in removable_callback_types.items():
             if check not in removed_checks:
                 continue
-            litellm.logging_callback_manager.remove_callbacks_by_type(self.optional_callbacks, callback_type)
+            litellm.logging_callback_manager.remove_callbacks_by_type(optional_callbacks, callback_type)
             litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, callback_type)
             if check == "router_budget_limiting":
                 self.router_budget_logger = None
