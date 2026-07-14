@@ -15,8 +15,6 @@ const isComplexityRouterModel = (modelData: any): boolean =>
   modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
   modelData?.litellm_params?.complexity_router_config != null;
 
-// Backend tiers accept a single model (string) or a pool (string[]); routers saved
-// before multi-model tiers existed still have the string form, so normalize on load.
 const normalizeTierModels = (value: unknown): string[] => {
   if (Array.isArray(value)) return value;
   if (typeof value === "string" && value) return [value];

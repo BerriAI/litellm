@@ -12,9 +12,6 @@ const { Text } = Typography;
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 
-// A tier maps to one or more models. With more than one, the backend randomly
-// picks among them (or Thompson-samples within the pool when adaptive routing
-// is on) instead of always calling the same model.
 export interface ComplexityTiers {
   SIMPLE: string[];
   MEDIUM: string[];
