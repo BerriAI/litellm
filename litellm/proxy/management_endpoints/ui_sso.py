@@ -3216,11 +3216,9 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
-        )
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
 
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.
