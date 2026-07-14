@@ -5304,3 +5304,49 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+def _make_priority_router(default_priority):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        default_priority=default_priority,
+    )
+    router.schedule_acompletion = AsyncMock(return_value="scheduled")
+    router.async_function_with_fallbacks = AsyncMock(return_value="fallbacks")
+    return router
+
+
+@pytest.mark.asyncio
+async def test_acompletion_honors_explicit_priority_zero():
+    """priority=0 must route through the scheduler, not be dropped by an `or` default."""
+    router = _make_priority_router(default_priority=None)
+
+    result = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        priority=0,
+    )
+
+    assert result == "scheduled"
+    router.schedule_acompletion.assert_awaited_once()
+    router.async_function_with_fallbacks.assert_not_awaited()
+    assert router.schedule_acompletion.await_args.kwargs["priority"] == 0
+
+
+@pytest.mark.asyncio
+async def test_acompletion_missing_priority_falls_back_to_default():
+    router = _make_priority_router(default_priority=None)
+
+    result = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result == "fallbacks"
+    router.async_function_with_fallbacks.assert_awaited_once()
+    router.schedule_acompletion.assert_not_awaited()
