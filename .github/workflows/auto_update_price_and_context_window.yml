@@ -33,6 +33,7 @@ jobs:
           git fetch origin "${BASE_BRANCH}" "${BRANCH_NAME}" || true
           if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
             git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
+            git merge --no-edit "origin/${BASE_BRANCH}"
           else
             git checkout -b "${BRANCH_NAME}" "origin/${BASE_BRANCH}"
           fi
