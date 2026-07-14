@@ -18,7 +18,7 @@ export type FilterMode = "none" | "client" | "server";
 export type ColumnResizeMode = "onEnd" | "onChange";
 export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
-export type DataTableSkeletonShape = "text" | "twoLine";
+export type DataTableSkeletonShape = "text" | "twoLine" | "badge" | "chips" | "meter";
 
 export interface DataTableProps<TData extends RowData, TValue> {
   data: TData[];

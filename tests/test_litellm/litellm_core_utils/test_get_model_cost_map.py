@@ -138,6 +138,42 @@ def test_shipped_backup_carries_the_claude_routing_rules():
         set_fallback_generalizations(previous)
 
 
+def test_shipped_routing_rules_never_match_through_an_unrecognized_namespace():
+    """Routing rules decide ``litellm_provider`` for otherwise-unknown ids, and the
+    proxy's wildcard access check (``can_key_call_model`` with a ``bedrock/*`` key)
+    trusts that inference: it rebuilds ``{provider}/{model}`` and matches it against
+    the key's patterns. A routing pattern that matches as a substring lets
+    ``bedrockz/anthropic.claude-...`` resolve to bedrock and slip through a
+    ``bedrock/*`` key, so every shipped routing rule must anchor to the start of
+    the name and never match an id carrying an unrecognized namespace prefix."""
+    backup = GetModelCostMap.load_local_model_cost_map()
+    rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
+
+    routing_rules = [r for r in rules if "litellm_provider" in r["model_info"]]
+    assert routing_rules
+    assert all(r["pattern"].startswith("^") for r in routing_rules)
+
+    previous = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(rules)
+        for bedrock_id in [
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-v2:1",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "global.anthropic.claude-fable-5-20260120-v1:0",
+        ]:
+            assert match_routing_generalization(bedrock_id) == "bedrock", bedrock_id
+        for namespaced in [
+            "bedrockz/anthropic.claude-3-5-sonnet-20240620",
+            "bedrockz/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "bedrockz/claude-3-5-sonnet-20240620",
+        ]:
+            assert match_routing_generalization(namespaced) is None, namespaced
+    finally:
+        set_fallback_generalizations(previous)
+
+
 def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     """Adaptive thinking is data, not code. The bundled backup must carry
     supports_adaptive_thinking on genuine Claude >= 4.6 entries (every provider

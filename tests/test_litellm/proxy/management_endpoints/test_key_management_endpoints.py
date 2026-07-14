@@ -12272,6 +12272,55 @@ async def test_bulk_update_team_keys_team_member_no_permission(monkeypatch):
     mock.update_data.assert_not_called()
 
 
+def test_handle_key_type_persists_key_type_and_derives_routes():
+    """`handle_key_type` keeps `key_type` in the payload (so it is persisted on
+    the token) while still deriving the `allowed_routes` preset. Regression for
+    the UI showing scoped keys as "All Proxy Models": the frontend now reads the
+    persisted `key_type` instead of reverse-mapping the preset string."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    cases = {
+        LiteLLMKeyType.MANAGEMENT: ("management", ["management_routes"]),
+        LiteLLMKeyType.READ_ONLY: ("read_only", ["info_routes"]),
+        LiteLLMKeyType.LLM_API: ("llm_api", ["llm_api_routes"]),
+    }
+    for key_type, (expected_type, expected_routes) in cases.items():
+        data = GenerateKeyRequest(key_type=key_type)
+        out = handle_key_type(data, {"key_type": key_type})
+        assert out["key_type"] == expected_type
+        assert out["allowed_routes"] == expected_routes
+
+
+def test_handle_key_type_default_persists_type_without_forcing_routes():
+    """`default` is persisted but must not overwrite an explicit `allowed_routes`
+    (e.g. a SCIM key created with `["/scim/*"]` and no explicit key_type)."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT)
+    out = handle_key_type(data, {"allowed_routes": ["/scim/*"], "key_type": LiteLLMKeyType.DEFAULT})
+    assert out["key_type"] == "default"
+    assert out["allowed_routes"] == ["/scim/*"]
+
+
+def test_handle_key_type_none_drops_key_type():
+    """When no `key_type` is supplied the payload must not carry a `key_type`
+    entry, so old keys stay `null` and the frontend keeps its route fallback."""
+    from litellm.proxy._types import GenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=None)
+    out = handle_key_type(data, {"key_type": None})
+    assert "key_type" not in out
+
+
 # ---- pydantic-layer validation -------------------------------------------
 
 
@@ -14530,3 +14579,264 @@ def test_generate_key_helper_fn_accepts_per_tag_rate_limits():
         request_type="user",
         tag_rpm_limit={"cell-1": 5},
     )
+
+
+def _find_expires_clauses(node):
+    """Recursively collect every value keyed 'expires' anywhere in a Prisma where dict."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "expires":
+                found.append(value)
+            else:
+                found.extend(_find_expires_clauses(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_find_expires_clauses(item))
+    return found
+
+
+def test_build_expires_where_clause_expired_shape():
+    """'expired' must exclude never-expiring (NULL) keys and match expires < now."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_where_clause,
+    )
+
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert _build_expires_where_clause("expired", now) == {
+        "AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]
+    }
+
+
+def test_build_expires_where_clause_active_shape():
+    """'active' must include never-expiring (NULL) keys and match expires >= now."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_where_clause,
+    )
+
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert _build_expires_where_clause("active", now) == {
+        "OR": [{"expires": None}, {"expires": {"gte": now}}]
+    }
+
+
+def test_build_key_filter_conditions_expired_applies_lt_clause():
+    """expires_filter='expired' ANDs in a not-NULL + lt(now) constraint."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="expired",
+    )
+
+    clauses = _find_expires_clauses(where)
+    assert {"not": None} in clauses
+    lt_clauses = [c for c in clauses if isinstance(c, dict) and "lt" in c]
+    assert len(lt_clauses) == 1
+    assert "gte" not in str(clauses)
+
+
+def test_build_key_filter_conditions_active_applies_gte_and_null():
+    """expires_filter='active' ANDs in a NULL-or-gte(now) constraint."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="active",
+    )
+
+    clauses = _find_expires_clauses(where)
+    assert None in clauses
+    gte_clauses = [c for c in clauses if isinstance(c, dict) and "gte" in c]
+    assert len(gte_clauses) == 1
+    assert "lt" not in str(clauses)
+
+
+def test_build_key_filter_conditions_no_expires_filter_omits_clause():
+    """Default (no expires_filter) must not add any expires constraint — preserves existing callers."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+    )
+
+    assert _find_expires_clauses(where) == []
+
+
+def test_build_key_filter_conditions_invalid_expires_filter_omits_clause():
+    """An unrecognized expires_filter value is ignored, not applied blindly."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="garbage",
+    )
+
+    assert _find_expires_clauses(where) == []
+
+
+def test_build_key_filter_conditions_expires_now_is_call_time_utc():
+    """The lt(now) boundary is computed at call time as a tz-aware UTC datetime."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    before = datetime.now(timezone.utc)
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="expired",
+    )
+    after = datetime.now(timezone.utc)
+
+    lt_values = [c["lt"] for c in _find_expires_clauses(where) if isinstance(c, dict) and "lt" in c]
+    assert len(lt_values) == 1
+    now_value = lt_values[0]
+    assert now_value.tzinfo is not None
+    assert now_value.utcoffset().total_seconds() == 0
+    assert before <= now_value <= after
+
+
+@pytest.mark.asyncio
+async def test_list_keys_rejects_invalid_expires():
+    """A typo'd expires value must 400, never silently fall back to returning all keys."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ProxyException) as exc_info:
+            await list_keys(
+                request=Mock(),
+                user_api_key_dict=mock_user_api_key_dict,
+                status=None,
+                expires="expred",
+            )
+
+    assert exc_info.value.code == "400"
+    assert "Invalid expires value" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_value, expected_forward",
+    [("expired", "expired"), ("active", "active"), (None, None)],
+)
+async def test_list_keys_forwards_expires_filter(expires_value, expected_forward):
+    """list_keys forwards a valid/None expires value verbatim to _list_key_helper as expires_filter."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_email="admin@example.com",
+        teams=[],
+        organization_memberships=[],
+    )
+    mock_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_helper,
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=mock_user_api_key_dict,
+            status=None,
+            expires=expires_value,
+        )
+
+    mock_helper.assert_called_once()
+    assert mock_helper.call_args.kwargs["expires_filter"] == expected_forward
+
+
+@pytest.mark.asyncio
+async def test_list_keys_without_expires_param_forwards_none():
+    """Existing callers that never pass `expires` must not 400 and must forward expires_filter=None."""
+    from unittest.mock import Mock, patch
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_email="admin@example.com",
+        teams=[],
+        organization_memberships=[],
+    )
+    mock_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_helper,
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=mock_user_api_key_dict,
+            status=None,
+        )
+
+    mock_helper.assert_called_once()
+    assert mock_helper.call_args.kwargs["expires_filter"] is None

@@ -30,13 +30,20 @@ export interface ComplexityRouterConfigPayload {
   match_threshold?: number;
 }
 
+const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
+  const missing = TIER_KEYS.filter((tier) => !tiers[tier]);
+  if (missing.length === 0) return null;
+  return `Select a model for the following tier(s): ${missing.join(", ")}`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
   keywordTierRules,
 }: Pick<BuildComplexityRouterConfigParams, "semanticMatchingEnabled" | "embeddingModel" | "keywordTierRules">):
-  | string
-  | null => {
+  string | null => {
   if (!semanticMatchingEnabled) return null;
   if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";

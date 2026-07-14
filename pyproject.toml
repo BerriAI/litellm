@@ -62,7 +62,7 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
-    "litellm-proxy-extras==0.4.75",
+    "litellm-proxy-extras==0.4.76",
     "litellm-enterprise==0.1.49",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
@@ -205,7 +205,7 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.2.0",
+    "Pillow==12.3.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",

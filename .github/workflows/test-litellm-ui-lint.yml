@@ -89,4 +89,4 @@ jobs:
 
       - name: Check for dead code (knip)
         if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
-        run: npm run knip
+        run: npm run knip:ci
