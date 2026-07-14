@@ -464,17 +464,24 @@ class LoggingClient:
             json=body,
         )
 
-    def messages_raw(self, key: str, model: str, text: str, *, max_tokens: int = 16) -> StreamingResponse:
-        """Non-streaming POST /v1/messages (Anthropic-native body): raw outcome
-        judged by status/body/headers, for tests that need x-litellm-call-id."""
+    def messages_raw(
+        self, key: str, model: str, text: str, *, max_tokens: int = 16, stream: bool = False
+    ) -> StreamingResponse:
+        """POST /v1/messages (Anthropic-native body): raw outcome judged by
+        status/body/headers, for tests that need x-litellm-call-id. With
+        ``stream=True`` the SSE body is consumed and its events counted."""
+        body = AnthropicMessagesBody(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[ChatMessage(role="user", content=text)],
+            stream=stream or None,
+        )
+        if stream:
+            return self.gateway.transport.stream(
+                "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+            )
         return self.gateway.transport.send(
-            "/v1/messages",
-            headers=self.gateway.transport.bearer(key),
-            json=AnthropicMessagesBody(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[ChatMessage(role="user", content=text)],
-            ),
+            "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
         )
 
     def responses_raw(

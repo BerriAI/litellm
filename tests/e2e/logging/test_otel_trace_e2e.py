@@ -315,3 +315,50 @@ class TestOtelTraceCompleteness:
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
+
+    @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["messages"])
+    def test_messages_stream_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """One successful STREAMED /v1/messages call must export ONE complete
+        OTEL trace: a single root SERVER span with auth/db/cost children and
+        the gen-AI CLIENT span connected back to the root.
+
+        Same streaming lifecycle risk as the chat surface (the gen-AI span
+        closes from the stream-consumption path), so the same stream-specific
+        assertions apply: the response actually streamed, exactly ONE gen-AI
+        span exists for the call, and the span records
+        litellm.request.streaming=true.
+        """
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-stream-messages-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+
+        genai_span = f"chat {MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span)
+
+        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
+        assert len(genai_spans) == 1, (
+            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
+            f"spans: {hits[0].span_names()}"
+        )
+        assert _tag(genai_spans[0], "litellm.request.streaming") is True, (
+            "the gen-AI span must record litellm.request.streaming=true; its absence means "
+            "the stream flag was dropped before the model call"
+        )
