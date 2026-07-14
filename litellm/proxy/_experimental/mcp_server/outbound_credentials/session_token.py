@@ -10,7 +10,9 @@ outstanding sessions immediately without a revocation store.
 
 Wire shape: ``llm_session_`` (access) / ``llm_srefresh_`` (refresh) + an HS256 JWT,
 the same signing approach as :mod:`.envelope`. Claims are ``iss``/``iat``/``exp``
-plus ``kind``, ``user_id``, and ``client_id``; ``client_id`` binds the refresh token
+plus ``jti`` (per-mint uniqueness, so two tokens minted in the same second never
+collide and a future revocation list has a stable handle), ``kind``, ``user_id``, and
+``client_id``; ``client_id`` binds the refresh token
 to the DCR client it was issued to (RFC 6749 section 6) and is carried on the access
 token for parity and audit. There is no encrypted payload: nothing in a session token
 is secret beyond the signature, and reprs never print the signed value because minted
@@ -28,6 +30,7 @@ injected ``now``); the strict pydantic claims model is the sole, total type gate
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta
 from typing import Literal, TypeAlias
 
@@ -177,6 +180,7 @@ class _SessionClaims(BaseModel):
     iss: str
     iat: int
     exp: int
+    jti: str = Field(min_length=1)
     kind: SessionTokenKind
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
@@ -276,6 +280,7 @@ def _mint(
         iss=SESSION_ISSUER,
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
+        jti=secrets.token_urlsafe(16),
         kind=kind,
         user_id=principal.user_id,
         client_id=principal.client_id,
