@@ -22620,6 +22620,11 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Skip User Budget On Team Key
+             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
+             */
+            skip_user_budget_on_team_key?: boolean | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */
