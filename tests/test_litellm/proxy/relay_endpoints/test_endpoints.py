@@ -1,9 +1,15 @@
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
-from litellm.proxy.relay_endpoints.endpoints import _load_managed_config
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.relay_endpoints.endpoints import (
+    RELAY_SETTINGS_PATH_ENV,
+    _load_managed_config,
+    router,
+)
 
 
 def test_load_managed_config_parses_pinned_version(tmp_path: Path) -> None:
@@ -127,3 +133,49 @@ def test_load_managed_config_preserves_nested_managed_settings(tmp_path: Path) -
     assert config.claude_code.managed_settings["permissions"] == {
         "defaultMode": "acceptEdits"
     }
+
+
+def test_endpoint_serves_policy_from_env_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "relay_settings.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "claude_code:",
+                "  version: 2.1.206",
+                "codex:",
+                "  version: 0.144.2",
+                "policy_version: 9",
+            ]
+        )
+    )
+    monkeypatch.setenv(RELAY_SETTINGS_PATH_ENV, str(path))
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: None
+
+    with TestClient(app) as client:
+        response = client.get("/relay/managed-config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["claude_code"]["version"] == "2.1.206"
+    assert body["codex"]["version"] == "0.144.2"
+    assert body["policy_version"] == 9
+
+
+def test_endpoint_requires_authentication() -> None:
+    app = FastAPI()
+    app.include_router(router)
+
+    def _reject() -> None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    app.dependency_overrides[user_api_key_auth] = _reject
+
+    with TestClient(app) as client:
+        response = client.get("/relay/managed-config")
+
+    assert response.status_code == 401
