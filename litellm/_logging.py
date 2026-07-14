@@ -198,10 +198,10 @@ class JsonFormatter(Formatter):
             json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         session_id = session_id_var.get()
-        if session_id:
+        if session_id and "session_id" not in json_record:
             json_record["session_id"] = session_id
         trace_id = trace_id_var.get()
-        if trace_id:
+        if trace_id and "trace_id" not in json_record:
             json_record["trace_id"] = trace_id
 
         if record.exc_info:
