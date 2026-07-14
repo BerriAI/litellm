@@ -1,8 +1,11 @@
 """
 Tests for the enable_redis_auth_cache litellm_settings flag.
 
-Verifies that _init_cache attaches Redis to user_api_key_cache only when
-the flag is explicitly set to True, and leaves it in-memory-only otherwise.
+Verifies that _init_cache attaches Redis to user_api_key_cache by default
+whenever a coordination Redis exists, and only leaves it in-memory-only when
+the flag is explicitly set to False (opt-out). Also pins the cross-worker CLI
+SSO login regression from issue #33253: with the default settings, a login
+session written by one worker is readable by another.
 """
 
 from contextlib import contextmanager
@@ -65,7 +68,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
     fresh_user_cache = DualCache()
     fresh_spend_cache = DualCache()
 
-    enable_redis_auth_cache = litellm_settings.get("enable_redis_auth_cache", False)
+    enable_redis_auth_cache = litellm_settings.get("enable_redis_auth_cache", True) is not False
 
     with (
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
@@ -107,15 +110,15 @@ class TestRedisAuthCacheFlag:
                 "enable_redis_auth_cache=False"
             )
 
-    def test_flag_absent_leaves_user_api_key_cache_in_memory_only(self):
-        """When enable_redis_auth_cache is not set at all, default is in-memory-only."""
+    def test_flag_absent_attaches_redis_to_user_api_key_cache_by_default(self):
+        """When enable_redis_auth_cache is not set, Redis attaches by default (issue #33253)."""
         with _patched_init_cache(
             litellm_settings={},
             cache_params={"type": "redis", "host": "localhost", "port": 6379},
         ) as (user_cache, _):
-            assert user_cache.redis_cache is None, (
-                "user_api_key_cache must remain in-memory-only when "
-                "enable_redis_auth_cache is absent from litellm_settings"
+            assert user_cache.redis_cache is not None, (
+                "user_api_key_cache must attach to the coordination Redis by "
+                "default when Redis is configured and the flag is absent"
             )
 
     def test_spend_counter_cache_always_gets_redis_regardless_of_flag(self):
@@ -143,3 +146,57 @@ class TestRedisAuthCacheFlag:
         ) as (user_cache, spend_cache):
             assert spend_cache.redis_cache is not None
             assert user_cache.redis_cache is None
+
+
+class TestCliSsoLoginCrossWorker:
+    """
+    Regression for issue #33253: the CLI SSO login flow stores its pending
+    session in ``user_api_key_cache``. On a multi-worker deployment ``/sso/cli/start``
+    and ``/sso/key/generate`` can land on different workers, so the session must
+    survive being read back from a different worker's cache instance. With the
+    default settings and a coordination Redis present, that now works because
+    ``user_api_key_cache`` shares the Redis backend across workers.
+    """
+
+    LOGIN_ID = "cli-abcdef012345"
+    FLOW = {"poll_secret_hash": "deadbeef", "sso_complete": False, "session_data": None}
+
+    def _worker_cache(self, shared_redis, *, attach_redis: bool) -> DualCache:
+        cache = DualCache()
+        if attach_redis:
+            cache.attach_redis_cache(shared_redis)
+        return cache
+
+    def test_default_flow_readable_from_other_worker(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+            _set_cli_sso_flow,
+        )
+
+        shared_redis = _FakeRedisCache()
+        worker_a = self._worker_cache(shared_redis, attach_redis=True)
+        worker_b = self._worker_cache(shared_redis, attach_redis=True)
+
+        _set_cli_sso_flow(login_id=self.LOGIN_ID, cache=worker_a, flow=dict(self.FLOW))
+
+        flow = _get_cli_sso_flow_or_raise(login_id=self.LOGIN_ID, cache=worker_b)
+        assert flow["poll_secret_hash"] == "deadbeef"
+
+    def test_in_memory_only_flow_lost_across_workers(self):
+        """Without a shared Redis, the pre-fix behaviour reproduces (session lost)."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+            _set_cli_sso_flow,
+        )
+
+        shared_redis = _FakeRedisCache()
+        worker_a = self._worker_cache(shared_redis, attach_redis=False)
+        worker_b = self._worker_cache(shared_redis, attach_redis=False)
+
+        _set_cli_sso_flow(login_id=self.LOGIN_ID, cache=worker_a, flow=dict(self.FLOW))
+
+        with pytest.raises(HTTPException) as exc_info:
+            _get_cli_sso_flow_or_raise(login_id=self.LOGIN_ID, cache=worker_b)
+        assert exc_info.value.detail == "Invalid CLI login session"
