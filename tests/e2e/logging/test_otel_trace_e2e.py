@@ -23,7 +23,7 @@ from collections.abc import Callable
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
@@ -151,7 +151,7 @@ def _settled_names(*, route: str, genai_span: str) -> set[str]:
 
 
 class TestOtelTraceCompleteness:
-    @pytest.mark.covers("logging.otel.success.exports_metric")
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
     def test_chat_completions_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -189,3 +189,71 @@ class TestOtelTraceCompleteness:
             settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["messages"])
+    def test_messages_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """This test verifies that one successful non-streaming /v1/messages request
+        produces exactly one complete OTEL trace.
+
+        The trace must have a single root span named "POST /v1/messages". The
+        authentication, database, cost-writing, and model-call spans must all belong to
+        the same trace and have valid parent relationships leading back to that root.
+
+        The model-call span is expected to be named "chat <model>". The test fails if
+        the request is split across multiple traces, if any span references a missing
+        parent, or if the model-call span cannot be connected back to the root."""
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-trace-messages-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["responses"])
+    def test_responses_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """This test verifies that one successful non-streaming /v1/responses request
+        produces exactly one complete OTEL trace.
+
+        The trace must have a single root span named "POST /v1/responses". The
+        authentication, database, cost-writing, and model-call spans must all belong to
+        the same trace and have valid parent relationships leading back to that root.
+
+        The model-call span is expected to be named "chat <model>". The test fails if
+        the request is split across multiple traces, if any span references a missing
+        parent, or if the model-call span cannot be connected back to the root."""
+        route = "/v1/responses"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-trace-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        genai_span = f"chat {CHEAP_OPENAI_MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span)
