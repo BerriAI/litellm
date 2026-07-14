@@ -3,6 +3,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.relay_endpoints import RelayManagedConfigResponse
@@ -26,7 +27,7 @@ def _load_managed_config(path: Path) -> RelayManagedConfigResponse:
     except yaml.YAMLError as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to parse Relay settings at {path}: {e}"},
+            detail={"error": f"Failed to parse Relay settings ({RELAY_SETTINGS_PATH_ENV}): {e}"},
         )
 
     if parsed is None:
@@ -34,9 +35,17 @@ def _load_managed_config(path: Path) -> RelayManagedConfigResponse:
     if not isinstance(parsed, dict):
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Relay settings at {path} must be a YAML mapping, got {type(parsed).__name__}"},
+            detail={
+                "error": f"Relay settings ({RELAY_SETTINGS_PATH_ENV}) must be a YAML mapping, got {type(parsed).__name__}"
+            },
         )
-    return RelayManagedConfigResponse.model_validate(parsed)
+    try:
+        return RelayManagedConfigResponse.model_validate(parsed)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Relay settings ({RELAY_SETTINGS_PATH_ENV}) failed schema validation: {e}"},
+        )
 
 
 @router.get(

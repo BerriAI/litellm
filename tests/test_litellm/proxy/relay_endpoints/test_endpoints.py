@@ -109,6 +109,16 @@ def test_load_managed_config_rejects_invalid_yaml(tmp_path: Path) -> None:
     assert exc_info.value.status_code == 500
 
 
+def test_load_managed_config_rejects_wrong_field_type(tmp_path: Path) -> None:
+    path = tmp_path / "relay_settings.yaml"
+    path.write_text("policy_version: not-an-integer\n")
+
+    with pytest.raises(HTTPException) as exc_info:
+        _load_managed_config(path)
+
+    assert exc_info.value.status_code == 500
+
+
 def test_load_managed_config_preserves_nested_managed_settings(tmp_path: Path) -> None:
     path = tmp_path / "relay_settings.yaml"
     path.write_text(
