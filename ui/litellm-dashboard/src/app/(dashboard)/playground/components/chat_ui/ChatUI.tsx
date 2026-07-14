@@ -77,6 +77,7 @@ import { A2ATaskMetadata, MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -98,6 +99,8 @@ interface ChatUIProps {
 }
 
 const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([EndpointType.CHAT, EndpointType.RESPONSES, EndpointType.MCP]);
+
+const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -185,7 +188,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
-  const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
+  const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
+    wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
+  });
   const [endpointType, setEndpointType] = useState<string>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
@@ -1255,16 +1260,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <TextInput
                         className="mt-2"
                         placeholder="Enter custom model name"
-                        onValueChange={(value) => {
-                          // Using setTimeout to create a simple debounce effect
-                          if (customModelTimeout.current) {
-                            clearTimeout(customModelTimeout.current);
-                          }
-
-                          customModelTimeout.current = setTimeout(() => {
-                            setSelectedModel(value);
-                          }, 500); // 500ms delay after typing stops
-                        }}
+                        onValueChange={debouncedSetSelectedModel}
                       />
                     )}
                   </div>
@@ -2186,7 +2182,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             loadMCPServers();
             setByokModalServer(null);
           }}
-          accessToken={accessToken || ""}
         />
       )}
 

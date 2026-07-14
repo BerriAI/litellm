@@ -1614,3 +1614,105 @@ class TestGuardrailInterventionClassification:
 
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_status"] == "guardrail_intervened"
+
+
+class _ApplyStyleGuardrail(CustomGuardrail):
+    """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""
+
+    def __init__(self, block: bool):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(
+            guardrail_name="apply-style-guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+        self.block = block
+        self.apply_called = False
+        self.seen_texts = None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        from fastapi import HTTPException
+
+        self.apply_called = True
+        self.seen_texts = inputs.get("texts")
+        if self.block:
+            raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
+        return inputs
+
+
+class TestApplyGuardrailStyleDeploymentDispatch:
+    """LIT-4217 regression: model-level guardrails that implement only the
+    unified apply_guardrail interface must execute in
+    async_pre_call_deployment_hook instead of silently hitting the
+    async_pre_call_hook no-op."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", [CallTypes.completion, CallTypes.acompletion])
+    async def test_blocks_when_requested_via_model_level_guardrails(self, call_type):
+        from fastapi import HTTPException
+
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "flagged content"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_deployment_hook(kwargs, call_type)
+
+        assert guardrail.apply_called is True
+        assert guardrail.seen_texts == ["flagged content"]
+
+    @pytest.mark.asyncio
+    async def test_pass_path_runs_guardrail_and_strips_dispatch_key(self):
+        guardrail = _ApplyStyleGuardrail(block=False)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        result = await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is True
+        assert result is not None
+        assert "guardrail_to_apply" not in result
+        assert result["messages"] == [{"role": "user", "content": "hello"}]
+
+    @pytest.mark.asyncio
+    async def test_skips_when_not_requested(self):
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "guardrails": ["some-other-guardrail"],
+            "metadata": {},
+        }
+
+        result = await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is False
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_proxy_extras_missing(self):
+        import sys
+        from unittest.mock import patch
+
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "flagged content"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.utils": None}):
+            with pytest.raises(ImportError, match="litellm\\[proxy\\]"):
+                await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is False
