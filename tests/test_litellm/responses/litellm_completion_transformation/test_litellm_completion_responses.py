@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.responses.litellm_completion_transformation.transformation import (
+    TOOL_CALL_CONTENT_CACHE,
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
     LiteLLMCompletionResponsesConfig,
@@ -1108,6 +1109,219 @@ class TestFunctionCallTransformation:
             else getattr(next_message, "tool_call_id", None)
         )
         assert tool_call_id_on_result == tool_call_id
+
+    def test_tool_call_output_reconstruction_preserves_assistant_text_content(self):
+        """
+        Regression test: when a follow-up call sends a bare `function_call_output`
+        for a `previous_response_id` and no DB session is available yet (the
+        common case for a same-round MCP follow-up, since spend-log writes are
+        queued/async - see LoggingWorker), the assistant message is
+        reconstructed purely from `TOOL_CALLS_CACHE`.
+
+        `TOOL_CALLS_CACHE` only ever stored the tool_call itself, so any text
+        the assistant said *alongside* the tool call (e.g. "Let me look that
+        up...") was silently dropped from the reconstructed message. This
+        must now be preserved via `TOOL_CALL_CONTENT_CACHE`.
+        """
+        tool_call_id = "call_content_preservation"
+
+        initial_response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content="Let me search the docs for that.",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="search_docs", arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+
+        try:
+            # Simulates what happens when the initial tool-call response is
+            # converted to Responses API format (populates the caches).
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=initial_response,
+            )
+
+            messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+                input=[
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": "search results here",
+                    }
+                ],
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+            TOOL_CALL_CONTENT_CACHE.delete_cache(key=tool_call_id)
+
+        assert len(messages) == 2
+        assistant_message = messages[0]
+        assert assistant_message.get("role") == "assistant"
+        assert assistant_message.get("content") == "Let me search the docs for that."
+        assert assistant_message.get("tool_calls")[0].get("id") == tool_call_id
+
+    def test_tool_call_output_reconstruction_without_cached_content_stays_none(self):
+        """
+        When the original assistant message had no text content (the common
+        case for a pure tool-call turn), reconstruction should not fabricate
+        any content.
+        """
+        tool_call_id = "call_no_content"
+
+        initial_response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="search_docs", arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+
+        try:
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=initial_response,
+            )
+
+            messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+                input=[
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": "search results here",
+                    }
+                ],
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+            TOOL_CALL_CONTENT_CACHE.delete_cache(key=tool_call_id)
+
+        assistant_message = messages[0]
+        assert assistant_message.get("role") == "assistant"
+        assert not assistant_message.get("content")
+
+    @pytest.mark.asyncio
+    async def test_async_responses_api_session_handler_preserves_content_without_db_session(self):
+        """
+        End-to-end counterpart to
+        `test_async_responses_api_session_handler_drops_cache_reconstructed_duplicate_tool_use`,
+        exercised through the *actual* `async_responses_api_session_handler`
+        entry point rather than the lower-level transform function directly.
+
+        This is the common real-world race for a same-round, non-streaming
+        MCP follow-up call: `previous_response_id` is set, but the DB session
+        is still empty because spend-log writes are queued/async (see
+        `LoggingWorker._queue.put_nowait`) and haven't been persisted yet by
+        the time the follow-up call runs. In that case the assistant message
+        must be reconstructed *entirely* from `TOOL_CALLS_CACHE` /
+        `TOOL_CALL_CONTENT_CACHE`, and the text the assistant said alongside
+        the tool call must survive the round trip.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses.litellm_completion_transformation.session_handler import (
+            ResponsesSessionHandler,
+        )
+
+        tool_call_id = "call_no_db_session_content"
+
+        initial_response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content="Let me search the docs for that.",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="search_docs", arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+
+        # Empty session: the DB row for the initial call is not yet visible
+        # (the fire-and-forget/queued spend-log write hasn't landed yet).
+        empty_session = ChatCompletionSession(messages=[], litellm_session_id=None)
+
+        try:
+            # Simulates the initial tool-call response being converted to
+            # Responses API format, which populates TOOL_CALLS_CACHE and
+            # TOOL_CALL_CONTENT_CACHE. This must happen *before* the
+            # follow-up input is transformed, matching production order
+            # (initial call's response is processed first).
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=initial_response,
+            )
+
+            new_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=[
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": "search results here",
+                    }
+                ],
+                responses_api_request={},
+            )
+
+            litellm_completion_request = {
+                "model": "claude-haiku-4-5",
+                "messages": new_messages,
+            }
+
+            with patch.object(
+                ResponsesSessionHandler,
+                "get_chat_completion_message_history_for_previous_response_id",
+                new_callable=AsyncMock,
+                return_value=empty_session,
+            ):
+                result = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                    previous_response_id="resp_prev_no_db",
+                    litellm_completion_request=litellm_completion_request,
+                )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+            TOOL_CALL_CONTENT_CACHE.delete_cache(key=tool_call_id)
+
+        combined = result["messages"]
+
+        assert len(combined) == 2, f"Expected exactly one assistant + one tool message, got: {combined}"
+
+        assistant_message = combined[0]
+        assert assistant_message.get("role") == "assistant"
+        assert assistant_message.get("content") == "Let me search the docs for that.", (
+            "Assistant text content that accompanied the tool call must survive "
+            f"reconstruction from cache when no DB session is available. Got: {combined}"
+        )
+        assert assistant_message.get("tool_calls")[0].get("id") == tool_call_id
+
+        tool_message = combined[1]
+        assert tool_message.get("role") == "tool"
+        assert tool_message.get("tool_call_id") == tool_call_id
 
 
 class TestToolChoiceTransformation:

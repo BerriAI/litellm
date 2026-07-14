@@ -74,6 +74,14 @@ from .custom_tools import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+# Sibling cache to TOOL_CALLS_CACHE: preserves any assistant text content that
+# accompanied a tool_call, keyed by tool_call_id. TOOL_CALLS_CACHE only stores
+# the tool_call itself (id/type/function), so a lone `function_call_output`
+# reconstructed purely from TOOL_CALLS_CACHE (no DB session available - see
+# `_transform_responses_api_tool_call_output_to_chat_completion_message`)
+# would otherwise silently drop any text the assistant said alongside the
+# tool call (e.g. "Let me look that up...").
+TOOL_CALL_CONTENT_CACHE = InMemoryCache()
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -1116,6 +1124,11 @@ class LiteLLMCompletionResponsesConfig:
             chat_completion_response_message = ChatCompletionResponseMessage(
                 tool_calls=[tool_call_chunk],
                 role="assistant",
+                # Restore any assistant text that accompanied this tool call
+                # (e.g. "Let me look that up...") so it isn't silently
+                # dropped when reconstructing purely from cache (no DB
+                # session available yet for `previous_response_id`).
+                content=TOOL_CALL_CONTENT_CACHE.get_cache(key=tool_call_output.get("call_id") or ""),
             )
             return [chat_completion_response_message, tool_output_message]
 
@@ -1437,11 +1450,22 @@ class LiteLLMCompletionResponsesConfig:
             if isinstance(choice, Choices):
                 if choice.message.tool_calls:
                     all_chat_completion_tools.extend(choice.message.tool_calls)
+                    message_content = choice.message.content
                     for tool_call in choice.message.tool_calls:
                         TOOL_CALLS_CACHE.set_cache(
                             key=tool_call.id,
                             value=tool_call,
                         )
+                        # Preserve any assistant text that accompanied the
+                        # tool call(s) so a later reconstruction from cache
+                        # alone (no DB session yet - see
+                        # `_transform_responses_api_tool_call_output_to_chat_completion_message`)
+                        # doesn't silently drop it.
+                        if message_content:
+                            TOOL_CALL_CONTENT_CACHE.set_cache(
+                                key=tool_call.id,
+                                value=message_content,
+                            )
 
         # Extract custom tool names from the original request
         custom_tool_names: set[str] = set()
