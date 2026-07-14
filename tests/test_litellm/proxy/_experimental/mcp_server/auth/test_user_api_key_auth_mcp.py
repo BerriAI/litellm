@@ -5950,3 +5950,136 @@ class TestMCPDcrBridgeDelegateAdmission:
                     route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestAggregateGatewayDcrChallenge:
+    """The mcp_gateway_dcr front door: a 401 on the aggregate /mcp scope must
+    carry the RFC 9728 resource_metadata challenge pointing at the gateway's
+    own protected-resource metadata, and must NOT fire for named-server
+    targets, explicit litellm keys, non-401 failures, or with the flag off."""
+
+    _FLAG_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.is_mcp_gateway_dcr_enabled"
+    _AUTH_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
+    _EXPECTED_RESOURCE_METADATA = 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp"'
+
+    def _scope(self, path="/mcp", extra_headers=()):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"host", b"testserver"), *extra_headers],
+        }
+
+    def _auth_401(self):
+        async def _raise(api_key, request):
+            raise ProxyException(
+                message="Authentication Error: Invalid API key",
+                type="auth_error",
+                param="api_key",
+                code=401,
+            )
+
+        return _raise
+
+    async def test_challenge_on_anonymous_aggregate_mcp(self):
+        """Anonymous request to the aggregate /mcp with the flag on: 401 plus
+        the bare bearer challenge (no error attribute, RFC 6750 section 3.1)."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+
+    async def test_challenge_invalid_token_on_failed_bearer(self):
+        """A bearer that fails LiteLLM admission at aggregate scope (an expired
+        gateway session, a revoked key) re-challenges with error=invalid_token
+        so a spec client re-authorizes instead of retrying the dead token."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"authorization", b"Bearer expired-session-token"),))
+                )
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f'Bearer error="invalid_token", {self._EXPECTED_RESOURCE_METADATA}'
+
+    async def test_no_challenge_when_flag_off(self):
+        """Flag off: the original admission error propagates untouched, both
+        with and without a bearer."""
+        for extra_headers in ((), ((b"authorization", b"Bearer some-token"),)):
+            with (
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(self._FLAG_PATCH_TARGET, return_value=False),
+            ):
+                with pytest.raises(ProxyException) as exc_info:
+                    await MCPRequestHandler.process_mcp_request(self._scope(extra_headers=extra_headers))
+            assert str(exc_info.value.code) == "401"
+
+    async def test_no_challenge_for_explicit_litellm_key(self):
+        """An explicit x-litellm-api-key declares a litellm-key client; a typo
+        there must surface the real auth error, never a DCR challenge that
+        would send SDKs into a sign-in flow."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-litellm-api-key", b"sk-typo"),))
+                )
+
+    async def test_no_challenge_for_named_servers_header(self):
+        """x-mcp-servers names explicit targets; the per-server challenge paths
+        own those, so the aggregate challenge must not fire."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-servers", b"github"),))
+                )
+
+    async def test_no_challenge_for_path_named_server(self):
+        """/mcp/{server} targets one server; the aggregate challenge must not
+        fire even when that server does not resolve."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(self._scope(path="/mcp/github"))
+
+    async def test_no_challenge_for_client_supplied_mcp_auth(self):
+        """Per-server x-mcp-{alias}-authorization headers mean the caller is
+        not a cold-start DCR client; keep the original error."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-github-authorization", b"Bearer upstream"),))
+                )
+
+    async def test_no_challenge_for_non_401_failure(self):
+        """Only genuine 401s convert to a challenge; a 500 stays a 500."""
+
+        async def _raise_500(api_key, request):
+            raise ProxyException(message="boom", type="server_error", param=None, code=500)
+
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=_raise_500),
+            patch(self._FLAG_PATCH_TARGET, return_value=True),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        assert str(exc_info.value.code) == "500"

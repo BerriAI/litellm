@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.faults import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
+    is_mcp_gateway_dcr_enabled,
     validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -2309,6 +2310,12 @@ async def _build_oauth_protected_resource_response(
         global_mcp_server_manager,
     )
 
+    # With the gateway-level DCR front door enabled, unnamed discovery
+    # describes the gateway itself as the authorization server for the
+    # aggregate /mcp resource instead of narrowing to one server.
+    if mcp_server_name is None and is_mcp_gateway_dcr_enabled():
+        return _build_aggregate_protected_resource_response(request)
+
     request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
@@ -2439,6 +2446,92 @@ def _jwt_auth_issuers() -> list:
     return issuers
 
 
+def _build_aggregate_protected_resource_response(request: Request) -> dict:
+    """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
+    the authorization server. No per-server names or scopes leak here; access
+    is resolved after sign-in from the authenticated user's grants.
+
+    The advertised authorization server is ``{base}/mcp`` (not the bare
+    origin) so RFC 8414 path-insertion resolves its metadata at
+    ``/.well-known/oauth-authorization-server/mcp``, a route this module
+    owns. The bare-origin well-known is registered first by the BYOK OAuth
+    feature and describes the BYOK flow, so it must not be the aggregate
+    discovery entry point (same pattern as the per-server documents, which
+    advertise ``{base}/{server_name}``)."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "authorization_servers": [f"{request_base_url}/mcp"],
+        "resource": f"{request_base_url}/mcp",
+        "scopes_supported": [],
+    }
+
+
+def _build_aggregate_authorization_server_response(request: Request) -> dict:
+    """RFC 8414 metadata for the gateway as the aggregate authorization server.
+
+    The issuer is ``{base}/mcp`` and must stay equal to the value the
+    aggregate protected-resource document advertises: spec clients verify the
+    issuer in the metadata matches the one that derived the well-known URL.
+    Advertises the root /authorize, /token, and /register endpoints and
+    ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
+    clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
+    S256 is mandatory in the gateway's authorize flow."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "issuer": f"{request_base_url}/mcp",
+        "authorization_endpoint": f"{request_base_url}/authorize",
+        "token_endpoint": f"{request_base_url}/token",
+        "registration_endpoint": f"{request_base_url}/register",
+        "response_types_supported": ["code"],
+        "scopes_supported": [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+    }
+
+
+def _raise_404_unless_gateway_dcr_enabled() -> None:
+    """The aggregate well-known routes exist only under the gateway-level DCR
+    front door; flag-off they 404 exactly like the previously-absent routes so
+    discovery behavior is byte-identical for existing deployments."""
+    if is_mcp_gateway_dcr_enabled():
+        return
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+# RFC 9728 path-appended discovery for the aggregate /mcp endpoint. A client
+# pointed at {base}/mcp inserts the well-known segment before the resource
+# path, so this exact route must exist for aggregate discovery to work at all.
+# Declared before the parameterized well-known routes below: Starlette matches
+# in registration order, and /.well-known/oauth-authorization-server/{name}
+# would otherwise capture the "/mcp" suffix as a server name.
+@router.get(
+    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp"
+)
+async def oauth_protected_resource_aggregate(request: Request):
+    """
+    OAuth protected resource discovery for the aggregate /mcp endpoint
+    (gateway-level DCR front door; 404 when the flag is off).
+    """
+    _raise_404_unless_gateway_dcr_enabled()
+    return _build_aggregate_protected_resource_response(request)
+
+
+@router.get(
+    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp"
+)
+async def oauth_authorization_server_aggregate(request: Request):
+    """
+    OAuth authorization server discovery for the aggregate /mcp endpoint, the
+    RFC 8414 path-inserted form for a client that treats {base}/mcp as its
+    authorization base URL (gateway-level DCR front door; 404 when the flag
+    is off, indistinguishable from an unknown server name on the
+    parameterized route below).
+    """
+    _raise_404_unless_gateway_dcr_enabled()
+    return _build_aggregate_authorization_server_response(request)
+
+
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
 @router.get(
@@ -2497,6 +2590,11 @@ def _build_oauth_authorization_server_response(
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+
+    # With the gateway-level DCR front door enabled, unnamed discovery keeps
+    # advertising the gateway's own /authorize, /token, and /register.
+    if mcp_server_name is None and is_mcp_gateway_dcr_enabled():
+        return _build_aggregate_authorization_server_response(request)
 
     request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
