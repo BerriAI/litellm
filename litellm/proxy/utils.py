@@ -3594,7 +3594,7 @@ class PrismaClient:
         try:
             verbose_proxy_logger.debug(
                 "PrismaClient: insert_data: %s",
-                {**data, "token": self.hash_token(token=data["token"])} if "token" in data else data,
+                {**data, "token": self.hash_token(token=data["token"])} if data.get("token") is not None else data,
             )
             if table_name == "key":
                 token = data["token"]
