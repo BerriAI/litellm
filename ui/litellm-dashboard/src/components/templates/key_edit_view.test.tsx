@@ -662,7 +662,31 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should resend existing budget windows on submit when they are left untouched", async () => {
+  it("should omit budget_limits when no budget windows exist", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"user"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  it("should omit existing budget windows when they are left untouched", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataWithWindow = {
       ...MOCK_KEY_DATA,
@@ -686,7 +710,7 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
-      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 100 }]);
+      expect(callArgs.budget_limits).toBeUndefined();
     });
   });
 

@@ -87,6 +87,13 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   return "default";
 };
 
+const areBudgetWindowsEqual = (first: readonly BudgetWindowEntry[], second: readonly BudgetWindowEntry[]): boolean =>
+  first.length === second.length &&
+  first.every(
+    (window, index) =>
+      window.budget_duration === second[index].budget_duration && window.max_budget === second[index].max_budget,
+  );
+
 export function KeyEditView({
   keyData,
   onCancel,
@@ -306,18 +313,16 @@ export function KeyEditView({
         values.duration = null;
       }
 
-      // Reconcile multi-window budget limits from the editor state, dropping
-      // incomplete entries (no max_budget). Sending [] tells the backend to clear
-      // all stored windows, so only send it when the user removed every window;
-      // when entries remain but are still incomplete, omit the field so the saved
-      // windows are left untouched (JSON.stringify drops the undefined key).
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      if (validWindows.length > 0) {
-        values.budget_limits = validWindows;
-      } else if (budgetLimits.length === 0) {
-        values.budget_limits = [];
+      const originalWindows = Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [];
+      if (!areBudgetWindowsEqual(budgetLimits, originalWindows)) {
+        if (validWindows.length > 0) {
+          values.budget_limits = validWindows;
+        } else if (budgetLimits.length === 0) {
+          values.budget_limits = [];
+        }
       }
 
       // Always send the current per-tag limit map so removing every row

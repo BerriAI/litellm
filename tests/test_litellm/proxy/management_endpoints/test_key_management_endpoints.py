@@ -10458,7 +10458,7 @@ class TestKeyOwnerPrivilegeEscalation:
     Policy:
     - created_by == caller → can edit any non-budget field without admin
     - created_by != caller (assigned user) → must pass admin check for any edit
-    - budget changes (max_budget/spend) → always require admin
+    - budget changes → always require admin
     - PROXY_ADMIN → unrestricted
     """
 
@@ -10472,6 +10472,7 @@ class TestKeyOwnerPrivilegeEscalation:
         row.team_id = None
         row.max_budget = None
         row.spend = 0.0
+        row.budget_limits = None
         row.organization_id = None
         row.project_id = None
         return row
@@ -10631,6 +10632,13 @@ class TestKeyOwnerPrivilegeEscalation:
         """Clearing budget_limits is a budget change and requires admin."""
         data = UpdateKeyRequest(key="sk-test", budget_limits=cleared_value)
         existing = self._make_existing_key(created_by="creator-123")
+        existing.budget_limits = [
+            {
+                "budget_duration": "30d",
+                "max_budget": 100.0,
+                "reset_at": "2026-08-01T00:00:00Z",
+            }
+        ]
         auth = self._make_auth(user_id="creator-123")
 
         mock_check = AsyncMock(
@@ -10651,6 +10659,59 @@ class TestKeyOwnerPrivilegeEscalation:
                     user_api_key_cache=MagicMock(),
                 )
         mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("unchanged_value", [[], None])
+    async def test_creator_can_send_unchanged_empty_budget_limits(
+        self, unchanged_value
+    ):
+        data = UpdateKeyRequest(key="sk-test", budget_limits=unchanged_value)
+        existing = self._make_existing_key(created_by="creator-123")
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_creator_can_send_unchanged_existing_budget_limits(self):
+        unchanged_window = {
+            "budget_duration": "30d",
+            "max_budget": 100.0,
+            "reset_at": "2026-08-01T00:00:00Z",
+        }
+        data = UpdateKeyRequest(key="sk-test", budget_limits=[unchanged_window])
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.budget_limits = [unchanged_window]
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        mock_check.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_admin_can_clear_budget_limits(self):
