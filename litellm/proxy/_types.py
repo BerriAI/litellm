@@ -2422,6 +2422,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    skip_user_budget_on_team_key: bool | None = Field(
+        None,
+        description=(
+            "If True, restores the legacy behavior where a user's personal "
+            "max_budget is NOT enforced when their key belongs to a team; only "
+            "the team (and team-member) budgets apply. Defaults to False, meaning "
+            "the user's personal max_budget is always enforced regardless of "
+            "whether the key belongs to a team (see GitHub issue #12905)."
+        ),
+    )
     user_url_validation: Optional[bool] = Field(
         None,
         description=(
