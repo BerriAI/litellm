@@ -5304,3 +5304,80 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+class TestStrategyRegistryCleanupOnRemoval:
+    """upsert_deployment / delete_deployment must de-register strategy routers
+    (auto/complexity/adaptive/quality) for the removed deployment — otherwise
+    the re-add dies on the init functions' "already exists" check and the
+    model silently disappears from every listing while the stale registry
+    object keeps routing. Issue #33168."""
+
+    def _make_router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+
+    def _complexity_deployment(self, simple_tier: str = "gpt-4o-mini"):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        return Deployment(
+            model_name="test-auto-latest",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config={
+                    "tiers": {
+                        "SIMPLE": simple_tier,
+                        "MEDIUM": simple_tier,
+                        "COMPLEX": simple_tier,
+                        "REASONING": simple_tier,
+                    }
+                },
+                complexity_router_default_model=simple_tier,
+            ),
+            model_info={"id": "complexity-registry-test-id"},
+        )
+
+    def test_upsert_updated_complexity_router_stays_listed(self):
+        router = self._make_router()
+        router.add_deployment(self._complexity_deployment())
+        assert "test-auto-latest" in router.get_model_names()
+        assert "test-auto-latest" in router.complexity_routers
+
+        # change the config -> upsert removes + re-adds the deployment
+        router.upsert_deployment(self._complexity_deployment(simple_tier="gpt-4o"))
+
+        assert "test-auto-latest" in router.get_model_names()
+        assert (
+            router.complexity_routers["test-auto-latest"].config.tiers["SIMPLE"]
+            == "gpt-4o"
+        )
+
+    def test_delete_complexity_router_clears_registry_and_allows_re_add(self):
+        router = self._make_router()
+        deployment = self._complexity_deployment()
+        router.add_deployment(deployment)
+
+        router.delete_deployment(id="complexity-registry-test-id")
+
+        # ghost registration must be gone once the deployment is deleted
+        assert "test-auto-latest" not in router.complexity_routers
+
+        # and the same name must be re-addable + listed again
+        router.add_deployment(deployment)
+        assert "test-auto-latest" in router.get_model_names()
+        assert "test-auto-latest" in router.complexity_routers
+
+    def test_delete_regular_deployment_untouched_by_registry_cleanup(self):
+        router = self._make_router()
+        model_id = router.get_model_ids()[0]
+
+        deleted = router.delete_deployment(id=model_id)
+
+        assert deleted is not None
+        assert "gpt-4o-mini" not in router.get_model_names()
