@@ -6,7 +6,7 @@ Calls the Singulr Guard API to scan messages.
 import json
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, TypeAlias, Union, cast
+from typing import Any, TypeAlias, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -59,8 +59,8 @@ class _LegacyFunctionDefinition(BaseModel):
     ChatCompletionToolParam, instead of casting an untyped dict."""
 
     name: str
-    description: Optional[str] = None
-    parameters: Optional[dict] = None
+    description: str | None = None
+    parameters: dict | None = None
 
 
 class SingulrGuardrail(CustomGuardrail):
@@ -182,10 +182,10 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def reconstruct_tool_calls(
-        tool_call_chunks: List[ChatCompletionToolCallChunk],
-    ) -> List[ChatCompletionMessageToolCall]:
+        tool_call_chunks: list[ChatCompletionToolCallChunk],
+    ) -> list[ChatCompletionMessageToolCall]:
 
-        aggregated: Dict[int, Dict[str, Any]] = defaultdict(
+        aggregated: dict[int, dict[str, Any]] = defaultdict(
             lambda: {
                 "id": None,
                 "type": "function",
@@ -235,20 +235,20 @@ class SingulrGuardrail(CustomGuardrail):
         if schema_prompt:
             messages.setdefault("system", []).append(schema_prompt)
 
-        tools: List[ChatCompletionToolParam] = list(inputs.get("tools") or [])
+        tools: list[ChatCompletionToolParam] = list(inputs.get("tools") or [])
         if input_type == "request":
             tools.extend(self._legacy_functions_as_tools(request_data))
 
         raw_tool_calls = inputs.get("tool_calls") or []
 
-        tool_calls: List[_SingulrToolCall] = []
+        tool_calls: list[_SingulrToolCall] = []
 
         if raw_tool_calls and isinstance(raw_tool_calls[0], ChatCompletionMessageToolCall):
-            tool_calls = cast(List[_SingulrToolCall], raw_tool_calls)
+            tool_calls = cast(list[_SingulrToolCall], raw_tool_calls)
         elif raw_tool_calls:
             tool_calls = cast(
-                List[_SingulrToolCall],
-                self.reconstruct_tool_calls(cast(List[ChatCompletionToolCallChunk], raw_tool_calls)),
+                list[_SingulrToolCall],
+                self.reconstruct_tool_calls(cast(list[ChatCompletionToolCallChunk], raw_tool_calls)),
             )
 
         singulr_request = SingulrGuardrailRequest(
