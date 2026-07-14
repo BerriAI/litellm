@@ -43,7 +43,7 @@ jobs:
           else
             git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
             git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
-            if gh pr view "${BRANCH_NAME}" >/dev/null 2>&1; then
+            if [ "$(gh pr list --head "${BRANCH_NAME}" --state open --json number --jq 'length')" -gt 0 ]; then
               echo "PR already exists for ${BRANCH_NAME}."
             else
               gh pr create --title "Update model_prices_and_context_window.json file" \
