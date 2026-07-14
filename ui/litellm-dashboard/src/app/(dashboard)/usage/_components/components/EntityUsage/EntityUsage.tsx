@@ -40,6 +40,7 @@ import {
 } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { useIsPtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/ptuReservations/useIsPtuCostAttributionEnabled";
 import {
   BreakdownMetrics,
   DailyData,
@@ -75,6 +76,7 @@ interface EntitySpendData {
   results: ExtendedDailyData[];
   metadata: {
     total_spend: number;
+    total_flat_cost?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -113,6 +115,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
+
+  const { enabled: ptuAttributionEnabled } = useIsPtuCostAttributionEnabled();
+  const showFlatCost = entityType === "team" && ptuAttributionEnabled;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -514,13 +519,33 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               <Col numColSpan={2}>
                 <Card>
                   <Title>{capitalizedEntityLabel} Spend Overview</Title>
-                  <Grid numItems={5} className="gap-4 mt-4">
+                  <Grid numItems={showFlatCost ? 7 : 5} className="gap-4 mt-4">
                     <Card>
                       <Title>Total Spend</Title>
                       <Text className="text-2xl font-bold mt-2">
                         ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
                       </Text>
                     </Card>
+                    {showFlatCost && (
+                      <>
+                        <Card>
+                          <Title>Flat Cost</Title>
+                          <Text className="text-2xl font-bold mt-2">
+                            ${formatNumberWithCommas(spendData.metadata.total_flat_cost ?? 0, 2)}
+                          </Text>
+                        </Card>
+                        <Card>
+                          <Title>Total Cost</Title>
+                          <Text className="text-2xl font-bold mt-2">
+                            $
+                            {formatNumberWithCommas(
+                              spendData.metadata.total_spend + (spendData.metadata.total_flat_cost ?? 0),
+                              2,
+                            )}
+                          </Text>
+                        </Card>
+                      </>
+                    )}
                     <Card>
                       <Title>Total Requests</Title>
                       <Text className="text-2xl font-bold mt-2">

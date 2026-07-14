@@ -19,6 +19,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   chat: "chat",
   "access-groups": "access-groups",
   budgets: "budgets",
+  "ptu-reservations": "ptu-reservations",
   workflows: "workflows",
   "guardrails-monitor": "guardrails-monitor",
   "mcp-servers": "mcp-servers",

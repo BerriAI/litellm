@@ -60,6 +60,7 @@ import {
   Wallet,
   Wrench,
   Workflow,
+  Coins,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -233,6 +234,13 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       { key: "budgets", page: "budgets", label: "Budgets", icon: <Wallet {...ICON} />, roles: all_admin_roles },
+      {
+        key: "ptu-reservations",
+        page: "ptu-reservations",
+        label: "PTU Reservations",
+        icon: <Coins {...ICON} />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {
