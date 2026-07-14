@@ -6235,3 +6235,97 @@ class TestGatewaySessionAdmission:
             with pytest.raises((HTTPException, ProxyException)):
                 await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
         mock_auth.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestUserSubjectTeamUnion:
+    """_get_allowed_mcp_servers_for_team unions across ALL a user's teams for a keyless
+    user-subject caller (the gateway DCR session bearer and bridge user-envelope), while a
+    key-based caller keeps its single-team behavior byte-identically."""
+
+    def _team(self, team_id, mcp_servers):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"op-{team_id}", mcp_servers=mcp_servers
+            ),
+        )
+
+    @contextlib.contextmanager
+    def _patch(self, *, teams_by_id, user_teams=None):
+        async def _get_team_object(team_id, **kw):
+            return teams_by_id.get(team_id)
+
+        async def _get_user_object(user_id, **kw):
+            return MagicMock(user_id=user_id, teams=user_teams or [])
+
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+            patch("litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ):
+            yield
+
+    async def test_keyless_user_unions_servers_across_all_their_teams(self):
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key=None)
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1", "srv2", "srv3"}
+
+    async def test_key_based_caller_uses_single_team_only(self):
+        """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the
+        same user belongs to other teams: key auth must be byte-identical to before."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key="sk-hash", team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_explicit_team_id_uses_that_team_only(self):
+        """A keyless caller that already pins a team_id (not the user-subject fan-out shape)
+        resolves only that team; the union is strictly for the no-team-id user-subject case."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key=None, team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_no_teams_gets_nothing_from_teams(self):
+        auth = UserAPIKeyAuth(user_id="lonely-user", api_key=None)
+        with self._patch(teams_by_id={}, user_teams=[]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_ui_session_team_id_still_resolves_to_nothing(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        auth = UserAPIKeyAuth(user_id="dash-user", api_key="sk-hash", team_id=UI_TEAM_ID)
+        with self._patch(teams_by_id={}, user_teams=["team-a"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_team_ids_helper_gates_on_shape(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        # key-based with team -> that team
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(
+            UserAPIKeyAuth(api_key="sk", team_id="t1", user_id="u")
+        ) == ["t1"]
+        # keyless user-subject, no team -> resolved from user record
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(
+                UserAPIKeyAuth(api_key=None, user_id="u")
+            ) == ["t2", "t3"]
+        # keyless, no user_id -> nothing
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(UserAPIKeyAuth(api_key=None)) == []
+        # UI sentinel -> nothing
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(
+            UserAPIKeyAuth(api_key="sk", team_id=UI_TEAM_ID, user_id="u")
+        ) == []
