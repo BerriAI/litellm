@@ -160,10 +160,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         no DeepSeek model supports native json_schema.
         """
         response_format = optional_params.get("response_format")
-        if (
-            not isinstance(response_format, dict)
-            or response_format.get("type") != "json_schema"
-        ):
+        if not isinstance(response_format, dict) or response_format.get("type") != "json_schema":
             return messages, optional_params
 
         json_schema: Optional[dict] = None
@@ -181,9 +178,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             messages = messages + [
                 {
                     "role": "user",
-                    "content": response_schema_prompt(
-                        model=model, response_schema=json_schema
-                    ),
+                    "content": response_schema_prompt(model=model, response_schema=json_schema),
                 }
             ]
         optional_params = {
