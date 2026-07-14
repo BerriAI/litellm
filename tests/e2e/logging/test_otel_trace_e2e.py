@@ -209,7 +209,9 @@ class TestOtelTraceCompleteness:
         (Anthropic-native body, its own pre/post hooks), so completeness proven
         on chat does not transfer; the orphan bug class is route-agnostic and
         must be pinned on each live route (verified: at the pre-fix foil commit
-        1bd603d1ac this route orphans exactly like chat does).
+        1bd603d1ac this route orphans exactly like chat does). The gen-AI span
+        keeps the semconv operation name "chat" even on this surface, so the
+        expected span is "chat <model>", not "messages <model>".
         """
         route = "/v1/messages"
         _assert_otel_destination_configured(client)
@@ -219,13 +221,13 @@ class TestOtelTraceCompleteness:
 
         marker = unique_marker()
         outcome = _first_ok(
-            client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}")
+            client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         hits = otel_reader.poll_traces_for_call(
             call_id=outcome.call_id,
-            marker=marker,
             settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+            settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")

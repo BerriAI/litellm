@@ -35,6 +35,7 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
     ChatBody,
     ChatMessage,
     ChatResponse,
@@ -73,14 +74,6 @@ WEATHER_TOOL = ChatTool(
         },
     ),
 )
-
-
-class MessagesRequestBody(BaseModel):
-    """Anthropic-native /v1/messages request (non-streaming)."""
-
-    model: str
-    max_tokens: int
-    messages: list[ChatMessage]
 
 
 class TeamCallbackBody(BaseModel):
@@ -469,7 +462,7 @@ class LoggingClient:
         return self.gateway.transport.send(
             "/v1/messages",
             headers=self.gateway.transport.bearer(key),
-            json=MessagesRequestBody(
+            json=AnthropicMessagesBody(
                 model=model,
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
