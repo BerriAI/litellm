@@ -16,14 +16,37 @@ import litellm
 from litellm._logging import (
     ALL_LOGGERS,
     JsonFormatter,
+    UvicornAccessPathFilter,
     _initialize_loggers_with_handler,
     _turn_on_json,
+    apply_log_filters,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+
+
+def _uvicorn_access_record(path: str) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/1.1" %d',
+        args=("127.0.0.1:12345", "GET", path, "HTTP/1.1", 200),
+        exc_info=None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_uvicorn_access_filters():
+    yield
+    access_logger = logging.getLogger("uvicorn.access")
+    for f in list(access_logger.filters):
+        if getattr(f, "_litellm_managed", False):
+            access_logger.removeFilter(f)
 
 
 class CacheHitCustomLogger(CustomLogger):
@@ -255,6 +278,113 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
         assert (
             logger.propagate is False
         ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+
+
+def test_uvicorn_access_path_filter_drops_excluded_path():
+    record = _uvicorn_access_record("/health/readiness")
+    filter = UvicornAccessPathFilter(frozenset({"/health/readiness"}))
+    assert filter.filter(record) is False
+
+
+def test_uvicorn_access_path_filter_keeps_other_paths():
+    record = _uvicorn_access_record("/chat/completions")
+    filter = UvicornAccessPathFilter(frozenset({"/health/readiness"}))
+    assert filter.filter(record) is True
+
+
+def test_uvicorn_access_path_filter_ignores_non_access_records():
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="boom",
+        args=("127.0.0.1:12345", "GET", "/health/readiness", "HTTP/1.1", 200),
+        exc_info=None,
+    )
+    filter = UvicornAccessPathFilter(frozenset({"/health/readiness"}))
+    assert filter.filter(record) is True
+
+
+def test_uvicorn_access_path_filter_ignores_malformed_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="malformed",
+        args=("127.0.0.1:12345", "GET"),
+        exc_info=None,
+    )
+    filter = UvicornAccessPathFilter(frozenset({"/health/readiness"}))
+    assert filter.filter(record) is True
+
+
+def test_apply_log_filters_defaults_drop_health_check_paths():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset())
+    access_logger = logging.getLogger("uvicorn.access")
+
+    for path in ("/health/readiness", "/health/liveliness", "/health/liveness"):
+        record = _uvicorn_access_record(path)
+        assert access_logger.filter(record) is False, f"expected {path} to be dropped by default"
+
+    record = _uvicorn_access_record("/chat/completions")
+    assert access_logger.filter(record)
+
+
+def test_apply_log_filters_merges_user_paths_with_defaults():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/custom/noisy"}))
+    access_logger = logging.getLogger("uvicorn.access")
+
+    assert access_logger.filter(_uvicorn_access_record("/custom/noisy")) is False
+    assert access_logger.filter(_uvicorn_access_record("/health/readiness")) is False
+    assert access_logger.filter(_uvicorn_access_record("/chat/completions"))
+
+
+def test_apply_log_filters_reapply_replaces_previous_filter():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/a"}))
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/b"}))
+    access_logger = logging.getLogger("uvicorn.access")
+
+    managed_filters = [f for f in access_logger.filters if getattr(f, "_litellm_managed", False)]
+    assert len(managed_filters) == 1
+
+    assert access_logger.filter(_uvicorn_access_record("/b")) is False
+    assert access_logger.filter(_uvicorn_access_record("/a"))
+
+
+def test_apply_log_filters_exclude_health_check_paths_false_disables_defaults():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset(), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    for path in ("/health/readiness", "/health/liveliness", "/health/liveness"):
+        assert access_logger.filter(_uvicorn_access_record(path)), f"expected {path} to be logged"
+
+
+def test_apply_log_filters_explicit_path_wins_over_disabled_defaults():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/health/readiness"}), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    assert access_logger.filter(_uvicorn_access_record("/health/readiness")) is False
+    assert access_logger.filter(_uvicorn_access_record("/health/liveliness"))
+
+
+def test_apply_log_filters_noop_installs_no_filter():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset(), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    managed_filters = [f for f in access_logger.filters if getattr(f, "_litellm_managed", False)]
+    assert managed_filters == []
+
+
+def test_apply_log_filters_noop_removes_stale_filter():
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset({"/a"}))
+    apply_log_filters(excluded_uvicorn_access_paths=frozenset(), exclude_health_check_paths=False)
+    access_logger = logging.getLogger("uvicorn.access")
+
+    managed_filters = [f for f in access_logger.filters if getattr(f, "_litellm_managed", False)]
+    assert managed_filters == []
+    assert access_logger.filter(_uvicorn_access_record("/a"))
 
 
 @pytest.mark.asyncio

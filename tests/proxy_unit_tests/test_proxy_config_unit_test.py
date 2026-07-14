@@ -316,3 +316,221 @@ async def test_json_logs_calls_turn_on_json():
         # Cleanup
         os.unlink(temp_file_path)
         litellm.json_logs = False
+
+
+@pytest.mark.asyncio
+async def test_log_filters_absent_still_applies_defaults():
+    """
+    Test that load_config calls apply_log_filters exactly once with the
+    default (empty) args when litellm_settings.log_filters isn't set at all,
+    so health-check paths are still suppressed out of the box.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with mock.patch(
+            "litellm.proxy.proxy_server.apply_log_filters"
+        ) as mock_apply_log_filters:
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+
+            mock_apply_log_filters.assert_called_once_with(
+                excluded_uvicorn_access_paths=frozenset(),
+                exclude_health_check_paths=True,
+            )
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_log_filters_calls_apply_log_filters():
+    """
+    Test that litellm_settings.log_filters.excluded_uvicorn_access_paths in the
+    config file reaches litellm._logging.apply_log_filters.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {
+            "log_filters": {"excluded_uvicorn_access_paths": ["/custom/noisy"]}
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with mock.patch(
+            "litellm.proxy.proxy_server.apply_log_filters"
+        ) as mock_apply_log_filters:
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+
+            mock_apply_log_filters.assert_called_once_with(
+                excluded_uvicorn_access_paths=frozenset({"/custom/noisy"}),
+                exclude_health_check_paths=True,
+            )
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_log_filters_exclude_health_check_paths_false_reaches_apply_log_filters():
+    """
+    Test that litellm_settings.log_filters.exclude_health_check_paths: false in the
+    config file reaches litellm._logging.apply_log_filters as exclude_health_check_paths=False.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {
+            "log_filters": {"exclude_health_check_paths": False}
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with mock.patch(
+            "litellm.proxy.proxy_server.apply_log_filters"
+        ) as mock_apply_log_filters:
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+
+            mock_apply_log_filters.assert_called_once_with(
+                excluded_uvicorn_access_paths=frozenset(),
+                exclude_health_check_paths=False,
+            )
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_log_filters_invalid_value_raises():
+    """
+    Test that litellm_settings.log_filters set to a non-dict value raises a
+    clear error instead of failing deep inside LogFiltersConfig(**value).
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {"log_filters": "not-a-dict"},
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with pytest.raises(Exception, match="Invalid value set for log_filters"):
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_log_filters_invalid_field_type_raises():
+    """
+    Test that litellm_settings.log_filters with a dict value that fails
+    LogFiltersConfig validation (excluded_uvicorn_access_paths is not a list)
+    still raises instead of silently swallowing the bad config.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {
+            "log_filters": {"excluded_uvicorn_access_paths": "not-a-list"}
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        with pytest.raises(Exception):
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+    finally:
+        os.unlink(temp_file_path)

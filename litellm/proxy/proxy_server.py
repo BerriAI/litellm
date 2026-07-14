@@ -213,7 +213,7 @@ from functools import lru_cache
 
 import litellm
 from litellm import Router
-from litellm._logging import verbose_proxy_logger, verbose_router_logger
+from litellm._logging import apply_log_filters, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -4047,6 +4047,9 @@ class ProxyConfig:
         litellm_settings = config.get("litellm_settings", None)
         if litellm_settings is None:
             litellm_settings = {}
+
+        log_filters_config: Optional[LogFiltersConfig] = None
+
         if litellm_settings:
             # ANSI escape code for blue text
             blue_color_code = "\033[94m"
@@ -4322,6 +4325,10 @@ class ProxyConfig:
                     litellm.json_logs = True
                     litellm._turn_on_json()
                     verbose_proxy_logger.debug(f"{blue_color_code} Enabled JSON logging via config{reset_color_code}")
+                elif key == "log_filters" and value is not None:
+                    if not isinstance(value, dict):
+                        raise Exception(f"Invalid value set for log_filters - value={value}")
+                    log_filters_config = LogFiltersConfig(**value)
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, value, is_full_admin=False)}{reset_color_code}"
@@ -4340,6 +4347,15 @@ class ProxyConfig:
 
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+
+        # Drop health-check probe noise from the uvicorn access log by default when the
+        # proxy starts; litellm_settings.log_filters (parsed above, if present) extends/overrides this.
+        apply_log_filters(
+            excluded_uvicorn_access_paths=frozenset(
+                log_filters_config.excluded_uvicorn_access_paths if log_filters_config else []
+            ),
+            exclude_health_check_paths=(log_filters_config.exclude_health_check_paths if log_filters_config else True),
+        )
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})

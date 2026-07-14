@@ -1959,6 +1959,17 @@ class TeamDefaultSettings(LiteLLMPydanticObjectBase):
     )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
+class LogFiltersConfig(LiteLLMPydanticObjectBase):
+    excluded_uvicorn_access_paths: List[str] = Field(
+        default_factory=list,
+        description="Additional request paths to drop from the uvicorn access log, on top of the built-in health-check paths (unless exclude_health_check_paths is set to False).",
+    )
+    exclude_health_check_paths: bool = Field(
+        default=True,
+        description="Whether to drop the built-in health-check paths (/health/readiness, /health/liveliness, /health/liveness) from the uvicorn access log. Set to False to see them logged again.",
+    )
+
+
 class DynamoDBArgs(LiteLLMPydanticObjectBase):
     billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
     read_capacity_units: Optional[int] = None
