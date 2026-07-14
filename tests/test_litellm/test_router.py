@@ -4025,12 +4025,10 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     assert model_info["output_cost_per_token"] == 0.0015
 
 
-def test_combine_fallback_usage():
-    """Test that _combine_fallback_usage merges partial and fallback usage."""
+def test_combine_fallback_usage_without_partial_usage():
     from litellm.router import Router
     from litellm.types.utils import Usage
 
-    # Create a stream chunk with usage
     chunk = litellm.ModelResponseStream(
         id="test",
         model="gpt-4o",
@@ -4038,12 +4036,31 @@ def test_combine_fallback_usage():
         usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
 
-    # Call _combine_fallback_usage with no extra usage
     Router._combine_fallback_usage(chunk, None)
     assert chunk.usage is not None
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+
+def test_combine_fallback_usage():
+    from litellm.router import Router
+    from litellm.types.utils import Usage
+
+    chunk = litellm.ModelResponseStream(
+        id="test",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    partial_usage = Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)
+
+    Router._combine_fallback_usage(chunk, partial_usage)
+
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 17
+    assert chunk.usage.completion_tokens == 8
+    assert chunk.usage.total_tokens == 25
 
 
 @pytest.mark.asyncio
