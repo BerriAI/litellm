@@ -561,6 +561,155 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
 
 
+def test_create_follow_up_input_with_previous_response_id_only_outputs_tool_results():
+    """
+    When ``previous_response_id`` is provided the session handler will
+    reconstruct the full conversation from the spend-log database.  The
+    follow-up input must therefore contain **only** ``function_call_output``
+    items so that ``tool_result`` blocks are placed immediately after the
+    assistant ``tool_use`` blocks (Anthropic requirement).
+    """
+    response = types.SimpleNamespace(
+        output=[
+            OutputFunctionToolCall(
+                id="toolu_01",
+                type="function_call",
+                call_id="toolu_01",
+                name="transfer_conversation",
+                arguments="{}",
+                status="completed",
+            )
+        ]
+    )
+    tool_results = [
+        {"tool_call_id": "toolu_01", "name": "transfer_conversation", "result": "transferred"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input=[
+            {"type": "message", "role": "user", "content": "transfer me"},
+        ],
+        previous_response_id="resp-abc123",
+    )
+
+    # Must only contain function_call_output items, no messages or function_calls
+    assert len(follow_up) == 1
+    assert follow_up[0]["type"] == "function_call_output"
+    assert follow_up[0]["call_id"] == "toolu_01"
+    assert follow_up[0]["output"] == "transferred"
+
+
+def test_create_follow_up_input_with_previous_response_id_multiple_tool_results():
+    """Multiple tool results are all included when previous_response_id is set."""
+    response = types.SimpleNamespace(
+        output=[
+            OutputFunctionToolCall(
+                id="toolu_01",
+                type="function_call",
+                call_id="toolu_01",
+                name="get_weather",
+                arguments="{}",
+                status="completed",
+            ),
+            OutputFunctionToolCall(
+                id="toolu_02",
+                type="function_call",
+                call_id="toolu_02",
+                name="get_time",
+                arguments="{}",
+                status="completed",
+            ),
+        ]
+    )
+    tool_results = [
+        {"tool_call_id": "toolu_01", "name": "get_weather", "result": "72F"},
+        {"tool_call_id": "toolu_02", "name": "get_time", "result": "12:00"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input=[
+            {"type": "message", "role": "user", "content": "weather and time?"},
+        ],
+        previous_response_id="resp-abc123",
+    )
+
+    assert len(follow_up) == 2
+    assert all(item["type"] == "function_call_output" for item in follow_up)
+    assert follow_up[0]["call_id"] == "toolu_01"
+    assert follow_up[1]["call_id"] == "toolu_02"
+
+
+def test_create_follow_up_input_with_previous_response_id_no_tool_results():
+    """Empty tool_results with previous_response_id produces empty follow-up."""
+    response = types.SimpleNamespace(output=[])
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=[],
+        original_input=[{"type": "message", "role": "user", "content": "hi"}],
+        previous_response_id="resp-abc123",
+    )
+
+    assert follow_up == []
+
+
+def test_create_follow_up_input_without_previous_response_id_is_self_contained():
+    """
+    Regression test for the streaming MCP iterator path:
+    when ``previous_response_id`` is ``None`` the follow-up input must
+    be fully self-contained (original input + assistant message + function
+    calls + tool results).
+    """
+    response = types.SimpleNamespace(
+        output=[
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "I'll transfer you."}],
+            },
+            OutputFunctionToolCall(
+                id="toolu_01",
+                type="function_call",
+                call_id="toolu_01",
+                name="transfer_conversation",
+                arguments="{}",
+                status="completed",
+            ),
+        ]
+    )
+    tool_results = [
+        {"tool_call_id": "toolu_01", "name": "transfer_conversation", "result": "done"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input=[
+            {"type": "message", "role": "user", "content": "transfer me"},
+        ],
+    )
+
+    # Should contain: user message, assistant message, function_call, function_call_output
+    types_in_follow_up = [
+        item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        for item in follow_up
+    ]
+    assert "message" in types_in_follow_up  # user message
+    assert "function_call" in types_in_follow_up
+    assert "function_call_output" in types_in_follow_up
+
+    # Verify the assistant message is present
+    assistant_msgs = [
+        item
+        for item in follow_up
+        if isinstance(item, dict) and item.get("role") == "assistant"
+    ]
+    assert len(assistant_msgs) == 1
+
+
 def test_completion_with_function_tools_works_without_fastapi_installed():
     script = textwrap.dedent(
         """

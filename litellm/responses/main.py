@@ -333,7 +333,10 @@ async def aresponses_api_with_mcp(
 
             if tool_results:
                 follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
-                    response=response, tool_results=tool_results, original_input=input
+                    response=response,
+                    tool_results=tool_results,
+                    original_input=input,
+                    previous_response_id=response.id,
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)

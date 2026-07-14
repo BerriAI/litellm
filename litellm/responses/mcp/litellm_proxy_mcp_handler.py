@@ -923,12 +923,32 @@ class LiteLLM_Proxy_MCP_Handler:
         return follow_up_messages
 
     @staticmethod
-    def _create_follow_up_input(
+    def _build_tool_result_items(
+        tool_results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Build ``function_call_output`` items from tool results."""
+        return [
+            {
+                "type": "function_call_output",
+                "call_id": tool_result["tool_call_id"],
+                "output": tool_result["result"],
+            }
+            for tool_result in tool_results
+        ]
+
+    @staticmethod
+    def _build_self_contained_follow_up_input(
         response: ResponsesAPIResponse,
         tool_results: List[Dict[str, Any]],
         original_input: Any = None,
     ) -> List[Any]:
-        """Create follow-up input with tool results in proper format."""
+        """Build a fully self-contained follow-up input (no session handler).
+
+        This is used by the streaming MCP iterator path where
+        ``previous_response_id`` is not passed and the follow-up input
+        must include the original messages, assistant response, function
+        calls, and tool results.
+        """
         follow_up_input: List[Any] = []
 
         # Add original user input if available to maintain conversation context
@@ -989,16 +1009,44 @@ class LiteLLM_Proxy_MCP_Handler:
             follow_up_input.append(function_call)
 
         # Add tool results (function call outputs)
-        for tool_result in tool_results:
-            follow_up_input.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_result["tool_call_id"],
-                    "output": tool_result["result"],
-                }
-            )
+        follow_up_input.extend(
+            LiteLLM_Proxy_MCP_Handler._build_tool_result_items(tool_results)
+        )
 
         return follow_up_input
+
+    @staticmethod
+    def _create_follow_up_input(
+        response: ResponsesAPIResponse,
+        tool_results: List[Dict[str, Any]],
+        original_input: Any = None,
+        previous_response_id: str | None = None,
+    ) -> List[Any]:
+        """Create follow-up input with tool results in proper format.
+
+        When ``previous_response_id`` is provided the session handler will
+        reconstruct the full conversation history (including the original
+        user messages and the assistant response with tool_use blocks) from
+        the spend-log database.  In that case we must **only** emit
+        ``function_call_output`` items so that the combined message list
+        produced by the session handler places the ``tool_result`` blocks
+        immediately after the assistant ``tool_use`` blocks, as required by
+        Anthropic.  Including the original input / assistant message /
+        function_call items again would duplicate them and break the
+        ``tool_use`` → ``tool_result`` ordering contract.
+
+        When ``previous_response_id`` is ``None`` (e.g. the streaming MCP
+        iterator path) the follow-up input must be fully self-contained and
+        therefore includes the original input, assistant message, function
+        calls, and tool results.
+        """
+        if previous_response_id is not None:
+            return LiteLLM_Proxy_MCP_Handler._build_tool_result_items(tool_results)
+        return LiteLLM_Proxy_MCP_Handler._build_self_contained_follow_up_input(
+            response=response,
+            tool_results=tool_results,
+            original_input=original_input,
+        )
 
     @staticmethod
     async def _make_follow_up_call(
