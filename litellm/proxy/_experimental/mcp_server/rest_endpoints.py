@@ -829,21 +829,20 @@ if MCP_AVAILABLE:
                     else {}
                 )
 
-                # Query all servers the user has access to
-                errors = []
-                for allowed_server_id in allowed_server_ids:
-                    server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
-                    if server is None:
-                        continue
+                servers = tuple(
+                    server
+                    for allowed_server_id in allowed_server_ids
+                    if (server := global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)) is not None
+                )
 
-                    server_auth_header = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
-                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(
-                        server,
-                        user_api_key_dict,
-                        prefetched_creds=prefetched_oauth_creds,
-                    )
-
+                async def _fetch_server_tools(server):
                     try:
+                        server_auth_header = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
+                        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                            server,
+                            user_api_key_dict,
+                            prefetched_creds=prefetched_oauth_creds,
+                        )
                         tools_result = await _get_tools_for_single_server(
                             server,
                             server_auth_header,
@@ -852,15 +851,19 @@ if MCP_AVAILABLE:
                             extra_headers=user_oauth_extra_headers,
                             apply_tool_filters=apply_tool_filters,
                         )
-                        list_tools_result.extend(tools_result)
+                        return tools_result, None
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(
+                        error = (
                             f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
                             if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
                             else f"{get_server_prefix(server)}: {str(e)}"
                         )
-                        continue
+                        return [], error
+
+                results = await asyncio.gather(*(_fetch_server_tools(server) for server in servers))
+                list_tools_result = [tool for tools_result, _ in results for tool in tools_result]
+                errors = [error for _, error in results if error is not None]
 
                 if errors and not list_tools_result:
                     error_message = "Failed to get tools from servers: " + "; ".join(errors)
