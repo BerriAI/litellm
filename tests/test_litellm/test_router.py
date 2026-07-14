@@ -5401,3 +5401,21 @@ def test_get_settings_includes_default_litellm_params_and_optional_pre_call_chec
     assert settings["optional_pre_call_checks"] == ["prompt_caching"]
     assert "default_litellm_params" in settings
     assert isinstance(settings["default_litellm_params"], dict)
+
+
+def test_update_settings_tolerates_null_default_litellm_params_and_optional_pre_call_checks():
+    """
+    Regression test: `_add_router_settings_from_db_config` calls
+    `update_settings(**combined_router_settings)` with the raw dict merged from
+    config.yaml and the DB router_settings row - neither is filtered through
+    `UpdateRouterConfig(exclude_none=True)` first, so an explicit
+    `default_litellm_params: null` / `optional_pre_call_checks: null` in either
+    source reaches update_settings verbatim. `{**dict, **None}` and iterating
+    `None` both raise TypeError, which would crash proxy startup / config sync.
+    """
+    router = _make_router_for_settings_tests(timeout=42)
+
+    router.update_settings(default_litellm_params=None, optional_pre_call_checks=None)
+
+    assert router.default_litellm_params["timeout"] == 42
+    assert router.optional_pre_call_checks == []

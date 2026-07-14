@@ -9757,11 +9757,13 @@ class Router:
                     if value is None or isinstance(value, RetryPolicy):
                         setattr(self, var, value)
                 elif var == "default_litellm_params":
-                    self.default_litellm_params = {**self.default_litellm_params, **kwargs[var]}
+                    if kwargs[var] is not None:
+                        self.default_litellm_params = {**self.default_litellm_params, **kwargs[var]}
                 elif var == "optional_pre_call_checks":
-                    new_checks = [check for check in kwargs[var] if check not in self.optional_pre_call_checks]
-                    if new_checks:
-                        self.add_optional_pre_call_checks(new_checks)
+                    if kwargs[var] is not None:
+                        new_checks = [check for check in kwargs[var] if check not in self.optional_pre_call_checks]
+                        if new_checks:
+                            self.add_optional_pre_call_checks(new_checks)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
