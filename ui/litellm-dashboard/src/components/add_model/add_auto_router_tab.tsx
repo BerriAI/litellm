@@ -8,7 +8,11 @@ import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import ComplexityRouterConfig, {
+  ComplexityRouterConfigValue,
+  DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_TIER_DISTANCE_PENALTY,
+} from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
@@ -38,7 +42,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [routerType, setRouterType] = useState<RouterType>("recommended");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
-    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
 
@@ -89,6 +93,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       tiers,
       classifier_type: classifierType,
       classifier_llm_config: classifierLlmConfig,
+      adaptive = false,
+      adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
+      tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
+      adaptive_eligible: adaptiveEligible = "all",
     } = complexityRouterConfig;
 
     const missingTiersError = getMissingTiersError(tiers);
@@ -111,7 +119,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       return;
     }
 
-    const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+    const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
 
     form.setFieldsValue({
       custom_llm_provider: "auto_router",
@@ -132,6 +140,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           semanticMatchingEnabled,
           embeddingModel,
           matchThreshold,
+          adaptive,
+          adaptiveWeights,
+          tierDistancePenalty,
+          adaptiveEligible,
         };
 
         const submitValues = {
