@@ -206,12 +206,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
-          // Keyword tier overrides and semantic matching are two facets of one
-          // setting (semantic matching changes how the same keyword-tier rules get
-          // matched), so they share a panel. It only renders when at least one change
-          // handler is wired (the add-router flow) — the edit-auto-router modal
-          // doesn't pass them yet, so it stays hidden there rather than rendering
-          // interactive-but-dead controls.
           ...(onKeywordTierRulesChange || onSemanticMatchingEnabledChange
             ? [
                 {

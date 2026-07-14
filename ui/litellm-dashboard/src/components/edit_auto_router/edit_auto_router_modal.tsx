@@ -4,7 +4,11 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "../add_model/ComplexityRouterConfig";
+import ComplexityRouterConfig, {
+  ComplexityRouterConfigValue,
+  DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_TIER_DISTANCE_PENALTY,
+} from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const isComplexityRouterModel = (modelData: any): boolean =>
@@ -19,6 +23,48 @@ interface EditAutoRouterModalProps {
   accessToken: string;
   userRole: string;
 }
+
+const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
+  "tiers",
+  "classifier_type",
+  "classifier_llm_config",
+  "adaptive",
+  "adaptive_weights",
+  "tier_distance_penalty",
+  "adaptive_eligible",
+]);
+
+const toRecord = (value: unknown): Record<string, unknown> => {
+  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+};
+
+export const buildUpdatedComplexityRouterConfig = (
+  storedConfig: unknown,
+  value: ComplexityRouterConfigValue,
+): Record<string, unknown> => {
+  const preservedConfig = Object.fromEntries(
+    Object.entries(toRecord(storedConfig)).filter(([key]) => !MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)),
+  );
+  const adaptiveEligible = value.adaptive_eligible ?? "all";
+
+  return {
+    ...preservedConfig,
+    tiers: value.tiers,
+    classifier_type: value.classifier_type,
+    ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(value.adaptive && {
+      adaptive: true,
+      adaptive_weights: value.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
+      ...(adaptiveEligible === "all" && {
+        tier_distance_penalty: value.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
+      }),
+      adaptive_eligible: adaptiveEligible,
+    }),
+  };
+};
 
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
@@ -141,15 +187,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const values = await form.validateFields();
 
       if (isComplexityRouter) {
-        const {
-          tiers,
-          classifier_type,
-          classifier_llm_config,
-          adaptive,
-          adaptive_weights,
-          tier_distance_penalty,
-          adaptive_eligible,
-        } = complexityRouterConfig;
+        const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
         if (Object.values(tiers).filter(Boolean).length === 0) {
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
           return;
@@ -162,17 +200,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
         const updatedLitellmParams = {
           ...modelData.litellm_params,
-          complexity_router_config: {
-            tiers,
-            classifier_type,
-            ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
-            ...(adaptive && {
-              adaptive,
-              adaptive_weights,
-              ...(adaptive_eligible === "all" && { tier_distance_penalty }),
-              adaptive_eligible,
-            }),
-          },
+          complexity_router_config: buildUpdatedComplexityRouterConfig(
+            modelData.litellm_params?.complexity_router_config,
+            complexityRouterConfig,
+          ),
           complexity_router_default_model: defaultModel,
         };
         const updatedModelInfo = {

@@ -30,9 +30,6 @@ const AdaptiveRoutingConfig: React.FC<AdaptiveRoutingConfigProps> = ({ value, on
     onChange(nextValue);
   };
 
-  // AdaptiveRouterWeights requires quality + cost === 1.0, so a single quality
-  // slider derives cost rather than exposing two independent inputs that could
-  // drift apart and fail backend validation.
   const handleQualityWeightChange = (qualityPercent: number) => {
     const quality = qualityPercent / 100;
     onChange({ ...value, adaptive_weights: { quality, cost: Math.round((1 - quality) * 100) / 100 } });
