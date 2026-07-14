@@ -155,23 +155,21 @@ class TestOtelTraceCompleteness:
     def test_chat_completions_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful non-streaming /chat/completions call must export ONE
-        complete OTEL trace to the admin-owned destination (LIT-3787): a single
-        root SERVER span ("POST /chat/completions") with the auth phase, db
-        lookup, and cost write under it, and the gen-AI CLIENT span ("chat
-        <model>") parented into the same tree - exactly one trace for the call,
-        no dangling parent references.
+        """This test verifies that a successful non-streaming
+        /chat/completions request produces one complete OTEL trace.
 
-        If the trace splits, the gen-AI span lands alone as an orphan: in the
-        customer's observability tool the LLM call shows up with no request
-        context (trace stuck "in progress", no root), and the server trace shows
-        a request with no LLM call inside. Latency breakdown (gateway overhead
-        vs model time), per-request cost attribution, and root-causing a slow or
-        failed call all silently break - spans still arrive, so nothing alerts.
+        The trace should have a single server root span for the incoming request, with
+        the authentication, database, and cost-recording work beneath it. The span for
+        the actual model call must also belong to that same trace, rather than being
+        exported separately with a missing parent.
 
-        /chat/completions is the proxy's highest-traffic route and the default
-        for every OpenAI-compatible SDK; trace completeness must hold here
-        before anywhere else.
+        This matters because a split trace is easy to miss: all of the spans may still
+        arrive, but the model call appears without the surrounding request context.
+        That makes it difficult to understand where time was spent, connect the model
+        cost to the original request, or investigate a slow or failed call.
+
+        /chat/completions is the main OpenAI-compatible route used by most customers,
+        so it is important that trace parenting works correctly on this path.
         """
         route = "/chat/completions"
         _assert_otel_destination_configured(client)
