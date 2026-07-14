@@ -1650,11 +1650,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Group (block, replacement) pairs by the content-list index they belong to,
         preserving block order within each group. Blocks lacking a content_index
         (e.g. bare-string message content) are not part of any content list, so
-        they contribute no grouped entries."""
-        located_entries = tuple(
-            (location.content_index, entry)
-            for entry in zip(blocks, replacement_texts)
-            if (location := entry[0].location) is not None and location.content_index is not None
+        they contribute no grouped entries.
+
+        Sorted explicitly (stable, so within-group order survives) rather than
+        relying on blocks already arriving grouped by content_index: groupby only
+        merges *contiguous* runs of a key, so an unsorted input would silently
+        split one content_index across multiple, later-overwritten groups.
+        """
+        located_entries = sorted(
+            (
+                (location.content_index, entry)
+                for entry in zip(blocks, replacement_texts)
+                if (location := entry[0].location) is not None and location.content_index is not None
+            ),
+            key=lambda located_entry: located_entry[0],
         )
         return {
             content_index: tuple(entry for _, entry in group)

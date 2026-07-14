@@ -3401,6 +3401,113 @@ def test_get_content_items_for_message_tool_result_qualifier_never_leaks_groundi
     assert blocks[0].qualifier is None
 
 
+def test_get_content_items_for_message_bare_string_content_list_item():
+    """A content list can mix a bare string item alongside a dict item (e.g. a
+    tool_result) -- both must be extracted, each at its own content_index."""
+    guardrail = _make_guardrail()
+    message = {
+        "role": "user",
+        "content": [
+            "plain string item",
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "PII here"},
+        ],
+    }
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == [
+        QualifiedTextBlock(
+            text="plain string item",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=0, tool_result_content_index=None),
+        ),
+        QualifiedTextBlock(
+            text="PII here",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=1, tool_result_content_index=-1),
+        ),
+    ]
+
+
+def test_apply_masking_to_messages_masks_bare_string_content_list_item():
+    """Masking must overwrite a bare-string content-list item in place, and
+    leave a sibling tool_result item's independent masking untouched."""
+    guardrail = _make_guardrail()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "plain string item",
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "PII here"},
+            ],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["{MASKED_STRING}", "{MASKED_PII}"]
+    )
+
+    content = updated[0]["content"]
+    assert content[0] == "{MASKED_STRING}"
+    assert content[1]["content"] == "{MASKED_PII}"
+
+
+def test_apply_masking_to_messages_preserves_non_text_top_level_item():
+    """A top-level content item that contributes no text block (e.g. an image)
+    must be preserved unchanged, not dropped, when masking a sibling text item
+    in the same content list -- regression guard for the pre-existing
+    _mask_content_list bug this rewrite fixes."""
+    guardrail = _make_guardrail()
+    image_item = {"type": "image", "source": {"type": "base64", "data": "abc"}}
+    messages = [
+        {
+            "role": "user",
+            "content": [image_item, {"type": "text", "text": "call me at 555-0100"}],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["call me at {PHONE}"]
+    )
+
+    content = updated[0]["content"]
+    assert content[0] == image_item
+    assert content[1] == {"type": "text", "text": "call me at {PHONE}"}
+
+
+def test_get_content_items_for_message_tool_result_with_missing_content_key():
+    """A malformed/adversarial tool_result with no (or non-text) own content
+    must be skipped silently, not raise."""
+    guardrail = _make_guardrail()
+    message = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}],
+    }
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == []
+
+
+def test_apply_masking_to_messages_leaves_contentless_message_unchanged():
+    """A message with no content (e.g. an assistant turn carrying only
+    tool_calls) must pass through masking untouched, not be dropped or
+    crash -- there is no separate early-continue case in the rewrite, so this
+    locks in that the generic content-type guard covers it."""
+    guardrail = _make_guardrail()
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(messages=messages, masked_texts=[])
+
+    assert updated == messages
+
+
 def test_create_bedrock_input_content_request_includes_tool_result_text():
     """End-to-end: the actual Bedrock INPUT payload built for a tool_result-
     bearing conversation must contain the tool_result's text."""
