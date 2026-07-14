@@ -18,6 +18,7 @@ fails the test; a pricing or token-count drift does not.
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import pytest
 
@@ -430,13 +431,30 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
 
 
-# Chat providers this negative-spend guard sweeps when the proxy exposes them. Two
-# are guaranteed by the suite's driver_models (gemini, anthropic); gpt-5.5 (openai
-# chat) is only wired on the stage/docker gateways, so it's swept when present.
-# Adding a provider here widens the guard by one line.
-_NEG_GUARD_CHAT_MODELS: tuple[str, ...] = ("gemini-2.5-flash", "claude-haiku-4-5", "gpt-5.5")
-_NEG_GUARD_EMBEDDING_MODEL = "openai-text-embedding-3-small"
-_NEG_GUARD_EMBEDDING_ROW_MARKER = "text-embedding-3-small"
+@dataclass(frozen=True, slots=True)
+class _SweepModel:
+    """A deployment the negative-spend guard drives. `call` is the model_name sent to
+    the proxy; `row_marker` is the substring the resulting spend row's `model` must
+    contain (rows carry the resolved provider/model, so bedrock's alias shows up as
+    `bedrock/us.anthropic...`). The two claude markers are prefix-qualified so a
+    bedrock-anthropic row can't stand in for anthropic-direct, or vice versa."""
+
+    call: str
+    row_marker: str
+
+
+# Chat providers this guard sweeps when the proxy exposes them, each non-streaming and
+# streaming: gemini, anthropic, openai, and bedrock - the surface #25846's negative
+# streaming-cost bug lived on. gemini/anthropic/bedrock are registered by the suite's
+# driver_models; gpt-5.5 is only wired on the stage/docker gateways. Adding a provider
+# is one line.
+_CHAT_SWEEP: tuple[_SweepModel, ...] = (
+    _SweepModel("gemini-2.5-flash", "gemini-2.5-flash"),
+    _SweepModel("claude-haiku-4-5", "anthropic/claude-haiku-4-5"),
+    _SweepModel("gpt-5.5", "gpt-5.5"),
+    _SweepModel("bedrock-claude-haiku-4-5", "us.anthropic.claude-haiku-4-5"),
+)
+_EMBEDDING_SWEEP = _SweepModel("openai-text-embedding-3-small", "text-embedding-3-small")
 
 
 @pytest.mark.covers("quota_management.spend_tracking.non_negative.never_negative")
@@ -447,50 +465,53 @@ def test_no_provider_logs_negative_spend(
     provider the proxy exposes, both non-streaming and streaming, plus an embedding;
     then every logged row is asserted non-negative. A negative cost is a real billing
     bug: cache-token accounting that lets a derived token count fall below zero
-    (BerriAI/litellm#25846) surfaces here as spend < 0, and the streaming leg is
-    included on purpose because that is the path that regression rode in on. The
-    per-provider positive-row check keeps the guard non-vacuous - a pipeline that
-    silently logs 0 (or drops the row) fails instead of sliding past a bare `>= 0`."""
+    (BerriAI/litellm#25846, a bedrock-anthropic streaming regression) surfaces here as
+    spend < 0, and both bedrock and the streaming leg are exercised on purpose because
+    that is the path that regression rode in on. The per-provider positive-row check
+    keeps the guard non-vacuous - a pipeline that silently logs 0 (or drops the row)
+    fails instead of sliding past a bare `>= 0`."""
     present = frozenset(entry.model_name for entry in client.gateway.model_info())
-    chat_models = tuple(m for m in _NEG_GUARD_CHAT_MODELS if m in present)
-    assert len(chat_models) >= 2, (
+    chat = tuple(m for m in _CHAT_SWEEP if m.call in present)
+    assert len(chat) >= 2, (
         f"need >=2 chat providers for a cross-provider guard; "
         f"proxy exposes {sorted(present)}"
     )
-    assert _NEG_GUARD_EMBEDDING_MODEL in present, (
-        f"embedding deployment {_NEG_GUARD_EMBEDDING_MODEL!r} not registered; "
+    assert _EMBEDDING_SWEEP.call in present, (
+        f"embedding deployment {_EMBEDDING_SWEEP.call!r} not registered; "
         f"proxy exposes {sorted(present)}"
     )
 
-    for model in chat_models:
+    for model in chat:
         _ = unwrap(
-            client.chat(scoped_key, model, f"one word {unique_marker()}", max_tokens=16)
+            client.chat(
+                scoped_key, model.call, f"one word {unique_marker()}", max_tokens=16
+            )
         )
         stream = client.chat_stream(
-            scoped_key, model, f"count to three {unique_marker()}", max_tokens=32
+            scoped_key, model.call, f"count to three {unique_marker()}", max_tokens=32
         )
         assert stream.ok, (
-            f"{model} stream failed (status {stream.status_code}): {stream.body[:300]}"
+            f"{model.call} stream failed (status {stream.status_code}): {stream.body[:300]}"
         )
     _ = unwrap(
         client.embed(
-            scoped_key, _NEG_GUARD_EMBEDDING_MODEL, f"vectorize {unique_marker()}"
+            scoped_key, _EMBEDDING_SWEEP.call, f"vectorize {unique_marker()}"
         )
     )
 
-    expected_markers = (*chat_models, _NEG_GUARD_EMBEDDING_ROW_MARKER)
+    expected = (*chat, _EMBEDDING_SWEEP)
 
     def every_provider_costed(rows: list[SpendLogRow]) -> bool:
         return all(
-            any(marker in (r.model or "") and (r.spend or 0) > 0 for r in rows)
-            for marker in expected_markers
+            any(m.row_marker in (r.model or "") and (r.spend or 0) > 0 for r in rows)
+            for m in expected
         )
 
     # min_rows waits for the streaming rows too (non-stream + stream per chat model,
     # plus the embedding), so the streaming spend is actually observed and checked.
     rows = client.poll_logs_for_key(
         scoped_key,
-        min_rows=2 * len(chat_models) + 1,
+        min_rows=2 * len(chat) + 1,
         predicate=every_provider_costed,
     )
 
@@ -499,10 +520,10 @@ def test_no_provider_logs_negative_spend(
         f"provider logged negative spend (billing regression): {_summarize(negative)}"
     )
 
-    for marker in expected_markers:
+    for m in expected:
         assert any(
-            marker in (r.model or "") and (r.spend or 0) > 0 for r in rows
-        ), f"no positive spend row for {marker!r}; guard would be vacuous: {_summarize(rows)}"
+            m.row_marker in (r.model or "") and (r.spend or 0) > 0 for r in rows
+        ), f"no positive spend row for {m.row_marker!r}; guard would be vacuous: {_summarize(rows)}"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
