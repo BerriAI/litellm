@@ -6261,3 +6261,165 @@ class TestAggregateGatewayDcrChallenge:
             with pytest.raises(ProxyException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())
         assert str(exc_info.value.code) == "500"
+
+
+@pytest.mark.asyncio
+class TestGatewaySessionAdmission:
+    """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
+    token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
+    token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
+    aggregate scope with the flag on, never for named servers or per-server flows."""
+
+    _MASTER_KEY = "sk-gateway-session-admission-master-key"
+    _FLAG = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.is_mcp_gateway_dcr_enabled"
+
+    def _session_bearer(self, user_id="sso-user-42", client_id="llm_dcrc_abc"):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+            mint_session_refresh_token,
+        )
+
+        keys = session_keys_from_master_key(self._MASTER_KEY)
+        principal = SessionPrincipal(user_id=user_id, client_id=client_id)
+        return mint_session_token, mint_session_refresh_token, principal, keys
+
+    def _access_token(self, **kw):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer(**kw)
+        return mint(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+
+    def _scope(self, bearer, path="/mcp", extra_headers=()):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {bearer}".encode()), *extra_headers],
+        }
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _patch_user_reload(*, user_id, active=True):
+        get_user_object = AsyncMock(
+            return_value=MagicMock(
+                user_id=user_id,
+                metadata={"scim_active": active} if not active else {"scim_active": True},
+                user_role=None,
+                object_permission=None,
+                object_permission_id=None,
+            )
+        )
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            yield get_user_object
+
+    async def test_valid_session_admits_under_live_user_at_aggregate_scope(self):
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            self._patch_user_reload(user_id="sso-user-42") as get_user_object,
+        ):
+            auth_result, _h, _servers, mcp_server_auth_headers, _o, _r = await MCPRequestHandler.process_mcp_request(
+                self._scope(token)
+            )
+        assert get_user_object.await_args.kwargs["user_id"] == "sso-user-42"
+        assert auth_result.user_id == "sso-user-42"
+        mock_auth.assert_not_called()
+        # Identity-only admission injects no per-server upstream credential (unlike the
+        # bridge envelope arm); the headers dict is whatever the request carried, here empty.
+        assert not mcp_server_auth_headers
+
+    async def test_expired_session_fails_closed_with_invalid_token_challenge(self):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer()
+        token = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in (exc_info.value.headers or {})["WWW-Authenticate"]
+
+    async def test_tampered_session_fails_closed(self):
+        token = self._access_token()
+        tampered = token[:-3] + ("aaa" if not token.endswith("aaa") else "bbb")
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(tampered))
+        assert exc_info.value.status_code == 401
+
+    async def test_refresh_token_is_not_admitted_at_the_tool_edge(self):
+        from datetime import datetime, timezone
+
+        _mint, refresh, principal, keys = self._session_bearer()
+        refresh_token = refresh(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(refresh_token))
+        assert exc_info.value.status_code == 401
+
+    async def test_foreign_key_session_fails_closed(self):
+        token = self._access_token()
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-a-totally-different-master-key"),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+
+    async def test_arm_does_not_fire_when_flag_off(self):
+        """Flag off: a session-shaped bearer is treated as an ordinary bearer and hits the
+        oauth2 arm, which validates it as a litellm credential and fails it there (not the
+        session arm). Proven by user_api_key_auth being called, unlike the flag-on path."""
+        token = self._access_token()
+        with (
+            patch(self._FLAG, return_value=False),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
+            ) as mock_auth,
+        ):
+            with pytest.raises((HTTPException, ProxyException)):
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        mock_auth.assert_called_once()
+
+    async def test_arm_does_not_fire_for_named_server(self):
+        """A session-shaped bearer aimed at a named server (path scope) does not enter the
+        aggregate arm; it is treated as an ordinary bearer on that server."""
+        token = self._access_token()
+        with (
+            patch(self._FLAG, return_value=True),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
+            ) as mock_auth,
+        ):
+            with pytest.raises((HTTPException, ProxyException)):
+                await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
+        mock_auth.assert_called_once()

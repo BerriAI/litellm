@@ -25,6 +25,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    is_session_bearer_shaped,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_TeamTable,
@@ -124,6 +127,17 @@ def _has_client_supplied_mcp_auth(
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
 
 
+def _is_aggregate_mcp_scope(route: str, mcp_servers: list[str] | None) -> bool:
+    """True when a request targets the aggregate ``/mcp`` endpoint rather than any named
+    server. Named targets arrive either through ``x-mcp-servers`` (``mcp_servers``) or a
+    path segment (``/mcp/{server}`` / ``/{server}/mcp``); the aggregate scope has neither.
+    The gateway-DCR session arm and challenge fire only here, so a per-server flow is never
+    affected."""
+    if mcp_servers:
+        return False
+    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+
+
 def _is_aggregate_gateway_dcr_challenge_scope(
     route: str,
     mcp_servers: list[str] | None,
@@ -141,11 +155,9 @@ def _is_aggregate_gateway_dcr_challenge_scope(
     client. Fails closed to the original admission error otherwise."""
     if not _is_litellm_auth_admission_error(exc):
         return False
-    if mcp_servers:
-        return False
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
         return False
-    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+    return _is_aggregate_mcp_scope(route, mcp_servers)
 
 
 def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> HTTPException:
@@ -359,6 +371,22 @@ class MCPRequestHandler:
                 server=bridge_delegate_target,
                 authorization_value=oauth2_headers["Authorization"],
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
+        elif (
+            is_mcp_gateway_dcr_enabled()
+            and _is_aggregate_mcp_scope(request_route, mcp_servers)
+            and oauth2_headers
+            and is_session_bearer_shaped(oauth2_headers["Authorization"])
+        ):
+            # A gateway DCR session bearer at the aggregate /mcp scope: open the
+            # identity-only session token and admit under the live litellm user it
+            # references. A session-shaped bearer that does not open fails closed with
+            # the aggregate invalid_token challenge; a non-session bearer never reaches
+            # here (is_session_bearer_shaped is false) and falls through to the oauth2 arm.
+            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
+                authorization_value=oauth2_headers["Authorization"],
                 request=request,
                 route=request_route,
             )
@@ -623,6 +651,59 @@ class MCPRequestHandler:
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
                 raise HTTPException(status_code=401, detail="Invalid or expired credential")
+            case _:
+                assert_never(result)
+
+    @staticmethod
+    async def _admit_gateway_session(
+        authorization_value: str,
+        request: Request,
+        route: str,
+    ) -> UserAPIKeyAuth:
+        """Open a gateway DCR session bearer and admit the live litellm user it references.
+
+        The custody sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals
+        no upstream credential (those are vaulted per user and resolved at egress), so this
+        admits identity only and injects no per-server header. The token's signature proves
+        the user signed in when it was minted, but authorization is resolved fresh here, the
+        sealed ``user_id`` reloads the current user record through the SAME
+        :meth:`_reload_admitted_user` the bridge user-subject path uses, and the admitted
+        identity runs through the centralized policy gate, so the user's present team, org,
+        budget, and SCIM state gate the request rather than a snapshot frozen at mint time.
+
+        Fails closed with the aggregate ``invalid_token`` challenge on an expired, tampered,
+        or foreign token, on a refresh token presented at the tool edge, and when the
+        referenced user is missing, deactivated, or rejected by the policy gate. The
+        pre-DB gates (size, IP, route allowlist) run first, mirroring the bridge arm and the
+        standard pipeline, so a caller blocked by IP or route is turned away before any
+        crypto or DB read."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            NotSessionBearer,
+            SessionBearerAdmitted,
+            SessionBearerInvalid,
+            resolve_session_bearer,
+            session_keys_from_master_key,
+        )
+        from litellm.proxy.proxy_server import master_key
+
+        if not master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+
+        keys = session_keys_from_master_key(master_key)
+        result = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
+        match result:
+            case SessionBearerAdmitted():
+                admitted = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                return admitted
+            case SessionBearerInvalid():
+                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+            case NotSessionBearer():
+                # is_session_bearer_shaped gated entry, so a non-session bearer here means a
+                # session-shaped-but-empty value; fail closed with the same challenge.
+                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
             case _:
                 assert_never(result)
 
