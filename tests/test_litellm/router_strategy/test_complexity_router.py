@@ -962,6 +962,66 @@ class TestRouterComplexityDeploymentMethods:
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
 
 
+class TestComplexityRouterRegistryLifecycle:
+    """Regression tests for issue #33168.
+
+    DB-stored complexity-router models silently disappear from `/v1/models` on
+    `PATCH /model/{id}/update` and keep routing as a ghost on `/model/delete`,
+    because `upsert_deployment` / `delete_deployment` clean `model_list` but never
+    the `complexity_routers` registry. These exercise the router-level lifecycle
+    the proxy DB-sync uses.
+    """
+
+    def _make_deployment(self, model_id: str, simple_model: str):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        return Deployment(
+            model_name="auto_router/complexity_router/my-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router/my-router",
+                complexity_router_default_model=simple_model,
+                complexity_router_config={"tiers": {"SIMPLE": simple_model, "MEDIUM": "gpt-4o"}},
+            ),
+            model_info={"id": model_id},
+        )
+
+    def _router(self, simple_model: str = "gpt-4o-mini"):
+        # ignore_invalid_deployments mirrors the proxy default, under which the
+        # pre-fix "...already exists" error was swallowed and the deployment
+        # silently dropped from model_list.
+        return Router(
+            model_list=[self._make_deployment("cr-1", simple_model).to_json(exclude_none=True)],
+            ignore_invalid_deployments=True,
+        )
+
+    def test_upsert_reregisters_and_keeps_model_listed(self):
+        router = self._router(simple_model="gpt-4o-mini")
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+        assert router.get_deployment(model_id="cr-1") is not None
+
+        updated = self._make_deployment("cr-1", simple_model="gpt-4o")
+        router.upsert_deployment(deployment=updated)
+
+        # Deployment must remain visible in model_list (feeds /v1/models & /model/info).
+        assert router.get_deployment(model_id="cr-1") is not None
+        assert name in router.model_name_to_deployment_indices
+        # Registry must be rebuilt with the patched config, not left stale.
+        assert name in router.complexity_routers
+        assert router.complexity_routers[name].config.default_model == "gpt-4o"
+
+    def test_delete_removes_registry_no_ghost(self):
+        router = self._router()
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+
+        router.delete_deployment(id="cr-1")
+
+        assert router.get_deployment(model_id="cr-1") is None
+        assert name not in router.complexity_routers
+        assert name not in router.model_name_to_deployment_indices
+
+
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
 

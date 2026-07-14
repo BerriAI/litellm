@@ -8228,6 +8228,11 @@ class Router:
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
 
+                self._remove_strategy_router_registrations(
+                    model_name=_deployment_on_router.model_name,
+                    litellm_params=_deployment_on_router.litellm_params,
+                )
+
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
             return deployment
@@ -8253,6 +8258,8 @@ class Router:
         if id in self.model_id_to_deployment_index_map:
             deployment_idx = self.model_id_to_deployment_index_map[id]
 
+        deployment_on_router = self.get_deployment(model_id=id)
+
         try:
             if deployment_idx is not None:
                 # Pop the item from the list first
@@ -8263,11 +8270,59 @@ class Router:
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                if deployment_on_router is not None:
+                    self._remove_strategy_router_registrations(
+                        model_name=deployment_on_router.model_name,
+                        litellm_params=deployment_on_router.litellm_params,
+                    )
                 return item
             else:
                 return None
         except Exception:
             return None
+
+    def _remove_strategy_router_registrations(self, model_name: str, litellm_params: LiteLLM_Params) -> None:
+        """
+        Remove the per-strategy router registrations for a deployment being
+        removed or replaced.
+
+        `upsert_deployment` / `delete_deployment` pop the deployment from
+        `model_list` but the strategy registries (`auto_routers`,
+        `complexity_routers`, `quality_routers`, `adaptive_routers`) are keyed by
+        `model_name` and were only ever reset wholesale in `set_model_list`.
+        Without this cleanup, re-adding an updated deployment raises
+        "...already exists" (silently dropping it from `model_list` under
+        `ignore_invalid_deployments`), and deletes leave a ghost router that keeps
+        serving traffic until a full restart.
+
+        Adaptive registration is cleaned unconditionally because a
+        complexity-router deployment with `adaptive: True` also registers an
+        adaptive router under the same `model_name`, so it cannot be gated on the
+        adaptive-router prefix alone.
+        """
+        if self._is_auto_router_deployment(litellm_params=litellm_params):
+            self.auto_routers.pop(model_name, None)
+        if self._is_complexity_router_deployment(litellm_params=litellm_params):
+            self.complexity_routers.pop(model_name, None)
+        if self._is_quality_router_deployment(litellm_params=litellm_params):
+            self.quality_routers.pop(model_name, None)
+        self._remove_adaptive_router_registration(model_name=model_name)
+
+    def _remove_adaptive_router_registration(self, model_name: str) -> None:
+        """
+        Drop the adaptive router registered under `model_name` and unregister its
+        post-call hook so it stops recording signals after the deployment is gone.
+        """
+        adaptive_router = self.adaptive_routers.pop(model_name, None)
+        if adaptive_router is None:
+            return
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
+            if isinstance(callback, AdaptiveRouterPostCallHook) and callback.adaptive_router is adaptive_router:
+                litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
 
     def _get_router_deployment_budget_limiter(
         self,
