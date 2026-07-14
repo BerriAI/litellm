@@ -936,6 +936,11 @@ class ModelManagementAuthChecks:
         team_obj: Optional[LiteLLM_TeamTable] = None,
         premium_user: bool = False,
     ) -> Literal[True]:
+        if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Internal user viewers cannot manage models."},
+            )
         if premium_user is False:
             raise HTTPException(
                 status_code=403,

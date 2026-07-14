@@ -9,6 +9,7 @@ vi.mock("../utils/roles", () => {
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
+    rolesAllowedToViewModels: ["admin", "internal", "admin_viewer", "internal_user_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
     isUserTeamAdminForAnyTeam: () => false,
   };
@@ -185,6 +186,27 @@ describe("Sidebar (leftnav)", () => {
       mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  describe("Internal Viewer model access", () => {
+    const internalViewerAuth = {
+      userId: "internal-viewer-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal_user_viewer",
+      token: "test-token",
+      userEmail: "viewer@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    it("shows Models + Endpoints without exposing write-scoped pages", () => {
+      mockUseAuthorized.mockReturnValueOnce(internalViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+      expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+      expect(screen.queryByText("Agents")).not.toBeInTheDocument();
     });
   });
 

@@ -4,6 +4,7 @@ import {
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
+  rolesAllowedToViewModels,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "./roles";
@@ -170,6 +171,15 @@ describe("roles", () => {
       // Admin Viewer is added on top — the new set must be larger than
       // the write-only set, otherwise the constant has no purpose.
       expect(rolesAllowedToViewWriteScopedPages.length).toBeGreaterThan(rolesWithWriteAccess.length);
+    });
+  });
+
+  describe("rolesAllowedToViewModels", () => {
+    it("includes internal viewers without granting other write-scoped pages", () => {
+      expect(rolesAllowedToViewModels).toContain("Internal Viewer");
+      expect(rolesAllowedToViewModels).toContain("internal_user_viewer");
+      expect(rolesAllowedToViewWriteScopedPages).not.toContain("Internal Viewer");
+      expect(rolesAllowedToViewWriteScopedPages).not.toContain("internal_user_viewer");
     });
   });
 });

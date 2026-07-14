@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
@@ -126,6 +127,11 @@ class TestModelManagementAuthChecks:
             team_id="test_team",
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
+        self.team_admin_viewer = UserAPIKeyAuth(
+            user_id="test_viewer",
+            team_id="test_team",
+            user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        )
 
     @pytest.mark.asyncio
     async def test_can_user_make_team_model_call_admin_success(self):
@@ -164,6 +170,26 @@ class TestModelManagementAuthChecks:
             premium_user=True,
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_internal_viewer_fails(self):
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[
+                Member(user_id=self.team_admin_viewer.user_id, role="admin")
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.team_admin_viewer,
+                team_obj=team_obj,
+                premium_user=True,
+            )
+
+        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_allow_team_model_action_success(self):

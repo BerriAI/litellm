@@ -147,6 +147,37 @@ describe("AllModelsTab", () => {
     expect(screen.getByText("Current Team:")).toBeInTheDocument();
   });
 
+  it("should hide model settings from Internal Viewers", () => {
+    const internalViewerAuth = {
+      ...mockUseAuthorized,
+      userRole: "Internal Viewer",
+    };
+    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(internalViewerAuth);
+    mockUseModelsInfo.mockReturnValue({
+      data: createPaginatedModelData([
+        {
+          model_name: "viewer-model",
+          litellm_params: { model: "openai/gpt-4" },
+          model_info: {
+            id: "viewer-model-id",
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            db_model: true,
+            created_by: "user-123",
+          },
+        },
+      ]),
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getByText("viewer-model")).toBeInTheDocument();
+    expect(screen.queryByTitle("Model Settings")).not.toBeInTheDocument();
+  });
+
   it("should filter models by direct team access when current team is selected", async () => {
     const mockTeams = [
       {

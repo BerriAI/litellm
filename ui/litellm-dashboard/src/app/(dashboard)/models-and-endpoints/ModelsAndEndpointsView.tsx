@@ -14,7 +14,13 @@ import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { transformModelData } from "./utils/modelDataTransformer";
-import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  internalViewerRoles,
+  isProxyAdminRole,
+  isUserTeamAdminForAnyTeam,
+} from "@/utils/roles";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
@@ -148,11 +154,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
+  const isInternalViewer = userRole && internalViewerRoles.includes(userRole);
   const isUserTeamAdmin = userID && isUserTeamAdminForAnyTeam(teams, userID);
   const addModelDisabledForInternalUsers =
     isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
-  // Hide tab if user is NOT a proxy admin AND (internal user with setting enabled OR not a team admin)
-  const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
+  const internalUserCannotAddModel = addModelDisabledForInternalUsers || !isUserTeamAdmin;
+  const shouldHideAddModelTab = isInternalViewer || (!isProxyAdmin && internalUserCannotAddModel);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelCostMapData);

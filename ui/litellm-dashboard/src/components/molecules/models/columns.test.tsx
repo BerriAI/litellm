@@ -737,6 +737,40 @@ describe("columns", () => {
     expect(onDeleteClick).toHaveBeenCalledWith("user-model");
   });
 
+  it("should not allow Internal Viewers to delete models they created", async () => {
+    const user = userEvent.setup();
+    const onDeleteClick = vi.fn();
+    const cols = columns(
+      "Internal Viewer",
+      "model-creator",
+      defaultProps.premiumUser,
+      defaultProps.setSelectedModelId,
+      defaultProps.setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+      onDeleteClick,
+    );
+
+    const model = createMockModel({
+      model_info: {
+        ...createMockModel().model_info,
+        db_model: true,
+        created_by: "model-creator",
+        id: "viewer-model",
+      },
+    });
+    render(<TestTable data={[model]} columns={cols} />);
+
+    const deleteButton = screen.getByRole("button", {
+      name: /config model cannot be deleted/i,
+    });
+    await user.click(deleteButton);
+    expect(onDeleteClick).not.toHaveBeenCalled();
+  });
+
   it("should disable delete for config models", () => {
     const cols = columns(
       "Admin",

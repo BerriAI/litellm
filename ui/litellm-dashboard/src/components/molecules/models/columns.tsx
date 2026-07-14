@@ -4,6 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Icon } from "@tremor/react";
 import { Divider, Flex, Popover, Space, Switch, Tooltip, Typography } from "antd";
 import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
+import { internalViewerRoles } from "@/utils/roles";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -360,7 +361,8 @@ export const columns = (
     enableResizing: false,
     cell: ({ row }) => {
       const model = row.original;
-      const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
+      const canEditModel =
+        !internalViewerRoles.includes(userRole) && (userRole === "Admin" || model.model_info?.created_by === userID);
       const isConfigModel = !model.model_info?.db_model;
       const isAdmin = userRole === "Admin";
       const isBlocked = model.model_info?.blocked === true;
