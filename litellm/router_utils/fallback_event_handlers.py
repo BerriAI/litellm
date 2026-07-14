@@ -33,7 +33,7 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
-        metadata = kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
+        metadata = kwargs.get("litellm_metadata") or {}
         model_info = metadata.get("model_info") or {}
         deployment_id: Optional[str] = model_info.get("id") if isinstance(model_info, dict) else None
 
@@ -206,11 +206,13 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-            _trigger_cooldown_for_failed_deployment(
-                litellm_router=litellm_router,
-                kwargs=kwargs,
-                exception=e,
-            )
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if getattr(logging_obj, "has_logged_async_failure", False):
+                _trigger_cooldown_for_failed_deployment(
+                    litellm_router=litellm_router,
+                    kwargs=kwargs,
+                    exception=e,
+                )
     raise error_from_fallbacks
 
 
