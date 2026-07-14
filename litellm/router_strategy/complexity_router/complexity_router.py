@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from pydantic import BaseModel
 
@@ -809,6 +809,44 @@ class ComplexityRouter(CustomLogger):
 
         return user_message, system_prompt
 
+    @staticmethod
+    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+        """Metadata may land on `metadata` or `litellm_metadata` depending on the
+        endpoint, mirroring DeploymentAffinityCheck's precedence."""
+        return [
+            metadata
+            for metadata_key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(metadata_key), dict)
+        ]
+
+    @staticmethod
+    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+        """Resolve a client-supplied session_id."""
+        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+            session_id = metadata.get("session_id")
+            if session_id is not None:
+                return str(session_id)
+        return None
+
+    @staticmethod
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+        """Resolve the proxy-derived API key hash, the same trust boundary
+        DeploymentAffinityCheck uses for its own key-based affinity (not the
+        client-supplied OpenAI `user` param, which isn't authenticated)."""
+        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+            user_key = metadata.get("user_api_key_hash")
+            if user_key is not None:
+                return str(user_key)
+        return None
+
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
+        # Namespace by the caller's API key hash so two different callers reusing the
+        # same client-supplied session_id can't poison each other's routing pin. Falls
+        # back to "unscoped" only when there's no authenticated caller to scope by
+        # (e.g. direct Router usage without the proxy layer).
+        caller_scope = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
+        return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -816,10 +854,70 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: Union[str, list] | None = None,
         specific_deployment: bool | None = False,
-    ) -> Optional[PreRoutingHookResponse]:
+    ) -> PreRoutingHookResponse | None:
         """
         Pre-routing hook called before the routing decision.
 
+        When `session_affinity` is enabled and a session_id is resolvable on the request,
+        pins the model chosen on the session's first turn and reuses it for every later
+        turn, skipping classification entirely. Otherwise delegates to `_classify_and_route`.
+        """
+        from litellm.types.router import PreRoutingHookResponse
+
+        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if self.config.session_affinity else None
+        cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
+
+        if cache_key is not None:
+            pinned_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            if isinstance(pinned_model, str):
+                # Refresh the TTL on every hit so an active session doesn't lose its
+                # pin mid-conversation just because it outlives the original write.
+                await self.litellm_router_instance.cache.async_set_cache(
+                    key=cache_key,
+                    value=pinned_model,
+                    ttl=self.config.session_affinity_ttl_seconds,
+                )
+                if self.config.adaptive:
+                    from litellm.router_strategy.adaptive_router.config import (
+                        ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
+                    )
+
+                    kwargs_metadata = request_kwargs.setdefault("metadata", {})
+                    if isinstance(kwargs_metadata, dict):
+                        kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = pinned_model
+                verbose_router_logger.info(
+                    f"ComplexityRouter: routing decision cause=session_affinity_pin, routed_model={pinned_model}"
+                )
+                has_original_messages = messages is not None and len(messages) > 0
+                return PreRoutingHookResponse(
+                    model=pinned_model,
+                    messages=messages if has_original_messages else None,
+                )
+
+        response = await self._classify_and_route(
+            model=model,
+            request_kwargs=request_kwargs,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )
+        if cache_key is not None and response is not None:
+            await self.litellm_router_instance.cache.async_set_cache(
+                key=cache_key,
+                value=response.model,
+                ttl=self.config.session_affinity_ttl_seconds,
+            )
+        return response
+
+    async def _classify_and_route(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: Union[str, list] | None = None,
+        specific_deployment: bool | None = False,
+    ) -> PreRoutingHookResponse | None:
+        """
         Classifies the request by complexity and returns the appropriate model.
         Supports chat completions (messages), Responses API (input), and other
         formats via the guardrail translation handler dispatch.
