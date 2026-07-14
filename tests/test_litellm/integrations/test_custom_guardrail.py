@@ -1845,3 +1845,72 @@ class TestOnlyScanNewMessages:
 
         cache.async_set_cache.assert_awaited_once()
         assert cache.async_set_cache.await_args.kwargs["ttl"] == GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_session_id_from_metadata_is_used_for_dedupe(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"metadata": {"session_id": "sess-meta"}}
+        texts = ["shared message"]
+
+        await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=texts, request_data=request, cache=cache)
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == []
+
+    @pytest.mark.asyncio
+    async def test_session_id_from_litellm_metadata_is_used_for_dedupe(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_metadata": {"session_id": "sess-lmeta"}}
+        texts = ["shared message"]
+
+        await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=texts, request_data=request, cache=cache)
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == []
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_disabled_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail(only_scan_new_messages=False)
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_masking_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail(mask_request_content=True)
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_without_session_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"metadata": {}}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_survives_cache_write_failure(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
