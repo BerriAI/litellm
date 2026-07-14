@@ -46,3 +46,22 @@ def test_undated_azure_audio_alias_matches_dated_entry(undated, dated):
 
     assert undated_info.get("litellm_provider") == "azure"
     assert undated_info.get("mode") == dated_info.get("mode")
+
+
+@pytest.mark.parametrize(
+    "undated, dated",
+    [
+        ("azure/gpt-audio-mini", "azure/gpt-audio-mini-2025-10-06"),
+        ("azure/gpt-realtime-mini", "azure/gpt-realtime-mini-2025-10-06"),
+    ],
+)
+def test_undated_azure_audio_alias_is_exact_mirror(undated, dated):
+    """The undated alias must be a byte-for-byte mirror of its dated entry —
+    covers every field (incl. realtime-specific cache/audio cost keys) so any
+    future drift between the pair is caught, not just the core COST_FIELDS."""
+    model_map = litellm.model_cost
+    assert undated in model_map, f"{undated} missing from model cost map"
+    assert model_map[undated] == model_map[dated], (
+        f"{undated} must exactly mirror {dated}; "
+        f"diff keys: {[k for k in set(model_map[undated]) | set(model_map[dated]) if model_map[undated].get(k) != model_map[dated].get(k)]}"
+    )
