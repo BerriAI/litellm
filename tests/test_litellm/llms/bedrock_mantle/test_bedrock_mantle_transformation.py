@@ -578,6 +578,44 @@ class TestBedrockMantleProviderResolution:
         assert provider == "bedrock_mantle"
         assert model == "openai.gpt-oss-20b"
 
+    def test_explicit_bedrock_provider_reconciled_to_mantle(self):
+        model, provider, _, _ = litellm.get_llm_provider(
+            "bedrock_mantle/openai.gpt-5.5", custom_llm_provider="bedrock"
+        )
+        assert provider == "bedrock_mantle"
+        assert model == "openai.gpt-5.5"
+
+    def test_explicit_bedrock_provider_keeps_native_bedrock_models(self):
+        model, provider, _, _ = litellm.get_llm_provider(
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            custom_llm_provider="bedrock",
+        )
+        assert provider == "bedrock"
+        assert model == "anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+    def test_completion_with_explicit_bedrock_provider_supports_tools(
+        self, local_cost_map
+    ):
+        response = litellm.completion(
+            model="bedrock_mantle/openai.gpt-5.5",
+            custom_llm_provider="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            tool_choice="auto",
+            parallel_tool_calls=False,
+            reasoning_effort="low",
+            mock_response="ok",
+        )
+        assert response.choices[0].message.content == "ok"
+
 
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
