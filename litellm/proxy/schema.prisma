@@ -329,15 +329,23 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   oauth2_flow        String?
+  token_exchange_endpoint String?
+  // Named for the RFC 8693 "audience" token-exchange request parameter (that flow only).
+  // RFC 8707 resource indicators are a separate concept, named "resource" in the v2 egress types.
+  audience           String?
+  subject_token_type String?
+  token_exchange_profile String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
+  dcr_bridge Boolean?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
   timeout               Float?
+  max_concurrent_requests Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -414,10 +422,12 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_fallbacks Json @default("{}")
     budget_id String?
     organization_id String?
     object_permission_id String?
@@ -507,10 +517,12 @@ model LiteLLM_DeletedVerificationToken {
     budget_reset_at         DateTime?
     allowed_cache_controls  String[] @default([])
     allowed_routes          String[] @default([])
+    key_type                String?
     policies                String[] @default([])
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    budget_fallbacks        Json     @default("{}")
     router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?

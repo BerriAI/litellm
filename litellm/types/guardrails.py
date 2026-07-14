@@ -701,7 +701,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', and 'repelloai'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', and 'headroom'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -909,6 +909,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_entities: List[str]
     supported_actions: List[str]
     supported_modes: List[str]
+    supported_modes_by_provider: Dict[str, List[str]]
     pii_entity_categories: List[PiiEntityCategoryMap]
     content_filter_settings: Optional[Dict[str, Any]] = None
 

@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -1530,6 +1531,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aembedding.value, False) is not True
             and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
+            and litellm_params.get(CallTypes.allm_passthrough_route.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
@@ -2574,6 +2576,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
+                    )
+                    model_call_details = redact_streaming_responses_for_custom_logger(
+                        model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
                     if self.stream is True:
@@ -4722,7 +4727,7 @@ class StandardLoggingPayloadSetup:
         api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
-            model=None,
+            model=base_model if custom_pricing else None,
             completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
@@ -5207,9 +5212,14 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
-        usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
+        raw_usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=response_obj,
             combined_usage_object=cast(Optional[Usage], kwargs.get("combined_usage_object")),
+        )
+        usage_dict = (
+            {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
+            if isinstance(init_response_obj, ImageResponse) and init_response_obj.data
+            else raw_usage_dict
         )
 
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
@@ -5268,6 +5278,11 @@ def get_standard_logging_object_payload(
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
+        # The router overrides completion_response.model to the model-group alias before
+        # this payload is built, so cost-map lookup via that alias always misses.
+        # Fall back to the actual deployment model set by the router in metadata.
+        if base_model is None:
+            base_model = metadata.get("deployment")
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         raw_response_cost = kwargs.get("response_cost")
         response_cost: float = raw_response_cost or 0.0
@@ -5389,7 +5404,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa: T201
+        print(json.dumps(payload, indent=4), flush=True)  # noqa: T201
 
 
 def get_standard_logging_metadata(

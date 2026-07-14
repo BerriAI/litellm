@@ -47,9 +47,7 @@ def test_transform_openai_request_builds_full_vertex_job():
         "litellm.llms.vertex_ai.batches.transformation.uuid.uuid4",
         return_value="fixed-uuid",
     ):
-        job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
-            {"input_file_id": INPUT_FILE}
-        )
+        job = T.transform_openai_batch_request_to_vertex_ai_batch_request({"input_file_id": INPUT_FILE})
 
     assert job["displayName"] == "litellm-vertex-batch-fixed-uuid"
     assert job["model"] == "publishers/google/models/gemini-1.5-flash-001"
@@ -91,13 +89,11 @@ def test_transform_vertex_response_full_mapping():
 
     assert isinstance(batch, LiteLLMBatch)
     assert batch.id == "3814889423749775360"
-    assert batch.completion_window == "24hrs"
+    assert batch.completion_window == "24h"
     # created_at is parsed via the shared helper (uses local tz); assert the
     # transform forwards createTime through that helper rather than a hardcoded
     # epoch that would be tz-dependent
-    assert batch.created_at == _convert_vertex_datetime_to_openai_datetime(
-        "2024-12-04T21:53:12.120184Z"
-    )
+    assert batch.created_at == _convert_vertex_datetime_to_openai_datetime("2024-12-04T21:53:12.120184Z")
     assert batch.endpoint == ""
     assert batch.object == "batch"
     assert batch.input_file_id == "gs://bucket/in.jsonl"
@@ -140,10 +136,7 @@ def test_transform_vertex_response_error_file_id_always_none():
     ],
 )
 def test_status_mapping_every_entry(vertex_state, expected):
-    assert (
-        T._get_batch_job_status_from_vertex_ai_batch_response({"state": vertex_state})
-        == expected
-    )
+    assert T._get_batch_job_status_from_vertex_ai_batch_response({"state": vertex_state}) == expected
 
 
 def test_status_mapping_defaults_to_unspecified_when_missing():
@@ -163,9 +156,7 @@ def test_status_mapping_unknown_state_raises_keyerror():
 
 def test_get_batch_id_splits_path():
     assert (
-        T._get_batch_id_from_vertex_ai_batch_response(
-            {"name": "projects/p/locations/l/batchPredictionJobs/999"}
-        )
+        T._get_batch_id_from_vertex_ai_batch_response({"name": "projects/p/locations/l/batchPredictionJobs/999"})
         == "999"
     )
 
@@ -198,18 +189,11 @@ def test_get_input_file_id_missing_input_config():
 
 
 def test_get_input_file_id_missing_gcs_source():
-    assert (
-        T._get_input_file_id_from_vertex_ai_batch_response({"inputConfig": {}}) == ""
-    )
+    assert T._get_input_file_id_from_vertex_ai_batch_response({"inputConfig": {}}) == ""
 
 
 def test_get_input_file_id_empty_uris():
-    assert (
-        T._get_input_file_id_from_vertex_ai_batch_response(
-            {"inputConfig": {"gcsSource": {"uris": []}}}
-        )
-        == ""
-    )
+    assert T._get_input_file_id_from_vertex_ai_batch_response({"inputConfig": {"gcsSource": {"uris": []}}}) == ""
 
 
 # =========================================================================== #
@@ -220,18 +204,14 @@ def test_get_input_file_id_empty_uris():
 def test_get_output_file_id_from_output_info():
     # outputInfo branch: rstrip trailing slash, append predictions.jsonl
     assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(
-            {"outputInfo": {"gcsOutputDirectory": "gs://bucket/out/"}}
-        )
+        T._get_output_file_id_from_vertex_ai_batch_response({"outputInfo": {"gcsOutputDirectory": "gs://bucket/out/"}})
         == "gs://bucket/out/predictions.jsonl"
     )
 
 
 def test_get_output_file_id_output_info_no_trailing_slash():
     assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(
-            {"outputInfo": {"gcsOutputDirectory": "gs://bucket/out"}}
-        )
+        T._get_output_file_id_from_vertex_ai_batch_response({"outputInfo": {"gcsOutputDirectory": "gs://bucket/out"}})
         == "gs://bucket/out/predictions.jsonl"
     )
 
@@ -243,10 +223,7 @@ def test_get_output_file_id_empty_output_info_falls_through_to_output_config():
         "outputInfo": {},
         "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg"}},
     }
-    assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(resp)
-        == "gs://b/cfg/predictions.jsonl"
-    )
+    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
 
 
 def test_get_output_file_id_no_output_info_and_no_output_config():
@@ -255,32 +232,18 @@ def test_get_output_file_id_no_output_info_and_no_output_config():
 
 def test_get_output_file_id_output_config_missing_gcs_destination():
     # outputConfig present but no gcsDestination -> returns the running "" value
-    assert (
-        T._get_output_file_id_from_vertex_ai_batch_response({"outputConfig": {}}) == ""
-    )
+    assert T._get_output_file_id_from_vertex_ai_batch_response({"outputConfig": {}}) == ""
 
 
 def test_get_output_file_id_output_config_already_has_suffix():
     # outputUriPrefix already ends in /predictions.jsonl -> returned as-is (no double append)
-    resp = {
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://b/cfg/predictions.jsonl"}
-        }
-    }
-    assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(resp)
-        == "gs://b/cfg/predictions.jsonl"
-    )
+    resp = {"outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg/predictions.jsonl"}}}
+    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
 
 
 def test_get_output_file_id_output_config_strips_trailing_slash():
-    resp = {
-        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg/"}}
-    }
-    assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(resp)
-        == "gs://b/cfg/predictions.jsonl"
-    )
+    resp = {"outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg/"}}}
+    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
 
 
 def test_get_output_file_id_output_info_takes_precedence_over_output_config():
@@ -288,10 +251,7 @@ def test_get_output_file_id_output_info_takes_precedence_over_output_config():
         "outputInfo": {"gcsOutputDirectory": "gs://from-info"},
         "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://from-config"}},
     }
-    assert (
-        T._get_output_file_id_from_vertex_ai_batch_response(resp)
-        == "gs://from-info/predictions.jsonl"
-    )
+    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://from-info/predictions.jsonl"
 
 
 # =========================================================================== #
@@ -301,16 +261,13 @@ def test_get_output_file_id_output_info_takes_precedence_over_output_config():
 
 def test_get_gcs_uri_prefix_root():
     assert (
-        T._get_gcs_uri_prefix_from_file("gs://litellm-testing-bucket/vtx_batch.jsonl")
-        == "gs://litellm-testing-bucket"
+        T._get_gcs_uri_prefix_from_file("gs://litellm-testing-bucket/vtx_batch.jsonl") == "gs://litellm-testing-bucket"
     )
 
 
 def test_get_gcs_uri_prefix_nested():
     assert (
-        T._get_gcs_uri_prefix_from_file(
-            "gs://litellm-testing-bucket/batches/vtx_batch.jsonl"
-        )
+        T._get_gcs_uri_prefix_from_file("gs://litellm-testing-bucket/batches/vtx_batch.jsonl")
         == "gs://litellm-testing-bucket/batches"
     )
 
@@ -321,21 +278,13 @@ def test_get_gcs_uri_prefix_nested():
 
 
 def test_get_model_from_gcs_file_plain():
-    assert (
-        T._get_model_from_gcs_file(INPUT_FILE)
-        == "publishers/google/models/gemini-1.5-flash-001"
-    )
+    assert T._get_model_from_gcs_file(INPUT_FILE) == "publishers/google/models/gemini-1.5-flash-001"
 
 
 def test_get_model_from_gcs_file_url_encoded():
     # %2F decodes to "/" via urllib.unquote before splitting
-    encoded = (
-        "gs://bucket/publishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2Fuuid"
-    )
-    assert (
-        T._get_model_from_gcs_file(encoded)
-        == "publishers/google/models/gemini-1.5-flash-001"
-    )
+    encoded = "gs://bucket/publishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2Fuuid"
+    assert T._get_model_from_gcs_file(encoded) == "publishers/google/models/gemini-1.5-flash-001"
 
 
 def test_get_model_from_gcs_file_no_publishers_raises():
@@ -389,8 +338,6 @@ def test_list_response_empty():
 
 
 def test_list_response_none_jobs_treated_as_empty():
-    out = T.transform_vertex_ai_batch_list_response_to_openai_list_response(
-        {"batchPredictionJobs": None}
-    )
+    out = T.transform_vertex_ai_batch_list_response_to_openai_list_response({"batchPredictionJobs": None})
     assert out["data"] == []
     assert out["first_id"] is None

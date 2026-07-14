@@ -8,6 +8,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Set,
     Tuple,
@@ -68,6 +69,7 @@ if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -77,6 +79,8 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _apply_toolset_scope,
+        _fire_mcp_tool_call_logging,
         _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -84,6 +88,120 @@ if MCP_AVAILABLE:
 
     ########################################################
     ############ MCP Server REST API Routes #################
+    async def _safe_fire_mcp_tool_call_logging(
+        logging_obj: Optional[Any],
+        result: Any,
+        start_time: datetime,
+        end_time: datetime,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        request_data: Optional[Mapping[str, object]] = None,
+    ) -> None:
+        if logging_obj is None:
+            return
+        logging_results = await asyncio.gather(
+            _fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                start_time,
+                end_time,
+                user_api_key_auth=user_api_key_auth,
+                request_data=request_data,
+            ),
+            return_exceptions=True,
+        )
+        logging_error = logging_results[0]
+        if isinstance(logging_error, asyncio.CancelledError):
+            raise logging_error
+        if isinstance(logging_error, BaseException):
+            verbose_logger.warning("MCP tool call logging failed (continuing): %s", logging_error)
+
+    def _relay_upstream_auth_http_exception(e: MCPUpstreamAuthError, request: Request) -> HTTPException:
+        """Convert a client-forwarded pass-through upstream 401 into an HTTPException that preserves the
+        upstream WWW-Authenticate, so a standards-compliant MCP client can run the upstream OAuth flow
+        instead of the generic 500 the endpoint catch-all would return."""
+        return e.to_http_exception(
+            base_url=get_request_base_url(request),
+            request_path=request.scope.get("_original_path") or request.url.path,
+        )
+
+    async def _handle_virtual_mcp_tool(
+        request: Request,
+        data: Dict[str, Any],
+        tool_name: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Any:
+        """Handle the virtual ``mcp_tool_search`` / ``mcp_tool_call`` REST tools (gated on
+        ``mcp_tool_search_enabled``). Kept out of ``call_tool_rest_api`` so that endpoint stays a single
+        dispatch. An upstream 401 raised by the virtual ``mcp_tool_call`` propagates unhandled to the
+        caller's ``except MCPUpstreamAuthError`` relay, the same as the direct call path."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            coerce_top_k,
+            handle_mcp_tool_call,
+            handle_mcp_tool_search,
+        )
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
+
+        if not getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
+            )
+        tool_arguments = data.get("arguments") or {}
+        rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        (
+            virtual_mcp_auth_header,
+            virtual_mcp_server_auth_headers,
+            virtual_raw_headers,
+        ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
+        virtual_oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+        if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
+            return await handle_mcp_tool_search(
+                query=tool_arguments.get("query", ""),
+                top_k=coerce_top_k(tool_arguments.get("top_k", 5)),
+                user_api_key_dict=user_api_key_dict,
+                client_ip=rest_client_ip,
+                mcp_auth_header=virtual_mcp_auth_header,
+                mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                oauth2_headers=virtual_oauth2_headers,
+                raw_headers=virtual_raw_headers,
+            )
+        # MCP_TOOL_CALL_TOOL_NAME: run the same pre-call pipeline as the normal path so the tool
+        # execution is spend-logged and guardrail-checked.
+        (_, virtual_logging_obj) = await ProxyBaseLLMRequestProcessing(data=data).common_processing_pre_call_logic(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+            route_type=CallTypes.call_mcp_tool.value,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+        )
+        _tool_start_time = datetime.now()
+        result = await handle_mcp_tool_call(
+            tool_name=tool_arguments.get("tool_name", ""),
+            arguments=tool_arguments.get("arguments") or {},
+            user_api_key_dict=user_api_key_dict,
+            client_ip=rest_client_ip,
+            mcp_auth_header=virtual_mcp_auth_header,
+            mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+            oauth2_headers=virtual_oauth2_headers,
+            raw_headers=virtual_raw_headers,
+            litellm_logging_obj=virtual_logging_obj,
+        )
+        await _safe_fire_mcp_tool_call_logging(
+            virtual_logging_obj,
+            result,
+            _tool_start_time,
+            datetime.now(),
+            user_api_key_auth=user_api_key_dict,
+            request_data=data,
+        )
+        return result
+
     def _get_server_auth_header(
         server,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
@@ -522,10 +640,37 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
+    def _as_query_str(value: Any) -> Optional[str]:
+        """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
+        return value if isinstance(value, str) else None
+
+    async def _resolve_toolset_scope(
+        toolset_name: Optional[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> UserAPIKeyAuth:
+        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        if not toolset_name:
+            return user_api_key_dict
+
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw("Database not available. Connect a database to your proxy")
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, toolset_name)
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+        return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
         server_id: Optional[str] = Query(None, description="The server id to list tools for"),
+        mcp_server_name: Optional[str] = Query(
+            None, description="Filter tools to a single MCP server by name or alias"
+        ),
+        toolset_name: Optional[str] = Query(None, description="Filter tools to a single toolset by name"),
         include_disabled_tools: bool = Query(
             False,
             description=(
@@ -563,16 +708,29 @@ if MCP_AVAILABLE:
         )
 
         try:
+            mcp_server_name = _as_query_str(mcp_server_name)
+            toolset_name = _as_query_str(toolset_name)
+
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
-            if apply_tool_filters and getattr(
-                getattr(user_api_key_dict, "object_permission", None),
-                "mcp_tool_search_enabled",
-                False,
+            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
+
+            if server_id is None:
+                server_id = mcp_server_name
+
+            if (
+                apply_tool_filters
+                and server_id is None
+                and toolset_name is None
+                and getattr(
+                    getattr(user_api_key_dict, "object_permission", None),
+                    "mcp_tool_search_enabled",
+                    False,
+                )
             ):
                 from litellm.proxy._experimental.mcp_server.tool_search import (
                     get_virtual_tool_definitions,
@@ -700,6 +858,8 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+                raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.
             verbose_logger.exception("HTTPException in list_tool_rest_api: %s", str(http_exc))
@@ -748,67 +908,10 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.tool_search import (
                 MCP_TOOL_CALL_TOOL_NAME,
                 MCP_TOOL_SEARCH_TOOL_NAME,
-                coerce_top_k,
-                handle_mcp_tool_call,
-                handle_mcp_tool_search,
             )
 
             if tool_name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
-                if not getattr(
-                    getattr(user_api_key_dict, "object_permission", None),
-                    "mcp_tool_search_enabled",
-                    False,
-                ):
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "forbidden",
-                            "message": f"{tool_name} requires mcp_tool_search_enabled on the key",
-                        },
-                    )
-                rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
-                (
-                    virtual_mcp_auth_header,
-                    virtual_mcp_server_auth_headers,
-                    virtual_raw_headers,
-                ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
-                virtual_oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
-                if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
-                    return await handle_mcp_tool_search(
-                        query=tool_arguments.get("query", ""),
-                        top_k=coerce_top_k(tool_arguments.get("top_k", 5)),
-                        user_api_key_dict=user_api_key_dict,
-                        client_ip=rest_client_ip,
-                        mcp_auth_header=virtual_mcp_auth_header,
-                        mcp_server_auth_headers=virtual_mcp_server_auth_headers,
-                        oauth2_headers=virtual_oauth2_headers,
-                        raw_headers=virtual_raw_headers,
-                    )
-                else:  # MCP_TOOL_CALL_TOOL_NAME
-                    # Run the same pre-call pipeline as the normal call path so the
-                    # tool execution is spend-logged and guardrail-checked.
-                    (
-                        _,
-                        virtual_logging_obj,
-                    ) = await ProxyBaseLLMRequestProcessing(data=data).common_processing_pre_call_logic(
-                        request=request,
-                        user_api_key_dict=user_api_key_dict,
-                        proxy_config=proxy_config,
-                        route_type=CallTypes.call_mcp_tool.value,
-                        proxy_logging_obj=proxy_logging_obj,
-                        general_settings=general_settings,
-                    )
-                    return await handle_mcp_tool_call(
-                        tool_name=tool_arguments.get("tool_name", ""),
-                        arguments=tool_arguments.get("arguments") or {},
-                        user_api_key_dict=user_api_key_dict,
-                        client_ip=rest_client_ip,
-                        mcp_auth_header=virtual_mcp_auth_header,
-                        mcp_server_auth_headers=virtual_mcp_server_auth_headers,
-                        oauth2_headers=virtual_oauth2_headers,
-                        raw_headers=virtual_raw_headers,
-                        litellm_logging_obj=virtual_logging_obj,
-                    )
+                return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early
             server_id = data.get("server_id")
@@ -876,11 +979,12 @@ if MCP_AVAILABLE:
                 user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
 
             # Call execute_mcp_tool directly (permission checks already done)
+            _tool_start_time = datetime.now()
             result = await execute_mcp_tool(
                 name=tool_name,
                 arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
-                start_time=datetime.now(),
+                start_time=_tool_start_time,
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
@@ -888,6 +992,14 @@ if MCP_AVAILABLE:
                 raw_headers=data.get("raw_headers"),
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
+            )
+            await _safe_fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                _tool_start_time,
+                datetime.now(),
+                user_api_key_auth=user_api_key_dict,
+                request_data=data,
             )
             return result
         except MCPMissingUserEnvVarsError as e:
@@ -928,8 +1040,16 @@ if MCP_AVAILABLE:
                     "guardrail_name": getattr(e, "guardrail_name", None),
                 },
             )
+        except MCPUpstreamAuthError as e:
+            # A client-forwarded pass-through upstream 401 from either the direct or the virtual call
+            # branch. Relay it as a 401 + WWW-Authenticate so the MCP client can re-run upstream OAuth,
+            # and log at info: an expected caller-must-reauth signal, not an operator-actionable error.
+            verbose_logger.info(f"MCP tool call relaying upstream HTTP {e.status_code}")
+            raise _relay_upstream_auth_http_exception(e, request)
         except HTTPException as e:
-            # Re-raise HTTPException as-is to preserve status code and detail
+            # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
+            # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
+            # the only status demoted to info.
             verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
             raise e
         except Exception as e:
@@ -1055,11 +1175,6 @@ if MCP_AVAILABLE:
             forwarded_authorization = (
                 effective_oauth2_headers.get("Authorization") if effective_oauth2_headers else None
             )
-            is_interactive_authz_code = (
-                server_model.auth_type == MCPAuth.oauth2
-                and forwarded_authorization is not None
-                and to_server_spec(server_model) is not None
-            )
             preview_cred_provider = (
                 UpstreamCredentialProvider(
                     oauth_token_store=PresentedOAuthTokenStore(
@@ -1070,7 +1185,11 @@ if MCP_AVAILABLE:
                         )
                     )
                 )
-                if is_interactive_authz_code
+                if (
+                    server_model.auth_type == MCPAuth.oauth2
+                    and forwarded_authorization is not None
+                    and to_server_spec(server_model) is not None
+                )
                 else None
             )
 
@@ -1231,8 +1350,13 @@ if MCP_AVAILABLE:
             if isinstance(credentials, dict):
                 mcp_auth_header = credentials.get("auth_value")
 
+        # Authorization doubles as the admission fallback (LITELLM_API_KEY_HEADER_NAME_SECONDARY):
+        # when the primary x-litellm-api-key header is absent, the Authorization value is the
+        # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
         oauth2_headers: Optional[Dict[str, str]] = None
-        if new_mcp_server_request.auth_type == MCPAuth.oauth2:
+        if new_mcp_server_request.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and headers.get(
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY
+        ):
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):

@@ -432,6 +432,11 @@ class TestCallToolRestApiVirtualTools:
                 new_callable=AsyncMock,
                 return_value=fake_result,
             ) as mock_execute,
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_tool_call_logging",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("logging failed"),
+            ) as mock_fire_logging,
         ):
             result = await self._get_call_fn()(
                 request=request,
@@ -439,6 +444,7 @@ class TestCallToolRestApiVirtualTools:
             )
 
         mock_execute.assert_awaited_once()
+        mock_fire_logging.assert_awaited_once()
         assert mock_execute.await_args.kwargs["name"] == "github-create_issue"
 
         assert result.isError is False
@@ -782,6 +788,47 @@ class TestCaptureHostProgressCallback:
         host.request_context.meta.progressToken = "tok12345"
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
+
+    def test_returns_callable_when_token_is_integer(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 12345
+        host.request_context.session = MagicMock()
+        assert callable(_capture_host_progress_callback(host))
+
+    def test_returns_callable_when_token_is_zero(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 0
+        host.request_context.session = MagicMock()
+        assert callable(_capture_host_progress_callback(host))
+
+    @pytest.mark.asyncio
+    async def test_forwarded_progress_token_preserves_integer_value(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 12345
+        session = AsyncMock()
+        host.request_context.session = session
+
+        callback = _capture_host_progress_callback(host)
+        assert callback is not None
+        await callback(0.5, 1.0)
+
+        session.send_progress_notification.assert_awaited_once_with(
+            progress_token=12345,
+            progress=0.5,
+            total=1.0,
+        )
 
 
 class TestHandleListToolsVirtual:
