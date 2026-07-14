@@ -9151,10 +9151,10 @@ class Router:
             # deployment name into litellm.model_cost as a zeroed stub, so
             # require the entry to carry usable limits/costs.
             _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
-            _fallback_entry = litellm.model_cost.get(_azure_fallback_key) or {}
-            _fallback_resolves = (
-                _fallback_entry.get("max_input_tokens") is not None
-                or _fallback_entry.get("max_tokens") is not None
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
                 or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
             if _fallback_resolves:
