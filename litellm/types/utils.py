@@ -3774,3 +3774,53 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+
+
+# openai._models.BaseModel sets defer_build=True, so subclasses start with MockValSer
+# as their __pydantic_serializer__. model_validate() (used by the SDK for all response
+# parsing) does NOT trigger the deferred build — only __init__ does. So every SDK object
+# produced by parsing a streaming chunk has MockValSer at the class level.
+#
+# streaming_handler.py stores these raw SDK objects as extra='allow' field values in
+# litellm's ModelResponseStream. When proxy_server calls model_dump_json(), the Rust
+# SchemaSerializer looks up type(value).__pydantic_serializer__ at the C level (bypassing
+# Python's __getattr__ retry), finds MockValSer, and raises:
+#   TypeError: 'MockValSer' object cannot be converted to 'SchemaSerializer'
+#
+# The crash is intermittent because model_dump() (Python path) accidentally self-heals
+# via MockValSer.__getattr__ -> attempt_rebuild(). If model_dump() runs first (usage
+# chunk), the SDK class is rebuilt as a side effect and model_dump_json() works. If
+# model_dump_json() runs first, it crashes.
+#
+# Remove these calls only when streaming_handler stops storing raw SDK objects in litellm
+# models (i.e., always converts to dicts or litellm's own types before assignment).
+from openai.types.chat import ChatCompletionChunk as _ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import (
+    Choice as _OAIChoice,
+    ChoiceDelta as _OAIChoiceDelta,
+    ChoiceLogprobs as _OAIChoiceLogprobs,
+    ChoiceDeltaToolCall as _OAIChoiceDeltaToolCall,
+    ChoiceDeltaToolCallFunction as _OAIChoiceDeltaToolCallFunction,
+)
+from openai.types.chat.chat_completion_token_logprob import (
+    ChatCompletionTokenLogprob as _OAIChatCompletionTokenLogprob,
+    TopLogprob as _OAITopLogprob,
+)
+
+
+def _rebuild_sdk_streaming_types() -> None:
+    for cls in (
+        _ChatCompletionChunk,
+        _OAIChoice,
+        _OAIChoiceDelta,
+        _OAIChoiceLogprobs,
+        _OAIChoiceDeltaToolCall,
+        _OAIChoiceDeltaToolCallFunction,
+        _OAIChatCompletionTokenLogprob,
+        _OAITopLogprob,
+    ):
+        cls.model_rebuild()
+
+
+_rebuild_sdk_streaming_types()
+del _rebuild_sdk_streaming_types

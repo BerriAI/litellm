@@ -344,6 +344,80 @@ def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
         )
 
 
+def test_sdk_streaming_types_model_dump_json_after_model_validate():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/18801 and #24357.
+
+    SDK objects created via model_validate() carry MockValSer as their pydantic serializer.
+    When stored as extra fields in ModelResponseStream and serialized via model_dump_json(),
+    pydantic's Rust core hits MockValSer at the C level and raises TypeError.
+    """
+    from openai.types.chat.chat_completion_chunk import (
+        ChoiceDeltaToolCall as _OAIChoiceDeltaToolCall,
+        ChoiceLogprobs as _OAIChoiceLogprobs,
+    )
+    from openai.types.chat.chat_completion_token_logprob import (
+        ChatCompletionTokenLogprob as _OAIChatCompletionTokenLogprob,
+    )
+
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    logprobs_obj = _OAIChoiceLogprobs.model_validate(
+        {
+            "content": [
+                _OAIChatCompletionTokenLogprob.model_validate(
+                    {"token": "hello", "bytes": [104], "logprob": -0.5, "top_logprobs": []}
+                )
+            ]
+        }
+    )
+    tool_call_obj = _OAIChoiceDeltaToolCall.model_validate(
+        {"index": 0, "id": "call_abc", "type": "function", "function": {"name": "my_tool", "arguments": '{"x": 1}'}},
+    )
+
+    model_response = ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(role="assistant"), logprobs=logprobs_obj)],
+        model="gpt-4o",
+    )
+    model_response.choices[0].delta.tool_calls = [tool_call_obj]
+
+    result = model_response.model_dump_json(exclude_none=True, exclude_unset=True)
+    assert "my_tool" in result
+    assert "hello" in result
+
+
+def test_sdk_streaming_empty_logprobs_model_dump_json():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24357.
+
+    The final stop chunk often carries ChoiceLogprobs(content=None, refusal=None).
+    This empty logprobs object is still a raw SDK type created via model_validate()
+    and retains MockValSer, causing model_dump_json() to crash the same way.
+    """
+    from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as _OAIChoiceLogprobs
+
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    empty_logprobs = _OAIChoiceLogprobs.model_validate({"content": None, "refusal": None})
+
+    model_response = ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(role="assistant", content=None),
+                logprobs=empty_logprobs,
+            )
+        ],
+        model="gpt-4o",
+    )
+
+    result = model_response.model_dump_json(exclude_none=True, exclude_unset=True)
+    assert "stop" in result
+
+
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
