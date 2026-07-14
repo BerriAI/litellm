@@ -20,13 +20,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
-    def _rejects_non_default_temperature(cls, model: str) -> bool:
+    def _model_for_capability_lookup(cls, model: str) -> str:
         if model.startswith(cls.GPT5_SERIES_ROUTE):
-            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
-        elif not model.startswith("azure/"):
-            model = "azure/" + model
+            return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        if model.startswith("azure/"):
+            return model
+        return "azure/" + model
+
+    @classmethod
+    def _rejects_non_default_temperature(cls, model: str) -> bool:
         return _is_explicitly_disabled_factory(
-            model=model,
+            model=cls._model_for_capability_lookup(model),
             custom_llm_provider=None,
             key="supports_non_default_temperature",
         )
@@ -40,11 +44,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         entry. Strip the prefix and prepend ``azure/`` so the lookup finds
         ``azure/gpt-5.1`` in model_prices_and_context_window.json.
         """
-        if model.startswith(cls.GPT5_SERIES_ROUTE):
-            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
-        elif not model.startswith("azure/"):
-            model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+        return super()._supports_reasoning_effort_level(cls._model_for_capability_lookup(model), level)
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
