@@ -5121,6 +5121,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=None,
@@ -5163,6 +5164,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=object_permission,
@@ -5240,7 +5242,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})),
+            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", organization_id=None, metadata={"scim_active": False})),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -6087,10 +6089,9 @@ class TestGatewaySessionAdmission:
     """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
     token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
     token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
-    aggregate scope with the flag on, never for named servers or per-server flows."""
+    aggregate scope, never for named servers or per-server flows."""
 
     _MASTER_KEY = "sk-gateway-session-admission-master-key"
-    _FLAG = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.is_mcp_gateway_dcr_enabled"
 
     def _session_bearer(self, user_id="sso-user-42", client_id="llm_dcrc_abc"):
         from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
@@ -6122,10 +6123,11 @@ class TestGatewaySessionAdmission:
 
     @staticmethod
     @contextlib.contextmanager
-    def _patch_user_reload(*, user_id, active=True):
+    def _patch_user_reload(*, user_id, active=True, organization_id=None):
         get_user_object = AsyncMock(
             return_value=MagicMock(
                 user_id=user_id,
+                organization_id=organization_id,
                 metadata={"scim_active": active} if not active else {"scim_active": True},
                 user_role=None,
                 object_permission=None,
@@ -6139,10 +6141,24 @@ class TestGatewaySessionAdmission:
         ):
             yield get_user_object
 
+    async def test_session_admission_binds_org_id_so_the_org_ceiling_applies(self):
+        """The admitted auth carries the user's org_id, so get_allowed_mcp_servers keeps the
+        org-level MCP ceiling in force for a gateway session instead of skipping it."""
+        token = self._access_token(user_id="org-user")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="org-user", organization_id="org-123"),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert auth_result.org_id == "org-123"
+
     async def test_valid_session_admits_under_live_user_at_aggregate_scope(self):
         token = self._access_token(user_id="sso-user-42")
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
@@ -6166,7 +6182,6 @@ class TestGatewaySessionAdmission:
         mint, _refresh, principal, keys = self._session_bearer()
         token = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -6178,7 +6193,6 @@ class TestGatewaySessionAdmission:
         token = self._access_token()
         tampered = token[:-3] + ("aaa" if not token.endswith("aaa") else "bbb")
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -6191,7 +6205,6 @@ class TestGatewaySessionAdmission:
         _mint, refresh, principal, keys = self._session_bearer()
         refresh_token = refresh(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -6201,37 +6214,17 @@ class TestGatewaySessionAdmission:
     async def test_foreign_key_session_fails_closed(self):
         token = self._access_token()
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", "sk-a-totally-different-master-key"),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope(token))
         assert exc_info.value.status_code == 401
 
-    async def test_arm_does_not_fire_when_flag_off(self):
-        """Flag off: a session-shaped bearer is treated as an ordinary bearer and hits the
-        oauth2 arm, which validates it as a litellm credential and fails it there (not the
-        session arm). Proven by user_api_key_auth being called, unlike the flag-on path."""
-        token = self._access_token()
-        with (
-            patch(self._FLAG, return_value=False),
-            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                new_callable=AsyncMock,
-                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
-            ) as mock_auth,
-        ):
-            with pytest.raises((HTTPException, ProxyException)):
-                await MCPRequestHandler.process_mcp_request(self._scope(token))
-        mock_auth.assert_called_once()
-
     async def test_arm_does_not_fire_for_named_server(self):
         """A session-shaped bearer aimed at a named server (path scope) does not enter the
         aggregate arm; it is treated as an ordinary bearer on that server."""
         token = self._access_token()
         with (
-            patch(self._FLAG, return_value=True),
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
