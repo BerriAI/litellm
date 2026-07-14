@@ -1006,7 +1006,8 @@ def responses_api_bridge_check(
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
     #
-    # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
+    # - # - gpt-5.4+: tools alone (OpenAI applies reasoning_effort server-side, making
+    #   /v1/chat/completions reject tool calls for this family) or reasoning-summary alias.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     if (
