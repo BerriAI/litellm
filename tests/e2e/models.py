@@ -82,6 +82,7 @@ class KeyInfo(BaseModel):
     key_alias: str | None = None
     models: list[str] = []
     tpm_limit: int | None = None
+    rpm_limit: int | None = None
     team_id: str | None = None
     spend: float | None = None
     max_budget: float | None = None
