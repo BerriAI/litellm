@@ -74,3 +74,23 @@ def test_wire_value_carries_no_prose():
 )
 def test_single_upstream_http_status_is_truthful(tag, status_code, expected):
     assert list_fault_http_status(ServerListFault(tag=tag, status_code=status_code)) == expected
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server():
+    """A cancelled per-server fetch must not masquerade as ok(tool_count=0): cancellation was already
+    suppressed before the outcome plumbing existed, so it stays suppressed, but as an internal fault
+    the outcome reporting can see."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    client = MagicMock()
+    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(MCPServerListError) as exc_info:
+        await manager._fetch_tools_with_timeout(client, "cancelled_srv")
+
+    assert exc_info.value.fault.tag == "internal"

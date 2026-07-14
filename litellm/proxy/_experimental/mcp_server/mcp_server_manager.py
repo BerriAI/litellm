@@ -3393,9 +3393,9 @@ class MCPServerManager:
         except TimeoutError as e:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
