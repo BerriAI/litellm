@@ -405,16 +405,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": initial_block,
                         }
                     )
-                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                        response=first_chunk,
-                        current_content_block_index=self.current_content_block_index,
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
                     )
                     # Empty / stop-only first chunk: close the block before the
                     # terminal message_delta so the sequence stays spec-compliant.
-                    if (
-                        isinstance(processed_first, dict)
-                        and processed_first.get("type") == "message_delta"
-                    ):
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -658,14 +657,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": initial_block,
                         }
                     )
-                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                        response=first_chunk,
-                        current_content_block_index=self.current_content_block_index,
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
                     )
-                    if (
-                        isinstance(processed_first, dict)
-                        and processed_first.get("type") == "message_delta"
-                    ):
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
