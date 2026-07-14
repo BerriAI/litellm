@@ -2845,6 +2845,52 @@ class TestToolChoiceForResponsesAPIResponse:
     def test_transform_tool_choice_for_responses_api_response_none(self):
         assert LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(None) is None
 
+    def test_transform_tool_choice_for_responses_api_response_normalizes_cursor_ide_dict_modes(self):
+        """
+        Cursor IDE dict modes like {"type": "tool"} or {"type": "function"} without a
+        name must still be normalized to a valid Literal string, not passed through
+        unchanged - regression for a review finding on the initial fix, which only
+        handled the named-function case and let these fall through to "return as-is",
+        failing ResponsesAPIResponse's Pydantic validation just like the original bug.
+        """
+        cases = {
+            "auto": "auto",
+            "none": "none",
+            "required": "required",
+            "tool": "required",
+            "any": "required",
+            "function": "required",  # "function" type with no name - same as "tool"
+        }
+        for type_value, expected in cases.items():
+            result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                {"type": type_value}
+            )
+            assert result == expected, f"type={type_value!r} expected {expected!r}, got {result!r}"
+
+    def test_transform_tool_choice_for_responses_api_response_cursor_ide_dict_modes_do_not_crash_validation(self):
+        """
+        Every Cursor-IDE-style dict mode must produce a value ResponsesAPIResponse
+        actually accepts, not just a normalized-looking one.
+        """
+        import time
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        for type_value in ("auto", "none", "required", "tool", "any", "function"):
+            normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                {"type": type_value}
+            )
+            ResponsesAPIResponse(
+                id="resp_1",
+                created_at=int(time.time()),
+                model="x",
+                object="response",
+                output=[],
+                parallel_tool_calls=True,
+                tool_choice=normalized,
+                tools=[],
+            )
+
     def test_streaming_response_created_event_does_not_crash_on_forced_tool_choice(self):
         """
         Regression test for the exact crash: building the synthetic

@@ -186,26 +186,33 @@ class LiteLLMCompletionResponsesConfig:
         ``{"type": "function", "name": "..."}``, not Chat Completion's
         nested ``{"type": "function", "function": {"name": "..."}}``.
 
+        Delegates to ``_transform_tool_choice`` first to normalize any
+        Cursor-IDE-style dict input (e.g. {"type": "tool"}, {"type":
+        "function"} without a name) into a string or the Chat Completion
+        nested shape, then rewrites only the nested-function case into the
+        flat Responses API shape.
+
         Handles:
         - String values: "auto", "none", "required" -> pass through as-is
+        - Dict with type only (Cursor IDE format), normalized the same way
+          as _transform_tool_choice: {"type": "auto"/"none"/"required"/
+          "tool"/"any"} -> the corresponding string
         - Chat Completion nested function format:
             - {"type": "function", "function": {"name": "..."}} -> {"type": "function", "name": "..."}
         - Already-flat Responses API format: pass through as-is
         """
-        if tool_choice is None:
-            return None
+        normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
 
-        if isinstance(tool_choice, str):
-            return tool_choice
+        if normalized is None or isinstance(normalized, str):
+            return normalized
 
-        if isinstance(tool_choice, dict):
-            if tool_choice.get("type") == "function":
-                function_name = tool_choice.get("function", {}).get("name") or tool_choice.get("name")
-                if function_name:
-                    return {"type": "function", "name": function_name}
+        if isinstance(normalized, dict) and normalized.get("type") == "function":
+            function_name = normalized.get("function", {}).get("name") or normalized.get("name")
+            if function_name:
+                return {"type": "function", "name": function_name}
 
         # Return as-is for unknown formats
-        return tool_choice
+        return normalized
 
     @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
