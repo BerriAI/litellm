@@ -289,11 +289,12 @@ DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT = int(os.getenv("DEFAULT_MOCK_RESPO
 # Bounds for the proxy token-counting endpoints (/utils/token_counter and /v1/messages/count_tokens),
 # enforced per worker process. Local tokenization is CPU-bound and offloaded to the default executor,
 # whose work queue is unbounded — these caps keep queued payload memory and per-request CPU bounded.
+# Fixed defaults for now; these could be made env-configurable in a follow-up if maintainers prefer.
 # Max tokenization jobs in flight at once; excess requests receive a 429.
-TOKEN_COUNTER_MAX_CONCURRENCY = int(os.getenv("TOKEN_COUNTER_MAX_CONCURRENCY", "32"))
+TOKEN_COUNTER_MAX_CONCURRENCY = 32
 # Max combined characters (all string fields) accepted per token-count request; larger requests receive a 400.
 # 10M chars ~ 2.5M tokens, comfortably above the largest mainstream model context windows.
-TOKEN_COUNTER_MAX_REQUEST_CHARS = int(os.getenv("TOKEN_COUNTER_MAX_REQUEST_CHARS", "10000000"))
+TOKEN_COUNTER_MAX_REQUEST_CHARS = 10_000_000
 MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES = int(os.getenv("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768))
 MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000))
 MAX_TILE_WIDTH = int(os.getenv("MAX_TILE_WIDTH", 512))
