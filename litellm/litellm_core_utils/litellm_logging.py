@@ -2310,7 +2310,17 @@ class Logging(LiteLLMLoggingBaseClass):
                         isinstance(callback, CustomLogger)
                         and is_sync_request
                         and self.call_type
-                        != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
+                        not in (
+                            # both endpoints are always dispatched through the
+                            # async wrapper, which already calls
+                            # async_log_success_event. anthropic_messages
+                            # (/v1/messages) sets no acompletion-style flag, so
+                            # is_sync_request is True here and the sync pass would
+                            # otherwise re-dispatch every CustomLogger, doubling
+                            # OTEL spans + cost/success callbacks.
+                            CallTypes.pass_through.value,
+                            CallTypes.anthropic_messages.value,
+                        )
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(

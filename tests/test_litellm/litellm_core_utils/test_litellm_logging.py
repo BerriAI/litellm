@@ -3707,3 +3707,51 @@ def test_set_cost_breakdown_stores_reasoning_cost():
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
     assert "reasoning_cost" not in no_reasoning.cost_breakdown
+
+
+def test_success_handler_skips_sync_callbacks_for_anthropic_messages(logging_obj):
+    """anthropic_messages (/v1/messages) is always dispatched through the async
+    wrapper, so the sync success_handler pass must not re-dispatch CustomLogger
+    callbacks -- the async handler is the canonical path.
+
+    Regression for the duplicate ``litellm_request`` OTEL spans + double
+    success/cost callbacks on non-streaming /v1/messages. Unlike acompletion,
+    anthropic_messages sets no async flag in litellm_params, so
+    _is_sync_litellm_request is True and the sync pass would otherwise fire.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    dummy_logger.log_stream_event = MagicMock()
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    dummy_logger.log_success_event.assert_not_called()
+    dummy_logger.log_stream_event.assert_not_called()
