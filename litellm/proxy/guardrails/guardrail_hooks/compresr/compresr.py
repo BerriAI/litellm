@@ -678,6 +678,13 @@ class CompresrGuardrail(CustomGuardrail):
         while len(store) > 1 and self._store_total_bytes > _MAX_TOTAL_STORE_BYTES:
             self._evict_oldest()
 
+    def _existing_originals(self, store_key: str | None) -> dict[str, str]:
+        """Originals already stored under this key, so the per-call byte budget
+        can account for an earlier turn that reused the store key."""
+        if store_key is None:
+            return {}
+        return self._originals_by_call_id.get(store_key, ({}, 0.0))[0]
+
     def _store_originals(self, store_key: str, originals: dict[str, str]) -> None:
         existing, _ = self._originals_by_call_id.get(store_key, ({}, 0.0))
         merged = self._bound_call_bytes({**existing, **originals})
@@ -1031,9 +1038,7 @@ class CompresrGuardrail(CustomGuardrail):
                 "Configure virtual-key auth to enable recovery."
             )
 
-        existing_originals: dict[str, str] = {}
-        if recovery_enabled and store_key is not None:
-            existing_originals = self._originals_by_call_id.get(store_key, ({}, 0.0))[0]
+        existing_originals = self._existing_originals(store_key)
         applied = self._apply_compression_results(
             messages, targets, contexts, results, recovery_enabled, existing_originals
         )
