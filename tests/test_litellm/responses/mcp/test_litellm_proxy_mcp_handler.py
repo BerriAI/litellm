@@ -710,6 +710,81 @@ def test_create_follow_up_input_without_previous_response_id_is_self_contained()
     assert len(assistant_msgs) == 1
 
 
+def test_create_follow_up_input_without_previous_response_id_string_input():
+    """String original_input is wrapped into a user message."""
+    response = types.SimpleNamespace(output=[])
+    tool_results = [
+        {"tool_call_id": "call-1", "name": "foo", "result": "bar"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input="hello world",
+    )
+
+    # First item should be a user message with the string content
+    assert follow_up[0]["type"] == "message"
+    assert follow_up[0]["role"] == "user"
+    assert follow_up[0]["content"] == "hello world"
+
+
+def test_create_follow_up_input_without_previous_response_id_non_dict_output_item():
+    """Output items with model_dump() are converted to dicts before processing."""
+    class FakeModel:
+        def model_dump(self):
+            return {
+                "type": "function_call",
+                "call_id": "call-xyz",
+                "name": "my_tool",
+                "arguments": '{"key": "val"}',
+            }
+
+    response = types.SimpleNamespace(output=[FakeModel()])
+    tool_results = [
+        {"tool_call_id": "call-xyz", "name": "my_tool", "result": "ok"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input=None,
+    )
+
+    function_call_items = [
+        item for item in follow_up if isinstance(item, dict) and item.get("type") == "function_call"
+    ]
+    assert len(function_call_items) == 1
+    assert function_call_items[0]["call_id"] == "call-xyz"
+
+
+def test_create_follow_up_input_without_previous_response_id_non_list_content():
+    """Message output with non-list content is appended as-is."""
+    response = types.SimpleNamespace(
+        output=[
+            {
+                "type": "message",
+                "content": "plain string content",
+            },
+        ]
+    )
+    tool_results = [
+        {"tool_call_id": "call-1", "name": "foo", "result": "done"},
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=cast(Any, response),
+        tool_results=tool_results,
+        original_input=None,
+    )
+
+    assistant_msgs = [
+        item for item in follow_up if isinstance(item, dict) and item.get("role") == "assistant"
+    ]
+    assert len(assistant_msgs) == 1
+    assert "plain string content" in assistant_msgs[0]["content"]
+
+
 def test_completion_with_function_tools_works_without_fastapi_installed():
     script = textwrap.dedent(
         """
