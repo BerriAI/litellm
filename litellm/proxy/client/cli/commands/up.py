@@ -68,34 +68,40 @@ def merge_claude_settings(
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
-def write_backup(record: BackupRecord) -> None:
-    BACKUP_PATH.parent.mkdir(exist_ok=True)
-    with open(BACKUP_PATH, "w") as f:
+def write_backup(record: BackupRecord, backup_path: Optional[Path] = None) -> None:
+    path = backup_path if backup_path is not None else BACKUP_PATH
+    path.parent.mkdir(exist_ok=True)
+    with open(path, "w") as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
-    os.chmod(BACKUP_PATH, 0o600)
+    os.chmod(path, 0o600)
 
 
-def read_backup() -> Optional[BackupRecord]:
-    if not BACKUP_PATH.exists():
+def read_backup(backup_path: Optional[Path] = None) -> Optional[BackupRecord]:
+    path = backup_path if backup_path is not None else BACKUP_PATH
+    if not path.exists():
         return None
-    with open(BACKUP_PATH, "r") as f:
+    with open(path, "r") as f:
         return _BACKUP_RECORD_ADAPTER.validate_json(f.read())
 
 
-def restore_claude_settings() -> Optional[BackupRecord]:
-    """Restore ~/.claude/settings.json from the backup, then delete the backup.
+def restore_claude_settings(
+    settings_path: Optional[Path] = None, backup_path: Optional[Path] = None
+) -> Optional[BackupRecord]:
+    """Restore settings_path from the backup at backup_path, then delete the backup.
 
     Returns the restored record, or None if there was nothing to restore.
     """
-    record = read_backup()
+    resolved_settings_path = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
+    resolved_backup_path = backup_path if backup_path is not None else BACKUP_PATH
+    record = read_backup(resolved_backup_path)
     if record is None:
         return None
     if record.existed and record.content is not None:
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
+        with open(resolved_settings_path, "w") as f:
             json.dump(record.content, f, indent=2)
-    elif CLAUDE_SETTINGS_PATH.exists():
-        CLAUDE_SETTINGS_PATH.unlink()
-    BACKUP_PATH.unlink()
+    elif resolved_settings_path.exists():
+        resolved_settings_path.unlink()
+    resolved_backup_path.unlink()
     return record
 
 

@@ -489,6 +489,61 @@ This is a one-time file patch and restore, not a live traffic interceptor. A Cla
 
 Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
 
+### QA Complexity-Based Auto-Routing Against Your Real Proxy
+
+`lite autoroute` lets you try LiteLLM's complexity-based auto-routing -- picking a cheaper or more expensive model depending on how complex a prompt looks -- against models your key already has access to on your real, running proxy, without editing that proxy's `config.yaml` and without any real request ever bypassing it. It builds a second, throwaway proxy locally that forwards every request back to your real proxy, and points Claude Code at that local proxy for the duration of the session.
+
+#### List Your Accessible Model Groups
+
+```bash
+lite model-groups list [--format table|json]
+```
+
+Lists the model groups your key can reach on the proxy, via `/model_group/info`, along with each group's mode (`chat`, `embedding`, etc.) and per-token pricing. This is also what `lite autoroute configure` uses internally to discover what it can offer you.
+
+#### Configure the Auto-Router
+
+```bash
+lite autoroute configure
+```
+
+An interactive wizard. It runs the same model-group discovery as above, splits the results into chat-capable and embedding-capable pools, and asks you to assign a model from the chat pool to each of the four complexity tiers -- SIMPLE, MEDIUM, COMPLEX, REASONING. From there it optionally offers: classifying prompt complexity with an LLM (again picked from your discovered pool) instead of the free built-in heuristic scorer, semantic keyword matching for tier assignment (needs an embedding model from the pool), and adaptive (bandit-based) selection layered on top of tiering.
+
+The wizard writes the result to `~/.litellm/autorouter/config.yaml` with `0600` permissions, since the file embeds your real proxy API key. Every model referenced anywhere in that config -- tier targets, the classifier model, the embedding model -- becomes its own `litellm_proxy/<model-name>` deployment whose `api_base` and `api_key` point back at your real proxy. That is the trick that keeps your real proxy's config untouched: every actual network call this generates, whether it is the routed completion, an LLM-classifier call, or an embedding call, forwards transparently through your real, already-running proxy with your real key.
+
+You must run `configure` at least once before `up`; running `up` first fails with a clear error telling you to configure first.
+
+#### Launch the Ephemeral Auto-Router Proxy
+
+```bash
+lite autoroute up
+```
+
+Starts a local, throwaway litellm proxy on a random free port, running the config `configure` generated, with a freshly-minted random API key baked in for this session only (your real proxy key never leaves the generated config -- it only appears there, forwarding to your real proxy). It waits for the ephemeral proxy to report healthy, then patches `~/.claude/settings.json` the same way `lite up` does, except with a static `ANTHROPIC_AUTH_TOKEN` env var instead of an `apiKeyHelper`, since this key is short-lived and self-issued rather than something needing SSO refresh. Any `claude` session started afterward, from any terminal, routes through the ephemeral proxy.
+
+`lite autoroute up` runs in the foreground and streams the ephemeral proxy's own log file into your terminal, so you can watch its routing decisions -- which tier and model got picked for each request -- as you use Claude Code normally. Press Ctrl-C (or send SIGTERM) to stop it; this kills the child proxy process and restores your original Claude Code settings, in that order.
+
+#### Recover From an Unclean Shutdown
+
+```bash
+lite autoroute down
+```
+
+If the `lite autoroute up` process dies uncleanly -- `kill -9`, a crash -- rather than being stopped with Ctrl-C, `down` is the manual recovery path: it kills any leftover ephemeral proxy process found via a recorded pid file and restores Claude Code's settings from whatever backup is on disk.
+
+#### Example
+
+```bash
+lite autoroute configure
+lite autoroute up
+# use Claude Code as normal in another terminal; routing decisions stream live
+lite autoroute down   # only needed if `up` was killed uncleanly instead of Ctrl-C'd
+```
+
+#### Caveats
+
+Adaptive mode's learned state does not persist across `lite autoroute up` sessions -- there is no local database, so every session starts adaptive selection cold. A Claude Code session already running before `up` started, or still running when it stops, keeps whatever settings it loaded at its own startup; like `lite up`, this is a one-time file patch and restore, not a live traffic interceptor. Only Claude Code is supported, for the same reason as `lite up`: no other supported agent (for example Cursor) has an equivalent hot-patchable config file.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:
