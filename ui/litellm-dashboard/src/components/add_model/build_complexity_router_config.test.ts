@@ -142,7 +142,21 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.adaptive_eligible).toBeUndefined();
   });
 
-  it("includes adaptive fields when adaptive is enabled", () => {
+  it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "all",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
+    expect(config.tier_distance_penalty).toBe(0.75);
+    expect(config.adaptive_eligible).toBe("all");
+  });
+
+  it("omits tier_distance_penalty when eligible='classified_tier', since the penalty doesn't apply there", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
       adaptive: true,
@@ -151,9 +165,8 @@ describe("buildComplexityRouterConfig", () => {
       adaptiveEligible: "classified_tier",
     });
     expect(config.adaptive).toBe(true);
-    expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
-    expect(config.tier_distance_penalty).toBe(0.75);
     expect(config.adaptive_eligible).toBe("classified_tier");
+    expect(config.tier_distance_penalty).toBeUndefined();
   });
 });
 

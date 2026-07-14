@@ -1,4 +1,5 @@
-import { Select as AntdSelect, Card, InputNumber, Radio, Space, Typography } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Select as AntdSelect, Card, InputNumber, Radio, Space, Tooltip, Typography } from "antd";
 import React from "react";
 import { ClassifierType, ComplexityRouterConfigValue, DEFAULT_CLASSIFIER_TIMEOUT_MS } from "./ComplexityRouterConfig";
 
@@ -115,9 +116,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
       {value.classifier_type === "heuristic" && (
         <div className="mt-4">
-          <Text strong style={{ display: "block", marginBottom: 4 }}>
-            Custom Technical Keywords
-          </Text>
+          <div className="flex items-center gap-2 mb-1">
+            <Text strong>Custom Technical Keywords</Text>
+            <Tooltip title="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
+              <InfoCircleOutlined className="text-gray-400" />
+            </Tooltip>
+          </div>
           <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
             Optional: Add terms to the built-in list to improve classification accuracy on the technical dimension.
             (e.g., udp, kafka, terraform).

@@ -137,7 +137,9 @@ describe("ComplexityRouterConfig", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div") as HTMLElement;
+    // "Custom Technical Keywords" now sits in its own label+tooltip row, so climb two
+    // levels to the wrapping section that also holds the input below it.
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
     const input = within(keywordsSection).getByRole("combobox");
     await user.type(input, "udp,");
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);

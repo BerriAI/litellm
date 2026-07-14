@@ -97,7 +97,7 @@ export const buildComplexityRouterConfig = ({
     ...(adaptive && {
       adaptive: true,
       adaptive_weights: adaptiveWeights,
-      tier_distance_penalty: tierDistancePenalty,
+      ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
       adaptive_eligible: adaptiveEligible,
     }),
   };

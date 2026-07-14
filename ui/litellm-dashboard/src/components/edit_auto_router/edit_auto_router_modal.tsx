@@ -166,7 +166,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             tiers,
             classifier_type,
             ...(classifier_type === "llm" ? { classifier_llm_config } : {}),
-            ...(adaptive && { adaptive, adaptive_weights, tier_distance_penalty, adaptive_eligible }),
+            ...(adaptive && {
+              adaptive,
+              adaptive_weights,
+              ...(adaptive_eligible === "all" && { tier_distance_penalty }),
+              adaptive_eligible,
+            }),
           },
           complexity_router_default_model: defaultModel,
         };
