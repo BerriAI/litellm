@@ -79,4 +79,16 @@ describe("buildUpdatedComplexityRouterConfig", () => {
 
     expect(updatedConfig).toEqual(expectedAdaptiveDisabledConfig);
   });
+
+  it("updates custom technical keywords when they are edited", () => {
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, classifiedTierValue, ["postgres"]);
+
+    expect(updatedConfig.custom_technical_keywords).toEqual(["postgres"]);
+  });
+
+  it("removes custom technical keywords when they are cleared", () => {
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, classifiedTierValue, []);
+
+    expect(updatedConfig.custom_technical_keywords).toBeUndefined();
+  });
 });
