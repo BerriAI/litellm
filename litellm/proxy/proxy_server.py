@@ -14621,13 +14621,6 @@ def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
 
 
 def _apply_router_settings_role_gate(router_settings: dict, is_full_admin: bool) -> dict:
-    """
-    ``default_litellm_params`` is an open-ended kwargs dict (Router merges it into
-    every completion call), so an admin can put a shared ``api_key`` or an
-    ``extra_headers`` Authorization token there. Unlike the other fields on
-    this page, nothing else masks it before it reaches non-full-admin callers
-    of /get/config/callbacks.
-    """
     default_litellm_params = router_settings.get("default_litellm_params")
     if is_full_admin or not isinstance(default_litellm_params, dict):
         return router_settings

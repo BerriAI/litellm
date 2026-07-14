@@ -5065,25 +5065,40 @@ def _make_router_for_settings_tests(**kwargs):
     )
 
 
-def test_update_settings_merges_default_litellm_params_without_dropping_existing_keys():
-    """
-    Regression test: `update_settings(default_litellm_params=...)` must merge into
-    the existing dict, not replace it wholesale. A naive `setattr` replace would
-    silently drop keys the Router set at init (e.g. `timeout`, `max_retries`,
-    `metadata`) whenever an admin edits `default_litellm_params` from the UI to
-    add something like `cache_control_injection_points`.
-    """
+def test_update_settings_replaces_default_litellm_params_wholesale():
     router = _make_router_for_settings_tests(timeout=42)
     assert router.default_litellm_params.get("timeout") == 42
 
     router.update_settings(
-        default_litellm_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+        default_litellm_params={
+            "timeout": 42,
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        }
     )
 
     assert router.default_litellm_params["timeout"] == 42
     assert router.default_litellm_params["cache_control_injection_points"] == [
         {"location": "message", "role": "system"}
     ]
+
+
+def test_update_settings_can_clear_default_litellm_params_keys():
+    """
+    Regression test: a prior merge-not-replace implementation could never remove a
+    key - `{**old, **new}` keeps any key present in `old` but absent from `new`.
+    Saving `default_litellm_params` after removing `cache_control_injection_points`
+    from the Admin UI's textarea must actually clear it, not silently keep the old
+    callback-affecting value active.
+    """
+    router = _make_router_for_settings_tests()
+    router.update_settings(
+        default_litellm_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+    )
+    assert "cache_control_injection_points" in router.default_litellm_params
+
+    router.update_settings(default_litellm_params={})
+
+    assert "cache_control_injection_points" not in router.default_litellm_params
 
 
 def test_update_settings_optional_pre_call_checks_is_idempotent():

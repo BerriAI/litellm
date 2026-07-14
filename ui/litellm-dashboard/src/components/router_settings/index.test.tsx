@@ -207,11 +207,6 @@ describe("RouterSettings", () => {
   });
 
   it("should round-trip default_litellm_params and optional_pre_call_checks unmodified on save", async () => {
-    // Regression test: default_litellm_params holds a dict (e.g. cache_control_injection_points),
-    // not a plain string - without listing it in the save handler's jsonKeys set, it'd be persisted
-    // as raw stringified text instead of parsed JSON. optional_pre_call_checks is a list owned by
-    // its own multi-select (no DOM input); without the fallback-to-state path in parseInputValue,
-    // an untouched value would be silently dropped instead of round-tripping through Save.
     vi.mocked(getCallbacksCall).mockResolvedValue({
       router_settings: {
         ...mockCallbacksResponse.router_settings,
