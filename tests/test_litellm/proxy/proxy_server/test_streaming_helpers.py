@@ -674,8 +674,11 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_data_generator_adapts_completed_model_response(monkeypatch):
-    _patch_logging_flags(monkeypatch, needs_wrap=True)
+@pytest.mark.parametrize("needs_wrap", [False, True])
+async def test_async_data_generator_adapts_completed_model_response(
+    monkeypatch, needs_wrap
+):
+    _patch_logging_flags(monkeypatch, needs_wrap=needs_wrap)
 
     completed_response = ModelResponse(
         id="chatcmpl-completed",
@@ -722,9 +725,12 @@ async def test_async_data_generator_adapts_completed_model_response(monkeypatch)
         )
     ]
 
-    assert len(iterator_hook_responses) == 1
-    assert iterator_hook_responses[0] is not completed_response
-    assert hasattr(iterator_hook_responses[0], "__aiter__")
+    if needs_wrap:
+        assert len(iterator_hook_responses) == 1
+        assert iterator_hook_responses[0] is not completed_response
+        assert hasattr(iterator_hook_responses[0], "__aiter__")
+    else:
+        assert iterator_hook_responses == []
     assert output[-1] == "data: [DONE]\n\n"
     first_chunk = output[0]
     assert isinstance(first_chunk, str)
