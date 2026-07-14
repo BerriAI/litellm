@@ -474,7 +474,7 @@ class LoggingClient:
             model=model,
             max_tokens=max_tokens,
             messages=[ChatMessage(role="user", content=text)],
-            stream=stream or None,
+            stream=True if stream else None,
         )
         if stream:
             return self.gateway.transport.stream(
