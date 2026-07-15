@@ -436,6 +436,33 @@ describe("Teams - premium props", () => {
   });
 });
 
+describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
+    const { container } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getByTestId("create-team-button");
+    const tabNav = container.querySelector(".ant-tabs-nav");
+
+    // The CTA lives in the tab bar's left slot, not the standalone page header.
+    expect(tabNav).not.toBeNull();
+    expect(tabNav!.contains(createButton)).toBe(true);
+
+    // It reads as the left end of the cluster: it precedes the first tab in DOM order.
+    const firstTab = screen.getByRole("tab", { name: "Your Teams" });
+    expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("omits the Create Team CTA for a role that cannot manage teams", () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
+    expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
+  });
+});
+
 describe("Teams - Default Team Settings tab visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();

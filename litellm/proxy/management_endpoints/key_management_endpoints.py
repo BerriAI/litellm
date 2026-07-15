@@ -42,7 +42,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_env_vars_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
@@ -3777,7 +3777,10 @@ async def generate_key_helper_fn(
                 return user_data
 
             ## CREATE KEY
-            verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
+            verbose_proxy_logger.debug(
+                "prisma_client: Creating Key= %s",
+                {**key_data, "token": hash_token(token=token)},
+            )
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
