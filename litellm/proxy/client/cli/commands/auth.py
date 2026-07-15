@@ -277,6 +277,28 @@ def prompt_team_selection_fallback(
             return None
 
 
+def _response_error_detail(response: requests.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    return None
+
+
+def _polling_error_message(response: requests.Response) -> str:
+    detail = _response_error_detail(response)
+    if detail:
+        return f"Polling error: HTTP {response.status_code}: {detail}"
+    return f"Polling error: HTTP {response.status_code}"
+
+
+def _is_permanent_polling_error(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code != 429
+
+
 # Polling-based authentication - no local server needed
 def _poll_for_ready_data(
     url: str,
@@ -308,8 +330,14 @@ def _poll_for_ready_data(
                         click.echo(pending_message)
                 elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
+            elif _is_permanent_polling_error(response.status_code):
+                detail = _response_error_detail(response)
+                raise ValueError(
+                    f"The proxy rejected the login session with HTTP {response.status_code}"
+                    + (f": {detail}" if detail else f" and no error detail (from {url})")
+                )
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
-                click.echo(f"Polling error: HTTP {response.status_code}")
+                click.echo(_polling_error_message(response))
         except requests.RequestException as e:
             if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")
@@ -342,12 +370,45 @@ def _normalize_teams(teams, team_details):
 
 
 def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
-    response = requests.post(f"{base_url}/sso/cli/start", timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    start_url = f"{base_url}/sso/cli/start"
+    try:
+        response = requests.post(start_url, timeout=10)
+    except requests.RequestException as e:
+        raise ValueError(
+            f"Could not reach the proxy at {start_url}: {e}. "
+            "Check that the proxy is running and that --base-url points at it."
+        ) from e
+
+    if response.status_code in (404, 405):
+        raise ValueError(
+            f"POST {start_url} returned HTTP {response.status_code}. "
+            "Either --base-url is wrong, or the proxy is older than this CLI and does not support "
+            "the CLI SSO login flow; upgrade the proxy or use a CLI version that matches it."
+        )
+    if response.status_code != 200:
+        detail = _response_error_detail(response)
+        raise ValueError(
+            f"Starting CLI login failed: HTTP {response.status_code} from {start_url}"
+            + (f": {detail}" if detail else "")
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        content_type = response.headers.get("content-type", "unknown")
+        raise ValueError(
+            f"The proxy returned a non-JSON response from {start_url} (content-type: {content_type}). "
+            "A proxy, load balancer, or auth gateway in front of LiteLLM may be intercepting the request. "
+            f"Response starts with: {response.text[:200]!r}"
+        )
+
     required_fields = ("login_id", "poll_secret", "user_code")
-    if not all(isinstance(data.get(field), str) for field in required_fields):
-        raise ValueError("Invalid CLI SSO start response")
+    missing_fields = tuple(field for field in required_fields if not isinstance(data.get(field), str))
+    if missing_fields:
+        raise ValueError(
+            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+            "The proxy version may not match this CLI; upgrade whichever is older."
+        )
     return data
 
 
@@ -577,6 +638,10 @@ def login(ctx: click.Context):
             return
         else:
             click.echo("❌ Authentication timed out. Please try again.")
+            click.echo(
+                "The proxy never reported the browser sign-in as finished. If you did complete it, "
+                "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
+            )
             return
 
     except KeyboardInterrupt:
