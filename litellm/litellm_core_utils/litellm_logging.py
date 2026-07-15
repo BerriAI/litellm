@@ -1895,7 +1895,11 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, FineTuningJob)
             or isinstance(logging_result, LiteLLMBatch)
             or isinstance(logging_result, ResponsesAPIResponse)
-            or (isinstance(logging_result, InteractionsAPIResponse) and self._is_interactions_create_call_type())
+            or (
+                isinstance(logging_result, InteractionsAPIResponse)
+                and logging_result.usage is not None
+                and self._is_interactions_create_call_type()
+            )
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
@@ -1921,6 +1925,13 @@ class Logging(LiteLLMLoggingBaseClass):
         interaction. The proxy sets ``call_type`` from its route_type
         (``create_interaction``/``acreate_interaction``); the SDK sets it from
         the decorated function name (``create``/``acreate``).
+
+        Recognition additionally requires a usage block (checked at the call
+        site): a ``background=true`` create returns ``in_progress`` without
+        usage, and billing it would write a $0 spend log under the interaction
+        id that collides with the row the background poll task writes once the
+        interaction completes (see
+        ``litellm.interactions.background_cost_polling``).
         """
         return self.call_type in (
             CallTypes.create_interaction.value,
@@ -1928,6 +1939,20 @@ class Logging(LiteLLMLoggingBaseClass):
             "create",
             "acreate",
         )
+
+    async def async_log_background_interaction_completion(
+        self,
+        result: InteractionsAPIResponse,
+    ) -> None:
+        """
+        Log the terminal result of a background interaction as a fresh success
+        event. The create request already ran success logging for its
+        ``in_progress`` response (no usage, so no cost was tracked); clearing
+        the dedup flag lets the completed result flow through cost calculation
+        and spend tracking exactly once, spanning create to completion.
+        """
+        self.model_call_details.pop("has_logged_async_success", None)
+        await self.async_success_handler(result=result)
 
     def _flush_passthrough_collected_chunks_helper(
         self,

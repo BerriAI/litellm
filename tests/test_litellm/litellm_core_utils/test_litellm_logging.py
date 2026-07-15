@@ -3812,8 +3812,65 @@ def test_interactions_response_is_recognized_for_logging(call_type):
     from litellm.types.interactions import InteractionsAPIResponse
 
     logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
-    response = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="completed")
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
     assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is True
+
+
+@pytest.mark.parametrize("call_type", ["acreate", "acreate_interaction"])
+def test_in_progress_background_create_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_rebills_after_in_progress_success():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.should_run_logging(event_type="async_success") is False
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
 
 
 @pytest.mark.parametrize(

@@ -279,6 +279,12 @@ class _ProxyDBLogger(CustomLogger):
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
                 await _release_budget_reservation(budget_reservation=budget_reservation)
+                if _is_unbilled_in_progress_interaction(completion_response):
+                    verbose_proxy_logger.debug(
+                        "Cost tracking deferred for in-progress background interaction; "
+                        "a poll task logs the final usage once it completes"
+                    )
+                    return
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
@@ -416,6 +422,12 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
             for key, value in patch.items():
                 if bucket.get(key) is None:
                     bucket[key] = value
+
+
+def _is_unbilled_in_progress_interaction(completion_response: Any) -> bool:
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    return isinstance(completion_response, InteractionsAPIResponse) and completion_response.usage is None
 
 
 def _should_track_cost_callback(
