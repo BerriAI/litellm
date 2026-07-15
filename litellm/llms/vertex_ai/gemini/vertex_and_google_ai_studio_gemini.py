@@ -998,6 +998,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_modalities.append("IMAGE")
             elif modality == "audio":
                 response_modalities.append("AUDIO")
+            elif modality == "video":
+                response_modalities.append("VIDEO")
             else:
                 response_modalities.append("MODALITY_UNSPECIFIED")
         return response_modalities

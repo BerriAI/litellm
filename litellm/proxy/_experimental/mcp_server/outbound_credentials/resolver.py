@@ -7,10 +7,11 @@ no precedence cascade. It is wildcard-free with an `assert_never` tail, so addin
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
 at runtime instead of returning `None`.
 
-`none` and `api_key` (shared-key source) are live, as is `authorization_code`, which reads the
-user's token from the injected `OAuthTokenStore`, and `token_exchange`, which swaps the caller's
-inbound token through the injected `TokenExchanger`. The remaining arms are `not_implemented` stubs
-that each land in a follow-up PR with their seam. Pure v2: no imports from v1.
+`none`, `api_key` (shared-key source), and `passthrough` (forwards the caller's own inbound token)
+are live, as is `authorization_code`, which reads the user's token from the injected
+`OAuthTokenStore`, and `token_exchange`, which swaps the caller's inbound token through the
+injected `TokenExchanger`. The remaining arms are `not_implemented` stubs that each land in a
+follow-up PR with their seam. Pure v2: no imports from v1.
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ class UpstreamCredentialProvider:
             case ApiKeyConfig() as config:
                 return self._api_key(config)
             case PassthroughConfig():
-                return _not_implemented(AuthSpecKind.passthrough)
+                return self._passthrough(subject)
             case ClientCredentialsConfig():
                 return _not_implemented(AuthSpecKind.client_credentials)
             case TokenExchangeConfig() as config:
@@ -117,6 +118,18 @@ class UpstreamCredentialProvider:
         store, so it reads as False without a per-mode branch here.
         """
         return await self._authz_token(subject, server) is not None
+
+    def _passthrough(self, subject: Subject) -> Result[httpx.Auth, CredError]:
+        """Forward the caller's own upstream credential verbatim; the gateway mints nothing.
+
+        The inbound token is the caller's already-disambiguated ``Authorization`` (never the LiteLLM
+        admission credential; the edge adapter drops that before building the ``Subject``). When it is
+        absent the request is sent unauthenticated so the upstream's own 401 surfaces, rather than the
+        gateway challenging on the upstream's behalf.
+        """
+        if subject.inbound_token is None:
+            return Ok(NoOpAuth())
+        return Ok(StaticHeaderAuth(subject.inbound_token.get_secret_value(), header_name="Authorization"))
 
     def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
         match config.key_source:
