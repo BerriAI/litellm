@@ -1026,7 +1026,6 @@ class TestMCPServerManager:
         """The gateway's relayed authorize flow (used by the browser-only Authorize) needs the
         upstream's authorization_url on the registry entry, and these rows never persist one, so
         the DB build must discover it the same way oauth2 rows do."""
-        from types import SimpleNamespace
 
         manager = MCPServerManager()
         row = LiteLLM_MCPServerTable(
@@ -1052,6 +1051,65 @@ class TestMCPServerManager:
         mock_discovery.assert_awaited_once()
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_discovers_scopes_when_authorization_url_is_manual(self):
+        """An admin-typed authorization_url must not switch off discovery for the fields left
+        blank: without the scopes_supported backfill the authorize redirect goes out scope-less
+        and IdPs like Google hard-fail it with 400 "Missing required parameter: scope"."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="manual-auth-url-1",
+            alias="manual_auth_url",
+            description="manual authorization_url, blank scopes",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/manual-authorize",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/discovered-authorize",
+            token_url="https://idp.example.com/token",
+            registration_url=None,
+            scopes=["calendar.read", "calendar.write"],
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)) as mock_discovery:
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        mock_discovery.assert_awaited_once()
+        assert built.authorization_url == "https://idp.example.com/manual-authorize"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.scopes == ["calendar.read", "calendar.write"]
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_skips_discovery_when_all_upstream_oauth_fields_present(self):
+        """A fully hand-configured server (authorization_url, token_url, and scopes all set) has
+        nothing left for discovery to fill, so the build must not fetch upstream metadata."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="fully-manual-1",
+            alias="fully_manual",
+            description="all upstream oauth fields set by the admin",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/manual-authorize",
+            token_url="https://idp.example.com/manual-token",
+            credentials={"scopes": ["calendar.read"]},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)) as mock_discovery:
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        mock_discovery.assert_not_awaited()
+        assert built.authorization_url == "https://idp.example.com/manual-authorize"
+        assert built.token_url == "https://idp.example.com/manual-token"
+        assert built.scopes == ["calendar.read"]
 
     async def _capture_subject_token(self, call) -> Optional[str]:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded

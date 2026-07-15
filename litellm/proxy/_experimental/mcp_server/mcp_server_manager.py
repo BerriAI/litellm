@@ -1447,8 +1447,9 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
+        has_all_upstream_oauth_fields = bool(mcp_server.authorization_url and mcp_server.token_url and scopes)
         needs_discovery = bool(server_url) and (
-            (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not mcp_server.authorization_url)
+            (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
                 mcp_server.token_exchange_endpoint
@@ -1467,7 +1468,7 @@ class MCPServerManager:
         if needs_discovery and mcp_oauth_metadata is None:
             verbose_logger.warning(
                 "MCP OAuth discovery yielded no metadata for server %s (%s); "
-                "OAuth endpoints stay unresolved until a rebuild succeeds",
+                "OAuth endpoints/scopes stay unresolved until a rebuild succeeds",
                 mcp_server.server_id,
                 server_url,
             )
