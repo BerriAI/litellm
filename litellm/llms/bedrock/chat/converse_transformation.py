@@ -493,6 +493,23 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
+    def _model_accepts_anthropic_thinking_param(self, model: str, base_model: str) -> bool:
+        """Whether the model accepts the Anthropic-shaped ``thinking`` / ``reasoning_effort`` request field.
+
+        The Converse mapping serializes ``thinking`` into ``additionalModelRequestFields`` in Anthropic's
+        shape. Only Anthropic Claude reasoning models accept that field; DeepSeek models reason natively
+        and reject it (a 400 when it leaks through), even though they advertise ``supports_reasoning``.
+        """
+        if "deepseek" in model or "deepseek" in base_model:
+            return False
+        return (
+            "claude-3-7" in model
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
+        )
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
 
@@ -553,17 +570,7 @@ class AmazonConverseConfig(BaseConfig):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
-        elif (
-            "claude-3-7" in model
-            or "claude-sonnet-4" in model
-            or "claude-opus-4" in model
-            or "deepseek.r1" in model
-            or supports_reasoning(
-                model=model,
-                custom_llm_provider=self.custom_llm_provider,
-            )
-            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
-        ):
+        elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
 
