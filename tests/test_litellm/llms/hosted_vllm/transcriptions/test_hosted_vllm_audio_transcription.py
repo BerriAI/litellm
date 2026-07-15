@@ -4,6 +4,9 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.hosted_vllm.transcriptions.transformation import (
+    HostedVLLMAudioTranscriptionConfig,
+)
 
 
 def _transcription_response() -> httpx.Response:
@@ -57,3 +60,30 @@ async def test_transcription_passes_custom_ca_to_async_http_client() -> None:
     request = client.post.call_args.kwargs
     assert request["data"] == {"model": "whisper-1"}
     assert request["files"] == {"file": ("audio.wav", b"audio", "audio/wav")}
+
+
+def test_transform_request_preserves_explicit_content_type() -> None:
+    config = HostedVLLMAudioTranscriptionConfig()
+
+    request_data = config.transform_audio_transcription_request(
+        model="whisper-1",
+        audio_file=("recording", b"audio", "audio/ogg"),
+        optional_params={"language": "en", "extra_body": {"temperature": 0.1}},
+        litellm_params={},
+    )
+
+    assert request_data.data == {"model": "whisper-1", "language": "en", "temperature": 0.1}
+    assert request_data.files == {"file": ("recording", b"audio", "audio/ogg")}
+
+
+def test_transform_request_derives_content_type_when_not_supplied() -> None:
+    config = HostedVLLMAudioTranscriptionConfig()
+
+    request_data = config.transform_audio_transcription_request(
+        model="whisper-1",
+        audio_file=("audio.mp3", b"audio"),
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert request_data.files == {"file": ("audio.mp3", b"audio", "audio/mpeg")}

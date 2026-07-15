@@ -56,6 +56,10 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
         processed_audio = process_audio_file(audio_file)
+        explicit_content_type = (
+            audio_file[2] if isinstance(audio_file, tuple) and len(audio_file) >= 3 and audio_file[2] else None
+        )
+        content_type = explicit_content_type or processed_audio.content_type
         extra_body = optional_params.get("extra_body") or {}
         data = {
             "model": model,
@@ -66,7 +70,7 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
-                processed_audio.content_type,
+                content_type,
             )
         }
 
