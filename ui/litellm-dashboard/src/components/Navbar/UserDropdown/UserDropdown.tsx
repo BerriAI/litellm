@@ -75,11 +75,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const disableUsageIndicator = useDisableUsageIndicator();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
-  const [disableShowBadges, setDisableShowBadges] = useState(false);
+  const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
 
   useEffect(() => {
-    const storedValue = getLocalStorageItem("disableShowBadges");
-    setDisableShowBadges(storedValue === "true");
+    const storedValue = getLocalStorageItem("disableShowNewBadge");
+    setDisableShowNewBadge(storedValue === "true");
   }, []);
 
   const userItems: MenuProps["items"] = [
@@ -131,21 +131,21 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       </Space>
       <Divider style={{ margin: "8px 0" }} />
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Feature Badges</Text>
+        <Text type="secondary">Hide New Feature Indicators</Text>
         <Switch
           size="small"
-          checked={disableShowBadges}
+          checked={disableShowNewBadge}
           onChange={(checked) => {
-            setDisableShowBadges(checked);
+            setDisableShowNewBadge(checked);
             if (checked) {
-              setLocalStorageItem("disableShowBadges", "true");
-              emitLocalStorageChange("disableShowBadges");
+              setLocalStorageItem("disableShowNewBadge", "true");
+              emitLocalStorageChange("disableShowNewBadge");
             } else {
-              removeLocalStorageItem("disableShowBadges");
-              emitLocalStorageChange("disableShowBadges");
+              removeLocalStorageItem("disableShowNewBadge");
+              emitLocalStorageChange("disableShowNewBadge");
             }
           }}
-          aria-label="Toggle hide feature badges"
+          aria-label="Toggle hide new feature indicators"
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>

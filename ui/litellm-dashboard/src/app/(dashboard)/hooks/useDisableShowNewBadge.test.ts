@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import { useDisableShowBadges } from "./useDisableShowBadges";
+import { useDisableShowNewBadge } from "./useDisableShowNewBadge";
 import { LOCAL_STORAGE_EVENT } from "@/utils/localStorageUtils";
 
-describe("useDisableShowBadges", () => {
-  const STORAGE_KEY = "disableShowBadges";
+describe("useDisableShowNewBadge", () => {
+  const STORAGE_KEY = "disableShowNewBadge";
 
   beforeEach(() => {
     localStorage.clear();
@@ -16,7 +16,7 @@ describe("useDisableShowBadges", () => {
   });
 
   it("should return false when localStorage is empty", () => {
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
   });
@@ -24,7 +24,7 @@ describe("useDisableShowBadges", () => {
   it("should return false when localStorage value is not 'true'", () => {
     localStorage.setItem(STORAGE_KEY, "false");
 
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
   });
@@ -32,7 +32,7 @@ describe("useDisableShowBadges", () => {
   it("should return true when localStorage value is 'true'", () => {
     localStorage.setItem(STORAGE_KEY, "true");
 
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(true);
   });
@@ -40,13 +40,13 @@ describe("useDisableShowBadges", () => {
   it("should return false when localStorage value is an empty string", () => {
     localStorage.setItem(STORAGE_KEY, "");
 
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
   });
 
   it("should update when storage event fires for the correct key", async () => {
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
 
@@ -64,7 +64,7 @@ describe("useDisableShowBadges", () => {
 
   it("should not update when storage event fires for a different key", () => {
     localStorage.setItem(STORAGE_KEY, "false");
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
 
@@ -78,7 +78,7 @@ describe("useDisableShowBadges", () => {
   });
 
   it("should update when custom LOCAL_STORAGE_EVENT fires for the correct key", async () => {
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
 
@@ -95,7 +95,7 @@ describe("useDisableShowBadges", () => {
 
   it("should not update when custom LOCAL_STORAGE_EVENT fires for a different key", () => {
     localStorage.setItem(STORAGE_KEY, "false");
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
 
@@ -109,7 +109,7 @@ describe("useDisableShowBadges", () => {
 
   it("should update when localStorage changes from false to true via custom event", async () => {
     localStorage.setItem(STORAGE_KEY, "false");
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(false);
 
@@ -126,7 +126,7 @@ describe("useDisableShowBadges", () => {
 
   it("should update when localStorage changes from true to false via storage event", async () => {
     localStorage.setItem(STORAGE_KEY, "true");
-    const { result } = renderHook(() => useDisableShowBadges());
+    const { result } = renderHook(() => useDisableShowNewBadge());
 
     expect(result.current).toBe(true);
 
@@ -146,7 +146,7 @@ describe("useDisableShowBadges", () => {
     const addEventListenerSpy = vi.spyOn(window, "addEventListener");
     const removeEventListenerSpy = vi.spyOn(window, "removeEventListener");
 
-    const { unmount } = renderHook(() => useDisableShowBadges());
+    const { unmount } = renderHook(() => useDisableShowNewBadge());
 
     expect(addEventListenerSpy).toHaveBeenCalledTimes(2);
     expect(addEventListenerSpy).toHaveBeenCalledWith("storage", expect.any(Function));
@@ -160,8 +160,8 @@ describe("useDisableShowBadges", () => {
   });
 
   it("should handle multiple hooks independently", async () => {
-    const { result: result1 } = renderHook(() => useDisableShowBadges());
-    const { result: result2 } = renderHook(() => useDisableShowBadges());
+    const { result: result1 } = renderHook(() => useDisableShowNewBadge());
+    const { result: result2 } = renderHook(() => useDisableShowNewBadge());
 
     expect(result1.current).toBe(false);
     expect(result2.current).toBe(false);

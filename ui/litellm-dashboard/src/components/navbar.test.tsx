@@ -53,15 +53,15 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
               <label>
                 <input
                   type="checkbox"
-                  aria-label="Toggle hide feature badges"
+                  aria-label="Toggle hide new feature indicators"
                   onChange={(e) => {
                     if (e.target.checked) {
-                      localStorageUtils.setLocalStorageItem("disableShowBadges", "true");
-                      localStorageUtils.emitLocalStorageChange("disableShowBadges");
+                      localStorageUtils.setLocalStorageItem("disableShowNewBadge", "true");
+                      localStorageUtils.emitLocalStorageChange("disableShowNewBadge");
                     }
                   }}
                 />
-                Toggle hide feature badges
+                Toggle hide new feature indicators
               </label>
             </div>
           )}
@@ -252,12 +252,12 @@ describe("Navbar", () => {
     expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
-  it("should handle hide feature badges toggle", async () => {
+  it("should handle hide new feature indicators toggle", async () => {
     const user = userEvent.setup();
 
     // Initially disabled
     mockGetLocalStorageItemImpl = (key: string) => {
-      if (key === "disableShowBadges") return "false";
+      if (key === "disableShowNewBadge") return "false";
       return null;
     };
 
@@ -270,14 +270,14 @@ describe("Navbar", () => {
     });
 
     // Find and click the toggle switch
-    const toggleSwitch = screen.getByLabelText("Toggle hide feature badges");
+    const toggleSwitch = screen.getByLabelText("Toggle hide new feature indicators");
     await user.click(toggleSwitch);
 
     // The functions are mocked globally, so we can check if they were called
     // by accessing them through the mock registry
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
-    expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowBadges", "true");
-    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowBadges");
+    expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge", "true");
+    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
 
     // Reset mock
     mockGetLocalStorageItemImpl = (key: string) => null;

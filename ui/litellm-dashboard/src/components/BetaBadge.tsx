@@ -1,10 +1,10 @@
 import { Badge } from "antd";
-import { useDisableShowBadges } from "@/app/(dashboard)/hooks/useDisableShowBadges";
+import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
 
 export default function BetaBadge({ children, dot = false }: { children?: React.ReactNode; dot?: boolean }) {
-  const disableShowBadges = useDisableShowBadges();
+  const disableShowNewBadge = useDisableShowNewBadge();
 
-  if (disableShowBadges) {
+  if (disableShowNewBadge) {
     return children ? <>{children}</> : null;
   }
 
