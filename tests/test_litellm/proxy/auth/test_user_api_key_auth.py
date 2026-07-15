@@ -39,6 +39,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _routing_selector_matches_claim,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
+    _should_skip_budget_checks,
     _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
@@ -50,6 +51,148 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
+
+@pytest.mark.parametrize("route", ["/models", "/v1/models"])
+def test_model_discovery_routes_skip_virtual_key_budget_checks(route):
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.info"
+    ) as mock_info:
+        assert (
+            _should_skip_budget_checks(
+                request_data={},
+                route=route,
+                request=None,
+                llm_router=None,
+            )
+            is True
+        )
+
+    mock_info.assert_called_once_with(
+        "Skipping budget checks for model discovery route: %s", route
+    )
+
+
+def test_zero_cost_model_skip_logs_budget_bypass():
+    llm_router = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
+            return_value="free-model",
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._is_model_cost_zero",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.info"
+        ) as mock_info,
+    ):
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-model"},
+                route="/v1/chat/completions",
+                request=None,
+                llm_router=llm_router,
+            )
+            is True
+        )
+
+    mock_info.assert_called_once_with(
+        "Skipping budget checks for zero-cost model: %s", "free-model"
+    )
+
+
+def test_inference_routes_do_not_skip_virtual_key_budget_checks():
+    assert (
+        _should_skip_budget_checks(
+            request_data={},
+            route="/v1/chat/completions",
+            request=None,
+            llm_router=None,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("route", ["/models", "/v1/models"])
+@pytest.mark.asyncio
+async def test_model_discovery_bypasses_virtual_key_budget_in_auth_builder(route):
+    from fastapi import Request
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-model-discovery-budget-test"
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        max_budget=0.0,
+        spend=0.0,
+    )
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
+    mock_logging = MagicMock()
+    mock_logging.internal_usage_cache.dual_cache = AsyncMock()
+    attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_logging,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {name: getattr(proxy_server, name, None) for name in attrs}
+
+    try:
+        for name, value in attrs.items():
+            setattr(proxy_server, name, value)
+
+        request = Request(
+            scope={
+                "type": "http",
+                "path": route,
+                "root_path": "",
+                "headers": [],
+                "query_string": b"",
+                "method": "GET",
+            }
+        )
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._virtual_key_max_budget_check",
+                new_callable=AsyncMock,
+            ) as max_budget_check,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert result.token == valid_token.token
+        max_budget_check.assert_not_awaited()
+    finally:
+        for name, value in originals.items():
+            setattr(proxy_server, name, value)
 
 
 def test_get_api_key():
