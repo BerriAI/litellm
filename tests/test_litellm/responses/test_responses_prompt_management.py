@@ -14,13 +14,19 @@ Covers:
 """
 
 import asyncio
-from typing import List
+from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ResponseInputParam,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,18 +60,15 @@ def _patch_responses_dispatch():
             return_value=("gpt-4o", "openai", None, None),
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -77,7 +80,6 @@ def _patch_responses_dispatch():
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -108,9 +110,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
@@ -255,6 +255,76 @@ class TestResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+    def test_cache_control_hook_preserves_reasoning_items(self):
+        system_message = cast(
+            AllMessageValues,
+            {"role": "system", "content": "Analyze the request"},
+        )
+        assistant_message = cast(
+            AllMessageValues,
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "The code has a bug",
+                        "annotations": [],
+                    }
+                ],
+            },
+        )
+        user_message = cast(
+            AllMessageValues,
+            {"role": "user", "content": "Check for security issues"},
+        )
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        original_input = cast(
+            ResponseInputParam,
+            [system_message, reasoning_item, assistant_message, user_message],
+        )
+        _, merged_messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="azure/gpt-5-codex",
+            messages=[system_message, assistant_message, user_message],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"
 
     def test_model_override_re_resolves_provider(self):
         """[G] When the prompt template overrides the model to a different provider,
