@@ -685,3 +685,73 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+class TestBedrockMantleStreamingChunkIdConsistency:
+    """Regression test for https://github.com/BerriAI/litellm/issues/32854
+
+    Bedrock Mantle returns a unique chunk ID per SSE event. The OpenAI spec
+    requires all chunks in one streaming response to share the same ID.
+    Clients like openai-go's ChatCompletionAccumulator silently drop chunks
+    when IDs don't match, breaking tool call accumulation and content
+    streaming.
+    """
+
+    def test_all_chunks_share_same_id(self):
+        from litellm.llms.bedrock_mantle.chat.transformation import (
+            BedrockMantleStreamingHandler,
+        )
+
+        chunks = [
+            {"id": "chatcmpl-aaa111", "object": "chat.completion.chunk", "model": "gpt-oss-120b",
+             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}]},
+            {"id": "chatcmpl-bbb222", "object": "chat.completion.chunk", "model": "gpt-oss-120b",
+             "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]},
+            {"id": "chatcmpl-ccc333", "object": "chat.completion.chunk", "model": "gpt-oss-120b",
+             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+
+        handler = BedrockMantleStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        parsed = [handler.chunk_parser(c) for c in chunks]
+
+        ids = [r.id for r in parsed]
+        assert all(chunk_id == "chatcmpl-aaa111" for chunk_id in ids), (
+            f"all chunks must share the first chunk's ID, got {ids}"
+        )
+
+    def test_single_chunk_preserves_id(self):
+        from litellm.llms.bedrock_mantle.chat.transformation import (
+            BedrockMantleStreamingHandler,
+        )
+
+        chunk = {
+            "id": "chatcmpl-only",
+            "object": "chat.completion.chunk",
+            "model": "gpt-oss-120b",
+            "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}],
+        }
+
+        handler = BedrockMantleStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        result = handler.chunk_parser(chunk)
+        assert result.id == "chatcmpl-only"
+
+    def test_config_returns_mantle_streaming_handler(self):
+        from litellm.llms.bedrock_mantle.chat.transformation import (
+            BedrockMantleChatConfig,
+            BedrockMantleStreamingHandler,
+        )
+
+        cfg = BedrockMantleChatConfig()
+        handler = cfg.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        assert isinstance(handler, BedrockMantleStreamingHandler)
