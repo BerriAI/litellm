@@ -8,7 +8,7 @@ and integration with the passthrough endpoint.
 import json
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

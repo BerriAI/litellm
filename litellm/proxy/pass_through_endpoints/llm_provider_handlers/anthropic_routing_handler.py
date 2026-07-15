@@ -28,7 +28,6 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-
 # ---------------------------------------------------------------------------
 # Pydantic models (inline — not imported from the hub)
 # ---------------------------------------------------------------------------

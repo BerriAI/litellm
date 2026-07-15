@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 if TYPE_CHECKING:
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
@@ -48,10 +48,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
-)
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
@@ -59,6 +55,10 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -921,7 +921,7 @@ async def handle_bedrock_passthrough_router_model(
 
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     data["model"] = model
@@ -965,8 +965,8 @@ async def handle_bedrock_count_tokens(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_body: Dict[str, Any],
-) -> Dict[str, Any]:
+    request_body: dict[str, Any],
+) -> dict[str, Any]:
     """
     Handle AWS Bedrock CountTokens API requests.
 
@@ -1113,7 +1113,7 @@ async def bedrock_llm_proxy_route(
     # Fall back to existing implementation for direct Bedrock models
     verbose_proxy_logger.debug(f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'")
 
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     data["method"] = request.method
@@ -1246,7 +1246,7 @@ def _resolve_vertex_model_from_router(
     endpoint: str,
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+) -> tuple[str, str, Optional[str], Optional[str]]:
     """
     Resolve Vertex AI model configuration from router.
 
@@ -1656,7 +1656,7 @@ def _override_vertex_params_from_router_credentials(
     router_credentials: Optional[Any],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str]]:
     """
     Override vertex_project and vertex_location with values from router_credentials if available.
 
@@ -1713,7 +1713,7 @@ async def _prepare_vertex_auth_headers(
     vertex_location: Optional[str],
     base_target_url: Optional[str],
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> Tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
+) -> tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
