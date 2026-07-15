@@ -2757,12 +2757,44 @@ if MCP_AVAILABLE:
                 arguments = hook_result["arguments"]
 
             verbose_logger.debug(f"Executing local registry tool: {name}")
+            # Resolve the effective upstream auth header for this server. A per-server
+            # x-mcp-{alias}-authorization header (carried in mcp_server_auth_headers)
+            # takes precedence over the deprecated global x-mcp-auth / BYOK
+            # mcp_auth_header, mirroring the managed path (_call_regular_mcp_tool and
+            # _prepare_mcp_server_headers). Without this OpenAPI-backed tools dropped the
+            # per-server credential and never authenticated against the upstream backend.
+            per_server_auth_header: Optional[Union[str, dict[str, str]]] = None
+            if mcp_server and mcp_server_auth_headers:
+                from litellm.proxy._experimental.mcp_server.utils import (
+                    lookup_mcp_server_auth_in_headers,
+                )
+
+                per_server_auth_header = lookup_mcp_server_auth_in_headers(
+                    mcp_server_auth_headers,
+                    alias=mcp_server.alias,
+                    server_name=mcp_server.server_name,
+                )
+
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
             # Pre-format the full Authorization header value using the server's
             # configured auth_type so the generator doesn't need to know the prefix.
             auth_header_value: Optional[str] = None
-            if mcp_auth_header:
+            per_server_forwarded_headers: Optional[dict[str, str]] = None
+            if isinstance(per_server_auth_header, dict):
+                # Per-server headers are already full header values; forward them
+                # verbatim. Authorization becomes the ContextVar auth override and any
+                # other header rides along in the forwarded extra headers.
+                for header_key, header_val in per_server_auth_header.items():
+                    if header_key.lower() == "authorization":
+                        auth_header_value = header_val
+                    else:
+                        if per_server_forwarded_headers is None:
+                            per_server_forwarded_headers = {}
+                        per_server_forwarded_headers[header_key] = header_val
+            elif isinstance(per_server_auth_header, str) and per_server_auth_header:
+                auth_header_value = per_server_auth_header
+            elif mcp_auth_header:
                 server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
                 if server_auth_type == MCPAuth.api_key:
                     auth_header_value = f"ApiKey {mcp_auth_header}"
@@ -2795,6 +2827,11 @@ if MCP_AVAILABLE:
                         if forwarded_headers is None:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
+
+            # Per-server x-mcp-{alias}-* headers win over caller-forwarded extra_headers,
+            # matching the managed path where the resolved server_auth_header is applied last.
+            if per_server_forwarded_headers:
+                forwarded_headers = {**(forwarded_headers or {}), **per_server_forwarded_headers}
 
             _auth_token = _request_auth_header.set(auth_header_value)
             _extra_token = _request_extra_headers.set(forwarded_headers)

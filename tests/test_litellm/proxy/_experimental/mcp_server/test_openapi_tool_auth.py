@@ -91,6 +91,160 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
 
 
 @pytest.mark.asyncio
+async def test_openapi_local_tool_forwards_per_server_auth_header():
+    """Regression for #33344: an OpenAPI-backed (local-registry) MCP server must
+    forward the caller's per-server ``x-mcp-{alias}-authorization`` header to the
+    upstream backend. The credential arrives in ``mcp_server_auth_headers`` (not
+    the global ``mcp_auth_header``); pre-fix the local dispatch ignored it, so the
+    backend received no Authorization and rejected the request."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
+        _request_extra_headers,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_server = MagicMock()
+    fake_server.name = "report_openapi"
+    fake_server.alias = "report_openapi"
+    fake_server.server_name = "report_openapi"
+    fake_server.server_id = "srv-1"
+    fake_server.is_byok = False
+    fake_server.auth_type = None
+    fake_server.mcp_info = None
+    fake_server.extra_headers = None
+
+    fake_tool = MagicMock()
+    fake_tool.name = "summary_list"
+
+    captured: dict = {}
+
+    async def _capture_local(name, arguments):
+        captured["auth"] = _request_auth_header.get()
+        captured["extra"] = _request_extra_headers.get()
+        return []
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=fake_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=_capture_local,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="summary_list",
+            arguments={},
+            allowed_mcp_servers=[fake_server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=user,
+            mcp_server_auth_headers={"report_openapi": {"Authorization": "Bearer upstream-token"}},
+        )
+
+    # The per-server Authorization must reach the OpenAPI handler verbatim (no
+    # extra "Bearer " re-prefixing), so the upstream backend is authenticated.
+    assert captured["auth"] == "Bearer upstream-token"
+
+
+@pytest.mark.asyncio
+async def test_openapi_local_tool_forwards_per_server_non_auth_header():
+    """A per-server ``x-mcp-{alias}-{header}`` that is not Authorization must ride
+    along in the forwarded extra headers rather than being dropped."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
+        _request_extra_headers,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_server = MagicMock()
+    fake_server.name = "report_openapi"
+    fake_server.alias = "report_openapi"
+    fake_server.server_name = "report_openapi"
+    fake_server.server_id = "srv-1"
+    fake_server.is_byok = False
+    fake_server.auth_type = None
+    fake_server.mcp_info = None
+    fake_server.extra_headers = None
+
+    fake_tool = MagicMock()
+    fake_tool.name = "summary_list"
+
+    captured: dict = {}
+
+    async def _capture_local(name, arguments):
+        captured["auth"] = _request_auth_header.get()
+        captured["extra"] = _request_extra_headers.get()
+        return []
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=fake_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=_capture_local,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="summary_list",
+            arguments={},
+            allowed_mcp_servers=[fake_server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=user,
+            mcp_server_auth_headers={
+                "report_openapi": {"Authorization": "Bearer tok", "X-Tenant-Id": "acme"}
+            },
+        )
+
+    assert captured["auth"] == "Bearer tok"
+    assert captured["extra"] == {"X-Tenant-Id": "acme"}
+
+
+@pytest.mark.asyncio
 async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     """If the pre-call check raises (caller not authorized for this
     tool), the local handler must NOT be invoked."""
