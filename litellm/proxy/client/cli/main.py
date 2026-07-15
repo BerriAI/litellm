@@ -3,6 +3,7 @@ from typing import Optional
 
 # third party imports
 import click
+import requests
 
 from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
@@ -22,6 +23,20 @@ from .commands.users import users
 from .interface import interactive_shell
 
 
+class ConnectionAwareGroup(click.Group):
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except requests.exceptions.ConnectionError as e:
+            base_url = ctx.obj.get("base_url") if isinstance(ctx.obj, dict) else None
+            target = f" at {base_url}" if base_url else ""
+            raise click.ClickException(
+                f"Could not connect to the LiteLLM proxy{target}. "
+                "Make sure the server is running and reachable, or point the CLI at it "
+                "with --base-url or the LITELLM_PROXY_URL environment variable."
+            ) from e
+
+
 def print_version(base_url: str, api_key: Optional[str]):
     """Print CLI and server version info."""
     click.echo(f"LiteLLM Proxy CLI Version: {litellm_version}")
@@ -38,7 +53,7 @@ def print_version(base_url: str, api_key: Optional[str]):
         click.echo(f"Could not retrieve server version: {e}")
 
 
-@click.group(invoke_without_command=True)
+@click.group(cls=ConnectionAwareGroup, invoke_without_command=True)
 @click.option(
     "--version",
     "-v",

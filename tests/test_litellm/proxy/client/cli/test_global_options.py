@@ -4,6 +4,7 @@ import sys
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 from click.testing import CliRunner
 
 sys.path.insert(
@@ -63,6 +64,30 @@ def test_base_url_trailing_slash_normalized(cli_runner):
     mock_post.assert_called_once_with(
         "https://gateway.litellm-sandbox.ai/sso/cli/start", timeout=10
     )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["models", "list"],
+        ["keys", "list"],
+        ["http", "request", "GET", "/models"],
+    ],
+)
+def test_connection_error_prints_friendly_message(cli_runner, args):
+    """A dead proxy must yield a friendly 'Error:' line and exit 1, not a raw traceback."""
+    base_url = "http://127.0.0.1:59999"
+    with patch(
+        "requests.sessions.Session.request",
+        side_effect=requests.exceptions.ConnectionError("connection refused"),
+    ):
+        result = cli_runner.invoke(cli, ["--base-url", base_url, *args])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert f"Could not connect to the LiteLLM proxy at {base_url}" in result.output
+    # The exception must be swallowed into a click exit, never surfaced raw.
+    assert not isinstance(result.exception, requests.exceptions.ConnectionError)
 
 
 def test_cli_version_command(cli_runner):
