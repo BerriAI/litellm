@@ -24,7 +24,10 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_set_request_parsed_body,
+)
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
@@ -64,10 +67,26 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
         usage.pop("total_tokens", None)
 
 
+async def _normalize_anthropic_server_side_fallback_request(
+    request: Request,
+) -> None:
+    normalized_request_data = normalize_anthropic_server_side_fallbacks(
+        request_data=await _read_request_body(request=request),
+        headers=dict(request.headers),
+    )
+    _safe_set_request_parsed_body(
+        request=request,
+        parsed_body=normalized_request_data,
+    )
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[
+        Depends(_normalize_anthropic_server_side_fallback_request),
+        Depends(user_api_key_auth),
+    ],
 )
 async def anthropic_response(
     fastapi_response: Response,
@@ -92,10 +111,7 @@ async def anthropic_response(
         version,
     )
 
-    data = normalize_anthropic_server_side_fallbacks(
-        request_data=await _read_request_body(request=request),
-        headers=dict(request.headers),
-    )
+    data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -144,48 +145,78 @@ class TestEventLoggingBatchEndpoint:
         assert response.json() == {"status": "ok"}
 
 
-@pytest.mark.asyncio
-async def test_server_side_fallbacks_are_normalized_before_routing():
+@pytest.mark.parametrize(
+    "request_body,headers,expected_data",
+    [
+        (
+            {
+                "model": "claude-fable-5",
+                "fallbacks": [{"model": "claude-opus-4-8"}],
+                "anthropic_server_fallbacks": [{"model": "restricted-model"}],
+            },
+            {
+                "Anthropic-Beta": "other-beta, server-side-fallback-2026-06-01"
+            },
+            {
+                "model": "claude-fable-5",
+                "anthropic_server_fallbacks": [{"model": "claude-opus-4-8"}],
+            },
+        ),
+        (
+            {
+                "model": "claude-fable-5",
+                "anthropic_server_fallbacks": [{"model": "restricted-model"}],
+            },
+            {},
+            {"model": "claude-fable-5"},
+        ),
+        (
+            {
+                "model": "claude-fable-5",
+                "fallbacks": [{"model": "litellm-fallback"}],
+            },
+            {},
+            {
+                "model": "claude-fable-5",
+                "fallbacks": [{"model": "litellm-fallback"}],
+            },
+        ),
+    ],
+)
+def test_server_side_fallbacks_are_normalized_before_auth_and_routing(
+    request_body,
+    headers,
+    expected_data,
+):
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    from litellm.llms.anthropic.common_utils import (
-        ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM,
-    )
 
     processor = MagicMock()
     processor.base_process_llm_request = AsyncMock(return_value={"id": "msg_test"})
-    fallbacks = [{"model": "claude-opus-4-8"}]
-    request = MagicMock()
-    request.headers = {
-        "Anthropic-Beta": "other-beta, server-side-fallback-2026-06-01"
-    }
+    auth_request_data = {}
 
-    with (
-        patch.object(
-            ep,
-            "_read_request_body",
-            new=AsyncMock(
-                return_value={
-                    "model": "claude-fable-5",
-                    "fallbacks": fallbacks,
-                }
-            ),
-        ),
-        patch.object(
-            ep,
-            "ProxyBaseLLMRequestProcessing",
-            return_value=processor,
-        ) as processor_factory,
-    ):
-        result = await ep.anthropic_response(
-            fastapi_response=MagicMock(),
-            request=request,
-            user_api_key_dict=MagicMock(),
+    async def fake_auth(request: Request):
+        auth_request_data.update(await ep._read_request_body(request=request))
+        return MagicMock()
+
+    app = FastAPI()
+    app.include_router(ep.router)
+    app.dependency_overrides[ep.user_api_key_auth] = fake_auth
+
+    with patch.object(
+        ep,
+        "ProxyBaseLLMRequestProcessing",
+        return_value=processor,
+    ) as processor_factory:
+        response = TestClient(app).post(
+            "/v1/messages",
+            json=request_body,
+            headers=headers,
         )
 
-    routed_data = processor_factory.call_args.kwargs["data"]
-    assert result == {"id": "msg_test"}
-    assert "fallbacks" not in routed_data
-    assert routed_data[ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM] == fallbacks
+    assert response.status_code == 200
+    assert response.json() == {"id": "msg_test"}
+    assert auth_request_data == expected_data
+    assert processor_factory.call_args.kwargs["data"] == expected_data
 
 
 class TestStripTotalTokens(unittest.TestCase):

@@ -6,7 +6,7 @@ execute requests against models their API key cannot call.
 """
 
 from typing import List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -198,45 +198,6 @@ async def test_top_level_fallback_fields_validated(fallback_field):
         )
 
     assert "top-level-smuggled" in seen
-
-
-@pytest.mark.asyncio
-async def test_anthropic_server_side_fallbacks_are_not_routed_by_litellm():
-    valid_token = _key_with_models(["claude-fable-5"])
-    request_data = {
-        "model": "claude-fable-5",
-        "fallbacks": [{"model": "claude-opus-4-8"}],
-    }
-    request = MagicMock()
-    request.headers = {
-        "anthropic-beta": "other-beta,server-side-fallback-2026-06-01"
-    }
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ) as mock_is_valid_fallback,
-    ):
-        await _enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data=request_data,
-            route="/v1/messages",
-            request=request,
-            llm_model_list=None,
-            llm_router=None,
-        )
-
-    assert seen == ["claude-fable-5"]
-    mock_is_valid_fallback.assert_not_awaited()
 
 
 @pytest.mark.asyncio

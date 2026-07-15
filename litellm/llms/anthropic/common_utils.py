@@ -53,13 +53,16 @@ def normalize_anthropic_server_side_fallbacks(
     request_data: Mapping[str, object],
     headers: Mapping[str, str],
 ) -> dict[str, object]:
+    sanitized_request_data = {
+        key: value for key, value in request_data.items() if key != ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM
+    }
     if not is_anthropic_server_side_fallback_request(
         request_data=request_data,
         headers=headers,
     ):
-        return dict(request_data)
+        return sanitized_request_data
     return {
-        **{key: value for key, value in request_data.items() if key != "fallbacks"},
+        **{key: value for key, value in sanitized_request_data.items() if key != "fallbacks"},
         ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM: request_data["fallbacks"],
     }
 
