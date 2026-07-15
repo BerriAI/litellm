@@ -249,7 +249,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup(api_key)
         if headers is None:
             headers = {}
-        return {**self.headers, **headers}
+        return {**headers, **self.headers}
 
     def get_complete_url(
         self,

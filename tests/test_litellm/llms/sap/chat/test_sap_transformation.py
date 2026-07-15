@@ -657,14 +657,22 @@ class TestSAPTransformationIntegration:
         assert result["AI-Client-Type"] == "LiteLLM"
         assert result["ai-inference-observability-persistence-mode"] == "all"
 
-    def test_validate_environment_extra_headers_override_defaults(self, mock_config):
+    def test_validate_environment_preserves_provider_auth_over_caller_headers(
+        self, mock_config
+    ):
         result = mock_config.validate_environment(
-            headers={"Content-Type": "application/xml"},
+            headers={
+                "Authorization": "Bearer PROXY_TOKEN",
+                "Content-Type": "application/xml",
+                "ai-inference-observability-persistence-mode": "all",
+            },
             model="gpt-4o",
             messages=[],
             optional_params={},
             litellm_params={},
         )
 
-        assert result["Content-Type"] == "application/xml"
         assert result["Authorization"] == "Bearer TEST_TOKEN"
+        assert result["Content-Type"] == "application/json"
+        assert result["AI-Resource-Group"] == "test-group"
+        assert result["ai-inference-observability-persistence-mode"] == "all"

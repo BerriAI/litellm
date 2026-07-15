@@ -134,7 +134,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
         if headers is None:
             headers = {}
-        return {**self.headers, **headers}
+        return {**headers, **self.headers}
 
     def get_complete_url(
         self,
