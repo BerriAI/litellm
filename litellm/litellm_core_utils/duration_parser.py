@@ -12,6 +12,16 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
+WEEKDAYS: dict[str, int] = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
     match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
@@ -94,12 +104,17 @@ def duration_in_seconds(duration: str) -> int:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
 
-def get_next_standardized_reset_time(duration: str, current_time: datetime, timezone_str: str = "UTC") -> datetime:
+def get_next_standardized_reset_time(
+    duration: str,
+    current_time: datetime,
+    timezone_str: str = "UTC",
+    weekly_reset_day: str = "monday",
+) -> datetime:
     """
     Get the next standardized reset time based on the duration.
 
     All durations will reset at predictable intervals, aligned from the current time:
-    - Nd: If N=1, reset at next midnight; if N>1, reset every N days from now
+    - Nd: If N=1, reset at next midnight; if N=7, reset on the configured weekly day
     - Nh: Every N hours, aligned to hour boundaries (e.g., 1:00, 2:00)
     - Nm: Every N minutes, aligned to minute boundaries (e.g., 1:05, 1:10)
     - Ns: Every N seconds, aligned to second boundaries
@@ -108,6 +123,8 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
     - duration: Duration string (e.g. "30s", "30m", "30h", "30d")
     - current_time: Current datetime
     - timezone_str: Timezone string (e.g. "UTC", "US/Eastern", "Asia/Kolkata")
+    - weekly_reset_day: Day of the week for weekly (7d/1w) resets (default: "monday").
+      Valid values: monday, tuesday, wednesday, thursday, friday, saturday, sunday.
 
     Returns:
     - Next reset time at a standardized interval in the specified timezone
@@ -126,9 +143,9 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
 
     # Handle different time units
     if unit == "d":
-        return _handle_day_reset(current_time, base_midnight, value, tz)
+        return _handle_day_reset(current_time, base_midnight, value, tz, weekly_reset_day)
     elif unit == "w":
-        return _handle_day_reset(current_time, base_midnight, value * 7, tz)
+        return _handle_day_reset(current_time, base_midnight, value * 7, tz, weekly_reset_day)
     elif unit == "h":
         return _handle_hour_reset(current_time, base_midnight, value)
     elif unit == "m":
@@ -175,7 +192,13 @@ def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
     return int(value), unit
 
 
-def _handle_day_reset(current_time: datetime, base_midnight: datetime, value: int, tz: tzinfo) -> datetime:
+def _handle_day_reset(
+    current_time: datetime,
+    base_midnight: datetime,
+    value: int,
+    tz: tzinfo,
+    weekly_reset_day: str = "monday",
+) -> datetime:
     """Handle day-based reset times."""
     # Handle zero value - immediate expiration
     if value == 0:
@@ -183,11 +206,12 @@ def _handle_day_reset(current_time: datetime, base_midnight: datetime, value: in
 
     if value == 1:  # Daily reset at midnight
         return base_midnight + timedelta(days=1)
-    elif value == 7:  # Weekly reset on Monday at midnight
-        days_until_monday = (7 - current_time.weekday()) % 7
-        if days_until_monday == 0:  # If today is Monday
-            days_until_monday = 7
-        return base_midnight + timedelta(days=days_until_monday)
+    elif value == 7:  # Weekly reset on configured day at midnight
+        target_weekday = WEEKDAYS.get(weekly_reset_day.lower().strip(), 0)
+        days_until_reset = (target_weekday - current_time.weekday()) % 7
+        if days_until_reset == 0:  # If today is the reset day
+            days_until_reset = 7
+        return base_midnight + timedelta(days=days_until_reset)
     elif value == 30:  # Monthly reset on 1st at midnight
         # Get 1st of next month at midnight
         if current_time.month == 12:

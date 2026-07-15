@@ -198,6 +198,103 @@ class TestStandardizedResetTime(unittest.TestCase):
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
 
+    def test_configurable_weekly_reset_day(self):
+        """Test that weekly reset day can be configured via weekly_reset_day parameter."""
+        # Wednesday May 17, 2023 at 15:45 UTC
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+
+        # Default (Monday) - next Monday is May 22
+        monday_result = get_next_standardized_reset_time("7d", wednesday, "UTC")
+        self.assertEqual(monday_result, datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc))
+
+        # Sunday reset - next Sunday is May 21
+        sunday_result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", weekly_reset_day="sunday"
+        )
+        self.assertEqual(sunday_result, datetime(2023, 5, 21, 0, 0, 0, tzinfo=timezone.utc))
+
+        # Wednesday reset - if today is Wednesday, next reset is 7 days later (May 24)
+        wed_result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", weekly_reset_day="wednesday"
+        )
+        self.assertEqual(wed_result, datetime(2023, 5, 24, 0, 0, 0, tzinfo=timezone.utc))
+
+        # Friday reset - next Friday is May 19
+        fri_result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", weekly_reset_day="friday"
+        )
+        self.assertEqual(fri_result, datetime(2023, 5, 19, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_configurable_weekly_reset_day_with_1w(self):
+        """Test that 1w duration also respects weekly_reset_day."""
+        # Saturday May 20, 2023 at 10:00 UTC
+        saturday = datetime(2023, 5, 20, 10, 0, 0, tzinfo=timezone.utc)
+
+        # Sunday reset - next Sunday is May 21 (1 day away)
+        sunday_result = get_next_standardized_reset_time(
+            "1w", saturday, "UTC", weekly_reset_day="sunday"
+        )
+        self.assertEqual(sunday_result, datetime(2023, 5, 21, 0, 0, 0, tzinfo=timezone.utc))
+
+        # Tuesday reset - next Tuesday is May 23 (3 days away)
+        tuesday_result = get_next_standardized_reset_time(
+            "1w", saturday, "UTC", weekly_reset_day="tuesday"
+        )
+        self.assertEqual(tuesday_result, datetime(2023, 5, 23, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_configurable_weekly_reset_day_on_reset_day(self):
+        """Test that if today is the reset day, next reset is 7 days away."""
+        # Monday May 15, 2023 at 08:00 UTC
+        monday = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
+
+        # Monday reset - since today is Monday, next reset is 7 days later (May 22)
+        result = get_next_standardized_reset_time(
+            "7d", monday, "UTC", weekly_reset_day="monday"
+        )
+        self.assertEqual(result, datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc))
+
+        # Sunday reset - next Sunday is May 21 (6 days away)
+        sunday_result = get_next_standardized_reset_time(
+            "7d", monday, "UTC", weekly_reset_day="sunday"
+        )
+        self.assertEqual(sunday_result, datetime(2023, 5, 21, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_invalid_weekly_reset_day_falls_back_to_monday(self):
+        """Test that an invalid weekly_reset_day falls back to Monday."""
+        # Wednesday May 17, 2023
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+
+        # Invalid day - should fall back to Monday (next Monday = May 22)
+        result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", weekly_reset_day="funday"
+        )
+        self.assertEqual(result, datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_weekly_reset_day_case_insensitive(self):
+        """Test that weekly_reset_day is case-insensitive."""
+        # Wednesday May 17, 2023
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+
+        # Uppercase - should work same as lowercase
+        result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", weekly_reset_day="SUNDAY"
+        )
+        self.assertEqual(result, datetime(2023, 5, 21, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_weekly_reset_day_with_timezone(self):
+        """Test weekly_reset_day combined with a non-UTC timezone."""
+        # Friday May 19, 2023 at 22:30 UTC = 15:30 US/Pacific (same day)
+        friday_utc = datetime(2023, 5, 19, 22, 30, 0, tzinfo=timezone.utc)
+        pacific = ZoneInfo("US/Pacific")
+
+        # Sunday reset in Pacific - next Sunday midnight Pacific = May 21 00:00 PDT
+        # = May 21 07:00 UTC
+        result = get_next_standardized_reset_time(
+            "7d", friday_utc, "US/Pacific", weekly_reset_day="sunday"
+        )
+        expected = datetime(2023, 5, 21, 0, 0, 0, tzinfo=pacific)
+        self.assertEqual(result, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
