@@ -186,6 +186,46 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
 )
 
 
+def _normalized_authorize_endpoint(url: str) -> str:
+    """Compare authorize endpoints on scheme, host, and path only. The default port is elided and
+    the host is lowercased so ``https://IDP.example.com:443/authorize/`` and
+    ``https://idp.example.com/authorize`` are the same identity; query and trailing slash are not."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    default_port = {"https": 443, "http": 80}.get(scheme)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    authority = host if port is None or port == default_port else f"{host}:{port}"
+    return f"{scheme}://{authority}{parsed.path.rstrip('/')}"
+
+
+def _endpoints_corroborate_authorization_url(
+    source_authorization_url: str | None,
+    trusted_authorization_url: str | None,
+) -> bool:
+    """Whether a source's ``token_url``/``registration_url`` may be paired with a trusted authorize
+    endpoint. This is the single trust rule for adopting OAuth endpoints from any non-manual source.
+
+    Discovery is rooted at the MCP resource (RFC 9728), so a compromised upstream can advertise an
+    attacker-run authorization server. When ``authorization_url`` is admin-pinned, pairing it with a
+    ``token_url`` from a different source is the RFC 9700 authorization-server mix-up: the user signs
+    in at the trusted authorize endpoint while the gateway redeems the code, with the stored client
+    secret and PKCE verifier, at the attacker's token endpoint. Endpoints are trustworthy together
+    only when they share an authorization server, so a source's endpoints are adopted only when the
+    same source advertised an ``authorization_endpoint`` matching the pinned value. With no pinned
+    value (``trusted_authorization_url is None``) there is nothing to protect: the authorize endpoint
+    comes from the same source as the token endpoint, so they corroborate each other by construction.
+    """
+    if trusted_authorization_url is None:
+        return True
+    return bool(source_authorization_url) and _normalized_authorize_endpoint(
+        source_authorization_url
+    ) == _normalized_authorize_endpoint(trusted_authorization_url)
+
+
 def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_server: MCPServer | None) -> None:
     """Keep the last known good OAuth endpoints when a rebuild's re-discovery comes back empty.
 
@@ -193,29 +233,34 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     during re-discovery downgrades a working server (``authorization_url`` set) to a broken one
     (``None``, /authorize 400s) with no configuration change. Mirrors the ``short_prefix``
     carry-forward. Skipped when the server's ``url`` or ``auth_type`` changed, since the previous
-    endpoints may then belong to a different upstream. ``registration_url`` IS carried here even
-    though ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only
-    restores the same in-memory value the previous build already ran with, while persisting it
-    would flip ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for
-    dcr_bridge servers that never had one configured.
+    endpoints may then belong to a different upstream. ``registration_url`` IS carried even though
+    ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only restores
+    the same in-memory value the previous build already ran with, while persisting it would flip
+    ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for dcr_bridge
+    servers that never had one configured.
+
+    Carry-forward is a non-manual endpoint source, so the same trust rule as discovery applies: the
+    previous ``token_url``/``registration_url`` are carried only when the previous
+    ``authorization_url`` corroborates the authorize endpoint this build will use, i.e. when the
+    incoming build has no pinned authorize endpoint (``None`` -> we adopt the previous one too, a
+    consistent group) or pins the same one. An admin re-pointing ``authorization_url`` to a different
+    server must not keep serving the old token endpoint.
     """
     if previous_server is None:
         return
     if previous_server.url != new_server.url or previous_server.auth_type != new_server.auth_type:
         return
+    may_carry_endpoints = _endpoints_corroborate_authorization_url(
+        previous_server.authorization_url, new_server.authorization_url
+    )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
-    if new_server.token_url is None and previous_server.token_url:
+    if may_carry_endpoints and new_server.token_url is None and previous_server.token_url:
         new_server.token_url = previous_server.token_url
-    if new_server.registration_url is None and previous_server.registration_url:
+    if may_carry_endpoints and new_server.registration_url is None and previous_server.registration_url:
         new_server.registration_url = previous_server.registration_url
     if not new_server.scopes and previous_server.scopes:
         new_server.scopes = previous_server.scopes
-
-
-def _normalized_authorize_endpoint(url: str) -> str:
-    parsed = urlparse(url)
-    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
 
 
 def _gate_discovered_endpoints_against_manual_authorization_url(
@@ -224,26 +269,14 @@ def _gate_discovered_endpoints_against_manual_authorization_url(
     server_identifier: str,
     is_dcr_bridge: bool,
 ) -> MCPOAuthMetadata | None:
-    """Refuse discovered token/registration endpoints the pinned authorize endpoint cannot vouch for.
-
-    Discovery is rooted at the MCP resource (RFC 9728), so a compromised upstream can advertise an
-    attacker-run authorization server. When the admin manually configured ``authorization_url``,
-    filling a blank ``token_url`` from that advertisement recreates the RFC 9700 mix-up attack at
-    configuration time: users sign in at the trusted authorize endpoint while the gateway redeems
-    the code, with the stored client secret and PKCE verifier, at the attacker's token endpoint.
-    Endpoints from one metadata document are only trustworthy together, so the discovered
-    ``token_url`` and ``registration_url`` are accepted only when that same document's
-    ``authorization_endpoint`` matches the pinned value (scheme+host+path; query and trailing slash
-    are not identity). Scope discovery stays ungated: scopes steer the redirect to the trusted
-    authorize endpoint and carry no credentials.
+    """Apply :func:`_endpoints_corroborate_authorization_url` to freshly discovered metadata, the
+    other non-manual endpoint source. Drops the discovered ``token_url``/``registration_url`` (never
+    the scopes, which carry no credentials) when they cannot be vouched for by the pinned authorize
+    endpoint, logging why so an intentional mismatch can be resolved by setting Token URL by hand.
     """
-    if metadata is None or not manual_authorization_url:
+    if metadata is None or (not metadata.token_url and not metadata.registration_url):
         return metadata
-    if not metadata.token_url and not metadata.registration_url:
-        return metadata
-    if metadata.authorization_url and _normalized_authorize_endpoint(
-        manual_authorization_url
-    ) == _normalized_authorize_endpoint(metadata.authorization_url):
+    if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
         return metadata
     bridge_note = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -258,7 +291,7 @@ def _gate_discovered_endpoints_against_manual_authorization_url(
         "authorization server. Configure Token URL manually if the mismatch is intentional.%s",
         server_identifier,
         _normalized_authorize_endpoint(metadata.authorization_url) if metadata.authorization_url else "<absent>",
-        _normalized_authorize_endpoint(manual_authorization_url),
+        _normalized_authorize_endpoint(manual_authorization_url) if manual_authorization_url else "<absent>",
         bridge_note,
     )
     return metadata.model_copy(update={"token_url": None, "registration_url": None})

@@ -5287,6 +5287,102 @@ class TestMCPServerTimestamps:
         _carry_forward_resolved_oauth_endpoints(new_server=explicit, previous_server=previous)
         assert explicit.authorization_url == "https://configured.example.com/auth"
 
+    def test_carry_forward_does_not_revive_token_url_across_authorization_url_change(self):
+        """Carry-forward is a non-manual endpoint source, so it obeys the same trust rule as
+        discovery: a previous token_url/registration_url belongs to the previous authorization
+        server, so it must not be pinned to a NEW authorization_url the admin re-pointed to. Without
+        this, re-pointing authorize to server B while the same MCP url keeps serving A's token
+        endpoint recreates the RFC 9700 mix-up, durably, and the discovery gate alone cannot catch
+        it because the stale endpoint comes from the registry, not from discovery."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _carry_forward_resolved_oauth_endpoints,
+        )
+
+        previous = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp-a.example.com/authorize",
+            token_url="https://idp-a.example.com/token",
+            registration_url="https://idp-a.example.com/register",
+        )
+        repointed = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp-b.example.com/authorize",
+        )
+
+        _carry_forward_resolved_oauth_endpoints(new_server=repointed, previous_server=previous)
+
+        assert repointed.authorization_url == "https://idp-b.example.com/authorize"
+        assert repointed.token_url is None
+        assert repointed.registration_url is None
+
+    def test_carry_forward_restores_endpoints_when_authorization_url_unchanged(self):
+        """The last-known-good path still works: a rebuild whose discovery blipped (no authorize
+        endpoint) adopts the previous authorize endpoint AND its token endpoint together as a
+        consistent group, and a rebuild that re-pins the same authorize endpoint (formatting aside)
+        keeps carrying the corroborated token endpoint."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _carry_forward_resolved_oauth_endpoints,
+        )
+
+        def previous() -> MCPServer:
+            return MCPServer(
+                server_id="s1",
+                name="s1",
+                url="https://up.example.com/mcp",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+                authorization_url="https://idp.example.com/authorize",
+                token_url="https://idp.example.com/token",
+                registration_url="https://idp.example.com/register",
+            )
+
+        blipped = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url=None,
+        )
+        _carry_forward_resolved_oauth_endpoints(new_server=blipped, previous_server=previous())
+        assert blipped.authorization_url == "https://idp.example.com/authorize"
+        assert blipped.token_url == "https://idp.example.com/token"
+        assert blipped.registration_url == "https://idp.example.com/register"
+
+        same_authorize = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://IDP.example.com:443/authorize/",
+        )
+        _carry_forward_resolved_oauth_endpoints(new_server=same_authorize, previous_server=previous())
+        assert same_authorize.token_url == "https://idp.example.com/token"
+        assert same_authorize.registration_url == "https://idp.example.com/register"
+
+    def test_normalized_authorize_endpoint_treats_default_port_and_slash_as_identity(self):
+        """The corroboration check must not fail on formatting-only differences an IdP legitimately
+        emits: default port, trailing slash, host case, and query string are not identity, but a
+        non-default port is."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _normalized_authorize_endpoint,
+        )
+
+        canonical = _normalized_authorize_endpoint("https://idp.example.com/authorize")
+        assert _normalized_authorize_endpoint("https://idp.example.com:443/authorize") == canonical
+        assert _normalized_authorize_endpoint("https://IDP.example.com/authorize/") == canonical
+        assert _normalized_authorize_endpoint("https://idp.example.com/authorize?prompt=consent") == canonical
+        assert _normalized_authorize_endpoint("https://idp.example.com:8443/authorize") != canonical
+
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
         manager = MCPServerManager()
