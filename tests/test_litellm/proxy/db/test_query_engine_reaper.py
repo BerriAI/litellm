@@ -10,8 +10,12 @@ import pytest
 from litellm.proxy.db.query_engine_reaper import (
     REAPER_THREAD_NAME,
     _read_comm_and_ppid,
+    _reaper_loop,
+    _send_signal,
+    _try_reap,
     list_orphaned_engine_pids,
     reap_orphaned_engines,
+    set_child_subreaper,
     start_query_engine_reaper,
     terminate_and_reap,
     terminate_and_reap_all,
@@ -42,6 +46,18 @@ class TestReadCommAndPpid:
         (pid_dir / "stat").write_text("garbage with no parens")
         assert _read_comm_and_ppid(55, str(tmp_path)) is None
 
+    def test_truncated_fields_after_comm_returns_none(self, tmp_path):
+        pid_dir = tmp_path / "56"
+        pid_dir.mkdir()
+        (pid_dir / "stat").write_text("56 (proc) S")
+        assert _read_comm_and_ppid(56, str(tmp_path)) is None
+
+    def test_non_numeric_ppid_returns_none(self, tmp_path):
+        pid_dir = tmp_path / "57"
+        pid_dir.mkdir()
+        (pid_dir / "stat").write_text("57 (proc) S notanint 57")
+        assert _read_comm_and_ppid(57, str(tmp_path)) is None
+
 
 class TestListOrphanedEnginePids:
     def test_finds_only_engine_children_of_parent(self, tmp_path):
@@ -59,6 +75,49 @@ class TestListOrphanedEnginePids:
 
     def test_missing_proc_root_returns_empty(self, tmp_path):
         assert list_orphaned_engine_pids(1, proc_root=str(tmp_path / "absent")) == ()
+
+
+class TestSetChildSubreaper:
+    def test_matches_platform_capability(self):
+        result = set_child_subreaper()
+        if sys.platform.startswith("linux"):
+            assert result is True
+        else:
+            assert result is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and waitpid")
+class TestSignalHelpers:
+    def test_try_reap_true_for_non_child_pid(self):
+        assert _try_reap(1) is True
+
+    def test_send_signal_swallows_missing_pid(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        _send_signal(child.pid, signal.SIGTERM)
+
+
+class TestReaperLoop:
+    def test_survives_scan_failure_and_continues(self):
+        calls = []
+
+        def flaky_scan(parent_pid, proc_root="/proc"):
+            calls.append(parent_pid)
+            if len(calls) == 1:
+                raise RuntimeError("scan blew up")
+            raise KeyboardInterrupt
+
+        with (
+            patch(
+                "litellm.proxy.db.query_engine_reaper.reap_orphaned_engines",
+                side_effect=flaky_scan,
+            ),
+            patch("litellm.proxy.db.query_engine_reaper.time.sleep"),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            _reaper_loop(1234)
+
+        assert calls == [1234, 1234]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and waitpid")
@@ -152,6 +211,10 @@ class TestStartQueryEngineReaper:
     def test_starts_daemon_thread_on_linux(self):
         with (
             patch("litellm.proxy.db.query_engine_reaper.sys.platform", "linux"),
+            patch(
+                "litellm.proxy.db.query_engine_reaper.threading.enumerate",
+                return_value=[],
+            ),
             patch("litellm.proxy.db.query_engine_reaper.set_child_subreaper") as mock_subreaper,
             patch("litellm.proxy.db.query_engine_reaper.threading.Thread") as mock_thread_cls,
         ):
