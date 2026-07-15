@@ -184,6 +184,10 @@ class SemanticMCPToolFilter:
                 return
             raise
 
+    def _has_tools_missing_from_index(self, tools: list[Any]) -> bool:
+        """Allocation-free check for any named tool not yet in the semantic index."""
+        return any(name and name not in self._tool_map for name in (self._extract_tool_info(t)[0] for t in tools))
+
     def _tools_missing_from_index(self, tools: list[Any]) -> dict[str, Any]:
         """Map name -> tool for every named tool not yet in the semantic index."""
         return {
@@ -205,7 +209,7 @@ class SemanticMCPToolFilter:
         """
         from semantic_router.routers.base import Route
 
-        if not self._tools_missing_from_index(available_tools):
+        if not self._has_tools_missing_from_index(available_tools):
             return
 
         async with self._index_sync_lock:
@@ -215,6 +219,10 @@ class SemanticMCPToolFilter:
 
             if self.tool_router is None:
                 self._build_router(list(missing.values()))
+                if self.tool_router is not None:
+                    verbose_logger.info(
+                        f"Semantic tool filter indexed {len(missing)} request-time tools missing from the startup index"
+                    )
                 return
 
             descriptions = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
