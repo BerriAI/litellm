@@ -240,6 +240,115 @@ async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delt
     assert delta_json["usage"]["output_tokens"] == 8
 
 
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_bills_cache_rate_when_only_message_start_has_breakdown(
+    local_model_cost_map,
+):
+    """A stream that reports the cache breakdown ONLY on message_start must still bill
+    the cached tokens at the cache-read rate.
+
+    Bedrock usually repeats the cache breakdown on message_stop, but some deployments
+    (GovCloud) put it only on message_start and then have message_delta / message_stop
+    repeat uncached input_tokens alone. message_delta is the event the cost path reads,
+    so without the message_start merge it carries input_tokens=12 and no cache fields:
+    the 14713 cached tokens vanish from the bill and the call is charged ~36x too
+    little. Worse, a payload that pairs a cache-exclusive prompt_tokens with a populated
+    cached_tokens drives the cost calculator negative (see
+    test_inconsistent_cache_usage_never_prices_negative). See BerriAI/litellm#25846 /
+    LIT-2411.
+
+    Asserts the resulting cost, not just the usage dict, because the dict being merged
+    is the mechanism while the bill is the promise. Fails without
+    _merge_message_start_cache_into_delta_usage: cost drops to ~4.62e-05 from ~1.66e-03.
+    """
+    import litellm
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    uncached_input, cached_read, output = 12, 14713, 6
+
+    async def _govcloud_stream():
+        yield {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model,
+                # the ONLY event carrying the cache breakdown
+                "usage": {
+                    "input_tokens": uncached_input,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": cached_read,
+                    "output_tokens": 1,
+                },
+            },
+        }
+        # uncached input_tokens only, no cache fields
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"input_tokens": uncached_input, "output_tokens": output},
+        }
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": uncached_input, "output_tokens": output},
+        }
+
+    collected: list[bytes] = []
+    async for chunk in AmazonAnthropicClaudeMessagesConfig().bedrock_sse_wrapper(
+        _govcloud_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model=f"bedrock/invoke/{model}",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_govcloud_cache_on_start",
+            function_id="test_bedrock_sse_wrapper_govcloud_cache_on_start",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
+    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+
+    # the delta the cost path reads must be self-consistent on its own
+    delta_usage = delta_json["usage"]
+    assert delta_usage.get("cache_read_input_tokens") == cached_read, (
+        f"message_delta lost the cache breakdown, so {cached_read} cached tokens go "
+        f"unbilled: {delta_usage}"
+    )
+    assert delta_usage.get("input_tokens") == uncached_input, delta_usage
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object=dict(delta_usage), reasoning_content=None
+    )
+    # prompt_tokens must come out cache-INCLUSIVE, which is what the cost calculator
+    # assumes when it derives the uncached remainder by subtraction
+    assert usage.prompt_tokens == uncached_input + cached_read
+    assert usage.prompt_tokens_details.cached_tokens == cached_read
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="bedrock"
+    )
+
+    cost_map = litellm.model_cost[model]
+    expected_prompt_cost = (
+        uncached_input * cost_map["input_cost_per_token"]
+        + cached_read * cost_map["cache_read_input_token_cost"]
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-6), (
+        f"cached tokens not billed at the cache rate: {prompt_cost} != {expected_prompt_cost}"
+    )
+    assert completion_cost == pytest.approx(
+        output * cost_map["output_cost_per_token"], rel=1e-6
+    )
+
+
 def test_chunk_parser_usage_transformation():
     """Ensure Bedrock invocation metrics are transformed to Anthropic usage keys."""
 

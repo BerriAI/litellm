@@ -301,6 +301,49 @@ def test_generic_cost_per_token_above_200k_tokens():
     )
 
 
+def test_inconsistent_cache_usage_never_prices_negative():
+    """An inconsistent usage payload must never produce a negative cost.
+
+    generic_cost_per_token treats prompt_tokens as cache-INCLUSIVE and derives the
+    uncached remainder by subtraction: text_tokens = prompt_tokens - cache_hit. A
+    provider stream can hand us a payload where prompt_tokens is cache-EXCLUSIVE while
+    cached_tokens is populated (bedrock reports the cache breakdown on one SSE event and
+    uncached input_tokens on another; if the two are read from different events they
+    disagree). The subtraction then underflows and a negative token count times a
+    positive rate bills the customer a negative amount, which credits their budget back
+    and lets a key outspend its cap. See BerriAI/litellm#25846 / LIT-2411.
+
+    Fails without the zero-clamp in llm_cost_calc/utils.py: prompt_cost lands at
+    about -0.0146 instead of a positive number.
+    """
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    custom_llm_provider = "bedrock"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # cached_tokens exceeds prompt_tokens: the payload the clamp exists to absorb.
+    usage = Usage(
+        prompt_tokens=12,
+        completion_tokens=6,
+        total_tokens=18,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=14713),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert prompt_cost >= 0, f"negative input cost from inconsistent usage: {prompt_cost}"
+    assert completion_cost >= 0, f"negative output cost: {completion_cost}"
+
+    # The cached tokens must still be billed at the cache-read rate rather than dropped,
+    # so the clamp cannot be satisfied by zeroing the whole input cost.
+    model_cost_map = litellm.model_cost[model]
+    assert prompt_cost >= model_cost_map["cache_read_input_token_cost"] * 14713
+
+
 def test_get_token_base_cost_picks_highest_crossed_tier():
     """Regression test for #30345.
 
