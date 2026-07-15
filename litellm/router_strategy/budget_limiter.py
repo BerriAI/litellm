@@ -215,6 +215,7 @@ class RouterBudgetLimiting(CustomLogger):
             is_within_budget = True
 
             # Check provider budget
+            # Check provider budget
             if self.provider_budget_config:
                 if idx < len(deployment_providers):
                     provider = deployment_providers[idx]
@@ -222,21 +223,18 @@ class RouterBudgetLimiting(CustomLogger):
                     provider = self._get_llm_provider_for_deployment(deployment)
                 if provider in provider_configs:
                     config = provider_configs[provider]
-                    if config.max_budget is None:
-                        continue
-                    current_spend = spend_map.get(f"provider_spend:{provider}:{config.budget_duration}", 0.0)
-                    self._track_provider_remaining_budget_prometheus(
-                        provider=provider,
-                        spend=current_spend,
-                        budget_limit=config.max_budget,
-                    )
-
-                    if config.max_budget and current_spend >= config.max_budget:
-                        debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
-                        deployment_above_budget_info += f"{debug_msg}\n"
-                        is_within_budget = False
-                        continue
-
+                    if config.max_budget is not None:
+                        current_spend = spend_map.get(f"provider_spend:{provider}:{config.budget_duration}", 0.0)
+                        self._track_provider_remaining_budget_prometheus(
+                            provider=provider,
+                            spend=current_spend,
+                            budget_limit=config.max_budget,
+                        )
+                        if current_spend >= config.max_budget:
+                            debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
+                            deployment_above_budget_info += f"{debug_msg}\n"
+                            is_within_budget = False
+                            
             # Check deployment budget
             if self.deployment_budget_config and is_within_budget:
                 _model_name = deployment.get("model_name")
