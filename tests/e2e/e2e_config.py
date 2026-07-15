@@ -46,6 +46,7 @@ MCP_STUB_URL = os.environ.get("E2E_MCP_STUB_URL", "http://mcp-stub:8765/mcp")
 # upstream for the interactive OAuth flow, plus the stub IdP's token endpoint.
 # Derived from MCP_STUB_URL so one override relocates the whole stub.
 _MCP_STUB_BASE = MCP_STUB_URL.removesuffix("/mcp")
+MCP_STUB_CONFORMANCE_URL = f"{_MCP_STUB_BASE}/conformance/mcp"
 MCP_STUB_OAUTHUSER_URL = f"{_MCP_STUB_BASE}/oauthuser/mcp"
 MCP_STUB_TOKEN_URL = f"{_MCP_STUB_BASE}/oauth/token"
 

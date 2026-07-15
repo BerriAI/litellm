@@ -1,6 +1,6 @@
 """Deterministic MCP upstreams for the mcp e2e suite.
 
-One process, one port, two streamable-http MCP mounts plus a deterministic
+One process, one port, three streamable-http MCP mounts plus a deterministic
 OAuth2 IdP, so the compose stack keeps a single `mcp-stub` service:
 
 - `/mcp` — anonymous. `echo` answers immediately so auth tests can assert an
@@ -10,6 +10,13 @@ OAuth2 IdP, so the compose stack keeps a single `mcp-stub` service:
   `max_concurrent_requests` cap must bound); `stats` reads those counters back,
   so tests observe upstream concurrency through the proxy itself and the stub
   needs no side-channel port.
+- `/conformance/mcp` — anonymous, serving the official
+  @modelcontextprotocol/conformance suite's hardcoded fixture contract
+  (test_simple_text / test_error_handling tools, test://static-text,
+  test://static-binary and the test://template/{id}/data resources,
+  test_simple_prompt / test_prompt_with_arguments prompts), so the gateway can
+  be conformance-tested end to end and the suite's own prompt/resource tests
+  have a deterministic upstream that serves all three MCP primitives.
 - `/oauthuser/mcp` — the interactive (authorization_code) upstream: rejects
   anything but `Bearer OAUTH_USER_ACCESS_TOKEN`, which only the
   authorization_code grant hands out, so a served request proves the whole
@@ -61,6 +68,7 @@ OAUTH_USER_ACCESS_TOKEN = "e2e-stub-user-access-token"
 OAUTH_USER_REFRESH_TOKEN = "e2e-stub-user-refresh-token"
 
 main_mcp = FastMCP("e2e-stub", host="0.0.0.0", port=8765, stateless_http=True)
+conformance_mcp = FastMCP("e2e-stub-conformance", host="0.0.0.0", port=8765, stateless_http=True)
 oauthuser_mcp = FastMCP("e2e-stub-oauthuser", host="0.0.0.0", port=8765, stateless_http=True)
 
 
@@ -107,6 +115,50 @@ def stats(marker: str) -> str:
             "completed": recorded.completed,
         }
     )
+
+
+@conformance_mcp.tool()
+def test_simple_text() -> str:
+    """Return a plain text result (the conformance suite's simple-text fixture)."""
+    return "Hello from the e2e conformance stub"
+
+
+@conformance_mcp.tool()
+def test_error_handling(should_error: bool = True) -> str:
+    """Raise so the result carries isError (the conformance suite's error fixture)."""
+    if should_error:
+        raise ValueError("Intentional error from the e2e conformance stub")
+    return "no error"
+
+
+@conformance_mcp.resource("test://static-text")
+def static_text_resource() -> str:
+    """The conformance suite's static text resource fixture."""
+    return "Static text resource from the e2e conformance stub"
+
+
+@conformance_mcp.resource("test://static-binary")
+def static_binary_resource() -> bytes:
+    """The conformance suite's static binary resource fixture."""
+    return b"\x89binary-fixture-bytes\x00\x01"
+
+
+@conformance_mcp.resource("test://template/{id}/data")
+def template_resource(id: str) -> str:
+    """The conformance suite's resource template fixture: {id} must substitute."""
+    return f"Template resource data for id={id}"
+
+
+@conformance_mcp.prompt()
+def test_simple_prompt() -> str:
+    """The conformance suite's no-argument prompt fixture."""
+    return "This is a simple prompt from the e2e conformance stub"
+
+
+@conformance_mcp.prompt()
+def test_prompt_with_arguments(arg1: str, arg2: str) -> str:
+    """The conformance suite's argument-substitution prompt fixture."""
+    return f"Prompt rendered with arg1={arg1} and arg2={arg2}"
 
 
 def _register_guarded_tools(server: FastMCP, mount: str) -> None:
@@ -224,7 +276,7 @@ async def oauth_token(request: Request) -> JSONResponse:
 
 
 def build_app() -> Starlette:
-    servers = (main_mcp, oauthuser_mcp)
+    servers = (main_mcp, conformance_mcp, oauthuser_mcp)
     apps = {server.name: server.streamable_http_app() for server in servers}
 
     @contextlib.asynccontextmanager
@@ -247,6 +299,7 @@ def build_app() -> Starlette:
                     expected=f"Bearer {OAUTH_USER_ACCESS_TOKEN}",
                 ),
             ),
+            Mount("/conformance", app=apps["e2e-stub-conformance"]),
             Mount("/", app=apps["e2e-stub"]),
         ],
         lifespan=lifespan,

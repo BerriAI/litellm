@@ -121,6 +121,60 @@ async def _call_tool(url: str, headers: dict[str, str], tool: str, arguments: To
                 return McpToolText(text=_first_text(result), is_error=bool(result.isError))
 
 
+async def _list_prompts(url: str, headers: dict[str, str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """(name, argument names) per prompt, sorted by name."""
+    async with _http_client(headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_prompts()
+                return tuple(
+                    sorted(
+                        (prompt.name, tuple(arg.name for arg in (prompt.arguments or [])))
+                        for prompt in listed.prompts
+                    )
+                )
+
+
+async def _get_prompt(url: str, headers: dict[str, str], name: str, arguments: dict[str, str]) -> str:
+    """The text of the rendered prompt's first message."""
+    async with _http_client(headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.get_prompt(name, arguments)
+                first = result.messages[0].content if result.messages else None
+                if isinstance(first, TextContent):
+                    return first.text
+                return f"<non-text prompt content: {type(first).__name__}>"
+
+
+async def _list_resources(url: str, headers: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    """(uri, name) per resource, sorted by uri."""
+    async with _http_client(headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_resources()
+                return tuple(sorted((str(resource.uri), resource.name) for resource in listed.resources))
+
+
+async def _read_resource(url: str, headers: dict[str, str], uri: str) -> str:
+    """The text of the resource's first content block."""
+    from pydantic import AnyUrl
+
+    async with _http_client(headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.read_resource(AnyUrl(uri))
+                first = result.contents[0] if result.contents else None
+                text = getattr(first, "text", None)
+                if isinstance(text, str):
+                    return text
+                return f"<non-text resource content: {type(first).__name__}>"
+
+
 # ---------- interactive (authorization_code) OAuth: the MCP-host side ----------
 
 # Where the "browser" lands at the end of the authorize dance. Nothing listens
@@ -338,6 +392,22 @@ class McpClient:
         """One tools/call authenticated by the tokens in `storage` (minted by a
         prior poll_oauth_tool_names dance), over its own fresh MCP session."""
         return asyncio.run(_oauth_call_tool(_mcp_url(alias), headers, storage, tool, arguments))
+
+    def list_prompts(self, alias: str, headers: dict[str, str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """prompts/list over its own fresh MCP session: (name, argument names) sorted by name."""
+        return asyncio.run(_list_prompts(_mcp_url(alias), headers))
+
+    def get_prompt(self, alias: str, headers: dict[str, str], name: str, arguments: dict[str, str]) -> str:
+        """prompts/get over its own fresh MCP session: the rendered first message's text."""
+        return asyncio.run(_get_prompt(_mcp_url(alias), headers, name, arguments))
+
+    def list_resources(self, alias: str, headers: dict[str, str]) -> tuple[tuple[str, str], ...]:
+        """resources/list over its own fresh MCP session: (uri, name) sorted by uri."""
+        return asyncio.run(_list_resources(_mcp_url(alias), headers))
+
+    def read_resource(self, alias: str, headers: dict[str, str], uri: str) -> str:
+        """resources/read over its own fresh MCP session: the first content block's text."""
+        return asyncio.run(_read_resource(_mcp_url(alias), headers, uri))
 
     def stub_stats(self, alias: str, headers: dict[str, str], stats_tool: str, marker: str) -> StubToolStats:
         outcome = self.call_tool(alias, headers, stats_tool, {"marker": marker})
