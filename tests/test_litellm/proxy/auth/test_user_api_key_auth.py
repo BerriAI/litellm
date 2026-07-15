@@ -39,6 +39,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _routing_selector_matches_claim,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
+    _should_skip_budget_checks,
     _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
@@ -50,6 +51,31 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
+
+@pytest.mark.parametrize("route", ["/models", "/v1/models"])
+def test_model_discovery_routes_skip_virtual_key_budget_checks(route):
+    assert (
+        _should_skip_budget_checks(
+            request_data={},
+            route=route,
+            request=None,
+            llm_router=None,
+        )
+        is True
+    )
+
+
+def test_inference_routes_do_not_skip_virtual_key_budget_checks():
+    assert (
+        _should_skip_budget_checks(
+            request_data={},
+            route="/v1/chat/completions",
+            request=None,
+            llm_router=None,
+        )
+        is False
+    )
 
 
 def test_get_api_key():

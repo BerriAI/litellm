@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    MODEL_DISCOVERY_ROUTES,
     _cache_key_object,
     _can_object_call_model,
     _check_end_user_budget,
@@ -2451,6 +2452,8 @@ def _should_skip_budget_checks(
     request: Optional[Request],
     llm_router: Optional[Any],
 ) -> bool:
+    if route in MODEL_DISCOVERY_ROUTES:
+        return True
     model = _get_model_from_request_context(
         request_data=request_data,
         route=route,
