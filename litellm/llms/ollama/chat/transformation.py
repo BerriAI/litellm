@@ -46,6 +46,30 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_OLLAMA_THINK_LEVELS: tuple[str, ...] = ("low", "medium", "high", "max")
+
+
+def _map_reasoning_effort_to_think(value: Any, model: str) -> Union[bool, str]:
+    if not isinstance(value, str):
+        return bool(value)
+
+    if model.startswith("gpt-oss"):
+        if value in _OLLAMA_THINK_LEVELS[:3]:
+            return value
+        return "high" if value in {"xhigh", "max"} else "low"
+
+    effort_to_think: dict[str, Union[bool, str]] = {
+        "none": False,
+        "minimal": False,
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+    }
+    return effort_to_think.get(value, value in {"low", "medium", "high"})
+
+
 class OllamaChatConfig(BaseConfig):
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
@@ -178,10 +202,7 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = _map_reasoning_effort_to_think(value, model)
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection
