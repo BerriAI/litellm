@@ -143,6 +143,10 @@ describe("TagTable", () => {
 
     expect(editItem).toHaveAttribute("data-disabled");
     expect(deleteItem).toHaveAttribute("data-disabled");
+
+    await user.click(editItem);
+    await user.click(deleteItem);
+
     expect(mockOnEdit).not.toHaveBeenCalled();
     expect(mockOnDelete).not.toHaveBeenCalled();
   });
