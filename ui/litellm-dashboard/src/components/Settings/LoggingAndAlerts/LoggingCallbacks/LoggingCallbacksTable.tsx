@@ -119,7 +119,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
               : "No explicit access grants. Treated as proxy-wide automatic export for backward compatibility. Add access.global=true or access.teams/orgs to scope this destination.";
             return (
               <Tooltip title={tooltipTitle}>
-                <Tag color="orange" style={{ cursor: "help" }}>Auto-enabled</Tag>
+                <Tag color="orange" style={{ cursor: "help" }}>
+                  Auto-enabled
+                </Tag>
               </Tooltip>
             );
           }
