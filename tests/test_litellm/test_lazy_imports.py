@@ -348,3 +348,15 @@ def test_utils_module_lazy_imports():
         assert name in utils_globals
 
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
+
+
+def test_supports_pdf_input_top_level_export():
+    """Regression: litellm.supports_pdf_input must resolve at top level (used to raise AttributeError)."""
+    import litellm.utils
+
+    sys.modules["litellm"].__dict__.pop("supports_pdf_input", None)
+
+    func = getattr(litellm, "supports_pdf_input")
+    assert func is litellm.utils.supports_pdf_input
+    assert func(model="claude-sonnet-5") is True
+    assert func(model="gpt-3.5-turbo") is False
