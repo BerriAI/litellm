@@ -17,9 +17,18 @@ MCPInfo = Dict[str, Any]
 
 class MCPOAuthMetadata(BaseModel):
     scopes: Optional[List[str]] = None
+    """Effective scopes, resource-preferred: the RFC 9728 protected-resource advertisement or the
+    WWW-Authenticate challenge when the resource supplied one, else the authorization server's
+    ``scopes_supported``. A compromised resource server can influence this, so it must not expand a
+    manually pinned ``authorization_url`` (see ``authorization_server_scopes``)."""
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    authorization_server_scopes: Optional[List[str]] = None
+    """The ``scopes_supported`` enumerated by the authorization-server metadata document itself
+    (RFC 8414), independent of anything the resource server advertised. This is the only scope
+    source trusted to backfill a manually pinned ``authorization_url``, because it shares provenance
+    with the ``authorization_endpoint`` used to corroborate that pin."""
     from_origin_fallback: bool = False
     """True when the metadata came from guessing the resource origin as its authorization
     server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
