@@ -2835,6 +2835,38 @@ class TestRoutingPlugins:
         assert result is not None
         assert result.model == "gpt-4o-nano"
 
+    @pytest.mark.asyncio
+    async def test_plugin_applies_to_no_user_message_default_tier_path(self, mock_router_instance):
+        """Regression: `self.config.default_model or await self._pick_model_for_tier(...)`
+        short-circuited on a truthy default_model, so the no-user-message path never ran
+        the plugin pipeline at all when default_model was configured. A policy plugin
+        must not be bypassable via this path either. Reported by Veria AI on PR #33251."""
+
+        class ExcludeDefaultModel:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-default"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "default_model": "gpt-4o-default",
+                "plugins": [ExcludeDefaultModel()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "assistant", "content": "Hello!"},
+            ],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
     def test_plugins_and_adaptive_together_raises(self):
         with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
             ComplexityRouterConfig(

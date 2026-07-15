@@ -985,7 +985,12 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
-            routed_model = self.config.default_model or await self._pick_model_for_tier(
+            # No `self.config.default_model or ...` short-circuit here: default_model was
+            # never checked against the plugins, so it would function as an unconditional
+            # escape hatch around whatever policy a plugin enforces. Falls through to
+            # _pick_model_for_tier -> get_model_for_tier, which checks the MEDIUM tier
+            # before default_model -- the same priority every other call site already uses.
+            routed_model = await self._pick_model_for_tier(
                 ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
             )
             return PreRoutingHookResponse(
