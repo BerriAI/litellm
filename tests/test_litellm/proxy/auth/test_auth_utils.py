@@ -3,13 +3,15 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 """
 
 import base64
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
+    _check_valid_ip,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
@@ -2408,3 +2410,107 @@ class TestGetKeyTagRateLimits:
     def test_returns_none_when_unset(self):
         key = UserAPIKeyAuth(api_key="sk-123")
         assert get_key_tag_rpm_limit(key) is None
+
+
+def _make_request(
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    client: Optional[Tuple[str, int]] = ("203.0.113.7", 5555),
+) -> Request:
+    raw_headers: List[Tuple[bytes, bytes]] = [
+        (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+    ]
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": raw_headers,
+        "client": client,
+        "server": ("testserver", 80),
+        "scheme": "http",
+    }
+    return Request(scope)
+
+
+class TestCheckValidIPXForwardedFor:
+    """_check_valid_ip must compare a single resolved client IP against
+    allowed_ips, not the raw multi-hop X-Forwarded-For header string
+    (regression for the allowed_ips XFF bug)."""
+
+    def _check(
+        self,
+        *,
+        allowed_ips: Optional[List[str]],
+        request: Request,
+        use_x_forwarded_for: bool,
+        trusted_cidrs: List[str],
+    ) -> Tuple[bool, Optional[str]]:
+        with patch(
+            "litellm.proxy.auth.auth_utils.get_trusted_proxy_cidrs",
+            return_value=trusted_cidrs,
+        ):
+            return _check_valid_ip(
+                allowed_ips, request, use_x_forwarded_for=use_x_forwarded_for
+            )
+
+    def test_multi_hop_xff_from_trusted_proxy_resolves_real_client(self):
+        request = _make_request(
+            headers={"x-forwarded-for": "203.0.113.10, 10.0.0.2"},
+            client=("10.0.0.2", 1),
+        )
+        assert self._check(
+            allowed_ips=["203.0.113.10"],
+            request=request,
+            use_x_forwarded_for=True,
+            trusted_cidrs=["10.0.0.0/8"],
+        ) == (True, "203.0.113.10")
+
+    def test_prepended_allowed_ip_cannot_spoof_allowlist(self):
+        request = _make_request(
+            headers={"x-forwarded-for": "203.0.113.10, 9.9.9.9"},
+            client=("10.0.0.2", 1),
+        )
+        allowed, resolved = self._check(
+            allowed_ips=["203.0.113.10"],
+            request=request,
+            use_x_forwarded_for=True,
+            trusted_cidrs=["10.0.0.0/8"],
+        )
+        assert allowed is False
+        assert resolved == "9.9.9.9"
+
+    def test_xff_from_untrusted_peer_falls_back_to_direct_peer(self):
+        request = _make_request(
+            headers={"x-forwarded-for": "203.0.113.10"},
+            client=("8.8.8.8", 1),
+        )
+        assert self._check(
+            allowed_ips=["203.0.113.10"],
+            request=request,
+            use_x_forwarded_for=True,
+            trusted_cidrs=["10.0.0.0/8"],
+        ) == (False, "8.8.8.8")
+
+    def test_xff_ignored_when_use_x_forwarded_for_disabled(self):
+        request = _make_request(
+            headers={"x-forwarded-for": "203.0.113.10"},
+            client=("203.0.113.7", 1),
+        )
+        assert self._check(
+            allowed_ips=["203.0.113.7"],
+            request=request,
+            use_x_forwarded_for=False,
+            trusted_cidrs=["10.0.0.0/8"],
+        ) == (True, "203.0.113.7")
+
+    def test_none_allowed_ips_allows_everything(self):
+        request = _make_request(client=("8.8.8.8", 1))
+        assert self._check(
+            allowed_ips=None,
+            request=request,
+            use_x_forwarded_for=True,
+            trusted_cidrs=["10.0.0.0/8"],
+        ) == (True, None)

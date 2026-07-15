@@ -14,6 +14,8 @@ from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
+from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
+from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
@@ -36,15 +38,25 @@ def _check_valid_ip(
     use_x_forwarded_for: Optional[bool] = False,
 ) -> Tuple[bool, Optional[str]]:
     """
-    Returns if ip is allowed or not
+    Returns whether the resolved client IP is allowed, plus that IP.
+
+    When use_x_forwarded_for is set, resolve a single client address from the
+    X-Forwarded-For chain instead of comparing the raw multi-hop header string.
+    X-Forwarded-For is only trusted when the direct peer is one of the operator
+    configured trusted_proxy_ranges, and the chain is walked right to left so a
+    client cannot spoof an allowed address by prepending it.
     """
     if allowed_ips is None:  # if not set, assume true
         return True, None
 
-    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = _get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for)
+    client_ip, _ = resolve_client_ip(
+        request,
+        TrustedProxyConfig(
+            use_forwarded_for=bool(use_x_forwarded_for),
+            trusted_proxy_cidrs=get_trusted_proxy_cidrs(),
+        ),
+    )
 
-    # Check if IP address is allowed
     if client_ip not in allowed_ips:
         return False, client_ip
 
