@@ -43,6 +43,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
     validate_trusted_redirect_uri,
+    well_known_root_suffix,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -50,7 +51,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1814,31 +1814,13 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     }
 
 
-def _mcp_named_server_exists(request: Request) -> bool:
-    """True when a server literally named ``mcp`` is configured and visible to this caller.
-
-    Its per-server authorization-server document is served at
-    ``/.well-known/oauth-authorization-server/mcp``, a single segment that collides with the
-    aggregate path. When such a server exists the real server wins the route, so that
-    deployment keeps its per-server discovery regardless of whether the aggregate front door
-    is on."""
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
-        global_mcp_server_manager,
-    )
-
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
-    return global_mcp_server_manager.get_mcp_server_by_name("mcp", client_ip=client_ip) is not None
-
-
 # RFC 9728 path-appended discovery for the aggregate /mcp endpoint. A client
 # pointed at {base}/mcp inserts the well-known segment before the resource
 # path, so this exact route must exist for aggregate discovery to work at all.
 # Declared before the parameterized well-known routes below: Starlette matches
 # in registration order, and /.well-known/oauth-authorization-server/{name}
 # would otherwise capture the "/mcp" suffix as a server name.
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
 async def oauth_protected_resource_aggregate(request: Request):
     """
     OAuth protected resource discovery for the aggregate /mcp endpoint.
@@ -1850,28 +1832,26 @@ async def oauth_protected_resource_aggregate(request: Request):
     return _build_aggregate_protected_resource_response(request)
 
 
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")
 async def oauth_authorization_server_aggregate(request: Request):
     """
     OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414
     path-inserted form for a client that treats {base}/mcp as its authorization base URL.
 
-    This single-segment path collides with the parameterized ``/{mcp_server_name}`` route
-    below, so a server literally named ``mcp`` wins it and keeps its per-server discovery;
-    only when no such server exists is the aggregate document served.
+    The single-segment /mcp is reserved for the aggregate so the discovery chain stays
+    consistent: the aggregate protected-resource document advertises {base}/mcp as its
+    authorization server, so the document served here must have issuer {base}/mcp. A server
+    literally named ``mcp`` therefore does not take this route; it keeps its standard
+    two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp. Letting the
+    per-server row win here instead would serve an issuer of {base} against a resource that
+    advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
     """
-    if _mcp_named_server_exists(request):
-        return _build_oauth_authorization_server_response(request=request, mcp_server_name="mcp")
     return _build_aggregate_authorization_server_response(request)
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
@@ -1891,9 +1871,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 @router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
@@ -1963,9 +1941,7 @@ def _build_oauth_authorization_server_response(
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery endpoint using standard MCP URL pattern.
@@ -1980,9 +1956,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
 
 
 # LiteLLM legacy pattern and root endpoint
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
