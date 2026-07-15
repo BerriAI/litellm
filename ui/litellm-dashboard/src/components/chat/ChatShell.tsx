@@ -9,14 +9,16 @@ import { migratedHref } from "@/utils/migratedPages";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import ConversationList from "./ConversationList";
 
-const CHAT_BASE = migratedHref("chat");
-export const CHAT_ROUTES = {
-  chats: CHAT_BASE,
-  integrations: `${CHAT_BASE}/integrations`,
-  credentials: `${CHAT_BASE}/credentials`,
-  apiKeys: `${CHAT_BASE}/api-keys`,
-  usage: `${CHAT_BASE}/usage`,
-};
+export function getChatRoutes() {
+  const base = migratedHref("chat");
+  return {
+    chats: base,
+    integrations: `${base}/integrations`,
+    credentials: `${base}/credentials`,
+    apiKeys: `${base}/api-keys`,
+    usage: `${base}/usage`,
+  };
+}
 
 function stripTrailingSlash(path: string): string {
   return path.length > 1 ? path.replace(/\/+$/, "") : path;
@@ -54,7 +56,8 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
 
-  const isChatsRoute = pathname === CHAT_ROUTES.chats;
+  const routes = getChatRoutes();
+  const isChatsRoute = pathname === routes.chats;
 
   return (
     <div className="flex h-full w-full flex-col bg-background overflow-hidden">
@@ -73,7 +76,7 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <div className="shrink-0 bg-sidebar border-sidebar-border border-r flex flex-col overflow-hidden w-[260px]">
           <div className="px-2 pt-3 pb-1 shrink-0">
-            <Button onClick={() => router.push(CHAT_ROUTES.chats)} className="w-full justify-start gap-2.5">
+            <Button onClick={() => router.push(routes.chats)} className="w-full justify-start gap-2.5">
               <Plus className="h-4 w-4" />
               New Chat
             </Button>
@@ -85,32 +88,32 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
             <NavItem
               icon={<MessageSquare className="h-4 w-4" />}
               label="Chats"
-              onClick={() => router.push(CHAT_ROUTES.chats)}
+              onClick={() => router.push(routes.chats)}
               active={isChatsRoute}
             />
             <NavItem
               icon={<LayoutGrid className="h-4 w-4" />}
               label="Integrations"
-              onClick={() => router.push(CHAT_ROUTES.integrations)}
-              active={pathname === CHAT_ROUTES.integrations}
+              onClick={() => router.push(routes.integrations)}
+              active={pathname === routes.integrations}
             />
             <NavItem
               icon={<KeyRound className="h-4 w-4" />}
               label="Credentials"
-              onClick={() => router.push(CHAT_ROUTES.credentials)}
-              active={pathname === CHAT_ROUTES.credentials}
+              onClick={() => router.push(routes.credentials)}
+              active={pathname === routes.credentials}
             />
             <NavItem
               icon={<Lock className="h-4 w-4" />}
               label="API Keys"
-              onClick={() => router.push(CHAT_ROUTES.apiKeys)}
-              active={pathname === CHAT_ROUTES.apiKeys}
+              onClick={() => router.push(routes.apiKeys)}
+              active={pathname === routes.apiKeys}
             />
             <NavItem
               icon={<BarChart3 className="h-4 w-4" />}
               label="Usage"
-              onClick={() => router.push(CHAT_ROUTES.usage)}
-              active={pathname === CHAT_ROUTES.usage}
+              onClick={() => router.push(routes.usage)}
+              active={pathname === routes.usage}
             />
           </div>
 
@@ -120,10 +123,10 @@ const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
             <ConversationList
               conversations={conversations}
               activeConversationId={activeConversationId}
-              onSelect={(id) => router.push(`${CHAT_ROUTES.chats}?id=${id}`)}
+              onSelect={(id) => router.push(`${routes.chats}?id=${id}`)}
               onDelete={(id) => {
                 deleteConversation(id);
-                if (id === activeConversationId) router.push(CHAT_ROUTES.chats);
+                if (id === activeConversationId) router.push(routes.chats);
               }}
               onRename={renameConversation}
             />
