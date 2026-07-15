@@ -105,8 +105,8 @@ def _install_fake_runner(monkeypatch, *, outcomes_by_model):
 
 @pytest.fixture(autouse=True)
 def _proxy_env(monkeypatch):
-    monkeypatch.setenv("LITELLM_PROXY_BASE_URL", "http://localhost:4000")
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-test")
 
 
 def test_count_stream_event_deltas_only_counts_records_with_event_payload():

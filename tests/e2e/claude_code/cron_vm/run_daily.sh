@@ -313,7 +313,7 @@ PROXY_CONFIG="${WORKTREE}/tests/e2e/claude_code/test_config.yaml"
 log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 # Bind the proxy to loopback only. The populator proxy is talked to
 # exclusively by the pytest run on the same host (the health check and
-# the test env set `LITELLM_PROXY_BASE_URL=http://127.0.0.1:...`),
+# the test env set `LITELLM_PROXY_URL=http://127.0.0.1:...`),
 # so there's no reason to expose it on the VM's external interfaces.
 # Without `--host`, `litellm` defaults to 0.0.0.0, which combined with
 # the predictable default `LITELLM_MASTER_KEY=sk-cron-matrix` would
@@ -402,8 +402,8 @@ set +e
        LANG="${LANG:-C.UTF-8}" \
        LC_ALL="${LC_ALL:-}" \
        TMPDIR="${TMPDIR:-/tmp}" \
-       LITELLM_PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}" \
-       LITELLM_PROXY_API_KEY="${PROXY_API_KEY}" \
+       LITELLM_PROXY_URL="http://127.0.0.1:${PROXY_PORT}" \
+       LITELLM_MASTER_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
        "${WORKTREE_UV}" run pytest "${PYTEST_ARGS[@]}"
 )
