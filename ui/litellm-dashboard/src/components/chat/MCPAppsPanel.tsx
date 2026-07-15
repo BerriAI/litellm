@@ -13,7 +13,7 @@ import {
   getMCPOAuthUserCredentialStatus,
   listMCPTools,
 } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isUnsupportedOnGatewayConnect } from "../mcp_tools/types";
 import MessageManager from "@/components/molecules/message_manager";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
@@ -242,6 +242,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   };
 
   const renderConnectionIndicator = (server: MCPServer) => {
+    if (connectMode && isUnsupportedOnGatewayConnect(server.auth_type)) {
+      return (
+        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
+          Not supported on this connection
+        </span>
+      );
+    }
     if (server.auth_type === AUTH_TYPE.OAUTH2) {
       if (oauthConnected.has(server.server_id)) {
         return <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
@@ -507,6 +514,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
             const count = toolCounts[name];
+            const unsupported = !!connectMode && isUnsupportedOnGatewayConnect(server.auth_type);
 
             return (
               <div
@@ -514,7 +522,9 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
                 onClick={() => setDetailServer(server)}
                 className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
                   isLeftCol ? "border-r" : ""
-                } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""}`}
+                } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""} ${
+                  unsupported ? "opacity-50" : ""
+                }`}
               >
                 {server.mcp_info?.logo_url ? (
                   <img
