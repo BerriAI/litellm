@@ -108,9 +108,9 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
-        request_data = cast("dict[str, object]", data)
+        request_data = cast("dict[str, object]", data)  # cast-ok: _read_request_body returns an untyped Dict
         return encode_video_id_in_response(
-            response=cast(object, response),
+            response=cast(object, response),  # cast-ok: base_process_llm_request returns Any
             fallback_provider=coerce_optional_str(request_data.get("custom_llm_provider")),
             fallback_model_id=coerce_optional_str(request_data.get("model")),
         )
@@ -298,7 +298,7 @@ async def video_status(
             version=version,
         )
         return encode_video_id_in_response(
-            response=cast(object, response),
+            response=cast(object, response),  # cast-ok: base_process_llm_request returns Any
             fallback_provider=custom_llm_provider,
             fallback_model_id=model_id_from_decoded,
         )
