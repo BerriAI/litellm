@@ -420,9 +420,7 @@ MCP_INTERNAL_REQUEST_KEYS: set = {
 }
 
 
-def filter_internal_params(
-    data: dict, additional_internal_params: Optional[set] = None
-) -> dict:
+def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
