@@ -345,14 +345,14 @@ export const generateMetadata = (
   exportScope: ExportScope,
   spendData: EntitySpendData,
 ): ExportMetadata => {
-  const summary: Record<string, any> = {
+  const summary: ExportMetadata["summary"] = {
     total_spend: spendData.metadata.total_spend,
     total_requests: spendData.metadata.total_api_requests,
     successful_requests: spendData.metadata.total_successful_requests,
     failed_requests: spendData.metadata.total_failed_requests,
     total_tokens: spendData.metadata.total_tokens,
   };
-  if (entityType === "team") {
+  if (hasFlatCost(spendData)) {
     const flatCost = spendData.metadata.total_flat_cost ?? 0;
     summary.total_flat_cost = flatCost;
     summary.total_cost = spendData.metadata.total_spend + flatCost;

@@ -3,10 +3,7 @@ import { Button, Card, Tag, Typography } from "antd";
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { useIsPtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/ptuReservations/useIsPtuCostAttributionEnabled";
-import {
-  PtuReservationItem,
-  usePtuReservations,
-} from "@/app/(dashboard)/hooks/ptuReservations/usePtuReservations";
+import { PtuReservationItem, usePtuReservations } from "@/app/(dashboard)/hooks/ptuReservations/usePtuReservations";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
 import PtuReservationModal from "./ptu_reservation_modal";

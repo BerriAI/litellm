@@ -27,13 +27,21 @@ export interface PtuReservationListFilters {
 
 export const ptuReservationKeys = createQueryKeys("ptuReservations");
 
+const filtersToListParam = (filters: PtuReservationListFilters): Record<string, string | number> => {
+  const out: Record<string, string | number> = {};
+  if (filters.team_id) out.team_id = filters.team_id;
+  if (filters.model) out.model = filters.model;
+  if (filters.active_only) out.active_only = "true";
+  return out;
+};
+
 export const usePtuReservations = (
   filters: PtuReservationListFilters = {},
   options: { enabled?: boolean } = {},
 ): UseQueryResult<PtuReservationItem[]> => {
   const { accessToken } = useAuthorized();
   return useQuery<PtuReservationItem[]>({
-    queryKey: ptuReservationKeys.list(filters),
+    queryKey: ptuReservationKeys.list({ filters: filtersToListParam(filters) }),
     queryFn: async () => {
       const data = await ptuReservationListCall(accessToken!, filters);
       return (data ?? []).filter((item: PtuReservationItem | null): item is PtuReservationItem => item != null);

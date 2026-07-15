@@ -1862,22 +1862,18 @@ describe("EntityUsageExport utils", () => {
       expect(result.summary.total_tokens).toBe(4500);
     });
 
-    it("should include total_flat_cost and total_cost in team summary when provided", () => {
-      const teamSpendWithFlat: EntitySpendData = {
+    it("should include total_flat_cost and total_cost in summary when total_flat_cost is present", () => {
+      const spendWithFlat: EntitySpendData = {
         ...mockSpendData,
         metadata: { ...mockSpendData.metadata, total_flat_cost: 6.45 },
       };
-      const result = generateMetadata("team", mockDateRange, [], "daily", teamSpendWithFlat);
+      const result = generateMetadata("team", mockDateRange, [], "daily", spendWithFlat);
       expect(result.summary.total_flat_cost).toBeCloseTo(6.45, 4);
       expect(result.summary.total_cost).toBeCloseTo(46.0 + 6.45, 4);
     });
 
-    it("should omit total_flat_cost and total_cost from non-team summary", () => {
-      const teamSpendWithFlat: EntitySpendData = {
-        ...mockSpendData,
-        metadata: { ...mockSpendData.metadata, total_flat_cost: 6.45 },
-      };
-      const result = generateMetadata("user", mockDateRange, [], "daily", teamSpendWithFlat);
+    it("should omit total_flat_cost and total_cost when total_flat_cost is absent", () => {
+      const result = generateMetadata("team", mockDateRange, [], "daily", mockSpendData);
       expect(result.summary.total_flat_cost).toBeUndefined();
       expect(result.summary.total_cost).toBeUndefined();
     });

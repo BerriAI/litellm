@@ -663,15 +663,6 @@ export const ptuReservationListCall = async (
   }
 };
 
-export const ptuReservationInfoCall = async (accessToken: string, id: string) => {
-  try {
-    return await apiClient.get(`/ptu_reservation/info?id=${encodeURIComponent(id)}`, { accessToken });
-  } catch (error) {
-    console.error("Failed to fetch PTU reservation:", error);
-    throw error;
-  }
-};
-
 export const ptuReservationCreateCall = async (accessToken: string, formValues: Record<string, any>) => {
   try {
     return await apiClient.post(`/ptu_reservation/new`, { accessToken, body: { ...formValues } });
