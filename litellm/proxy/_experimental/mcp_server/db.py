@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
     {
+        "issuer",
         "authorization_url",
         "token_url",
         "registration_url",
@@ -1181,6 +1182,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
         getattr(server, "spec_path", None),
         getattr(server, "auth_type", None),
         getattr(server, "oauth2_flow", None),
+        getattr(server, "issuer", None),
         getattr(server, "authorization_url", None),
         getattr(server, "token_url", None),
         getattr(server, "registration_url", None),

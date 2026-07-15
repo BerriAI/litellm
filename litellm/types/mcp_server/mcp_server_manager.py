@@ -60,6 +60,7 @@ class MCPServer(BaseModel):
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
+    issuer: Optional[str] = None
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None

@@ -1231,6 +1231,80 @@ class TestMCPServerManager:
         assert built.scopes == ["read"]
 
     @pytest.mark.asyncio
+    async def test_build_from_table_issuer_anchor_ignores_resource_rooted_discovery(self):
+        """When an admin configures an issuer, discovery is anchored on that issuer's own metadata
+        (RFC 8414), not on the resource-rooted RFC 9728 chain a compromised MCP resource controls.
+        The resource-rooted _descovery_metadata must not run at all, and the authoritative token_url,
+        registration_url, and scopes come from the issuer document. This closes the mix-up where a
+        compromised resource echoes the pinned authorize endpoint to smuggle its own token_url."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="issuer-anchored-1",
+            alias="issuer_anchored",
+            description="issuer configured, blank endpoints",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        authoritative = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=["read", "write"],
+            authorization_server_scopes=["read", "write"],
+        )
+        resource_rooted = AsyncMock(return_value=MCPOAuthMetadata(token_url="https://attacker.example.com/steal"))
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=authoritative)) as anchored,
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://idp.example.com")
+        resource_rooted.assert_not_awaited()
+        assert built.issuer == "https://idp.example.com"
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.registration_url == "https://idp.example.com/register"
+        assert built.scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_issuer_anchor_fails_closed_without_falling_back_to_resource(self):
+        """A configured issuer whose metadata does not validate (RFC 8414 §3.3 mismatch or fetch
+        failure) yields None from the anchored fetch. The build must adopt nothing and must NOT fall
+        back to resource-rooted discovery, or the fail-closed guarantee would be defeated by the very
+        resource the issuer anchor exists to distrust."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="issuer-anchored-2",
+            alias="issuer_anchored_failclosed",
+            description="issuer configured, upstream fails validation",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        resource_rooted = AsyncMock(return_value=MCPOAuthMetadata(token_url="https://attacker.example.com/steal"))
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        resource_rooted.assert_not_awaited()
+        assert built.issuer == "https://idp.example.com"
+        assert built.token_url is None
+        assert built.registration_url is None
+        assert built.scopes is None
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "advertised_authorization_url",
         ["https://attacker.example.com/authorize", None],
@@ -2461,6 +2535,78 @@ class TestMCPServerManager:
         assert result.authorization_url == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
         assert result.token_url == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
         assert result.scopes == ["api://some-scope/.default"]
+
+    @staticmethod
+    def _issuer_doc_response_builder(well_known_url: str, document: dict):
+        def build_response(url: str, **kwargs):
+            mock_response = MagicMock()
+            if url == well_known_url:
+                mock_response.json.return_value = document
+                mock_response.raise_for_status = MagicMock()
+            else:
+                request = httpx.Request("GET", url)
+                response_obj = httpx.Response(status_code=404, request=request)
+                mock_response.raise_for_status = MagicMock(
+                    side_effect=httpx.HTTPStatusError("not found", request=request, response=response_obj)
+                )
+            return mock_response
+
+        return build_response
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_adopts_document_with_matching_issuer(self):
+        """RFC 8414 §3.3: under require_issuer, a document that self-attests the same issuer it was
+        fetched from is authoritative and its endpoints and scopes are adopted."""
+        manager = MCPServerManager()
+        issuer = "https://idp.example.com"
+        build_response = self._issuer_doc_response_builder(
+            f"{issuer}/.well-known/oauth-authorization-server",
+            {
+                "issuer": issuer,
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token",
+                "scopes_supported": ["read", "write"],
+            },
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=build_response)
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(issuer, issuer, require_issuer=issuer)
+
+        assert result is not None
+        assert result.authorization_url == "https://idp.example.com/authorize"
+        assert result.token_url == "https://idp.example.com/token"
+        assert result.scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_rejects_issuer_mismatch(self):
+        """RFC 8414 §3.3 fail-closed: a document self-attesting a DIFFERENT issuer than the one it was
+        fetched from is rejected even though it carries valid-looking endpoints, so a compromised
+        resource cannot point the issuer-anchored fetch at an attacker authorization server that
+        smuggles its own token_endpoint and inflated scopes."""
+        manager = MCPServerManager()
+        issuer = "https://idp.example.com"
+        build_response = self._issuer_doc_response_builder(
+            f"{issuer}/.well-known/oauth-authorization-server",
+            {
+                "issuer": "https://attacker.example.com",
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://attacker.example.com/steal",
+                "scopes_supported": ["admin"],
+            },
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=build_response)
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(issuer, issuer, require_issuer=issuer)
+
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_derives_azure_metadata(
@@ -5486,6 +5632,22 @@ class TestMCPServerTimestamps:
         assert _normalized_authorize_endpoint("https://IDP.example.com/authorize/") == canonical
         assert _normalized_authorize_endpoint("https://idp.example.com/authorize?prompt=consent") == canonical
         assert _normalized_authorize_endpoint("https://idp.example.com:8443/authorize") != canonical
+
+    def test_issuer_matches_rfc8414_section_3_3(self):
+        """Issuer equality tolerates only URL-insignificant differences (scheme/host case, default
+        port, a trailing slash). A different host, a non-string, an empty string, or a None issuer
+        never matches, so a document that omits issuer fails closed under issuer-anchored discovery."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _issuer_matches
+
+        assert _issuer_matches("https://mcp.slack.com", "https://mcp.slack.com")
+        assert _issuer_matches("https://MCP.slack.com/", "https://mcp.slack.com")
+        assert _issuer_matches("https://mcp.slack.com:443", "https://mcp.slack.com")
+        assert _issuer_matches("https://login.example.com/tenant/v2.0", "https://login.example.com/tenant/v2.0")
+        assert not _issuer_matches("https://attacker.example.com", "https://mcp.slack.com")
+        assert not _issuer_matches("https://login.example.com/other/v2.0", "https://login.example.com/tenant/v2.0")
+        assert not _issuer_matches(None, "https://mcp.slack.com")
+        assert not _issuer_matches("", "https://mcp.slack.com")
+        assert not _issuer_matches(123, "https://mcp.slack.com")
 
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
