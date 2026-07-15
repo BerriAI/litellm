@@ -5212,9 +5212,14 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
-        usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
+        raw_usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=response_obj,
             combined_usage_object=cast(Optional[Usage], kwargs.get("combined_usage_object")),
+        )
+        usage_dict = (
+            {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
+            if isinstance(init_response_obj, ImageResponse) and init_response_obj.data
+            else raw_usage_dict
         )
 
         id = response_obj.get("id", kwargs.get("litellm_call_id"))

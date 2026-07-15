@@ -530,6 +530,56 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, caplog):
+    """Regression for LIT-4356: /key/generate must never emit the raw virtual key
+    to a logger, even for short keys that bypass the regex-based
+    SecretRedactionFilter."""
+    import hashlib
+    import logging
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    mock_prisma_client.db = MagicMock()
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        if kwargs.get("table_name") == "user":
+            return MagicMock(models=[], spend=0)
+        return MagicMock(
+            token="hashed_token_456",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    raw_key = "sk-short-secret"
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await generate_key_fn(
+            data=GenerateKeyRequest(key=raw_key),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="user-1",
+            ),
+        )
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert raw_key not in log_text
+    assert hashlib.sha256(raw_key.encode()).hexdigest() in log_text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field,request_kwargs,expected_in_error",
     [
@@ -12270,6 +12320,55 @@ async def test_bulk_update_team_keys_team_member_no_permission(monkeypatch):
             litellm_changed_by=None,
         )
     mock.update_data.assert_not_called()
+
+
+def test_handle_key_type_persists_key_type_and_derives_routes():
+    """`handle_key_type` keeps `key_type` in the payload (so it is persisted on
+    the token) while still deriving the `allowed_routes` preset. Regression for
+    the UI showing scoped keys as "All Proxy Models": the frontend now reads the
+    persisted `key_type` instead of reverse-mapping the preset string."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    cases = {
+        LiteLLMKeyType.MANAGEMENT: ("management", ["management_routes"]),
+        LiteLLMKeyType.READ_ONLY: ("read_only", ["info_routes"]),
+        LiteLLMKeyType.LLM_API: ("llm_api", ["llm_api_routes"]),
+    }
+    for key_type, (expected_type, expected_routes) in cases.items():
+        data = GenerateKeyRequest(key_type=key_type)
+        out = handle_key_type(data, {"key_type": key_type})
+        assert out["key_type"] == expected_type
+        assert out["allowed_routes"] == expected_routes
+
+
+def test_handle_key_type_default_persists_type_without_forcing_routes():
+    """`default` is persisted but must not overwrite an explicit `allowed_routes`
+    (e.g. a SCIM key created with `["/scim/*"]` and no explicit key_type)."""
+    from litellm.proxy._types import GenerateKeyRequest, LiteLLMKeyType
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT)
+    out = handle_key_type(data, {"allowed_routes": ["/scim/*"], "key_type": LiteLLMKeyType.DEFAULT})
+    assert out["key_type"] == "default"
+    assert out["allowed_routes"] == ["/scim/*"]
+
+
+def test_handle_key_type_none_drops_key_type():
+    """When no `key_type` is supplied the payload must not carry a `key_type`
+    entry, so old keys stay `null` and the frontend keeps its route fallback."""
+    from litellm.proxy._types import GenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        handle_key_type,
+    )
+
+    data = GenerateKeyRequest(key_type=None)
+    out = handle_key_type(data, {"key_type": None})
+    assert "key_type" not in out
 
 
 # ---- pydantic-layer validation -------------------------------------------

@@ -14,6 +14,30 @@ describe("ModelsCell", () => {
     expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
   });
 
+  it("shows 'No model access' for scope-restricted keys with an empty model list", () => {
+    const { rerender } = render(<ModelsCell models={[]} allowedRoutes={["/scim/*"]} />);
+    expect(screen.getByText("No model access")).toBeInTheDocument();
+    expect(screen.queryByText("All Proxy Models")).not.toBeInTheDocument();
+    rerender(<ModelsCell models={[]} allowedRoutes={["management_routes"]} />);
+    expect(screen.getByText("No model access")).toBeInTheDocument();
+    rerender(<ModelsCell models={[]} allowedRoutes={["info_routes"]} />);
+    expect(screen.getByText("No model access")).toBeInTheDocument();
+  });
+
+  it("still shows 'All Proxy Models' for empty models when the key is not scope-restricted", () => {
+    render(<ModelsCell models={[]} allowedRoutes={["llm_api_routes"]} />);
+    expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
+    expect(screen.queryByText("No model access")).not.toBeInTheDocument();
+  });
+
+  it("uses a persisted key_type to render 'No model access' regardless of allowed_routes", () => {
+    const { rerender } = render(<ModelsCell models={[]} allowedRoutes={[]} keyType="management" />);
+    expect(screen.getByText("No model access")).toBeInTheDocument();
+    expect(screen.queryByText("All Proxy Models")).not.toBeInTheDocument();
+    rerender(<ModelsCell models={[]} allowedRoutes={[]} keyType="read_only" />);
+    expect(screen.getByText("No model access")).toBeInTheDocument();
+  });
+
   it("renders every model with no overflow badge when at or below the limit", () => {
     render(<ModelsCell models={["gpt-4o", "claude-sonnet-4-5", "o3-mini"]} maxVisible={3} />);
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();

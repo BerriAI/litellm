@@ -301,17 +301,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/edit_guardrail_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/guardrail_info.tsx": {
     "max-params": {
       "count": 1
@@ -336,14 +325,6 @@
       "count": 5
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1643,13 +1624,13 @@
   },
   "src/components/Teams.tsx": {
     "no-nested-ternary": {
-      "count": 4
+      "count": 2
     },
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/ToolDetail.tsx": {
@@ -1934,11 +1915,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/user_search_modal.tsx": {
-    "react-hooks/use-memo": {
-      "count": 1
-    }
-  },
   "src/components/constants.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2104,9 +2080,6 @@
   "src/components/molecules/filter.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/molecules/models/columns.test.tsx": {
@@ -2168,9 +2141,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/organization/organization_view.tsx": {
