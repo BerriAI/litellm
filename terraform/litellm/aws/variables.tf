@@ -533,3 +533,65 @@ variable "otel_headers_secret_arn" {
   type        = string
   default     = ""
 }
+
+# ---------- Enterprise billing metrics ----------
+#
+# License-gated request metering. Opt-in and gated entirely on
+# billing_metrics_endpoint: leave it empty (the default) and nothing
+# metering-related lands in the container env. Set it and gateway + backend
+# export billable-request counts over OTLP/HTTP, authenticating to the
+# collector with an mTLS client cert. The proxy accepts the cert, key, and CA
+# as either a file path or literal PEM content, so on Fargate they are
+# injected straight from Secrets Manager as env vars and no volume is needed.
+
+variable "billing_metrics_endpoint" {
+  description = <<-EOT
+    OTLP/HTTP endpoint for enterprise billing metrics (sets
+    LITELLM_BILLING_METRICS_ENDPOINT). Non-empty enables request metering;
+    empty (default) disables it and adds no billing env to the container.
+    Requires an enterprise license. Example:
+    "https://telemetry.litellm.ai/v1/metrics"
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "billing_metrics_client_cert_pem" {
+  description = <<-EOT
+    PEM content of the mTLS client certificate issued for this deployment.
+    When billing_metrics_endpoint is set, the stack stores this in a
+    `<tenant>-litellm-<env>-billing-metrics-client-cert` Secrets Manager
+    entry, grants the task-execution role GetSecretValue on it, and exposes
+    it to gateway + backend as LITELLM_BILLING_METRICS_CLIENT_CERT. Required
+    whenever metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_client_key_pem" {
+  description = <<-EOT
+    PEM content of the private key matching
+    billing_metrics_client_cert_pem. Stored in a
+    `<tenant>-litellm-<env>-billing-metrics-client-key` Secrets Manager
+    entry and exposed as LITELLM_BILLING_METRICS_CLIENT_KEY. Required
+    whenever metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_ca_cert_pem" {
+  description = <<-EOT
+    PEM content of the CA bundle used to verify the metering collector.
+    Only needed for private or test collectors whose CA is not in the
+    system trust store; telemetry.litellm.ai is publicly trusted, so leave
+    this empty for production. When set, it is exposed as
+    LITELLM_BILLING_METRICS_CA_CERT.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
