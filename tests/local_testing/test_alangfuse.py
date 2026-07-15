@@ -83,7 +83,7 @@ def search_logs(log_file_path, num_good_logs=1):
                     print(line.strip())
                     print("\n\n")
                     match = re.search(
-                        r'"POST /api/public/ingestion HTTP/1.1" (\d+) (\d+)',
+                        r'"POST /api/public/otel/v1/traces HTTP/1.1" (\d+) (\d+)',
                         line,
                     )
                     if match:
