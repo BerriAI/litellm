@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     IdJagConfig,
     NoneConfig,
+    PassthroughConfig,
     PrivateKeyJwtAuth,
     SharedKey,
     TokenExchangeConfig,
@@ -250,6 +251,12 @@ def test_token_exchange_empty_subject_token_type_normalizes_to_default():
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_client_forwarded_modes_map_to_passthrough_config(auth_type):
+    spec = to_server_spec(_server(auth_type=auth_type))
+    assert spec is not None and isinstance(spec.config, PassthroughConfig)
 
 
 @pytest.mark.parametrize(

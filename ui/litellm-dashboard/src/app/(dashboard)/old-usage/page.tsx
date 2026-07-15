@@ -1,6 +1,6 @@
 "use client";
 
-import Usage from "@/components/usage";
+import Usage from "./_components/usage";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 

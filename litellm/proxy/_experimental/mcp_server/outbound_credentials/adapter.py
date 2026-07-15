@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     IdJagConfig,
     NoneConfig,
+    PassthroughConfig,
     PrivateKeyJwtAuth,
     ServerSpec,
     SharedKey,
@@ -69,9 +70,10 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
-    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), and
-    ``oauth2_token_exchange`` (OBO); client_credentials (M2M), delegated/passthrough
-    oauth2, and SigV4 return None and stay on v1.
+    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), ``oauth2_token_exchange``
+    (OBO), and the client-forwarded token modes ``true_passthrough`` / ``oauth_delegate``
+    (``PassthroughConfig``); client_credentials (M2M), delegated/passthrough oauth2, and SigV4
+    return None and stay on v1.
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
@@ -103,6 +105,8 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
             return None
         case MCPAuth.oauth2_id_jag:
             return _id_jag_spec(server, resource)
+        case MCPAuth.true_passthrough | MCPAuth.oauth_delegate:
+            return ServerSpec(server_id=server.server_id, resource=resource, config=PassthroughConfig())
         case MCPAuth.oauth2_token_exchange:
             return _token_exchange_spec(server, resource)
         case MCPAuth.aws_sigv4:
