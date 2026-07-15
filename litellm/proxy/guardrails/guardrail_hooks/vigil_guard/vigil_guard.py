@@ -116,11 +116,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
 
@@ -131,6 +127,13 @@ class VigilGuardGuardrail(CustomGuardrail):
         )
 
         return VigilGuardGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
 
     @log_guardrail_information
     async def apply_guardrail(

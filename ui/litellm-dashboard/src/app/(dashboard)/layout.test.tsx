@@ -13,8 +13,8 @@ vi.mock("next/navigation", () => ({
   usePathname: vi.fn(() => "/ui/guardrails"),
 }));
 
-vi.mock("@/components/navbar", () => ({
-  default: () => <div data-testid="navbar" />,
+vi.mock("@/components/DashboardHeader", () => ({
+  DashboardHeader: () => <div data-testid="dashboard-header" />,
 }));
 
 vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
@@ -76,12 +76,12 @@ describe("(dashboard) Layout", () => {
 
     await waitFor(() => expect(screen.getByTestId("loading-screen")).toBeTruthy());
     expect(screen.queryByTestId("page-content")).toBeNull();
-    expect(screen.queryByTestId("navbar")).toBeNull();
+    expect(screen.queryByTestId("dashboard-header")).toBeNull();
 
     pendingUiConfig.resolve();
 
     await waitFor(() => expect(screen.getByTestId("page-content")).toBeTruthy());
-    expect(screen.getByTestId("navbar")).toBeTruthy();
+    expect(screen.getByTestId("dashboard-header")).toBeTruthy();
     expect(screen.queryByTestId("loading-screen")).toBeNull();
   });
 
@@ -102,7 +102,7 @@ describe("(dashboard) Layout", () => {
       expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/onboarding?invitation_id=abc123")),
     );
     expect(screen.queryByTestId("page-content")).toBeNull();
-    expect(screen.queryByTestId("navbar")).toBeNull();
+    expect(screen.queryByTestId("dashboard-header")).toBeNull();
     expect(screen.queryByTestId("sidebar")).toBeNull();
   });
 });

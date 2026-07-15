@@ -207,7 +207,8 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
       const mcpSpend = row.mcp_tool_call_spend || 0;
-      const spend = info.getValue();
+      const isMultiCallSession = (row.session_total_count || 1) > 1;
+      const spend = isMultiCallSession && row.session_total_spend != null ? row.session_total_spend : info.getValue();
 
       return (
         <div className="flex flex-col items-end">
@@ -216,6 +217,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
               <MoneyCell value={spend} decimals={6} />
             </span>
           </Tooltip>
+          {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP

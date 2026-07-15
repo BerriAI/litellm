@@ -58,10 +58,7 @@ class SemanticGuardrail(CustomGuardrail):
     ):
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=[
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-            ],
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
             **kwargs,
@@ -95,6 +92,13 @@ class SemanticGuardrail(CustomGuardrail):
             f"SemanticGuardrail '{guardrail_name}' initialized with {self.route_count} routes, "
             f"embedding_model={embedding_model}, threshold={similarity_threshold}"
         )
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
 
     @log_guardrail_information
     async def async_pre_call_hook(

@@ -904,6 +904,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_entities: List[str]
     supported_actions: List[str]
     supported_modes: List[str]
+    supported_modes_by_provider: Dict[str, List[str]]
     pii_entity_categories: List[PiiEntityCategoryMap]
     content_filter_settings: Optional[Dict[str, Any]] = None
 
