@@ -300,7 +300,12 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         if not line:
             continue
         chunks += 1
-        if stream_error is None and (b'"type":"error"' in line or line.startswith(b'data: {"error"')):
+        if stream_error is None and (
+            line.startswith(b"event: error")
+            or b'"type":"error"' in line
+            or b'"type": "error"' in line
+            or line.startswith(b'data: {"error"')
+        ):
             stream_error = line.decode(errors="replace")[:300]
     return StreamingResponse(
         status_code=resp.status_code,
