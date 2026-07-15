@@ -397,6 +397,12 @@ class CallTypes(str, Enum):
     avector_store_search = "avector_store_search"
 
     #########################################################
+    # Google Interactions API Call Types
+    #########################################################
+    create_interaction = "create_interaction"
+    acreate_interaction = "acreate_interaction"
+
+    #########################################################
     # Container Call Types
     #########################################################
     create_container = "create_container"

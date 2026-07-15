@@ -1895,7 +1895,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, FineTuningJob)
             or isinstance(logging_result, LiteLLMBatch)
             or isinstance(logging_result, ResponsesAPIResponse)
-            or isinstance(logging_result, InteractionsAPIResponse)
+            or (isinstance(logging_result, InteractionsAPIResponse) and self._is_interactions_create_call_type())
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
@@ -1912,6 +1912,22 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return True
         return False
+
+    def _is_interactions_create_call_type(self) -> bool:
+        """
+        Only interaction creation is billable. GET polls, deletes, and cancels
+        also return an ``InteractionsAPIResponse`` (with usage once completed),
+        so recognizing those would write spend on every poll of a background
+        interaction. The proxy sets ``call_type`` from its route_type
+        (``create_interaction``/``acreate_interaction``); the SDK sets it from
+        the decorated function name (``create``/``acreate``).
+        """
+        return self.call_type in (
+            CallTypes.create_interaction.value,
+            CallTypes.acreate_interaction.value,
+            "create",
+            "acreate",
+        )
 
     def _flush_passthrough_collected_chunks_helper(
         self,
