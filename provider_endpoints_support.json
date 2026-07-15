@@ -488,9 +488,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false,
-        "a2a": false,
-        "interactions": false
+        "rerank": false
       }
     },
     "chutes": {
@@ -2892,12 +2890,12 @@
         "rerank": false
       }
     },
-    "charity_engine": {
-      "display_name": "Charity Engine (`charity_engine`)",
-      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+    "empiriolabs": {
+      "display_name": "EmpirioLabs (`empiriolabs`)",
+      "url": "https://docs.litellm.ai/docs/providers/empiriolabs",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
+        "messages": false,
         "responses": true,
         "embeddings": false,
         "image_generations": false,
@@ -2905,12 +2903,13 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": false
       }
     },
-    "empiriolabs": {
-      "display_name": "EmpirioLabs (`empiriolabs`)",
-      "url": "https://docs.litellm.ai/docs/providers/empiriolabs",
+    "daoxe": {
+      "display_name": "DaoXE (`daoxe`)",
+      "url": "https://docs.litellm.ai/docs/providers/daoxe",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
