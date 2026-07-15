@@ -12,10 +12,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PTU_ROLLUP_JOB_ID, PTU_SENTINEL_API_KEY
 from litellm.repositories.ptu_reservation_repository import PTUReservationRepository
-
-PTU_SENTINEL_API_KEY = "__ptu_reservation__"
-PTU_ROLLUP_JOB_ID = "ptu_reservation_rollup_job"
 
 
 @dataclass(frozen=True, slots=True)

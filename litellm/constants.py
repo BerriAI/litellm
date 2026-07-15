@@ -1628,3 +1628,9 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
+# sentinel api_key so PTU flat cost stays distinguishable from real per-request
+# spend under the table's composite unique constraint.
+PTU_SENTINEL_API_KEY: str = "__ptu_reservation__"
+PTU_ROLLUP_JOB_ID: str = "ptu_reservation_rollup_job"
