@@ -2692,6 +2692,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> list[Resource]:
         """Fetch available resources from a single MCP server."""
 
@@ -2715,6 +2716,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resources = await client.list_resources()
@@ -2734,6 +2736,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> list[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
@@ -2757,6 +2760,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resource_templates = await client.list_resource_templates()
