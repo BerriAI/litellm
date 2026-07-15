@@ -27,7 +27,7 @@ from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
-from otel_client import JaegerTrace, OtelReader
+from otel_client import JaegerSpan, JaegerTrace, OtelReader
 
 pytestmark = pytest.mark.e2e
 
@@ -96,7 +96,9 @@ def _chain_reaches(span_id: str, root_id: str, trace: JaegerTrace) -> bool:
     return False
 
 
-def _assert_complete_trace(hits: list[JaegerTrace], *, route: str, genai_span: str) -> None:
+def _assert_complete_trace(
+    hits: list[JaegerTrace], *, route: str, genai_span: str, require_cost_span: bool = True
+) -> None:
     """The enforced behavior: the destination holds exactly one trace for the
     call, rooted at the SERVER span, with auth/db/cost children and the gen-AI
     span all connected into that one tree - no dangling parent references."""
@@ -135,7 +137,8 @@ def _assert_complete_trace(hits: list[JaegerTrace], *, route: str, genai_span: s
     assert any(name.startswith(DB_SPAN_PREFIX) for name in names), (
         f"no db ('{DB_SPAN_PREFIX}*') span in the trace; spans: {names}"
     )
-    assert COST_SPAN in names, f"cost write span {COST_SPAN!r} missing; spans: {names}"
+    if require_cost_span:
+        assert COST_SPAN in names, f"cost write span {COST_SPAN!r} missing; spans: {names}"
 
     genai = next((span for span in trace.spans if span.operation_name == genai_span), None)
     assert genai is not None, f"gen-AI span {genai_span!r} missing; spans: {names}"
@@ -146,8 +149,16 @@ def _assert_complete_trace(hits: list[JaegerTrace], *, route: str, genai_span: s
     )
 
 
-def _settled_names(*, route: str, genai_span: str) -> set[str]:
-    return {f"POST {route}", f"auth {route}", COST_SPAN, genai_span}
+def _settled_names(*, route: str, genai_span: str, require_cost_span: bool = True) -> set[str]:
+    names = {f"POST {route}", f"auth {route}", genai_span}
+    return (names | {COST_SPAN}) if require_cost_span else names
+
+
+def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
+    for tag in span.tags:
+        if tag.key == key:
+            return tag.value
+    return None
 
 
 class TestOtelTraceCompleteness:
@@ -257,3 +268,179 @@ class TestOtelTraceCompleteness:
             settled_prefixes={DB_SPAN_PREFIX},
         )
         _assert_complete_trace(hits, route=route, genai_span=genai_span)
+
+    @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["chat_completions"])
+    def test_chat_completions_stream_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed `/chat/completions` request should export one
+        complete OTEL trace. The trace must contain a single root `SERVER`
+        span, with the auth, database, cost, and gen-AI `CLIENT` spans all
+        connected back to that root.
+
+        Streaming has an additional lifecycle risk because the gen-AI span is
+        closed by the stream-consumption path after the final chunk has
+        arrived and usage has been aggregated. Historically, this has caused
+        duplicate or orphaned spans.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The gen-AI span contains `litellm.request.streaming=true`.
+        """
+        route = "/chat/completions"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-stream-chat-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span)
+
+        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
+        assert len(genai_spans) == 1, (
+            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
+            f"spans: {hits[0].span_names()}"
+        )
+        assert _tag(genai_spans[0], "litellm.request.streaming") is True, (
+            "the gen-AI span must record litellm.request.streaming=true; its absence means "
+            "the stream flag was dropped before the model call"
+        )
+
+    @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["messages"])
+    def test_messages_stream_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed `/v1/messages` request should export one
+        complete OTEL trace. The trace must contain a single root `SERVER`
+        span, with the auth, database, cost, and gen-AI `CLIENT` spans all
+        connected back to that root.
+
+        This endpoint has the same streaming lifecycle risk as
+        `/chat/completions`: the gen-AI span is closed by the
+        stream-consumption path after the final chunk has arrived and usage
+        has been aggregated.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The gen-AI span contains `litellm.request.streaming=true`.
+        """
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-stream-messages-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span)
+
+        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
+        assert len(genai_spans) == 1, (
+            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
+            f"spans: {hits[0].span_names()}"
+        )
+        assert _tag(genai_spans[0], "litellm.request.streaming") is True, (
+            "the gen-AI span must record litellm.request.streaming=true; its absence means "
+            "the stream flag was dropped before the model call"
+        )
+
+    @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["responses"])
+    def test_responses_stream_exports_complete_trace(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed /v1/responses request should export one complete
+        OTEL trace. The trace must contain a single root SERVER span, with the
+        auth, database, and gen-AI CLIENT spans all connected back to that
+        root.
+
+        This endpoint has the same streaming lifecycle risk as the other
+        streaming surfaces: the gen-AI span is closed by the
+        stream-consumption path after the final event has arrived and usage
+        has been aggregated.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * Spend is recorded correctly.
+        """
+        route = "/v1/responses"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(
+            f"otel-stream-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
+        )
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = _first_ok(
+            client,
+            lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}", stream=True),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {CHEAP_OPENAI_MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span, require_cost_span=False),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span, require_cost_span=False)
+
+        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
+        assert len(genai_spans) == 1, (
+            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
+            f"spans: {hits[0].span_names()}"
+        )
+
+        spend_row = client.poll_proxy_spend_for_key(key)
+        assert spend_row is not None and spend_row.spend is not None and spend_row.spend > 0, (
+            "a successful streamed responses call must record a positive-spend row in /spend/logs "
+            "(the cost-write SPAN is knowingly absent on this surface, LIT-4428, but the spend "
+            f"itself must land); got {spend_row!r}"
+        )
+        assert spend_row.call_type == "aresponses", (
+            f"the spend row must be attributed to the responses call type, got {spend_row.call_type!r}"
+        )
