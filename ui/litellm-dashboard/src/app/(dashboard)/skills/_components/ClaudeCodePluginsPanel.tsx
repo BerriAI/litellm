@@ -98,7 +98,6 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
             pluginsList={pluginsList}
             isLoading={isLoading}
             onDeleteClick={handleDeleteClick}
-            accessToken={accessToken}
             isAdmin={isAdmin}
             onPluginClick={(id) => {
               const skill = pluginsList.find((p) => p.id === id);

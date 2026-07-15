@@ -13,7 +13,6 @@ interface PluginTableProps {
   pluginsList: Plugin[];
   isLoading: boolean;
   onDeleteClick: (pluginName: string, displayName: string) => void;
-  accessToken: string | null;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
 }

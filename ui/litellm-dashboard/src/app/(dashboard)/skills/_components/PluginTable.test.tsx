@@ -33,7 +33,6 @@ const defaultProps = {
   pluginsList: mockPlugins,
   isLoading: false,
   onDeleteClick: mockOnDeleteClick,
-  accessToken: "sk-test",
   isAdmin: true,
   onPluginClick: mockOnPluginClick,
 };
