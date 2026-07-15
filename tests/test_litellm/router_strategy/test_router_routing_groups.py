@@ -694,3 +694,35 @@ def test_no_override_key_keeps_existing_behavior():
     assert strategy == "least-busy"
     strategy_none_kwargs, _ = router._get_routing_context("other-model", None)
     assert strategy_none_kwargs == "least-busy"
+
+
+def test_request_routing_strategy_override_helper_validates_directly():
+    router = _build_router(routing_strategy="least-busy")
+    assert router._get_request_routing_strategy_override({"routing_strategy": "simple-shuffle"}) == "simple-shuffle"
+    assert router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
+    assert router._get_request_routing_strategy_override({"routing_strategy": "lar1"}) is None
+    assert router._get_request_routing_strategy_override({"routing_strategy": {"bad": "type"}}) is None
+    assert router._get_request_routing_strategy_override({}) is None
+    assert router._get_request_routing_strategy_override(None) is None
+
+
+def test_override_strategy_selector_helper_builds_per_strategy():
+    router = _build_router(routing_strategy="least-busy")
+    latency_selector = router._get_override_strategy_selector("latency-based-routing")
+    assert latency_selector is not None
+    assert router._get_override_strategy_selector("latency-based-routing") is latency_selector
+    assert router._get_override_strategy_selector("least-busy") is router.leastbusy_logger
+    assert router._get_override_strategy_selector("simple-shuffle") is None
+
+
+def test_strategy_reinit_unregisters_override_selectors():
+    router = _build_router(routing_strategy="least-busy")
+    override_selector = router._get_override_strategy_selector("latency-based-routing")
+    assert override_selector is not None
+    assert any(id(cb) == id(override_selector) for cb in litellm.callbacks)
+
+    router.update_settings(routing_strategy="latency-based-routing")
+
+    assert router._override_selectors == {}
+    assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
+    assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
