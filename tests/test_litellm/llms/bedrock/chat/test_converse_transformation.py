@@ -605,6 +605,34 @@ def test_bedrock_deepseek_r1_thinking_dropped_does_not_leak_into_request():
     assert "thinking" not in request.get("additionalModelRequestFields", {})
 
 
+@pytest.mark.parametrize("param", ["thinking", "reasoning_effort"])
+def test_bedrock_deepseek_r1_reasoning_params_not_forwarded_by_map(param):
+    """Even when map_openai_params is called directly (bypassing the supported-params
+    gate), DeepSeek R1 must not forward the Anthropic-shaped thinking/reasoning_effort
+    into additionalModelRequestFields, since Bedrock rejects it with a 400."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.deepseek.r1-v1:0"
+    value = {"type": "enabled", "budget_tokens": 1024} if param == "thinking" else "high"
+
+    optional_params = config.map_openai_params(
+        non_default_params={param: value, "max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert request.get("additionalModelRequestFields") is None
+
+
 def test_get_supported_openai_params_bedrock_converse():
     """
     Test that all documented bedrock converse models have the same set of supported openai params when using
