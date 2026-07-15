@@ -392,29 +392,29 @@ export const processActivityData = (
         };
       }
       // Update totals
-      modelMetrics[model].total_requests += modelData.metrics.api_requests;
-      modelMetrics[model].prompt_tokens += modelData.metrics.prompt_tokens;
-      modelMetrics[model].completion_tokens += modelData.metrics.completion_tokens;
-      modelMetrics[model].total_tokens += modelData.metrics.total_tokens;
-      modelMetrics[model].total_spend += modelData.metrics.spend;
-      modelMetrics[model].total_successful_requests += modelData.metrics.successful_requests;
-      modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
-      modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
-      modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
+      modelMetrics[model].total_requests += modelData.metrics?.api_requests ?? 0;
+      modelMetrics[model].prompt_tokens += modelData.metrics?.prompt_tokens ?? 0;
+      modelMetrics[model].completion_tokens += modelData.metrics?.completion_tokens ?? 0;
+      modelMetrics[model].total_tokens += modelData.metrics?.total_tokens ?? 0;
+      modelMetrics[model].total_spend += modelData.metrics?.spend ?? 0;
+      modelMetrics[model].total_successful_requests += modelData.metrics?.successful_requests ?? 0;
+      modelMetrics[model].total_failed_requests += modelData.metrics?.failed_requests ?? 0;
+      modelMetrics[model].total_cache_read_input_tokens += modelData.metrics?.cache_read_input_tokens ?? 0;
+      modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics?.cache_creation_input_tokens ?? 0;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
         date: day.date,
         metrics: {
-          prompt_tokens: modelData.metrics.prompt_tokens,
-          completion_tokens: modelData.metrics.completion_tokens,
-          total_tokens: modelData.metrics.total_tokens,
-          api_requests: modelData.metrics.api_requests,
-          spend: modelData.metrics.spend,
-          successful_requests: modelData.metrics.successful_requests,
-          failed_requests: modelData.metrics.failed_requests,
-          cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
-          cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
+          prompt_tokens: modelData.metrics?.prompt_tokens ?? 0,
+          completion_tokens: modelData.metrics?.completion_tokens ?? 0,
+          total_tokens: modelData.metrics?.total_tokens ?? 0,
+          api_requests: modelData.metrics?.api_requests ?? 0,
+          spend: modelData.metrics?.spend ?? 0,
+          successful_requests: modelData.metrics?.successful_requests ?? 0,
+          failed_requests: modelData.metrics?.failed_requests ?? 0,
+          cache_read_input_tokens: modelData.metrics?.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: modelData.metrics?.cache_creation_input_tokens ?? 0,
         },
       });
     });
@@ -433,17 +433,17 @@ export const processActivityData = (
             if (!apiKeyBreakdown[apiKey]) {
               apiKeyBreakdown[apiKey] = {
                 api_key: apiKey,
-                key_alias: keyData.metadata.key_alias,
-                team_id: keyData.metadata.team_id,
+                key_alias: keyData.metadata?.key_alias,
+                team_id: keyData.metadata?.team_id,
                 spend: 0,
                 requests: 0,
                 tokens: 0,
               };
             }
 
-            apiKeyBreakdown[apiKey].spend += keyData.metrics.spend;
-            apiKeyBreakdown[apiKey].requests += keyData.metrics.api_requests;
-            apiKeyBreakdown[apiKey].tokens += keyData.metrics.total_tokens;
+            apiKeyBreakdown[apiKey].spend += keyData.metrics?.spend ?? 0;
+            apiKeyBreakdown[apiKey].requests += keyData.metrics?.api_requests ?? 0;
+            apiKeyBreakdown[apiKey].tokens += keyData.metrics?.total_tokens ?? 0;
           });
         }
       });
@@ -478,11 +478,11 @@ export const processActivityData = (
                 };
               }
 
-              modelBreakdown[modelName].spend += keyDataForModel.metrics.spend;
-              modelBreakdown[modelName].requests += keyDataForModel.metrics.api_requests;
-              modelBreakdown[modelName].successful_requests += keyDataForModel.metrics.successful_requests || 0;
-              modelBreakdown[modelName].failed_requests += keyDataForModel.metrics.failed_requests || 0;
-              modelBreakdown[modelName].tokens += keyDataForModel.metrics.total_tokens;
+              modelBreakdown[modelName].spend += keyDataForModel.metrics?.spend ?? 0;
+              modelBreakdown[modelName].requests += keyDataForModel.metrics?.api_requests ?? 0;
+              modelBreakdown[modelName].successful_requests += keyDataForModel.metrics?.successful_requests ?? 0;
+              modelBreakdown[modelName].failed_requests += keyDataForModel.metrics?.failed_requests ?? 0;
+              modelBreakdown[modelName].tokens += keyDataForModel.metrics?.total_tokens ?? 0;
             }
           }
         });
