@@ -173,6 +173,7 @@ async def create_batch(
 
             # Create batch using model credentials
             response = await litellm.acreate_batch(
+                model=model_from_file_id,
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **_create_batch_data,  # type: ignore
             )
