@@ -2757,12 +2757,6 @@ if MCP_AVAILABLE:
                 arguments = hook_result["arguments"]
 
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            # Resolve the effective upstream auth header for this server. A per-server
-            # x-mcp-{alias}-authorization header (carried in mcp_server_auth_headers)
-            # takes precedence over the deprecated global x-mcp-auth / BYOK
-            # mcp_auth_header, mirroring the managed path (_call_regular_mcp_tool and
-            # _prepare_mcp_server_headers). Without this OpenAPI-backed tools dropped the
-            # per-server credential and never authenticated against the upstream backend.
             per_server_auth_header: Optional[Union[str, dict[str, str]]] = None
             if mcp_server and mcp_server_auth_headers:
                 from litellm.proxy._experimental.mcp_server.utils import (
@@ -2782,9 +2776,6 @@ if MCP_AVAILABLE:
             auth_header_value: Optional[str] = None
             per_server_forwarded_headers: Optional[dict[str, str]] = None
             if isinstance(per_server_auth_header, dict):
-                # Per-server headers are already full header values; forward them
-                # verbatim. Authorization becomes the ContextVar auth override and any
-                # other header rides along in the forwarded extra headers.
                 for header_key, header_val in per_server_auth_header.items():
                     if header_key.lower() == "authorization":
                         auth_header_value = header_val
@@ -2828,8 +2819,6 @@ if MCP_AVAILABLE:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
 
-            # Per-server x-mcp-{alias}-* headers win over caller-forwarded extra_headers,
-            # matching the managed path where the resolved server_auth_header is applied last.
             if per_server_forwarded_headers:
                 forwarded_headers = {**(forwarded_headers or {}), **per_server_forwarded_headers}
 

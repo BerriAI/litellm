@@ -163,8 +163,6 @@ async def test_openapi_local_tool_forwards_per_server_auth_header():
             mcp_server_auth_headers={"report_openapi": {"Authorization": "Bearer upstream-token"}},
         )
 
-    # The per-server Authorization must reach the OpenAPI handler verbatim (no
-    # extra "Bearer " re-prefixing), so the upstream backend is authenticated.
     assert captured["auth"] == "Bearer upstream-token"
 
 
