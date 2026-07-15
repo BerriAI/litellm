@@ -7598,9 +7598,7 @@ class ProxyStartupEvent:
             try:
                 _db_gs_record = await call_with_db_reconnect_retry(
                     prisma_client,
-                    lambda: ConfigRepository(prisma_client).table.find_first(
-                        where={"param_name": "general_settings"}
-                    ),
+                    lambda: ConfigRepository(prisma_client).table.find_first(where={"param_name": "general_settings"}),
                     reason="startup_store_model_in_db_general_settings_lookup_failure",
                 )
                 if _db_gs_record is not None:
@@ -7611,7 +7609,7 @@ class ProxyStartupEvent:
                     if isinstance(_db_param_value, str):
                         try:
                             _db_param_value = json.loads(_db_param_value)
-                        except (json.JSONDecodeError, TypeError):
+                        except json.JSONDecodeError:
                             _db_param_value = {}
                     if isinstance(_db_param_value, dict):
                         _db_val = _db_param_value.get("store_model_in_db")
