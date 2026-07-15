@@ -2986,7 +2986,7 @@ class Router:
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self.cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags = deployment.get("litellm_params", {}).get("tags")

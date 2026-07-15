@@ -3773,3 +3773,19 @@ def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
     assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
     assert payload["total_tokens"] == 0
     assert payload["completion_tokens"] == 0
+
+
+def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
+    """
+    pre_call/post_call must not stash their locals (full messages, the Logging
+    object, complete_input_dict) into module-level state. That pinned the most
+    recent request's entire payload in memory for the life of the worker,
+    which with multi-hundred-KB requests is a permanent per-worker leak.
+    """
+    litellm.error_logs.clear()
+    big_input = [{"role": "user", "content": "x" * 10_000}]
+
+    logging_obj.pre_call(input=big_input, api_key="sk-test")
+    logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
+
+    assert litellm.error_logs == {}
