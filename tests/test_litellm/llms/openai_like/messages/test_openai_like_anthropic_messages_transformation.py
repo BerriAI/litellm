@@ -301,6 +301,23 @@ def test_anthropic_beta_survives_provider_filter_on_passthrough_path(config):
     assert "anthropic-beta" not in stripped
 
 
+def test_prompt_caching_scope_beta_is_blocked_for_direct_anthropic():
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    headers = {
+        "anthropic-beta": "web-search-2025-03-05,prompt-caching-scope-2026-01-05,context-management-2025-06-27"
+    }
+
+    filtered = update_headers_with_filtered_beta(
+        headers=dict(headers), provider="anthropic"
+    )
+
+    beta_values = set(filtered.get("anthropic-beta", "").split(","))
+    assert "prompt-caching-scope-2026-01-05" not in beta_values
+    assert "web-search-2025-03-05" in beta_values
+    assert "context-management-2025-06-27" in beta_values
+
+
 def test_json_provider_messages_config_probes_capabilities_under_provider_slug():
     """Capability probes in the shared pass-through helpers read
     ``self.custom_llm_provider``. The JSON-provider config knows its slug, so it

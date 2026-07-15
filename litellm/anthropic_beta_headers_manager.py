@@ -34,6 +34,17 @@ from litellm.litellm_core_utils.litellm_logging import verbose_logger
 # Cache for the loaded configuration
 _BETA_HEADERS_CONFIG: Optional[Dict] = None
 
+BLOCKED_ANTHROPIC_BETA_HEADER_PREFIXES = (
+    "prompt-caching-scope-",
+)
+
+
+def _is_blocked_anthropic_beta_header(header: str) -> bool:
+    """Return True for Anthropic beta values this fork never forwards."""
+    return any(
+        header.startswith(prefix) for prefix in BLOCKED_ANTHROPIC_BETA_HEADER_PREFIXES
+    )
+
 
 class GetAnthropicBetaHeadersConfig:
     """
@@ -244,6 +255,10 @@ def filter_and_transform_beta_headers(
 
     for header in beta_headers:
         header = header.strip()
+
+        if _is_blocked_anthropic_beta_header(header):
+            verbose_logger.debug(f"Dropping blocked beta header '{header}'")
+            continue
 
         # Check if header is in the mapping
         if header not in provider_mapping:
