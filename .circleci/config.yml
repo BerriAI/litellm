@@ -163,6 +163,26 @@ commands:
             done
             echo "fake OpenAI endpoint did not become ready" >&2
             exit 1
+  start_cost_center_service:
+    description: "Start the stand-in cost center validation service (tests/store_model_in_db_tests/cost_center_service.py) on host port 9414 and wait until healthy. The proxy's team-metadata validator (team_metadata_validator_e2e.py, impl 'http') reaches it via TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start cost center validation service
+          background: true
+          command: |
+            uv run --no-sync python tests/store_model_in_db_tests/cost_center_service.py --host 0.0.0.0 --port 9414
+      - run:
+          name: Wait for cost center validation service
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:9414/health >/dev/null 2>&1; then
+                echo "cost center validation service is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "cost center validation service did not become ready" >&2
+            exit 1
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -2238,6 +2258,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - start_fake_openai_endpoint
+      - start_cost_center_service
       - attach_workspace:
           at: ~/project
       - run:
@@ -2257,11 +2278,13 @@ jobs:
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
+              -e TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/team_metadata_validator_e2e.py:/app/team_metadata_validator_e2e.py \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
