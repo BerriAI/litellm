@@ -26,9 +26,13 @@ from typing import (
     cast,
 )
 
+import copy
+from collections.abc import Mapping
+from datetime import datetime, timezone
+
 import httpx
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -43,10 +47,11 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
+    BedrockChecksViolation,
     BedrockContentItem,
     BedrockGuardrailChecksResponse,
     BedrockGuardrailOutput,
@@ -58,7 +63,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from botocore.awsrequest import AWSPreparedRequest
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -183,7 +188,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
         disable_exception_on_block: Optional[bool] = False,
-        checks: dict | object | None = None,
+        checks: BedrockChecksConfigModel | Mapping[str, object] | None = None,
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
@@ -212,11 +217,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         If True, will not raise an exception when the guardrail is blocked.
         """
 
-        # `checks` (InvokeGuardrailChecks) and `guardrailIdentifier` (ApplyGuardrail)
-        # are two different APIs; configuring both is ambiguous.
-        if self.checks is not None and self.guardrailIdentifier is not None:
+        # `checks` (InvokeGuardrailChecks) and `guardrailIdentifier`/`guardrailVersion`
+        # (ApplyGuardrail) are two different APIs; configuring both is ambiguous.
+        if self.checks is not None and (self.guardrailIdentifier is not None or self.guardrailVersion is not None):
             raise ValueError(
-                "Bedrock guardrail accepts either 'guardrailIdentifier' (ApplyGuardrail) "
+                "Bedrock guardrail accepts either 'guardrailIdentifier'/'guardrailVersion' (ApplyGuardrail) "
                 "or 'checks' (InvokeGuardrailChecks), not both."
             )
 
@@ -254,7 +259,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
 
     @staticmethod
-    def _normalize_checks(checks: object | None) -> dict[str, Any] | None:
+    def _normalize_checks(checks: BedrockChecksConfigModel | Mapping[str, object] | None) -> dict[str, Any] | None:
         """Normalize the configured `checks` into a plain dict for the API body.
 
         Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops None /
@@ -262,11 +267,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if checks is None:
             return None
-        if hasattr(checks, "model_dump"):
-            checks = checks.model_dump(exclude_none=True)
-        if not isinstance(checks, dict):
-            return None
-        unknown_keys = set(checks.keys()) - _BEDROCK_CHECKS_KNOWN_KEYS
+        raw = checks.model_dump(exclude_none=True) if isinstance(checks, BedrockChecksConfigModel) else dict(checks)
+        unknown_keys = set(raw.keys()) - _BEDROCK_CHECKS_KNOWN_KEYS
         if unknown_keys:
             verbose_proxy_logger.warning(
                 "BedrockGuardrail: unrecognized check key(s) %s will be ignored; "
@@ -275,12 +277,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 sorted(unknown_keys),
                 sorted(_BEDROCK_CHECKS_KNOWN_KEYS),
             )
-        cleaned = {
-            key: value for key, value in checks.items() if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None
-        }
-        if not cleaned and checks:
+        cleaned = {key: value for key, value in raw.items() if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None}
+        if not cleaned and raw:
             raise ValueError(
-                f"BedrockGuardrail: 'checks' block contained only unrecognized or empty keys {sorted(checks.keys())}. "
+                f"BedrockGuardrail: 'checks' block contained only unrecognized or empty keys {sorted(raw.keys())}. "
                 f"Known keys: {sorted(_BEDROCK_CHECKS_KNOWN_KEYS)}. "
                 "Fix the guardrail config or remove the 'checks' block to use ApplyGuardrail mode."
             )
@@ -773,8 +773,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
-        from datetime import datetime, timezone
-
         start_time = datetime.now(timezone.utc)
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
@@ -867,7 +865,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def _sign_and_post(
         self,
-        prepared_request: object,
+        prepared_request: "AWSPreparedRequest",
         request_data: dict | None,
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -879,13 +877,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         success (including non-2xx that httpx did not raise on); the 200-path logging,
         status and tracing stay with each caller because the two APIs report differently.
         """
-        from datetime import datetime, timezone
-
         try:
             return await self.async_handler.post(
                 url=prepared_request.url,
-                data=prepared_request.body,  # type: ignore
-                headers=prepared_request.headers,  # type: ignore
+                data=prepared_request.body,
+                headers=dict(prepared_request.headers),
             )
         except HTTPException:
             # Propagate HTTPException (e.g. from non-200 path) as-is
@@ -964,27 +960,25 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         dropped). Messages exceeding the per-message content-block cap are split into
         multiple messages rather than truncated.
         """
-        checks_messages: list[BedrockChecksMessage] = []
-
         if source == "OUTPUT":
             # Reuse the ApplyGuardrail output extractor (single source of truth for
             # pulling assistant text out of a ModelResponse), then re-tag as an
             # assistant turn for the role-based InvokeGuardrailChecks payload.
             output_request = self._create_bedrock_output_content_request(response=response)
-            output_texts: list[str] = []
-            for item in output_request.get("content") or []:
-                text = (item.get("text") or {}).get("text")
-                if text:
-                    output_texts.append(text)
+            output_texts = [
+                text for item in output_request.get("content") or [] if (text := (item.get("text") or {}).get("text"))
+            ]
             return self._chunk_texts_into_checks_messages("assistant", output_texts)
 
-        for message in messages or []:
-            # Map every role onto a supported one; never skip (skipping = bypass).
-            role = _BEDROCK_CHECKS_ROLE_MAP.get(message.get("role") or "", "user")
-            blocks = self.get_content_items_for_message(message) or []
-            texts = [block.text for block in blocks if block.text]
-            checks_messages.extend(self._chunk_texts_into_checks_messages(role, texts))
-        return checks_messages
+        # Map every role onto a supported one; never skip (skipping = bypass).
+        return [
+            checks_message
+            for message in messages or []
+            for checks_message in self._chunk_texts_into_checks_messages(
+                _BEDROCK_CHECKS_ROLE_MAP.get(message.get("role") or "", "user"),
+                [block.text for block in self.get_content_items_for_message(message) or [] if block.text],
+            )
+        ]
 
     async def _make_invoke_guardrail_checks_request(
         self,
@@ -1000,8 +994,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         to a block decision via the configured thresholds. On a pass we return an
         empty ``BedrockGuardrailResponse`` (downstream masking treats it as a no-op).
         """
-        from datetime import datetime, timezone
-
         start_time = datetime.now(timezone.utc)
 
         checks_messages = self._build_invoke_guardrail_checks_messages(
@@ -1055,7 +1047,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             raise HTTPException(status_code=status_code, detail=detail_message)
 
-        json_response = TypeAdapter(BedrockGuardrailChecksResponse).validate_python(httpx_response.json())
+        try:
+            json_response = TypeAdapter(BedrockGuardrailChecksResponse).validate_python(httpx_response.json())
+        except (ValidationError, ValueError) as e:
+            verbose_proxy_logger.error("Bedrock InvokeGuardrailChecks: unparseable 200 response: %s", str(e))
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response={"error": str(e)},
+                request_data=request_data or {},
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time.timestamp(),
+                end_time=datetime.now(timezone.utc).timestamp(),
+                duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
+                event_type=event_type,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Bedrock InvokeGuardrailChecks returned an unexpected response shape"},
+            ) from e
         violations = self._collect_invoke_checks_violations(json_response)
 
         # Log a copy with PII location offsets stripped: offsets + the (separately
@@ -1069,7 +1078,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
             event_type=event_type,
-            tracing_detail=self._build_invoke_checks_tracing_detail(violations) or None,
+            tracing_detail=self._build_invoke_checks_tracing_detail(violations) if violations else None,
         )
 
         if violations:
@@ -1079,13 +1088,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _collect_invoke_checks_violations(
         self, response: BedrockGuardrailChecksResponse | None
-    ) -> list[dict[str, Any]]:
+    ) -> list[BedrockChecksViolation]:
         """Return the check results whose score meets/exceeds the configured threshold.
 
         Only checks present in the configured ``checks`` block are evaluated; a
         threshold of ``None`` makes that check detect-only (never contributes a
-        violation). Only the non-sensitive label (category/type) and the numeric
-        score are kept -- never offsets or matched text.
+        violation). A truncated sensitiveInformation result counts as a violation
+        (fail closed: omitted detections were never scored). Only the non-sensitive
+        label (category/type) and the numeric score are kept -- never offsets or
+        matched text.
         """
         results: dict[str, Any] = dict((response or {}).get("results") or {})
         # (results key, score field, label field, threshold). PII uses
@@ -1107,20 +1118,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
 
         configured_checks = self.checks or {}
-        violations: list[dict[str, Any]] = []
+        violations: list[BedrockChecksViolation] = []
         for check_key, score_field, label_field, threshold in check_specs:
             if threshold is None or check_key not in configured_checks:
                 continue
-            for entry in (results.get(check_key) or {}).get("results") or []:
+            check_result = results.get(check_key) or {}
+            if check_key == "sensitiveInformation" and check_result.get("truncated"):
+                violations.append({"check": check_key, "truncated": True})
+            for entry in check_result.get("results") or []:
                 score = entry.get(score_field)
                 if isinstance(score, (int, float)) and float(score) >= threshold:
-                    violations.append(
-                        {
-                            "check": check_key,
-                            label_field: entry.get(label_field),
-                            score_field: score,
-                        }
+                    violation: BedrockChecksViolation = (
+                        {"check": check_key, "category": entry.get("category"), "severityScore": float(score)}
+                        if score_field == "severityScore"
+                        else {"check": check_key, "type": entry.get("type"), "confidenceScore": float(score)}
                     )
+                    violations.append(violation)
         return violations
 
     @staticmethod
@@ -1128,8 +1141,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: BedrockGuardrailChecksResponse,
     ) -> dict[str, Any]:
         """Strip PII location offsets from a checks response before it is logged."""
-        import copy
-
         sanitized: dict[str, Any] = copy.deepcopy(dict(response))
         sensitive = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
         for entry in sensitive.get("results") or []:
@@ -1144,7 +1155,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _build_invoke_checks_tracing_detail(
-        violations: list[dict[str, Any]],
+        violations: list[BedrockChecksViolation],
     ) -> GuardrailTracingDetail:
         tracing_detail: GuardrailTracingDetail = {}
         categories = [
@@ -1158,7 +1169,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return tracing_detail
 
     def _get_block_exception_for_checks(
-        self, violations: list[dict[str, Any]], request_data: Optional[dict] = None
+        self, violations: list[BedrockChecksViolation], request_data: dict | None = None
     ) -> Union[HTTPException, ModifyResponseException]:
         """Build the block exception for an over-threshold InvokeGuardrailChecks result.
 

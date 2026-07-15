@@ -179,6 +179,18 @@ class BedrockChecksResults(TypedDict, total=False):
     sensitiveInformation: BedrockChecksSensitiveInformationResult | None
 
 
+class BedrockChecksViolation(TypedDict, total=False):
+    """One over-threshold InvokeGuardrailChecks result; carries only the
+    non-sensitive label and score, never offsets or matched text."""
+
+    check: str
+    category: str | None
+    type: str | None
+    severityScore: float
+    confidenceScore: float
+    truncated: bool
+
+
 class BedrockChecksTextUnits(TypedDict, total=False):
     textUnits: int | None
 

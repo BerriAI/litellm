@@ -233,6 +233,96 @@ async def test_unsolicited_check_scores_are_ignored():
 
 
 @pytest.mark.asyncio
+async def test_blocks_when_score_equals_threshold():
+    """The documented contract is score >= threshold blocks; equality must block."""
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
+    payload = {
+        "results": {
+            "contentFilter": {
+                "results": [{"category": "VIOLENCE", "severityScore": 0.5}]
+            }
+        }
+    }
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
+    with creds, prep, post_patch:
+        with pytest.raises(HTTPException) as exc:
+            await g.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "borderline"}],
+                request_data={"messages": []},
+            )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_truncated_pii_results_block():
+    """Truncated sensitiveInformation results fail closed: omitted detections were
+    never scored, so sub-threshold visible entries must not let the request pass."""
+    g = BedrockGuardrail(
+        checks={"sensitiveInformation": {"entities": [{"type": "EMAIL"}]}},
+        pii_confidence_threshold=0.5,
+    )
+    payload = {
+        "results": {
+            "sensitiveInformation": {
+                "results": [{"type": "EMAIL", "confidenceScore": 0.1}],
+                "truncated": True,
+            }
+        }
+    }
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
+    with creds, prep, post_patch:
+        with pytest.raises(HTTPException) as exc:
+            await g.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "many entities"}],
+                request_data={"messages": []},
+            )
+    assert exc.value.status_code == 400
+    assert {"check": "sensitiveInformation", "truncated": True} in exc.value.detail["bedrock_guardrail_checks"]
+
+
+@pytest.mark.asyncio
+async def test_truncated_pii_ignored_when_pii_check_not_configured():
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
+    payload = {
+        "results": {
+            "sensitiveInformation": {"results": [], "truncated": True}
+        }
+    }
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
+    with creds, prep, post_patch:
+        result = await g.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"messages": []},
+        )
+    assert result == BedrockGuardrailResponse()
+
+
+@pytest.mark.asyncio
+async def test_checks_with_guardrail_version_rejected():
+    with pytest.raises(ValueError):
+        BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, guardrailVersion="DRAFT")
+
+
+@pytest.mark.asyncio
+async def test_malformed_200_response_fails_closed():
+    """A 200 whose body does not match the checks response shape must raise, not pass."""
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
+    payload = {"results": "not-a-mapping"}
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
+    with creds, prep, post_patch:
+        with pytest.raises(HTTPException) as exc:
+            await g.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hello"}],
+                request_data={"messages": []},
+            )
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
 async def test_disable_exception_on_block_raises_modify_response_exception():
     g = BedrockGuardrail(
         checks=CONTENT_FILTER_CHECKS,
