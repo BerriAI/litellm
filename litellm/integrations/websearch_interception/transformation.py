@@ -95,10 +95,7 @@ class WebSearchTransformation:
                 call_id = getattr(item, "call_id", None)
                 arguments = getattr(item, "arguments", "")
 
-            if item_type != "function_call" or item_name not in (
-                LITELLM_WEB_SEARCH_TOOL_NAME,
-                "web_search",
-            ):
+            if item_type != "function_call" or item_name != LITELLM_WEB_SEARCH_TOOL_NAME:
                 continue
 
             if isinstance(arguments, str):

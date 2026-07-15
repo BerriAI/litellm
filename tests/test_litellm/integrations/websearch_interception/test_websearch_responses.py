@@ -15,7 +15,6 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.types.integrations.custom_logger import (
-    CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
 )
 from litellm.types.utils import CallTypes, LlmProviders
@@ -118,6 +117,27 @@ async def test_responses_hook_ignores_non_websearch_function_call():
 
 
 @pytest.mark.asyncio
+async def test_responses_hook_ignores_bare_web_search_function_call():
+    logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+    response = SimpleNamespace(
+        output=[SimpleNamespace(type="function_call", name="web_search", call_id="c1", arguments="{}")]
+    )
+
+    should_run, tools_dict = await logger.async_should_run_responses_agentic_loop(
+        response=response,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "name": "litellm_web_search"}],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={},
+    )
+
+    assert should_run is False
+    assert tools_dict == {}
+
+
+@pytest.mark.asyncio
 async def test_surface_marker_routes_should_run_to_responses_branch():
     """async_should_run_agentic_loop must dispatch to the responses branch when the
     surface marker says responses.
@@ -201,7 +221,10 @@ async def test_build_responses_plan_produces_responses_input():
             },
             logging_obj=MagicMock(),
             stream=False,
-            kwargs={"custom_llm_provider": "openai"},
+            kwargs={
+                "custom_llm_provider": "openai",
+                "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+            },
         )
 
     assert plan.run_agentic_loop is True
@@ -225,6 +248,7 @@ async def test_build_responses_plan_produces_responses_input():
 
     assert patch_obj.tools == [{"type": "function", "name": "litellm_web_search"}]
     assert "tool_choice" not in patch_obj.optional_params
+    assert "_agentic_loop_api_surface" not in patch_obj.kwargs
     assert patch_obj.model == "openai/gpt-4o"
 
 
