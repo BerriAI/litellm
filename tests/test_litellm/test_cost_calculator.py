@@ -11,16 +11,38 @@ sys.path.insert(
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
+    get_replicate_completion_pricing,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_unmapped_replicate_cost_with_explicit_seconds():
+    cost = completion_cost(model="replicate/unmapped-runtime", total_time=2.0)
+    assert cost == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 2.0)
+
+
+def test_unmapped_replicate_cost_with_timestamp_fallback():
+    response = {"created": 10.0, "ended": 12.0}
+    cost = get_replicate_completion_pricing(response)
+    assert cost == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 2.0)
+
+
+def test_unmapped_replicate_cost_converts_response_ms_to_seconds():
+    model = "replicate/unmapped-runtime"
+    response = ModelResponse(model=model)
+    response._response_ms = 2000.0
+
+    cost = completion_cost(model=model, completion_response=response)
+    assert cost == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 2.0)
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
