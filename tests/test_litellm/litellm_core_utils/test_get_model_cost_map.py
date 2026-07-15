@@ -4,8 +4,10 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
+import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +25,35 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     _count_model_entries,
     _finalize_model_cost_map,
 )
+
+
+def test_veo_31_lite_generate_001_model_cost_map_entries():
+    repo_root = Path(__file__).parents[3]
+    root_map = json.loads(
+        (repo_root / "model_prices_and_context_window.json").read_text()
+    )
+    backup_map = GetModelCostMap.load_local_model_cost_map()
+
+    expected = {
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "supported_modalities": ["text"],
+        "supported_output_modalities": ["video"],
+    }
+    provider_by_model = {
+        "gemini/veo-3.1-lite-generate-001": "gemini",
+        "vertex_ai/veo-3.1-lite-generate-001": "vertex_ai-video-models",
+    }
+
+    for model_map in [root_map, backup_map]:
+        for model, provider in provider_by_model.items():
+            entry = model_map[model]
+            for key, value in expected.items():
+                assert entry[key] == value
+            assert entry["litellm_provider"] == provider
 
 
 def _make_models(n: int) -> dict:
@@ -133,7 +164,10 @@ def test_shipped_backup_carries_the_claude_routing_rules():
     try:
         set_fallback_generalizations(rules)
         assert match_routing_generalization("claude-opus-4-9") == "anthropic"
-        assert match_routing_generalization("global.anthropic.claude-opus-4-9") == "bedrock"
+        assert (
+            match_routing_generalization("global.anthropic.claude-opus-4-9")
+            == "bedrock"
+        )
     finally:
         set_fallback_generalizations(previous)
 
@@ -152,7 +186,9 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
 
     rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
     baseline_rule = next(r for r in rules if r.get("name") == "claude-family-baseline")
-    adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
+    adaptive_rule = next(
+        r for r in rules if r.get("name") == "claude-adaptive-thinking"
+    )
     assert "supports_adaptive_thinking" not in baseline_rule["model_info"]
     assert "litellm_provider" not in baseline_rule["model_info"]
     assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True}
