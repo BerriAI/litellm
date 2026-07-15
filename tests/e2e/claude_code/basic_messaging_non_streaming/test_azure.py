@@ -33,7 +33,7 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # resource URL and API key.
 AZURE_MODELS = [
     "claude-haiku-4-5-azure",
-    "claude-sonnet-4-6-azure",
+    "claude-sonnet-4-5-azure",
     "claude-opus-4-7-azure",
 ]
 

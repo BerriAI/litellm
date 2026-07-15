@@ -63,7 +63,7 @@ from claude_code.cli_driver import (
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 

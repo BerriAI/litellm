@@ -553,8 +553,8 @@ def pytest_sessionfinish(session, exitstatus):
 # ---------------------------------------------------------------------------
 # Session-scoped compat model registration.
 #
-# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-6``
-# and ``claude-sonnet-4-6-bedrock-invoke``. On stage those live in the
+# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-5``
+# and ``claude-sonnet-4-5-bedrock-invoke``. On stage those live in the
 # gateway's model_list at deploy time; locally the docker-config.yaml
 # under tests/e2e/ only declares one of them, so every non-haiku cell
 # 400s with ``Invalid model name``. The fixture here reconciles the two:

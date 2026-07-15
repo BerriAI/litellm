@@ -27,7 +27,7 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # routing config; the driver only sends the alias.
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 

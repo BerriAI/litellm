@@ -54,7 +54,7 @@ from claude_code.http_probe import (
 
 AZURE_MODELS = [
     "claude-haiku-4-5-azure",
-    "claude-sonnet-4-6-azure",
+    "claude-sonnet-4-5-azure",
     "claude-opus-4-7-azure",
 ]
 

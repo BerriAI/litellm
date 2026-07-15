@@ -1,6 +1,6 @@
 """Regression tests for the compat-model registration loader.
 
-The compat cells hardcode virtual model names like ``claude-sonnet-4-6``
+The compat cells hardcode virtual model names like ``claude-sonnet-4-5``
 and expect them to be registered on the proxy before the cell runs. The
 session fixture in ``conftest.py`` reads ``test_config.yaml`` and POSTs
 those deployments via ``/model/new``. These tests pin the invariants

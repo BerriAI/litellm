@@ -189,7 +189,7 @@ def test_verify_streaming_requires_all_models_to_stream():
     fake_result = _FakeResult()
     outcomes = {
         "claude-haiku-4-5": DriverResult(text="ok", events=_streamed_events(5)),
-        "claude-sonnet-4-6": DriverResult(text="ok", events=_buffered_events()),
+        "claude-sonnet-4-5": DriverResult(text="ok", events=_buffered_events()),
         "claude-opus-4-7": DriverResult(text="ok", events=_streamed_events(5)),
     }
     runner, _captured = _make_fake_runner(outcomes_by_model=outcomes)

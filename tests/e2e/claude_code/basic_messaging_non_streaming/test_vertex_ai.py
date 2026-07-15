@@ -28,7 +28,7 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # model id and the GCP region.
 VERTEX_AI_MODELS = [
     "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-6-vertex",
+    "claude-sonnet-4-5-vertex",
     "claude-opus-4-7-vertex",
 ]
 

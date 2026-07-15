@@ -70,7 +70,7 @@ from claude_code.cli_driver import (
 # 1M-context beta. See module docstring for the per-cell-aggregator
 # rationale.
 ANTHROPIC_MODELS: Sequence[str] = (
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 )
 

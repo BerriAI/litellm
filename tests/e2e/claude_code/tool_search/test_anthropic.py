@@ -54,7 +54,7 @@ from claude_code.http_probe import (
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 
