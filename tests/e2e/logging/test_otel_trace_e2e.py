@@ -513,23 +513,18 @@ class TestOtelTraceCompleteness:
     def test_failed_chat_completions_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """A failed /chat/completions call (upstream authentication error) must
-        export one complete OTEL trace whose gen-AI span carries the full
-        LIT-4179 error contract: error=True, the exact error.type, ERROR span
-        status, and an UNTRUNCATED error.message containing the provider's
-        complete error JSON - proven by parsing that JSON back out of the
-        attribute (truncation breaks the parse). The root SERVER span must
-        record the 401 the client received.
+        """This test checks that a failed `/chat/completions` request produces a
+        single, complete OTEL trace. The model-call span should include all
+        expected error attributes, a non-empty stack trace, and the full,
+        untruncated `error.message`. The provider error embedded in that
+        message must also remain valid JSON. The root server span should
+        record the same 401 response returned to the client.
 
-        The trace has no cost-write span by design: a failed call bills
-        nothing, so the tree contract is asserted with require_cost_span=False.
-
-        The failure is produced by registering a deployment with a deliberately
-        invalid upstream Anthropic key, so the request clears proxy auth and
-        fails at the provider - the only path that produces a gen-AI error span
-        (proxy-gate rejections never reach the model and are deliberately not
-        traced as LLM calls).
-        """
+        The test uses a deployment with an invalid upstream API key. This
+        allows the request to pass LiteLLM’s proxy authentication and fail at
+        the provider, which is necessary to generate a model-call error span.
+        There should be no cost-write span because failed requests are not
+        billed."""
         route = "/chat/completions"
         _assert_otel_destination_configured(client)
 
