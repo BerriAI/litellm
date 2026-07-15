@@ -44261,6 +44261,90 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "bedrock_mantle/openai.gpt-5.6-sol": {
+        "input_cost_per_token": 5.5e-06,
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_read_input_token_cost": 5.5e-07,
+        "output_cost_per_token": 3.3e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock_mantle/openai.gpt-5.6-terra": {
+        "input_cost_per_token": 2.75e-06,
+        "cache_creation_input_token_cost": 3.4375e-06,
+        "cache_read_input_token_cost": 2.75e-07,
+        "output_cost_per_token": 1.65e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock_mantle/openai.gpt-5.6-luna": {
+        "input_cost_per_token": 1.1e-06,
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "output_cost_per_token": 6.6e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
         "cache_read_input_token_cost": 5.5e-07,

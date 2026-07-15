@@ -79,6 +79,7 @@ services:
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
+      STORE_MODEL_IN_DB: "True"
       LITELLM_OTEL_V2: "true"
       PHOENIX_COLLECTOR_HTTP_ENDPOINT: http://jaeger:4318/v1/traces
       PHOENIX_API_KEY: local-jaeger-noauth

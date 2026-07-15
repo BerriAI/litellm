@@ -1475,6 +1475,7 @@ if MCP_AVAILABLE:
             temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
                 temp_record,
                 credentials_are_encrypted=False,
+                persist_discovered_endpoints=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,
