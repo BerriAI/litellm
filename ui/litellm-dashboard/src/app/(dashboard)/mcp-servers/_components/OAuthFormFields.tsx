@@ -228,7 +228,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             label={
               <FieldLabel
                 label="Token Storage TTL (seconds, optional)"
-                tooltip="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default."
+                tooltip="How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default."
               />
             }
             name="token_storage_ttl_seconds"

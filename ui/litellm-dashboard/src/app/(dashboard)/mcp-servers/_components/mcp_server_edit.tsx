@@ -1386,7 +1386,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       label={
                         <span className="text-sm font-medium text-gray-700 flex items-center">
                           Token Storage TTL (seconds, optional)
-                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
+                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
                             <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                           </Tooltip>
                         </span>
