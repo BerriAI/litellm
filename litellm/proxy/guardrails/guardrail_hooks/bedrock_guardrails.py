@@ -868,7 +868,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return await self.async_handler.post(
                 url=prepared_request.url,
                 data=prepared_request.body,
-                headers=dict(prepared_request.headers),
+                headers=prepared_request.headers,
             )
         except HTTPException:
             # Propagate HTTPException (e.g. from non-200 path) as-is
