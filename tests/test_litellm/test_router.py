@@ -1871,6 +1871,59 @@ def test_completion_streaming_iterator_preserves_hidden_params():
     assert result._hidden_params.get("litellm_call_id") == "test-sync-call"
 
 
+def test_completion_streaming_iterator_reraises_mid_chunk_error():
+    """Sync: MidStreamFallbackError with generated_content and is_pre_first_chunk=False
+    must be re-raised immediately; the router cannot recover after partial content
+    has already been sent to the client."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello, I am",
+        is_pre_first_chunk=False,
+    )
+
+    class SyncIteratorMidChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorMidChunkError()
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        list(result)
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
     """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
