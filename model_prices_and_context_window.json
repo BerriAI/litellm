@@ -44089,6 +44089,66 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "hosted_vllm/zai-org/GLM-4.6-FP8": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "hosted_vllm/zai-org/GLM-4.6": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "hosted_vllm/MiniMaxAI/MiniMax-M2": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
+    },
+    "hosted_vllm/Qwen/Qwen3-VL-235B-A22B-Thinking": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
+    },
+    "zai-org/GLM-4.6": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "glm-latest": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "glm-private": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "qwen3v": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "minimaxai/minimax-m2": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
+    },
+    "xyne-spaces-minimax-m2": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
+    },
     "fallback_generalizations": {
         "rules": [
             {
