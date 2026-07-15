@@ -18,6 +18,7 @@ from litellm._logging import (
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
+    print_verbose,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -255,6 +256,75 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
         assert (
             logger.propagate is False
         ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+
+
+def test_print_verbose_always_emits_to_debug_logger(caplog):
+    """
+    Regression test: print_verbose() must route to verbose_logger.debug() regardless of
+    `set_verbose`, so callers relying on LITELLM_LOG=DEBUG (e.g. cache logging) are visible
+    even when the deprecated `set_verbose` flag is False.
+    """
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        print_verbose("cache lookup for key abc123")
+
+    assert any(
+        "cache lookup for key abc123" in record.message for record in caplog.records
+    ), f"expected print_verbose message in debug logs, got: {[r.message for r in caplog.records]}"
+
+
+def test_print_verbose_redacts_secrets_before_logging(caplog):
+    """
+    Regression test: the message passed to verbose_logger.debug() by print_verbose() must
+    still be redacted, since it now reaches the logger even when `set_verbose` is False.
+    """
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        print_verbose("using api key sk-abcdefghijklmnopqrstuvwxyz123456")
+
+    logged_messages = [record.message for record in caplog.records]
+    assert not any(
+        "sk-abcdefghijklmnopqrstuvwxyz123456" in message for message in logged_messages
+    ), f"secret leaked into debug logs: {logged_messages}"
+
+
+def test_print_verbose_still_prints_when_set_verbose_true(monkeypatch, capfd):
+    """
+    Regression test: print_verbose() must still print() to stdout when the deprecated
+    `set_verbose` flag is True, alongside the new verbose_logger.debug() call.
+    """
+    monkeypatch.setattr("litellm._logging.set_verbose", True)
+
+    print_verbose("legacy set_verbose output")
+
+    out, _ = capfd.readouterr()
+    assert "legacy set_verbose output" in out, f"expected print() output, got: {out!r}"
+
+
+def test_print_verbose_skips_redaction_when_debugging_is_off(monkeypatch):
+    """
+    Regression test: print_verbose() must not redact or log anything when neither
+    verbose_logger is at DEBUG level nor the legacy set_verbose flag is set. It's
+    called 60+ times per request across hot paths (litellm_logging.py, main.py,
+    caching), so paying for regex-based secret redaction on every call would add
+    real overhead in production deployments where debug logging is off.
+    """
+    import litellm._logging as logging_module
+
+    original_level = verbose_logger.level
+    verbose_logger.setLevel(logging.WARNING)
+    monkeypatch.setattr(logging_module, "set_verbose", False)
+
+    redact_calls = []
+    monkeypatch.setattr(logging_module, "redact_secrets", lambda value: redact_calls.append(value) or value)
+    debug_calls = []
+    monkeypatch.setattr(verbose_logger, "debug", lambda msg: debug_calls.append(msg))
+
+    try:
+        print_verbose("should never be redacted or logged")
+    finally:
+        verbose_logger.setLevel(original_level)
+
+    assert redact_calls == [], f"redact_secrets should not run, got calls: {redact_calls}"
+    assert debug_calls == [], f"verbose_logger.debug should not run, got calls: {debug_calls}"
 
 
 @pytest.mark.asyncio
