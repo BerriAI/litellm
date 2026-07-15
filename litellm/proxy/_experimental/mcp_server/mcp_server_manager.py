@@ -1165,7 +1165,7 @@ class MCPServerManager:
             if not should_discover:
                 mcp_oauth_metadata = None
             elif manual_issuer is not None and is_discovery_auth_type:
-                mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer)
+                mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
             else:
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
@@ -1608,7 +1608,10 @@ class MCPServerManager:
         if not needs_discovery:
             mcp_oauth_metadata = None
         elif manual_issuer is not None and is_discovery_auth_type:
-            mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer)
+            mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(
+                manual_issuer,
+                server_url,  # type: ignore[arg-type]
+            )
         else:
             mcp_oauth_metadata = await self._descovery_metadata(
                 server_url=server_url,  # type: ignore[arg-type]
@@ -3372,25 +3375,34 @@ class MCPServerManager:
                 return metadata
         return None
 
-    async def _fetch_issuer_anchored_oauth_metadata(self, issuer: str) -> Optional[MCPOAuthMetadata]:
-        """RFC 8414 issuer-anchored discovery.
+    async def _fetch_issuer_anchored_oauth_metadata(self, issuer: str, server_url: str) -> Optional[MCPOAuthMetadata]:
+        """RFC 8414 issuer-anchored discovery for the OAuth endpoints, with resource-driven scopes.
 
         Fetch authorization-server metadata from the admin-configured issuer's own origin and adopt
-        it only when the document self-attests that same issuer (RFC 8414 §3.3). Because the trust
-        anchor is the pinned issuer rather than anything the MCP resource server advertises, the
-        resulting token_endpoint/registration_endpoint/scopes are authoritative for that issuer and
-        cannot be substituted by a compromised resource. Fails closed (returns None) on a §3.3
-        mismatch or a fetch failure. The issuer is passed as its own ``server_url`` so the fetch is
-        treated as same-authority and is not subject to the resource-scoped SSRF shortcut.
+        its ``token_endpoint``/``registration_endpoint`` only when the document self-attests that same
+        issuer (RFC 8414 §3.3). Because the trust anchor is the pinned issuer rather than anything the
+        MCP resource advertises, the endpoints are authoritative for that issuer and cannot be
+        substituted by a compromised resource. Fails closed (returns None) on a §3.3 mismatch or a
+        fetch failure. The issuer is passed as its own ``server_url`` so the endpoint fetch is treated
+        as same-authority and is not subject to the resource-scoped SSRF shortcut.
+
+        Scopes are NOT taken from the issuer document. Per the MCP authorization spec Scope Selection
+        Strategy and RFC 9728, the scopes a client requests are resource-driven (the WWW-Authenticate
+        challenge or the protected-resource ``scopes_supported``), so the resource's advertised scopes
+        are fetched separately and used; the resource can influence only the requested scope, which
+        the authorization server and user consent bound (RFC 6749 §3.3), never the token endpoint.
         """
         metadata = await self._fetch_single_authorization_server_metadata(issuer, issuer, require_issuer=issuer)
         if metadata is None:
             verbose_logger.warning(
                 "MCP OAuth issuer-anchored discovery for issuer %s yielded no metadata whose issuer "
-                "matched (RFC 8414 §3.3); OAuth endpoints/scopes stay unresolved until a rebuild succeeds",
+                "matched (RFC 8414 §3.3); OAuth endpoints stay unresolved until a rebuild succeeds",
                 issuer,
             )
-        return metadata
+            return None
+        resource_metadata = await self._descovery_metadata(server_url, allow_origin_fallback=False)
+        resource_scopes = resource_metadata.scopes if resource_metadata else None
+        return metadata.model_copy(update={"scopes": resource_scopes})
 
     async def _fetch_single_authorization_server_metadata(
         self, issuer_url: str, server_url: str, require_issuer: Optional[str] = None

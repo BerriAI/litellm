@@ -1231,12 +1231,12 @@ class TestMCPServerManager:
         assert built.scopes == ["read"]
 
     @pytest.mark.asyncio
-    async def test_build_from_table_issuer_anchor_ignores_resource_rooted_discovery(self):
-        """When an admin configures an issuer, discovery is anchored on that issuer's own metadata
-        (RFC 8414), not on the resource-rooted RFC 9728 chain a compromised MCP resource controls.
-        The resource-rooted _descovery_metadata must not run at all, and the authoritative token_url,
-        registration_url, and scopes come from the issuer document. This closes the mix-up where a
-        compromised resource echoes the pinned authorize endpoint to smuggle its own token_url."""
+    async def test_build_from_table_uses_issuer_anchored_endpoints_when_issuer_configured(self):
+        """When an admin configures an issuer, the build takes its endpoints from the issuer-anchored
+        fetch (RFC 8414 §3.3) rather than the resource-rooted corroboration path. The build path does
+        not call _descovery_metadata directly; the issuer-anchored helper is responsible for combining
+        issuer endpoints with resource-driven scopes internally, and is invoked with the server url so
+        it can fetch those scopes."""
         manager = MCPServerManager()
         row = LiteLLM_MCPServerTable(
             server_id="issuer-anchored-1",
@@ -1250,7 +1250,7 @@ class TestMCPServerManager:
             updated_at=datetime.now(),
         )
 
-        authoritative = MCPOAuthMetadata(
+        resolved = MCPOAuthMetadata(
             authorization_url="https://idp.example.com/authorize",
             token_url="https://idp.example.com/token",
             registration_url="https://idp.example.com/register",
@@ -1258,18 +1258,53 @@ class TestMCPServerManager:
         )
         resource_rooted = AsyncMock(return_value=MCPOAuthMetadata(token_url="https://attacker.example.com/steal"))
         with (
-            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=authoritative)) as anchored,
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=resolved)) as anchored,
             patch.object(manager, "_descovery_metadata", new=resource_rooted),
         ):
             built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
-        anchored.assert_awaited_once_with("https://idp.example.com")
+        anchored.assert_awaited_once_with("https://idp.example.com", "https://up.example.com/mcp")
         resource_rooted.assert_not_awaited()
         assert built.issuer == "https://idp.example.com"
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.registration_url == "https://idp.example.com/register"
         assert built.scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_issuer_anchored_metadata_takes_endpoints_from_issuer_scopes_from_resource(self):
+        """The issuer-anchored helper adopts token_endpoint/registration_endpoint from the pinned
+        issuer's own §3.3-validated document, but the scopes are resource-driven: it fetches the
+        resource's advertised scopes and uses those, not the issuer document's scopes_supported. This
+        keeps endpoint trust anchored on the issuer while scope selection stays resource-driven per the
+        MCP Scope Selection Strategy."""
+        manager = MCPServerManager()
+
+        issuer_document = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=["as.everything"],
+        )
+        resource_document = MCPOAuthMetadata(scopes=["resource.read"])
+        with (
+            patch.object(
+                manager, "_fetch_single_authorization_server_metadata", new=AsyncMock(return_value=issuer_document)
+            ) as issuer_fetch,
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=resource_document)) as resource_fetch,
+        ):
+            result = await manager._fetch_issuer_anchored_oauth_metadata(
+                "https://idp.example.com", "https://up.example.com/mcp"
+            )
+
+        issuer_fetch.assert_awaited_once_with(
+            "https://idp.example.com", "https://idp.example.com", require_issuer="https://idp.example.com"
+        )
+        resource_fetch.assert_awaited_once()
+        assert result is not None
+        assert result.token_url == "https://idp.example.com/token"
+        assert result.registration_url == "https://idp.example.com/register"
+        assert result.scopes == ["resource.read"]
 
     @pytest.mark.asyncio
     async def test_build_from_table_issuer_anchor_fails_closed_without_falling_back_to_resource(self):
