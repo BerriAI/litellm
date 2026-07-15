@@ -4,10 +4,14 @@ Management routes (/v1/mcp/server CRUD) go through the shared Gateway
 transport. The MCP protocol itself (initialize, tools/list, tools/call over
 streamable HTTP) goes through the official mcp SDK, the same client library
 production MCP hosts use, aimed at the gateway's per-server URL namespace
-{PROXY}/{alias}/mcp. The gateway accepts the LiteLLM virtual key as either
+{PROXY}/{alias}/mcp.
+
+Every protocol method takes the request headers as a plain dict, built inside
+the test body, so the exact wire format is visible where it is asserted. The
+gateway accepts the LiteLLM virtual key as either
 `x-litellm-api-key: Bearer sk-...` or `Authorization: Bearer sk-...` (both
-Bearer-prefixed on the MCP routes, matching the docs); `McpAuth` models the
-two header styles so each test states which one it drives.
+Bearer-prefixed on the MCP routes, matching the docs); `McpHeaderName` names
+those two documented header styles for the tests' parametrized matrices.
 """
 
 from __future__ import annotations
@@ -32,17 +36,6 @@ from models import McpServerCreateBody, McpServerInfo
 McpHeaderName = Literal["x-litellm-api-key", "Authorization"]
 
 ToolArguments = Mapping[str, str | float]
-
-
-@dataclass(frozen=True, slots=True)
-class McpAuth:
-    """One of the two documented ways to present a LiteLLM key to the MCP gateway."""
-
-    header_name: McpHeaderName
-    key: str
-
-    def headers(self) -> dict[str, str]:
-        return {self.header_name: f"Bearer {self.key}"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,20 +148,20 @@ class McpClient:
             response_type=NoBody,
         )
 
-    def list_tools_once(self, alias: str, auth: McpAuth) -> ListToolsOutcome:
+    def list_tools_once(self, alias: str, headers: dict[str, str]) -> ListToolsOutcome:
         try:
-            return McpToolNames(names=asyncio.run(_list_tool_names(_mcp_url(alias), auth.headers())))
+            return McpToolNames(names=asyncio.run(_list_tool_names(_mcp_url(alias), headers)))
         except Exception as exc:  # noqa: BLE001 - the SDK raises ExceptionGroup-wrapped transport errors; modelled as a value
             return McpDenied(status_code=_http_status(exc), message=str(exc))
 
-    def poll_tool_names(self, alias: str, auth: McpAuth) -> tuple[str, ...]:
+    def poll_tool_names(self, alias: str, headers: dict[str, str]) -> tuple[str, ...]:
         """tools/list to the shared deadline: a just-created server record
         propagates to the gateway asynchronously and a just-created key can lag
         the auth cache, so the first attempts may 401 or list nothing."""
         deadline = time.monotonic() + self.gateway.poll_timeout
         outcome: ListToolsOutcome = McpDenied(status_code=None, message="never attempted")
         while time.monotonic() < deadline:
-            outcome = self.list_tools_once(alias, auth)
+            outcome = self.list_tools_once(alias, headers)
             match outcome:
                 case McpToolNames(names=names) if names:
                     return names
@@ -178,13 +171,13 @@ class McpClient:
             f"MCP tools for {alias!r} never listed within {self.gateway.poll_timeout}s; last outcome: {outcome}"
         )
 
-    def call_tool(self, alias: str, auth: McpAuth, tool: str, arguments: ToolArguments) -> McpToolText:
+    def call_tool(self, alias: str, headers: dict[str, str], tool: str, arguments: ToolArguments) -> McpToolText:
         """One tools/call over its own fresh MCP session, so concurrent callers
         behave like independent clients."""
-        return asyncio.run(_call_tool(_mcp_url(alias), auth.headers(), tool, arguments))
+        return asyncio.run(_call_tool(_mcp_url(alias), headers, tool, arguments))
 
-    def stub_stats(self, alias: str, auth: McpAuth, stats_tool: str, marker: str) -> StubToolStats:
-        outcome = self.call_tool(alias, auth, stats_tool, {"marker": marker})
+    def stub_stats(self, alias: str, headers: dict[str, str], stats_tool: str, marker: str) -> StubToolStats:
+        outcome = self.call_tool(alias, headers, stats_tool, {"marker": marker})
         return StubToolStats.model_validate_json(outcome.text)
 
 

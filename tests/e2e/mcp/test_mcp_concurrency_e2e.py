@@ -23,8 +23,8 @@ import pytest
 
 from e2e_config import MCP_STUB_URL, unique_marker
 from lifecycle import ResourceManager
-from mcp_client import McpAuth, McpClient, McpToolText
-from models import McpServerCreateBody
+from mcp_client import McpClient, McpToolText
+from models import KeyGenerateBody, McpServerCreateBody
 
 pytestmark = pytest.mark.e2e
 
@@ -35,7 +35,7 @@ class TestMcpServerMaxConcurrency:
 
     @pytest.mark.covers("mcp.call_tool.api_key.caps_concurrency")
     def test_max_concurrent_requests_caps_in_flight_upstream_calls(
-        self, client: McpClient, resources: ResourceManager, scoped_key: str
+        self, client: McpClient, resources: ResourceManager
     ) -> None:
         """Two servers against the same stub: one capped at 2 concurrent
         requests, one uncapped control. The tools/list polls are the settle
@@ -46,7 +46,10 @@ class TestMcpServerMaxConcurrency:
         max_concurrent = 2
         burst_size = 6
         slow_call_seconds = 2.0
-        auth = McpAuth(header_name="x-litellm-api-key", key=scoped_key)
+
+        key = client.gateway.generate_key(KeyGenerateBody())
+        resources.defer(lambda: client.gateway.delete_key(key))
+        headers = {"x-litellm-api-key": f"Bearer {key}"}
 
         capped_alias = f"e2emcpcap{unique_marker()}"
         capped = client.create_server(
@@ -66,14 +69,14 @@ class TestMcpServerMaxConcurrency:
         assert client.server_info(capped.server_id).max_concurrent_requests == max_concurrent
         assert client.server_info(control.server_id).max_concurrent_requests is None
 
-        _ = client.poll_tool_names(capped_alias, auth)
-        _ = client.poll_tool_names(control_alias, auth)
+        _ = client.poll_tool_names(capped_alias, headers)
+        _ = client.poll_tool_names(control_alias, headers)
 
         def burst_of_slow_calls(alias: str, text: str, marker: str) -> list[McpToolText]:
             arguments = {"text": text, "marker": marker, "sleep_seconds": slow_call_seconds}
             with ThreadPoolExecutor(max_workers=burst_size) as pool:
                 futures = [
-                    pool.submit(client.call_tool, alias, auth, f"{alias}-slow_echo", arguments)
+                    pool.submit(client.call_tool, alias, headers, f"{alias}-slow_echo", arguments)
                     for _ in range(burst_size)
                 ]
                 return [future.result() for future in futures]
@@ -85,7 +88,7 @@ class TestMcpServerMaxConcurrency:
             f"queued calls must all still succeed under the cap: {capped_results}"
         )
 
-        capped_stats = client.stub_stats(capped_alias, auth, f"{capped_alias}-stats", capped_marker)
+        capped_stats = client.stub_stats(capped_alias, headers, f"{capped_alias}-stats", capped_marker)
         assert capped_stats.completed == burst_size
         assert capped_stats.max_in_flight == max_concurrent, (
             f"stub saw {capped_stats.max_in_flight} overlapping calls; the cap of {max_concurrent} "
@@ -96,7 +99,7 @@ class TestMcpServerMaxConcurrency:
         control_results = burst_of_slow_calls(control_alias, "control", control_marker)
         assert all(result.is_error is False and result.text == "control" for result in control_results)
 
-        control_stats = client.stub_stats(control_alias, auth, f"{control_alias}-stats", control_marker)
+        control_stats = client.stub_stats(control_alias, headers, f"{control_alias}-stats", control_marker)
         assert control_stats.completed == burst_size
         assert control_stats.max_in_flight == burst_size, (
             f"uncapped control saw {control_stats.max_in_flight} overlapping calls, expected all {burst_size}; "
