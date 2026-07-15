@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
@@ -107,7 +107,7 @@ def get_litellm_params(
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
-    ssl_verify: Optional[bool] = None,
+    ssl_verify: Optional[Union[bool, str]] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
     use_litellm_proxy: Optional[bool] = None,
     api_version: Optional[str] = None,

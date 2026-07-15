@@ -1298,7 +1298,7 @@ class BaseLLMHTTPHandler:
         )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
         json_data = data if files is None and isinstance(data, dict) else None
 

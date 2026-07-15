@@ -7620,7 +7620,9 @@ def transcription(
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
+    elif custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers and custom_llm_provider != "hosted_vllm"
+    ):
         api_base = (
             api_base
             or litellm.api_base

@@ -3205,6 +3205,7 @@ all_litellm_params = (
         "use_chat_completions_api",
         "prompt_label",
         "shared_session",
+        "ssl_verify",
         "search_tool_name",
         "order",
         "enable_json_schema_validation",
