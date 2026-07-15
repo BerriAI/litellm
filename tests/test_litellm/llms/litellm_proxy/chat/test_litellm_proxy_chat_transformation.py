@@ -171,6 +171,20 @@ def test_optional_params_passed_through():
     assert body["max_tokens"] == 100
 
 
+def test_forwarded_metadata_merges_with_existing_optional_params_metadata():
+    """Forwarded tags must be merged with any metadata already in optional_params, not overwrite it."""
+    config = LiteLLMProxyChatConfig()
+    body = _sync_transform(
+        config,
+        optional_params={"metadata": {"caller_id": "svc-a", "region": "us-east-1"}},
+        litellm_params={"metadata": {"requester_metadata": {"tags": ["billing-team"]}}},
+    )
+    meta = body["metadata"]
+    assert meta.get("tags") == ["billing-team"], "forwarded tags must be present"
+    assert meta.get("caller_id") == "svc-a", "pre-existing metadata fields must be preserved"
+    assert meta.get("region") == "us-east-1", "pre-existing metadata fields must be preserved"
+
+
 # --- async path matches sync ---
 
 

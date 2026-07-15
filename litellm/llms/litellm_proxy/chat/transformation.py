@@ -135,7 +135,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
             if requester_metadata is not None:
                 forwarded = {k: v for k, v in requester_metadata.items() if k in self.FORWARDED_METADATA_FIELDS}
                 if forwarded:
-                    request_body["metadata"] = forwarded
+                    request_body["metadata"] = {**(request_body.get("metadata") or {}), **forwarded}
 
         litellm_session_id = litellm_params.get("litellm_session_id")
         if litellm_session_id is not None:
