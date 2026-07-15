@@ -448,8 +448,9 @@ def test_logging_init_sets_session_id_when_provided():
     assert session_id_var.get() == "my-session-99"
 
 
-def test_logging_init_does_not_set_session_id_when_absent():
-    """Logging.__init__() must NOT mutate session_id_var when no session_id is provided."""
+def test_logging_init_resets_session_id_to_empty_when_absent():
+    """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
+    so a prior request's session_id does not leak into subsequent log records."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     session_id_var.set("preexisting-sid")
@@ -464,5 +465,4 @@ def test_logging_init_does_not_set_session_id_when_absent():
         function_id="fn-003",
         kwargs={},
     )
-    assert session_id_var.get() == "preexisting-sid"
-    session_id_var.set("")
+    assert session_id_var.get() == ""
