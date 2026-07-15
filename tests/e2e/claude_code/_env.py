@@ -13,7 +13,7 @@ place and either spelling works (primary wins on tie).
 from __future__ import annotations
 
 import os
-from typing import Mapping, NamedTuple
+from typing import Callable, Mapping, NamedTuple
 
 import pytest
 
@@ -53,33 +53,92 @@ def resolve_proxy(env: Mapping[str, str] | None = None) -> ProxyConfig | None:
     return resolve_proxy_from(os.environ if env is None else env)
 
 
+def _fail_missing_proxy_env(compat_result) -> None:
+    compat_result.set(
+        {
+            "status": "fail",
+            "error": (
+                f"missing required env: set {PRIMARY_BASE_URL_ENV} and "
+                f"{PRIMARY_API_KEY_ENV} (or the legacy "
+                f"{LEGACY_BASE_URL_ENV} / {LEGACY_API_KEY_ENV}) to "
+                "point at a running LiteLLM proxy"
+            ),
+        }
+    )
+    pytest.fail(
+        f"{PRIMARY_BASE_URL_ENV} / {PRIMARY_API_KEY_ENV} not configured",
+        pytrace=False,
+    )
+
+
 def require_proxy(
     compat_result,
     *,
     env: Mapping[str, str] | None = None,
 ) -> ProxyConfig:
-    """Return proxy config or hard-fail the test. Matches the fail-not-
-    skip contract in ``tests/e2e/conftest.py``: a live test with the
-    proxy env unset is a real failure, not a skip.
+    """Return the proxy control-plane config (base URL + master key), or
+    hard-fail the test.
 
     ``env`` is injected for tests; production callers pass nothing and
     the process env is used. This keeps tests off ``monkeypatch.setenv``
-    for a check that is a pure function of its inputs."""
+    for a check that is a pure function of its inputs.
+
+    SECURITY: the ``api_key`` returned here is the proxy master key.
+    Callers that shell out to untrusted subprocesses (the ``claude`` CLI)
+    must NOT pass it as ``ANTHROPIC_AUTH_TOKEN``; a compromised CLI
+    release would then have admin capabilities (create/delete keys,
+    register deployments, read spend logs, drain budgets). Cell code
+    paths use ``require_compat_cli_credentials`` instead, which returns
+    an inference-only session key minted by the compat fixture. The
+    only legitimate use of ``require_proxy`` is control-plane work
+    inside the fixture itself."""
     cfg = resolve_proxy(env)
     if cfg is None:
+        _fail_missing_proxy_env(compat_result)
+    return cfg
+
+
+CliKeyProvider = Callable[[], str | None]
+
+
+def require_compat_cli_credentials(
+    compat_result,
+    *,
+    cli_key_provider: CliKeyProvider,
+    env: Mapping[str, str] | None = None,
+) -> ProxyConfig:
+    """Return the proxy base URL paired with the inference-only compat
+    CLI key, or hard-fail the test.
+
+    Purpose: cells hand this credential to the ``claude`` CLI subprocess.
+    Using the master key here would leak admin capabilities to the CLI
+    (see ``require_proxy``). ``cli_key_provider`` is a zero-arg callable
+    that returns the fixture-minted session key, or ``None`` if the
+    fixture is not active (e.g. a pure unit run that imports a cell).
+    Injected so tests can bind an in-memory key without running the
+    fixture or reaching into any global state.
+
+    If the provider returns ``None`` we hard-fail rather than silently
+    falling back to the master key - the fallback would defeat the whole
+    point of the split."""
+    cfg = resolve_proxy(env)
+    if cfg is None:
+        _fail_missing_proxy_env(compat_result)
+    cli_key = cli_key_provider()
+    if not cli_key:
         compat_result.set(
             {
                 "status": "fail",
                 "error": (
-                    f"missing required env: set {PRIMARY_BASE_URL_ENV} and "
-                    f"{PRIMARY_API_KEY_ENV} (or the legacy "
-                    f"{LEGACY_BASE_URL_ENV} / {LEGACY_API_KEY_ENV}) to "
-                    "point at a running LiteLLM proxy"
+                    "compat CLI key was not minted for this session; "
+                    "the claude_code compat fixture did not run (a "
+                    "prior fixture error, or the proxy env was unset "
+                    "when the session started)"
                 ),
             }
         )
         pytest.fail(
-            f"{PRIMARY_BASE_URL_ENV} / {PRIMARY_API_KEY_ENV} not configured",
+            "compat CLI key not available for this session",
             pytrace=False,
         )
-    return cfg
+    return ProxyConfig(base_url=cfg.base_url, api_key=cli_key)

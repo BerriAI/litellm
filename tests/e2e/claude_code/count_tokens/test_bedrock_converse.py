@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_compat_cli_credentials
+from claude_code.conftest import _compat_cli_key_provider
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
@@ -56,7 +57,9 @@ BEDROCK_CONVERSE_MODELS = [
 def test_count_tokens_bedrock_converse(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Converse) tier and
     assert the response shape."""
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_compat_cli_credentials(
+        compat_result, cli_key_provider=_compat_cli_key_provider
+    )
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:

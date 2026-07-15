@@ -22,10 +22,17 @@ from claude_code._basic_messaging import (
 from claude_code.cli_driver import DriverResult
 
 
+_MASTER_KEY = "sk-master-must-not-leak"
+_COMPAT_CLI_KEY = "sk-compat-cli-session-key"
+
 _PROXY_ENV: Mapping[str, str] = {
     "LITELLM_PROXY_URL": "http://localhost:4000",
-    "LITELLM_MASTER_KEY": "sk-test",
+    "LITELLM_MASTER_KEY": _MASTER_KEY,
 }
+
+
+def _static_cli_key_provider() -> str:
+    return _COMPAT_CLI_KEY
 
 
 class _FakeResult:
@@ -135,6 +142,7 @@ def test_verify_streaming_passes_when_proxy_streams():
         verify_streaming=True,
         env=_PROXY_ENV,
         runner=runner,
+        cli_key_provider=_static_cli_key_provider,
     )
 
     assert captured["extra_args"] == ["--include-partial-messages"]
@@ -155,6 +163,7 @@ def test_verify_streaming_fails_when_proxy_buffers():
             verify_streaming=True,
             env=_PROXY_ENV,
             runner=runner,
+            cli_key_provider=_static_cli_key_provider,
         )
 
     assert len(fake_result.rows) == 1
@@ -177,6 +186,7 @@ def test_non_streaming_variant_omits_partial_messages_flag():
         prompt="Reply with the single word 'pong' and nothing else.",
         env=_PROXY_ENV,
         runner=runner,
+        cli_key_provider=_static_cli_key_provider,
     )
 
     assert captured["extra_args"] == []
@@ -202,6 +212,7 @@ def test_verify_streaming_requires_all_models_to_stream():
             verify_streaming=True,
             env=_PROXY_ENV,
             runner=runner,
+            cli_key_provider=_static_cli_key_provider,
         )
 
     statuses = [row["status"] for row in fake_result.rows]
@@ -222,6 +233,59 @@ def test_missing_proxy_env_hard_fails_regardless_of_runner():
             prompt="whatever",
             env={},
             runner=runner,
+            cli_key_provider=_static_cli_key_provider,
         )
 
     assert captured == {}, "runner must not be called when env resolution fails"
+
+
+def test_missing_cli_key_hard_fails_without_falling_back_to_master_key():
+    """SECURITY-critical: if the compat fixture never bound a CLI key
+    (returns ``None``), the helper must hard-fail rather than reach for
+    the master key from env. A silent fallback would leak admin
+    capabilities to the ``claude`` CLI subprocess."""
+    fake_result = _FakeResult()
+    runner, captured = _make_fake_runner(outcomes_by_model={})
+
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        run_basic_messaging_cell(
+            compat_result=fake_result,
+            models=["claude-haiku-4-5"],
+            prompt="whatever",
+            env=_PROXY_ENV,
+            runner=runner,
+            cli_key_provider=lambda: None,
+        )
+
+    assert "compat CLI key" in str(excinfo.value)
+    assert captured == {}, (
+        "runner must not be called (and thus never receive the master "
+        "key) when the CLI key provider returns None"
+    )
+
+
+def test_runner_receives_compat_cli_key_not_master_key():
+    """SECURITY-critical: the ``api_key`` handed to the CLI runner must
+    be the fixture-minted compat CLI key, never the master key from
+    env. This is the invariant that keeps a compromised ``claude`` CLI
+    package from getting proxy admin capabilities."""
+    fake_result = _FakeResult()
+    model = "claude-haiku-4-5"
+    outcome = DriverResult(text="ok", events=_buffered_events())
+    runner, captured = _make_fake_runner(outcomes_by_model={model: outcome})
+
+    run_basic_messaging_cell(
+        compat_result=fake_result,
+        models=[model],
+        prompt="whatever",
+        env=_PROXY_ENV,
+        runner=runner,
+        cli_key_provider=_static_cli_key_provider,
+    )
+
+    assert captured["api_key"] == _COMPAT_CLI_KEY
+    assert captured["api_key"] != _MASTER_KEY, (
+        "api_key handed to runner must be the compat CLI key, not the "
+        "master key - master key would give a compromised CLI admin "
+        "access to the proxy"
+    )

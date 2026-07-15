@@ -29,7 +29,8 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_compat_cli_credentials
+from claude_code.conftest import _compat_cli_key_provider
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -100,7 +101,9 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 def test_tool_use_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     proxy preserves fine-grained tool streaming end-to-end."""
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_compat_cli_credentials(
+        compat_result, cli_key_provider=_compat_cli_key_provider
+    )
 
     outcomes = run_claude_models_parallel(
         models=ANTHROPIC_MODELS,

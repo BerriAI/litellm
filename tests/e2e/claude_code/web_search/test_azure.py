@@ -31,7 +31,8 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_compat_cli_credentials
+from claude_code.conftest import _compat_cli_key_provider
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -89,7 +90,9 @@ def test_web_search_azure(compat_result):
     upstream emitted a `tool_use` block calling `WebSearch`, proving
     the proxy preserved both the request-side tool definition and the
     response-side tool_use block."""
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_compat_cli_credentials(
+        compat_result, cli_key_provider=_compat_cli_key_provider
+    )
 
     outcomes = run_claude_models_parallel(
         models=AZURE_MODELS,

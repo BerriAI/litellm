@@ -27,7 +27,8 @@ from __future__ import annotations
 import json
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_compat_cli_credentials
+from claude_code.conftest import _compat_cli_key_provider
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -85,7 +86,9 @@ def _build_stdin_input() -> str:
 def test_vision_bedrock_invoke(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached via stream-json input and assert a non-empty reply."""
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_compat_cli_credentials(
+        compat_result, cli_key_provider=_compat_cli_key_provider
+    )
 
     outcomes = run_claude_models_parallel(
         models=BEDROCK_INVOKE_MODELS,

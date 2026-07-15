@@ -575,6 +575,7 @@ from claude_code._compat_models import (  # noqa: E402
     CompatDeployment,
     deployments_for_available_providers,
 )
+from claude_code._cli_key import build_compat_cli_key_body  # noqa: E402
 
 
 def _build_control_gateway():
@@ -596,17 +597,42 @@ def _register_deployment(gateway, deployment: CompatDeployment) -> str:
     )
 
 
+# The compat CLI key gets stashed here so cells can look it up through
+# ``_env.require_compat_cli_credentials`` without every cell taking the
+# fixture as an argument. Session-scoped and torn down in the fixture's
+# ``finally`` block, so a session that never bound one (fixture short-
+# circuited because the proxy env was unset) yields ``None`` and the
+# credentials helper surfaces that as a hard fail rather than silently
+# falling back to the master key.
+_COMPAT_CLI_KEY: Optional[str] = None
+
+
+def _compat_cli_key_provider() -> Optional[str]:
+    return _COMPAT_CLI_KEY
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _compat_models_registered() -> Any:
-    """Register every compat deployment whose credentials are set, then
-    tear them all down on session exit.
+    """Register every compat deployment whose credentials are set, mint
+    an inference-only key for the CLI, and tear both down on session
+    exit.
 
     Skips silently if the proxy env is not configured (no
     ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
     stay hermetic. Any deployment that fails to register aborts the
     session (that is a real config bug we want surfaced before any
     cell burns time hitting a 400).
-    """
+
+    SECURITY: the CLI key minted here carries
+    ``allowed_routes=["llm_api_routes"]`` and is scoped to just the
+    compat matrix's deployments. This is what cells pass to the
+    ``claude`` CLI subprocess via ``ANTHROPIC_AUTH_TOKEN``. Handing the
+    master key to the CLI would give a compromised
+    ``@anthropic-ai/claude-code`` release admin capabilities against
+    the proxy (register rogue deployments, read spend logs, drain
+    budgets). Master key stays on the control plane, used only inside
+    this fixture."""
+    global _COMPAT_CLI_KEY
     if resolve_proxy() is None:
         yield
         return
@@ -620,6 +646,7 @@ def _compat_models_registered() -> Any:
         return
 
     registered_ids: list[str] = []
+    cli_key: Optional[str] = None
     try:
         for deployment in deployments:
             try:
@@ -630,8 +657,21 @@ def _compat_models_registered() -> Any:
                     f"{deployment.model_name!r}: {exc}"
                 ) from exc
             registered_ids.append(model_id)
+
+        cli_key = gateway.generate_key(
+            build_compat_cli_key_body(d.model_name for d in deployments)
+        )
+        _COMPAT_CLI_KEY = cli_key
         yield
     finally:
+        _COMPAT_CLI_KEY = None
+        if cli_key is not None:
+            try:
+                gateway.delete_key(cli_key)
+            except (AssertionError, RequestException):
+                # Best-effort teardown; a leaked short-lived key is
+                # bounded by the deployment lifetime below.
+                pass
         for model_id in registered_ids:
             try:
                 gateway.delete_model(model_id)

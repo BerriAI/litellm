@@ -45,7 +45,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_compat_cli_credentials
+from claude_code.conftest import _compat_cli_key_provider
 from claude_code.http_probe import (
     assert_tool_search_shape,
     probe_tool_search,
@@ -63,7 +64,9 @@ def test_tool_search_bedrock_converse(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Bedrock (Converse)
     tier."""
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_compat_cli_credentials(
+        compat_result, cli_key_provider=_compat_cli_key_provider
+    )
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:
