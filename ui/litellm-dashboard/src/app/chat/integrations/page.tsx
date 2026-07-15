@@ -33,7 +33,12 @@ function IntegrationsPageContent() {
   return (
     <div className="flex-1 min-h-0 overflow-auto w-full py-8 px-8">
       {connectFlow && <ConnectFlowBanner flowHandle={connectFlow} clientOrigin={connectClient} />}
-      <MCPAppsPanel accessToken={accessToken} selectedServers={selectedMCPServers} onChange={setSelectedMCPServers} />
+      <MCPAppsPanel
+        accessToken={accessToken}
+        selectedServers={selectedMCPServers}
+        onChange={setSelectedMCPServers}
+        connectMode={!!connectFlow}
+      />
     </div>
   );
 }
