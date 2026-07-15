@@ -99,11 +99,22 @@ describe("TagTable", () => {
     expect(mockOnSelectTag).toHaveBeenCalledWith("test-tag");
   });
 
-  it("should render tag name as non-clickable for dynamic spend tags", () => {
+  it("should render tag name as non-clickable and muted for dynamic spend tags", () => {
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
     expect(screen.queryByRole("button", { name: "dynamic-spend-tag" })).not.toBeInTheDocument();
-    expect(screen.getByText("dynamic-spend-tag")).toBeInTheDocument();
+    expect(screen.getByText("dynamic-spend-tag")).toHaveClass("text-muted-foreground");
     expect(mockOnSelectTag).not.toHaveBeenCalled();
+  });
+
+  it("should truncate long tag names and descriptions", () => {
+    const longTag: Tag = {
+      ...mockTag,
+      name: "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15) Firefox/152.0",
+      description: "A very long description that would otherwise stretch the column far beyond what users need to see",
+    };
+    render(<TagTable {...defaultProps} data={[longTag]} />);
+    expect(screen.getByText(longTag.name)).toHaveClass("truncate", "text-primary");
+    expect(screen.getByText(longTag.description as string)).toHaveClass("truncate", "max-w-72");
   });
 
   it("should edit a tag through the actions menu", async () => {
