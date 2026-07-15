@@ -4154,6 +4154,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/ldap_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ldap Settings */
+        get: operations["get_ldap_settings_get_ldap_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/mcp_semantic_filter_settings": {
         parameters: {
             query?: never;
@@ -14249,6 +14266,23 @@ export interface paths {
          *     These settings will be applied to new users who sign in via SSO.
          */
         patch: operations["update_internal_user_settings_update_internal_user_settings_patch"];
+        trace?: never;
+    };
+    "/update/ldap_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Ldap Settings */
+        patch: operations["update_ldap_settings_update_ldap_settings_patch"];
         trace?: never;
     };
     "/update/mcp_semantic_filter_settings": {
@@ -24650,6 +24684,106 @@ export interface components {
             /** Tpm Limit Type */
             tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
         };
+        /** LDAPConfig */
+        LDAPConfig: {
+            /**
+             * Ldap Admin Group Dn
+             * @description LDAP group DN whose members should become LiteLLM proxy admins
+             */
+            ldap_admin_group_dn?: string | null;
+            /**
+             * Ldap Allow Insecure
+             * @description Allow LDAP bind without SSL or StartTLS. Not recommended outside isolated development environments
+             * @default false
+             */
+            ldap_allow_insecure: boolean;
+            /**
+             * Ldap Base Dn
+             * @description Base DN used to search for users
+             */
+            ldap_base_dn?: string | null;
+            /**
+             * Ldap Bind Dn
+             * @description Service account DN used to search users
+             */
+            ldap_bind_dn?: string | null;
+            /**
+             * Ldap Bind Password
+             * @description Service account password
+             */
+            ldap_bind_password?: string | null;
+            /**
+             * Ldap Display Name Attribute
+             * @description LDAP attribute used as the LiteLLM user display name
+             * @default displayName
+             */
+            ldap_display_name_attribute: string;
+            /**
+             * Ldap Email Attribute
+             * @description LDAP attribute used as the LiteLLM user email
+             * @default mail
+             */
+            ldap_email_attribute: string;
+            /**
+             * Ldap Enabled
+             * @description Enable LDAP login for the Admin UI
+             * @default false
+             */
+            ldap_enabled: boolean;
+            /**
+             * Ldap Group Attribute
+             * @description LDAP attribute containing user group DNs
+             * @default memberOf
+             */
+            ldap_group_attribute: string;
+            /**
+             * Ldap Search Base
+             * @description Optional search base. Defaults to base DN
+             */
+            ldap_search_base?: string | null;
+            /**
+             * Ldap Start Tls
+             * @description Upgrade LDAP connection with StartTLS before bind
+             * @default false
+             */
+            ldap_start_tls: boolean;
+            /**
+             * Ldap Url
+             * @description LDAP server URL, for example ldap://host:389
+             */
+            ldap_url?: string | null;
+            /**
+             * Ldap Use Ssl
+             * @description Connect to LDAP with SSL
+             * @default false
+             */
+            ldap_use_ssl: boolean;
+            /**
+             * Ldap User Id Attribute
+             * @description Immutable LDAP attribute used as the LiteLLM identity, for example objectGUID or entryUUID
+             */
+            ldap_user_id_attribute?: string | null;
+            /**
+             * Ldap User Search Filter
+             * @description LDAP user search filter. The {username} placeholder is escaped before use
+             * @default (|(uid={username})(sAMAccountName={username})(userPrincipalName={username}))
+             */
+            ldap_user_search_filter: string;
+        };
+        /**
+         * LDAPSettingsResponse
+         * @description Response model for LDAP settings
+         */
+        LDAPSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
             /** Jailbreak */
@@ -31863,6 +31997,11 @@ export interface components {
              * @default false
              */
             is_control_plane: boolean;
+            /**
+             * Ldap Configured
+             * @default false
+             */
+            ldap_configured: boolean;
             /** Proxy Base Url */
             proxy_base_url: string | null;
             /** Server Root Path */
@@ -39973,6 +40112,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InternalUserSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_ldap_settings_get_ldap_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LDAPSettingsResponse"];
                 };
             };
         };
@@ -51127,6 +51286,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DefaultInternalUserParams"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_ldap_settings_update_ldap_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LDAPConfig"];
             };
         };
         responses: {

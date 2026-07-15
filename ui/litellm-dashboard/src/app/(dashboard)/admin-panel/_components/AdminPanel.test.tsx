@@ -23,6 +23,10 @@ vi.mock("@/components/Settings/AdminSettings/SSOSettings/SSOSettings", () => ({
   default: () => <div>SSO Settings</div>,
 }));
 
+vi.mock("@/components/Settings/AdminSettings/LDAPSettings/LDAPSettings", () => ({
+  default: () => <div>LDAP Settings</div>,
+}));
+
 vi.mock("@/components/Settings/AdminSettings/UISettings/UISettings", () => ({
   default: () => <div>UI Settings</div>,
 }));
@@ -69,10 +73,16 @@ describe("AdminPanel", () => {
   describe("Tabs", () => {
     it("should render all tabs", () => {
       render(<AdminPanel />);
-      expect(screen.getByRole("tab", { name: /sso settings/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /authentication/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /security settings/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /scim/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /ui settings/i })).toBeInTheDocument();
+    });
+
+    it("should display SSO and LDAP settings in the Authentication tab", () => {
+      render(<AdminPanel />);
+      expect(screen.getByText("SSO Settings")).toBeInTheDocument();
+      expect(screen.getByText("LDAP Settings")).toBeInTheDocument();
     });
 
     it("should display Security Settings content when Security Settings tab is clicked", async () => {

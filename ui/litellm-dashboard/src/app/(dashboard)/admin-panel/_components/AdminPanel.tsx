@@ -22,6 +22,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
 import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
+import LDAPSettings from "@/components/Settings/AdminSettings/LDAPSettings/LDAPSettings";
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
@@ -186,9 +187,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const tabItems = [
     {
-      key: "sso-settings",
-      label: "SSO Settings",
-      children: <SSOSettings />,
+      key: "authentication-settings",
+      label: "Authentication",
+      children: (
+        <Space direction="vertical" size="large" className="w-full">
+          <SSOSettings />
+          <LDAPSettings />
+        </Space>
+      ),
     },
     {
       key: "security-settings",

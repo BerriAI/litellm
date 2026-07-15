@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -33,6 +33,28 @@ def test_ui_discovery_endpoints_with_defaults():
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is False
         assert data["sso_configured"] is False
+        assert data["ldap_configured"] is False
+
+
+def test_ui_discovery_endpoints_with_ldap_configured():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
+        patch("litellm.proxy.auth.ldap_auth.is_ldap_configured", new=AsyncMock(return_value=True)),
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+    ):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sso_configured"] is False
+        assert data["ldap_configured"] is True
 
 
 def test_ui_discovery_endpoints_with_custom_server_root_path():
