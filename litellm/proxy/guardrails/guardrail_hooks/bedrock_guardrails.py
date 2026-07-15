@@ -89,19 +89,6 @@ _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH = "/guardrail-checks/invoke"
 # never truncated (truncation would let a user hide content past the limit).
 _BEDROCK_CHECKS_MAX_CONTENT_BLOCKS = 10
 _BEDROCK_CHECKS_KNOWN_KEYS = frozenset({"contentFilter", "promptAttack", "sensitiveInformation"})
-# InvokeGuardrailChecks only accepts roles user/assistant/system. Map every other
-# OpenAI role onto one of these so NO message content is skipped (skipping would let
-# a user hide prohibited text in e.g. a tool/function message that the model still
-# sees -- a guardrail bypass). Unknown / tool / function content is treated as
-# untrusted input (`user`); `developer` carries app instructions (`system`).
-_BEDROCK_CHECKS_ROLE_MAP: dict[str, Literal["user", "assistant", "system"]] = {
-    "user": "user",
-    "assistant": "assistant",
-    "system": "system",
-    "developer": "system",
-    "tool": "user",
-    "function": "user",
-}
 # Keys in a sensitiveInformation result that pinpoint the PII location. They are
 # stripped before the response is handed to standard logging / telemetry so the
 # detected PII span cannot be reconstructed from logs.
@@ -952,13 +939,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ) -> list[BedrockChecksMessage]:
         """Build the role-tagged `messages` array for InvokeGuardrailChecks.
 
-        INPUT scans the request messages; OUTPUT scans the model response as an
-        ``assistant`` turn. Every non-empty text block of every message is scanned:
-        roles outside {user, assistant, system} (e.g. tool/function/developer) are
-        mapped onto a supported role rather than skipped, matching the ApplyGuardrail
-        path which scans all message text (empty strings carry nothing to scan and are
-        dropped). Messages exceeding the per-message content-block cap are split into
-        multiple messages rather than truncated.
+        INPUT scans the request messages, OUTPUT scans the model response as an
+        ``assistant`` turn. Every non-empty text block of every message is scanned;
+        messages exceeding the per-message content-block cap are split into multiple
+        messages rather than truncated.
+
+        INPUT content is tagged ``user`` regardless of the caller-supplied role.
+        Bedrock excludes ``system`` content from prompt-attack evaluation, so
+        trusting a caller's ``system``/``developer`` label would let an injection
+        avoid the promptAttack check. At the proxy every INPUT message is
+        caller-controlled, so all of it is treated as untrusted user input, matching
+        AWS guidance to tag untrusted content as user input.
         """
         if source == "OUTPUT":
             # Reuse the ApplyGuardrail output extractor (single source of truth for
@@ -970,12 +961,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ]
             return self._chunk_texts_into_checks_messages("assistant", output_texts)
 
-        # Map every role onto a supported one; never skip (skipping = bypass).
         return [
             checks_message
             for message in messages or []
             for checks_message in self._chunk_texts_into_checks_messages(
-                _BEDROCK_CHECKS_ROLE_MAP.get(message.get("role") or "", "user"),
+                "user",
                 [block.text for block in self.get_content_items_for_message(message) or [] if block.text],
             )
         ]

@@ -100,11 +100,13 @@ def test_normalize_checks_all_unknown_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_build_input_messages_maps_roles_and_scans_all():
-    """Every message is scanned: developer->system, tool/function->user (never skipped).
+def test_build_input_messages_tags_all_as_user_and_scans_all():
+    """Every INPUT message is scanned and tagged user regardless of the caller role.
 
-    Skipping a model-visible role (e.g. tool) would let prohibited content in that
-    message avoid scanning -- a guardrail bypass.
+    Bedrock excludes system content from prompt-attack evaluation, so tagging a
+    caller-supplied system/developer message as system would let an injection avoid
+    the promptAttack check. Every INPUT message is caller-controlled, so all of it is
+    treated as untrusted user input, and no message is skipped.
     """
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
     messages = [
@@ -116,8 +118,8 @@ def test_build_input_messages_maps_roles_and_scans_all():
     ]
     built = g._build_invoke_guardrail_checks_messages("INPUT", messages=messages)
     assert built == [
-        {"role": "system", "content": [{"text": "sys"}]},
-        {"role": "system", "content": [{"text": "dev"}]},
+        {"role": "user", "content": [{"text": "sys"}]},
+        {"role": "user", "content": [{"text": "dev"}]},
         {"role": "user", "content": [{"text": "hi"}]},
         {"role": "user", "content": [{"text": "tool-output"}]},
         {"role": "user", "content": [{"text": "fn-output"}]},
