@@ -32,6 +32,7 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
+from ..headers import merge_sap_request_headers
 from .models import (
     ChatCompletionTool,
     OrchestrationRequest,
@@ -249,7 +250,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup(api_key)
         if headers is None:
             headers = {}
-        return {**headers, **self.headers}
+        return merge_sap_request_headers(self.headers, headers)
 
     def get_complete_url(
         self,
