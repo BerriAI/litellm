@@ -1,8 +1,8 @@
-from typing import Dict, FrozenSet, List, Literal, Tuple, Union
+from typing import Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
-TIER_NAMES: Tuple[str, ...] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+TIER_NAMES: tuple[str, ...] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
 AUTOROUTER_MODEL_NAME = "autorouter"
 
 
@@ -32,10 +32,10 @@ class _RawModelGroup(BaseModel):
     output_cost_per_token: float | None = None
 
 
-_RAW_MODEL_GROUPS_ADAPTER = TypeAdapter(List[_RawModelGroup])
+_RAW_MODEL_GROUPS_ADAPTER = TypeAdapter(list[_RawModelGroup])
 
 
-def parse_discovered_models(raw: List[JsonValue]) -> Tuple[DiscoveredModel, ...]:
+def parse_discovered_models(raw: list[JsonValue]) -> tuple[DiscoveredModel, ...]:
     """Validate a raw `/model_group/info` response into typed models."""
     parsed = _RAW_MODEL_GROUPS_ADAPTER.validate_python(raw)
     return tuple(
@@ -52,11 +52,11 @@ def parse_discovered_models(raw: List[JsonValue]) -> Tuple[DiscoveredModel, ...]
     )
 
 
-def chat_models(models: Tuple[DiscoveredModel, ...]) -> Tuple[DiscoveredModel, ...]:
+def chat_models(models: tuple[DiscoveredModel, ...]) -> tuple[DiscoveredModel, ...]:
     return tuple(m for m in models if m.mode == "chat")
 
 
-def embedding_models(models: Tuple[DiscoveredModel, ...]) -> Tuple[DiscoveredModel, ...]:
+def embedding_models(models: tuple[DiscoveredModel, ...]) -> tuple[DiscoveredModel, ...]:
     return tuple(m for m in models if m.mode == "embedding")
 
 
@@ -91,7 +91,7 @@ SemanticMatchingChoice = Union[NoSemanticMatching, SemanticMatching]
 
 # Satisfies complexity_router's "semantic matching requires non-empty keyword_tier_rules"
 # invariant with a sane starting point; the generated config.yaml can be hand-edited afterward.
-_DEFAULT_KEYWORD_TIER_RULES: Tuple[Dict[str, JsonValue], ...] = (
+_DEFAULT_KEYWORD_TIER_RULES: tuple[dict[str, JsonValue], ...] = (
     {"keywords": ["hi", "hello", "thanks"], "tier": "SIMPLE"},
     {"keywords": ["explain", "how does"], "tier": "MEDIUM"},
     {"keywords": ["refactor", "implement", "debug"], "tier": "COMPLEX"},
@@ -106,17 +106,17 @@ class AutorouteConfig(BaseModel):
     api_key: str
     # Each tier maps to a pool of one or more models; complexity_router picks randomly among
     # them per request (or, in adaptive mode, learns which to prefer within the pool).
-    tiers: Dict[str, Tuple[str, ...]]
+    tiers: dict[str, tuple[str, ...]]
     default_model: str
     classifier: ClassifierChoice = Field(default_factory=HeuristicClassifier)
     semantic_matching: SemanticMatchingChoice = Field(default_factory=NoSemanticMatching)
     adaptive: bool = False
 
 
-def validate_config(config: AutorouteConfig, discovered: Tuple[DiscoveredModel, ...]) -> None:
+def validate_config(config: AutorouteConfig, discovered: tuple[DiscoveredModel, ...]) -> None:
     """Raise ConfigGenerationError if config references a model discovery didn't return."""
-    chat_names: FrozenSet[str] = frozenset(m.name for m in chat_models(discovered))
-    embedding_names: FrozenSet[str] = frozenset(m.name for m in embedding_models(discovered))
+    chat_names: frozenset[str] = frozenset(m.name for m in chat_models(discovered))
+    embedding_names: frozenset[str] = frozenset(m.name for m in embedding_models(discovered))
 
     for tier, models in config.tiers.items():
         for model in models:
@@ -138,7 +138,7 @@ def validate_config(config: AutorouteConfig, discovered: Tuple[DiscoveredModel, 
         )
 
 
-def _litellm_proxy_deployment(name: str, base_url: str, api_key: str) -> Dict[str, JsonValue]:
+def _litellm_proxy_deployment(name: str, base_url: str, api_key: str) -> dict[str, JsonValue]:
     return {
         "model_name": name,
         "litellm_params": {
@@ -149,7 +149,7 @@ def _litellm_proxy_deployment(name: str, base_url: str, api_key: str) -> Dict[st
     }
 
 
-def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
+def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
     """Build the model_list for the ephemeral proxy's config.yaml.
 
     Every real model referenced anywhere (tier targets, classifier, embedding) is deduplicated
@@ -167,7 +167,7 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
         _litellm_proxy_deployment(name, config.base_url, config.api_key) for name in sorted(referenced_names)
     ]
 
-    complexity_router_config: Dict[str, JsonValue] = {
+    complexity_router_config: dict[str, JsonValue] = {
         "tiers": {tier: list(models) for tier, models in config.tiers.items()},
         "default_model": config.default_model,
     }
@@ -185,7 +185,7 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
     if config.adaptive:
         complexity_router_config["adaptive"] = True
 
-    auto_router_litellm_params: Dict[str, JsonValue] = {
+    auto_router_litellm_params: dict[str, JsonValue] = {
         "model": "auto_router/complexity_router",
         "complexity_router_config": complexity_router_config,
     }
@@ -202,7 +202,7 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
     ]
 
 
-def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> Dict[str, JsonValue]:
+def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> dict[str, JsonValue]:
     """Full config.yaml content for the ephemeral proxy, including its own auth key.
 
     master_key must live under general_settings, not litellm_settings -- the proxy server
@@ -217,20 +217,20 @@ def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> Di
 
 
 __all__ = [
-    "TIER_NAMES",
     "AUTOROUTER_MODEL_NAME",
+    "TIER_NAMES",
+    "AutorouteConfig",
+    "ClassifierChoice",
     "ConfigGenerationError",
     "DiscoveredModel",
-    "parse_discovered_models",
-    "chat_models",
-    "embedding_models",
     "HeuristicClassifier",
     "LLMClassifier",
-    "ClassifierChoice",
     "NoSemanticMatching",
     "SemanticMatching",
     "SemanticMatchingChoice",
-    "AutorouteConfig",
-    "validate_config",
     "build_generated_model_list",
+    "chat_models",
+    "embedding_models",
+    "parse_discovered_models",
+    "validate_config",
 ]

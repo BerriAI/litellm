@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Dict, Mapping, Optional
+from typing import Mapping
 
 import click
 from pydantic import JsonValue, TypeAdapter
@@ -37,14 +37,14 @@ class BackupRecord:
     """Snapshot of ~/.claude/settings.json taken right before `lite up` patches it."""
 
     existed: bool
-    content: Optional[Dict[str, JsonValue]]
+    content: dict[str, JsonValue] | None
 
 
-_SETTINGS_ADAPTER = TypeAdapter(Dict[str, JsonValue])
+_SETTINGS_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _BACKUP_RECORD_ADAPTER = TypeAdapter(BackupRecord)
 
 
-def load_json_or_empty(path: Path) -> Dict[str, JsonValue]:
+def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
     if not path.exists():
         return {}
     with open(path, "r") as f:
@@ -56,7 +56,7 @@ def load_json_or_empty(path: Path) -> Dict[str, JsonValue]:
 
 def merge_claude_settings(
     settings: Mapping[str, JsonValue], base_url: str, api_key_helper: str
-) -> Dict[str, JsonValue]:
+) -> dict[str, JsonValue]:
     """Return a new settings dict wired to route Claude Code through the proxy.
 
     Only env.ANTHROPIC_BASE_URL and the top-level apiKeyHelper are overridden; a
@@ -71,7 +71,7 @@ def merge_claude_settings(
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
-def write_backup(record: BackupRecord, backup_path: Optional[Path] = None) -> None:
+def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
     path = backup_path if backup_path is not None else BACKUP_PATH
     path.parent.mkdir(exist_ok=True)
     with open(path, "w") as f:
@@ -79,7 +79,7 @@ def write_backup(record: BackupRecord, backup_path: Optional[Path] = None) -> No
     os.chmod(path, 0o600)
 
 
-def read_backup(backup_path: Optional[Path] = None) -> Optional[BackupRecord]:
+def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
     path = backup_path if backup_path is not None else BACKUP_PATH
     if not path.exists():
         return None
@@ -87,9 +87,7 @@ def read_backup(backup_path: Optional[Path] = None) -> Optional[BackupRecord]:
         return _BACKUP_RECORD_ADAPTER.validate_json(f.read())
 
 
-def restore_claude_settings(
-    settings_path: Optional[Path] = None, backup_path: Optional[Path] = None
-) -> Optional[BackupRecord]:
+def restore_claude_settings(settings_path: Path | None = None, backup_path: Path | None = None) -> BackupRecord | None:
     """Restore settings_path from the backup at backup_path, then delete the backup.
 
     Returns the restored record, or None if there was nothing to restore.
@@ -199,7 +197,7 @@ def up(ctx: click.Context) -> None:
     stop_event = threading.Event()
     restored = threading.Lock()
 
-    def _handle_signal(_signum: int, _frame: Optional[FrameType]) -> None:
+    def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()
 
     def _restore_once() -> None:
@@ -225,16 +223,16 @@ def down() -> None:
 
 
 __all__ = [
-    "up",
-    "down",
+    "BACKUP_PATH",
+    "CLAUDE_SETTINGS_PATH",
     "BackupRecord",
+    "UpError",
+    "down",
     "load_json_or_empty",
     "merge_claude_settings",
-    "write_backup",
     "read_backup",
-    "restore_claude_settings",
     "resolve_api_key_helper",
-    "UpError",
-    "CLAUDE_SETTINGS_PATH",
-    "BACKUP_PATH",
+    "restore_claude_settings",
+    "up",
+    "write_backup",
 ]

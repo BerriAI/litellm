@@ -1,5 +1,3 @@
-from typing import Dict
-
 from pydantic import JsonValue
 
 from .config import AUTOROUTER_MODEL_NAME
@@ -22,8 +20,8 @@ ANTHROPIC_DEFAULT_MODEL_ENV_KEYS = (
 
 
 def merge_claude_settings_static_token(
-    settings: Dict[str, JsonValue], base_url: str, auth_token: str
-) -> Dict[str, JsonValue]:
+    settings: dict[str, JsonValue], base_url: str, auth_token: str
+) -> dict[str, JsonValue]:
     """Return a new settings dict wired to a local ephemeral proxy with a static token.
 
     Unlike up.py's merge_claude_settings (which sets apiKeyHelper for a long-lived, real
@@ -33,14 +31,14 @@ def merge_claude_settings_static_token(
     """
     raw_env = settings.get(ENV_KEY, {})
     base_env = raw_env if isinstance(raw_env, dict) else {}
-    env: Dict[str, JsonValue] = {
+    env: dict[str, JsonValue] = {
         **base_env,
         ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/"),
         ANTHROPIC_AUTH_TOKEN_KEY: auth_token,
         **{key: AUTOROUTER_MODEL_NAME for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS},
     }
     env.pop(ANTHROPIC_API_KEY_KEY, None)
-    merged: Dict[str, JsonValue] = {**settings, ENV_KEY: env}
+    merged: dict[str, JsonValue] = {**settings, ENV_KEY: env}
     merged.pop(API_KEY_HELPER_KEY, None)
     return merged
 

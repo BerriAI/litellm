@@ -9,7 +9,6 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import click
 import requests
@@ -76,7 +75,7 @@ def poll_liveliness(base_url: str, log_path: Path, process: "subprocess.Popen[by
     )
 
 
-def write_pid_record(record: PidRecord, path: Optional[Path] = None) -> None:
+def write_pid_record(record: PidRecord, path: Path | None = None) -> None:
     resolved_path = path if path is not None else PID_RECORD_PATH
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     with open(resolved_path, "w") as f:
@@ -87,7 +86,7 @@ def write_pid_record(record: PidRecord, path: Optional[Path] = None) -> None:
         )
 
 
-def read_pid_record(path: Optional[Path] = None) -> Optional[PidRecord]:
+def read_pid_record(path: Path | None = None) -> PidRecord | None:
     resolved_path = path if path is not None else PID_RECORD_PATH
     if not resolved_path.exists():
         return None
@@ -95,7 +94,7 @@ def read_pid_record(path: Optional[Path] = None) -> Optional[PidRecord]:
         return _PID_RECORD_ADAPTER.validate_json(f.read())
 
 
-def clear_pid_record(path: Optional[Path] = None) -> None:
+def clear_pid_record(path: Path | None = None) -> None:
     resolved_path = path if path is not None else PID_RECORD_PATH
     resolved_path.unlink(missing_ok=True)
 
@@ -144,15 +143,15 @@ __all__ = [
     "CONFIG_PATH",
     "LOG_PATH",
     "PID_RECORD_PATH",
-    "ProcessLaunchError",
     "PidRecord",
+    "ProcessLaunchError",
     "allocate_free_port",
-    "launch_proxy",
-    "poll_liveliness",
-    "write_pid_record",
-    "read_pid_record",
     "clear_pid_record",
     "is_running",
-    "terminate",
+    "launch_proxy",
+    "poll_liveliness",
+    "read_pid_record",
     "stream_log",
+    "terminate",
+    "write_pid_record",
 ]

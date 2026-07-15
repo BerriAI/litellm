@@ -4,15 +4,13 @@ import secrets
 import signal
 import threading
 from types import FrameType
-from typing import Dict, Optional
 
 import click
 import yaml
 from pydantic import JsonValue, TypeAdapter
 
-from ..up import CLAUDE_SETTINGS_PATH
+from ..up import CLAUDE_SETTINGS_PATH, load_json_or_empty, restore_claude_settings, write_backup
 from ..up import BackupRecord as ClaudeBackupRecord
-from ..up import load_json_or_empty, restore_claude_settings, write_backup
 from .process import (
     AUTOROUTE_DIR,
     CONFIG_PATH,
@@ -34,7 +32,7 @@ from .wizard import run_configure_wizard
 
 AUTOROUTE_BACKUP_PATH = AUTOROUTE_DIR / "claude_settings_backup.json"
 
-_GENERATED_CONFIG_ADAPTER = TypeAdapter(Dict[str, JsonValue])
+_GENERATED_CONFIG_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 def _mint_and_embed_master_key() -> str:
@@ -49,11 +47,11 @@ def _mint_and_embed_master_key() -> str:
     with open(CONFIG_PATH, "r") as f:
         generated = _GENERATED_CONFIG_ADAPTER.validate_python(yaml.safe_load(f))
     general_settings = generated.get("general_settings")
-    updated_settings: Dict[str, JsonValue] = {
+    updated_settings: dict[str, JsonValue] = {
         **(general_settings if isinstance(general_settings, dict) else {}),
         "master_key": master_key,
     }
-    updated: Dict[str, JsonValue] = {**generated, "general_settings": updated_settings}
+    updated: dict[str, JsonValue] = {**generated, "general_settings": updated_settings}
     with open(CONFIG_PATH, "w") as f:
         yaml.safe_dump(updated, f, sort_keys=False)
     CONFIG_PATH.chmod(0o600)
@@ -122,7 +120,7 @@ def up() -> None:
         restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
         click.echo("\nStopped ephemeral proxy and restored Claude Code settings.")
 
-    def _handle_signal(_signum: int, _frame: Optional[FrameType]) -> None:
+    def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()
 
     signal.signal(signal.SIGINT, _handle_signal)
@@ -139,7 +137,7 @@ def up() -> None:
 @autoroute_group.command("down")
 def down() -> None:
     """Restore Claude Code settings and stop a leftover ephemeral proxy, if any"""
-    record: Optional[PidRecord] = read_pid_record()
+    record: PidRecord | None = read_pid_record()
     if record is not None and is_running(record.pid):
         terminate(record.pid)
         click.echo(f"Stopped leftover ephemeral proxy (pid {record.pid}).")

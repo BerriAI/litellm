@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 import click
 import yaml
@@ -30,7 +29,7 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _fuzzy_pick(models: Tuple[DiscoveredModel, ...], prompt_label: str, multiselect: bool) -> List[str]:
+def _fuzzy_pick(models: tuple[DiscoveredModel, ...], prompt_label: str, multiselect: bool) -> list[str]:
     """Type-to-filter picker over a (possibly huge) model pool, using InquirerPy's fzf-style fuzzy prompt.
 
     A plain numbered table + typed index does not scale past a handful of models -- proxies with
@@ -56,11 +55,11 @@ def _fuzzy_pick(models: Tuple[DiscoveredModel, ...], prompt_label: str, multisel
         click.echo("Select at least one model.")
 
 
-def _render_and_prompt_for_model(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> str:
+def _render_and_prompt_for_model(models: tuple[DiscoveredModel, ...], prompt_label: str) -> str:
     return _fuzzy_pick(models, prompt_label, multiselect=False)[0]
 
 
-def _render_and_prompt_for_models(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> Tuple[str, ...]:
+def _render_and_prompt_for_models(models: tuple[DiscoveredModel, ...], prompt_label: str) -> tuple[str, ...]:
     return tuple(_fuzzy_pick(models, prompt_label, multiselect=True))
 
 
