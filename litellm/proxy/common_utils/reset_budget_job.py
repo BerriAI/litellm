@@ -365,7 +365,7 @@ class ResetBudgetJob:
 
     async def _write_key_reset_updates(self, updated_keys: List[LiteLLM_VerificationToken]) -> None:
         """
-        Write per-row {spend, budget_reset_at} updates for keys.
+        Write per-row {spend, budget_reset_at, updated_at} updates for keys.
 
         Avoids the batched full-model update path, which trips
         prisma.errors.DataError on any row carrying object_permission_id or
@@ -379,15 +379,18 @@ class ResetBudgetJob:
             token = getattr(k, "token", None)
             if token is None:
                 continue
+            data = {"spend": 0, "budget_reset_at": k.budget_reset_at}
+            if getattr(k, "updated_at", None) is not None:
+                data["updated_at"] = k.updated_at
             batcher.litellm_verificationtoken.update(
                 where={"token": token},
-                data={"spend": 0, "budget_reset_at": k.budget_reset_at},
+                data=data,
             )
         await batcher.commit()
 
     async def _write_user_reset_updates(self, updated_users: List[LiteLLM_UserTable]) -> None:
         """
-        Write per-row {spend, budget_reset_at} updates for users.
+        Write per-row {spend, budget_reset_at, updated_at} updates for users.
 
         Mirrors _write_key_reset_updates — avoids the full-model update path
         that trips Prisma's DataError on rows carrying unrecognised fields
@@ -398,15 +401,18 @@ class ResetBudgetJob:
             user_id = getattr(u, "user_id", None)
             if user_id is None:
                 continue
+            data = {"spend": 0, "budget_reset_at": u.budget_reset_at}
+            if getattr(u, "updated_at", None) is not None:
+                data["updated_at"] = u.updated_at
             batcher.litellm_usertable.update(
                 where={"user_id": user_id},
-                data={"spend": 0, "budget_reset_at": u.budget_reset_at},
+                data=data,
             )
         await batcher.commit()
 
     async def _write_team_reset_updates(self, updated_teams: List[LiteLLM_TeamTable]) -> None:
         """
-        Write per-row {spend, budget_reset_at} updates for teams.
+        Write per-row {spend, budget_reset_at, updated_at} updates for teams.
 
         Mirrors _write_key_reset_updates — avoids the full-model update path
         that trips Prisma's DataError on rows carrying unrecognised fields
@@ -417,9 +423,12 @@ class ResetBudgetJob:
             team_id = getattr(t, "team_id", None)
             if team_id is None:
                 continue
+            data = {"spend": 0, "budget_reset_at": t.budget_reset_at}
+            if getattr(t, "updated_at", None) is not None:
+                data["updated_at"] = t.updated_at
             batcher.litellm_teamtable.update(
                 where={"team_id": team_id},
-                data={"spend": 0, "budget_reset_at": t.budget_reset_at},
+                data=data,
             )
         await batcher.commit()
 
@@ -743,7 +752,7 @@ class ResetBudgetJob:
         item_type: Literal["key", "team", "user"],
     ):
         """
-        In-place, updates spend=0, and sets budget_reset_at to current_time + budget_duration
+        In-place, updates spend=0, sets budget_reset_at to current_time + budget_duration, and updates updated_at
 
         Common logic for resetting budget for a team, user, or key.
 
@@ -754,6 +763,8 @@ class ResetBudgetJob:
         """
         try:
             item.spend = 0.0
+            if hasattr(item, "updated_at"):
+                item.updated_at = current_time
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 from litellm.proxy.common_utils.timezone_utils import (
                     get_budget_reset_time,
@@ -781,6 +792,8 @@ class ResetBudgetJob:
     ) -> Optional[LiteLLM_EndUserTable]:
         try:
             enduser.spend = 0.0
+            if hasattr(enduser, "updated_at"):
+                enduser.updated_at = datetime.now(timezone.utc)
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget for enduser: %s. Item: %s", e, enduser)
             raise e
@@ -797,6 +810,8 @@ class ResetBudgetJob:
                 )
 
                 budget.budget_reset_at = get_budget_reset_time(budget_duration=budget.budget_duration)
+                if hasattr(budget, "updated_at"):
+                    budget.updated_at = current_time
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget_reset_at for budget: %s. Item: %s", e, budget)
             raise e
