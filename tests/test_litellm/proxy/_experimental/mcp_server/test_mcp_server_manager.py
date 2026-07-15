@@ -1255,7 +1255,6 @@ class TestMCPServerManager:
             token_url="https://idp.example.com/token",
             registration_url="https://idp.example.com/register",
             scopes=["read", "write"],
-            authorization_server_scopes=["read", "write"],
         )
         resource_rooted = AsyncMock(return_value=MCPOAuthMetadata(token_url="https://attacker.example.com/steal"))
         with (
@@ -5340,6 +5339,7 @@ class TestMCPServerTimestamps:
             await manager._persist_discovered_oauth_endpoints(
                 server_id="s",
                 auth_type=MCPAuth.api_key,
+                existing_issuer=None,
                 existing_authorization_url=None,
                 existing_token_url=None,
                 existing_scopes=None,
@@ -5348,6 +5348,7 @@ class TestMCPServerTimestamps:
             await manager._persist_discovered_oauth_endpoints(
                 server_id="s",
                 auth_type=MCPAuth.oauth2,
+                existing_issuer=None,
                 existing_authorization_url=None,
                 existing_token_url=None,
                 existing_scopes=None,
@@ -5356,6 +5357,7 @@ class TestMCPServerTimestamps:
             await manager._persist_discovered_oauth_endpoints(
                 server_id="s",
                 auth_type=MCPAuth.oauth2,
+                existing_issuer=None,
                 existing_authorization_url=None,
                 existing_token_url=None,
                 existing_scopes=None,
@@ -5364,6 +5366,7 @@ class TestMCPServerTimestamps:
             await manager._persist_discovered_oauth_endpoints(
                 server_id="s",
                 auth_type=MCPAuth.oauth2,
+                existing_issuer=None,
                 existing_authorization_url="https://configured.example.com/authorize",
                 existing_token_url="https://configured.example.com/token",
                 existing_scopes=["configured"],
@@ -5389,6 +5392,7 @@ class TestMCPServerTimestamps:
             await manager._persist_discovered_oauth_endpoints(
                 server_id="s",
                 auth_type=MCPAuth.oauth2,
+                existing_issuer=None,
                 existing_authorization_url=None,
                 existing_token_url="https://configured.example.com/token",
                 existing_scopes=None,
@@ -5404,6 +5408,46 @@ class TestMCPServerTimestamps:
         assert persisted.authorization_url == "https://idp.example.com/authorize"
         assert persisted.credentials == {"scopes": ["s1"]}
         assert "token_url" not in persisted.fields_set()
+
+    @pytest.mark.asyncio
+    async def test_persist_discovered_oauth_endpoints_writes_discovered_issuer_trust_on_first_use(self):
+        """A server with no configured issuer records the discovered issuer trust-on-first-use, so the
+        next rebuild anchors discovery on it (RFC 8414 §3.3) instead of re-trusting the resource. When
+        an issuer is already set (admin-typed or a prior discovery), it is never overwritten."""
+        manager = MCPServerManager()
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            discovered_issuer="https://idp.example.com",
+        )
+
+        update_mcp_server_mock = AsyncMock()
+        with (
+            patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            await manager._persist_discovered_oauth_endpoints(
+                server_id="s",
+                auth_type=MCPAuth.oauth2,
+                existing_issuer=None,
+                existing_authorization_url=None,
+                existing_token_url=None,
+                existing_scopes=None,
+                metadata=metadata,
+            )
+            await manager._persist_discovered_oauth_endpoints(
+                server_id="s",
+                auth_type=MCPAuth.oauth2,
+                existing_issuer="https://admin-configured.example.com",
+                existing_authorization_url="https://admin-configured.example.com/authorize",
+                existing_token_url="https://admin-configured.example.com/token",
+                existing_scopes=["cfg"],
+                metadata=metadata,
+            )
+
+        assert update_mcp_server_mock.await_count == 1
+        persisted = update_mcp_server_mock.call_args.kwargs["data"]
+        assert persisted.issuer == "https://idp.example.com"
 
     @pytest.mark.asyncio
     async def test_build_mcp_server_from_table_skips_persistence_for_temporary_servers(self):

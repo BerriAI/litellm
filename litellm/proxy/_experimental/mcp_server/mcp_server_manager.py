@@ -1713,6 +1713,7 @@ class MCPServerManager:
             await self._persist_discovered_oauth_endpoints(
                 server_id=mcp_server.server_id,
                 auth_type=auth_type,
+                existing_issuer=manual_issuer,
                 existing_authorization_url=manual_authorization_url,
                 existing_token_url=manual_token_url,
                 existing_scopes=scopes,
@@ -1760,6 +1761,7 @@ class MCPServerManager:
         *,
         server_id: str,
         auth_type: MCPAuthType | None,
+        existing_issuer: str | None,
         existing_authorization_url: str | None,
         existing_token_url: str | None,
         existing_scopes: list[str] | None,
@@ -1782,6 +1784,9 @@ class MCPServerManager:
             return
         if metadata is None or metadata.from_origin_fallback:
             return
+        issuer_update = (
+            {"issuer": metadata.discovered_issuer} if metadata.discovered_issuer and not existing_issuer else {}
+        )
         authorization_url_update = (
             {"authorization_url": metadata.authorization_url}
             if metadata.authorization_url and not existing_authorization_url
@@ -1789,7 +1794,12 @@ class MCPServerManager:
         )
         token_url_update = {"token_url": metadata.token_url} if metadata.token_url and not existing_token_url else {}
         scopes_update = {"credentials": {"scopes": metadata.scopes}} if metadata.scopes and not existing_scopes else {}
-        updates: dict[str, object] = {**authorization_url_update, **token_url_update, **scopes_update}
+        updates: dict[str, object] = {
+            **issuer_update,
+            **authorization_url_update,
+            **token_url_update,
+            **scopes_update,
+        }
         if not updates:
             return
         from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # db.py imports this module at load
@@ -3453,6 +3463,7 @@ class MCPServerManager:
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
+                discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
             )
 
             if any(

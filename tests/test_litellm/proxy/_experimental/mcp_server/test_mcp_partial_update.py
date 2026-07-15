@@ -203,6 +203,7 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
     data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
 
     for stale_field in (
+        "issuer",
         "authorization_url",
         "token_url",
         "registration_url",
@@ -215,6 +216,46 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
     ):
         assert data_dict[stale_field] is None, f"{stale_field} must be cleared on auth_type switch"
     assert _credentials_cleared(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_url_change_clears_stale_discovered_oauth_fields():
+    """Re-pointing the server url at a potentially different upstream must clear the discovered or
+    trust-on-first-use OAuth issuer and endpoints, so the new upstream re-discovers instead of
+    anchoring on the previous upstream's issuer (RFC 8414 §3.3 against a stale anchor)."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://old.example.com/mcp"
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", url="https://new.example.com/mcp")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["url"] == "https://new.example.com/mcp"
+    for stale_field in ("issuer", "authorization_url", "token_url", "registration_url"):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared on url change"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_url_does_not_clear_discovered_oauth_fields():
+    """A partial update that resends the same url (or omits it) must not clear the discovered OAuth
+    fields, so a routine save does not force needless re-discovery."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://same.example.com/mcp"
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", url="https://same.example.com/mcp")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    for preserved_field in ("issuer", "authorization_url", "token_url", "registration_url"):
+        assert preserved_field not in data_dict, f"{preserved_field} must not be cleared when url is unchanged"
 
 
 @pytest.mark.asyncio
