@@ -1,0 +1,163 @@
+suite: test pod disruption budgets and topology spread constraints
+templates:
+  - gateway/poddisruptionbudget.yaml
+  - backend/poddisruptionbudget.yaml
+  - ui/poddisruptionbudget.yaml
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders no PDB by default
+    templates:
+      - gateway/poddisruptionbudget.yaml
+      - backend/poddisruptionbudget.yaml
+      - ui/poddisruptionbudget.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gateway PDB uses minAvailable and matches the gateway selector labels
+    template: gateway/poddisruptionbudget.yaml
+    set:
+      gateway.pdb.enabled: true
+      gateway.pdb.minAvailable: 1
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: apiVersion
+          value: policy/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - notExists:
+          path: spec.maxUnavailable
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: gateway
+
+  - it: backend PDB uses maxUnavailable when minAvailable is unset
+    template: backend/poddisruptionbudget.yaml
+    set:
+      backend.pdb.enabled: true
+      backend.pdb.maxUnavailable: 25%
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 25%
+      - notExists:
+          path: spec.minAvailable
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: backend
+
+  - it: minAvailable wins when both minAvailable and maxUnavailable are set
+    template: gateway/poddisruptionbudget.yaml
+    set:
+      gateway.pdb.enabled: true
+      gateway.pdb.minAvailable: 2
+      gateway.pdb.maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 2
+      - notExists:
+          path: spec.maxUnavailable
+
+  - it: enabled PDB with neither knob set falls back to maxUnavailable 1
+    template: ui/poddisruptionbudget.yaml
+    set:
+      ui.pdb.enabled: true
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: ui
+
+  - it: renders no PDB for a disabled component even when its pdb is enabled
+    template: gateway/poddisruptionbudget.yaml
+    set:
+      gateway.enabled: false
+      gateway.pdb.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: deployments omit topologySpreadConstraints by default
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+
+  - it: gateway deployment renders configured topologySpreadConstraints
+    template: gateway/deployment.yaml
+    set:
+      gateway.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: gateway
+
+  - it: backend deployment renders configured topologySpreadConstraints
+    template: backend/deployment.yaml
+    set:
+      backend.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+
+  - it: ui deployment renders configured topologySpreadConstraints
+    template: ui/deployment.yaml
+    set:
+      ui.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: topology.kubernetes.io/zone

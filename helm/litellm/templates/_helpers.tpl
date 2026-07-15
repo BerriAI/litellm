@@ -245,6 +245,44 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
+PodDisruptionBudget shared by gateway, backend, and ui.
+
+Invoke with a dict:
+  (dict "root" $ "component" .Values.gateway "componentName" "gateway"
+        "fullname" (include "litellm.gateway.fullname" .)
+        "selectorLabels" (include "litellm.gateway.selectorLabels" .))
+
+Renders nothing unless both the component and its `pdb.enabled` are on.
+Only one of minAvailable / maxUnavailable should be set; if both are,
+minAvailable wins. If neither is set, falls back to `maxUnavailable: 1` so
+an enabled-but-unconfigured PDB still permits node drains.
+*/}}
+{{- define "litellm.pdb" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .fullname }}
+  labels:
+    {{- include "litellm.commonLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .componentName }}
+spec:
+  selector:
+    matchLabels:
+      {{- .selectorLabels | nindent 6 }}
+  {{- if $component.pdb.minAvailable }}
+  minAvailable: {{ $component.pdb.minAvailable }}
+  {{- else if $component.pdb.maxUnavailable }}
+  maxUnavailable: {{ $component.pdb.maxUnavailable }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Renders `envFrom:` block for a component's `envConfigMaps` / `envSecrets`
 lists. Each entry is a resource name; the chart wires the whole ConfigMap /
 Secret into the container's env via configMapRef / secretRef.
