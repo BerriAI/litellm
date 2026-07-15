@@ -1,17 +1,13 @@
 import { useMemo } from "react";
-import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const FLAG_FIELD = "enable_ptu_cost_attribution";
 
 export const useIsPtuCostAttributionEnabled = (): { enabled: boolean; isLoading: boolean } => {
-  const { data, isLoading } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
+  const { data, isLoading } = useUISettings();
 
   const enabled = useMemo(() => {
-    if (!data) {
-      return false;
-    }
-    const entry = data.find((item) => item.field_name === FLAG_FIELD);
-    return Boolean(entry?.field_value);
+    return Boolean(data?.values?.[FLAG_FIELD]);
   }, [data]);
 
   return { enabled, isLoading };

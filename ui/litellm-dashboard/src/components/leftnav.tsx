@@ -93,6 +93,7 @@ interface SidebarProps {
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
   allowVectorStoresForTeamAdmins?: boolean;
+  enablePtuCostAttribution?: boolean;
 }
 
 interface MenuItem {
@@ -401,6 +402,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
+  enablePtuCostAttribution,
 }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
@@ -452,6 +454,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         }
         if (item.key === "projects" && !enableProjectsUI) return false;
         if (item.key === "chat" && !enableChatUI) return false;
+        if (item.key === "ptu-reservations" && !enablePtuCostAttribution) return false;
         if (
           !isAdmin &&
           item.key === "agents" &&
