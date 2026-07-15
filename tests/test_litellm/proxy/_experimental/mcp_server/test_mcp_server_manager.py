@@ -7685,6 +7685,17 @@ class TestResolveOpenAPIToolAuth:
         )
         assert auth_value == "ApiKey byok-raw-token"
 
+    def test_per_server_non_auth_only_falls_back_to_byok_auth_header(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header="byok-raw-token",
+            mcp_server_auth_headers={"report_openapi": {"X-Tenant-Id": "acme"}},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer byok-raw-token"
+        assert forwarded == {"X-Tenant-Id": "acme"}
+
     def test_no_credential_returns_none(self):
         auth_value, forwarded = _resolve_openapi_tool_auth(
             mcp_server=self._server(),

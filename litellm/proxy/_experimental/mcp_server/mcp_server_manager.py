@@ -379,6 +379,8 @@ def _resolve_openapi_tool_auth(
                 auth_value = header_val
             else:
                 extra[header_key] = header_val
+        if auth_value is None and mcp_auth_header:
+            auth_value = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header)
         return auth_value, (extra or None)
     if isinstance(per_server_auth_header, str) and per_server_auth_header:
         return per_server_auth_header, forwarded
