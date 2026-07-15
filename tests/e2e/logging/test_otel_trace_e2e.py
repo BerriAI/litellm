@@ -385,20 +385,21 @@ class TestOtelTraceCompleteness:
     def test_responses_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful STREAMED /v1/responses call must export ONE complete
-        OTEL trace: a single root SERVER span with auth/db/cost children and
-        the gen-AI CLIENT span connected back to the root, plus the stream
-        actually delivering events and exactly ONE gen-AI span for the call.
+        """A successful streamed /v1/responses request should export one complete
+        OTEL trace. The trace must contain a single root SERVER span, with the
+        auth, database, and gen-AI CLIENT spans all connected back to that
+        root.
 
-        Two knowingly relaxed assertions on this surface, both verified against
-        live traces and both tracked in LIT-4428: the responses route
-        does not stamp litellm.request.streaming on the gen-AI span, and the
-        spend write for a streamed responses call records spend correctly but
-        emits no batch_write_to_db cost span (streamed chat/messages and
-        non-streamed responses all emit it). Streaming is instead proven from
-        the response side (event-stream content type, chunks consumed). When
-        the product closes either gap, tighten this test to match the sibling
-        assertions.
+        This endpoint has the same streaming lifecycle risk as the other
+        streaming surfaces: the gen-AI span is closed by the
+        stream-consumption path after the final event has arrived and usage
+        has been aggregated.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * Spend is recorded correctly.
         """
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
@@ -432,4 +433,14 @@ class TestOtelTraceCompleteness:
         assert len(genai_spans) == 1, (
             f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
             f"spans: {hits[0].span_names()}"
+        )
+
+        spend_row = client.poll_proxy_spend_for_key(key)
+        assert spend_row is not None and spend_row.spend is not None and spend_row.spend > 0, (
+            "a successful streamed responses call must record a positive-spend row in /spend/logs "
+            "(the cost-write SPAN is knowingly absent on this surface, LIT-4428, but the spend "
+            f"itself must land); got {spend_row!r}"
+        )
+        assert spend_row.call_type == "aresponses", (
+            f"the spend row must be attributed to the responses call type, got {spend_row.call_type!r}"
         )
