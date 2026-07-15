@@ -515,6 +515,30 @@ def test_function_to_dict():
 # test_function_to_dict()
 
 
+def test_function_to_dict_pep604_union_annotation():
+    def get_forecast(location: str | None, days: int | None, limit: int):
+        """Get the forecast
+
+        Parameters
+        ----------
+        location : str
+            The city and state
+        days : int
+            Number of days
+        limit : int
+            Max results
+        """
+        return "sunny"
+
+    function_json = litellm.utils.function_to_dict(get_forecast)
+
+    properties = function_json["parameters"]["properties"]
+    assert properties["location"]["type"] == "string"
+    assert properties["days"]["type"] == "integer"
+    assert properties["limit"]["type"] == "integer"
+    assert function_json["parameters"]["required"] == ["location", "days", "limit"]
+
+
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
