@@ -229,6 +229,7 @@ __all__ = [
     "SemanticMatching",
     "SemanticMatchingChoice",
     "build_generated_model_list",
+    "build_generated_proxy_config",
     "chat_models",
     "embedding_models",
     "parse_discovered_models",

@@ -29,7 +29,10 @@ def list_model_groups(ctx: click.Context, output_format: Literal["table", "json"
     """List model groups accessible to your key, with mode and pricing"""
     client = create_client(ctx)
     groups = client.model_groups.info()
-    assert isinstance(groups, list)
+    if not isinstance(groups, list):
+        raise click.ClickException(
+            f"Unexpected response from /model_group/info: expected a list, got {type(groups).__name__}"
+        )
 
     if output_format == "json":
         rich.print_json(data=groups)

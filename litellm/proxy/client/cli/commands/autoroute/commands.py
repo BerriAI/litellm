@@ -92,6 +92,7 @@ def up() -> None:
     try:
         poll_liveliness(base_url, LOG_PATH, process)
     except ProcessLaunchError as e:
+        terminate(process.pid)
         clear_pid_record()
         raise click.ClickException(str(e))
 

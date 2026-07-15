@@ -66,12 +66,12 @@ def allocate_free_port() -> int:
 
 def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Popen[bytes]":
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path, "w")
-    return subprocess.Popen(
-        [sys.executable, "-m", "litellm.proxy.proxy_cli", "--config", str(config_path), "--port", str(port)],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
+    with open(log_path, "w") as log_file:
+        return subprocess.Popen(
+            [sys.executable, "-m", "litellm.proxy.proxy_cli", "--config", str(config_path), "--port", str(port)],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
 
 
 def _tail(log_path: Path, lines: int = 40) -> str:

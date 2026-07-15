@@ -102,3 +102,13 @@ def test_list_error_handling(mock_client, cli_runner):
 
     assert result.exit_code != 0
     assert "API Error" in str(result.exception)
+
+
+def test_list_surfaces_clean_error_when_response_is_not_a_list(mock_client, cli_runner):
+    mock_client.return_value.model_groups.info.return_value = {"data": SAMPLE_MODEL_GROUPS}
+
+    result = cli_runner.invoke(cli, ["model-groups", "list"])
+
+    assert result.exit_code != 0
+    assert result.exception is None or not isinstance(result.exception, AssertionError)
+    assert "Unexpected response from /model_group/info" in result.output

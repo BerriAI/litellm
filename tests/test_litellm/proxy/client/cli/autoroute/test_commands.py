@@ -122,6 +122,7 @@ class TestUpCommand:
         claude_settings_path.write_text(json.dumps(original_settings))
 
         fake_process = FakeProcess(pid=555)
+        terminate_calls = []
 
         def _raise_launch_error(*args, **kwargs):
             raise ProcessLaunchError("boom: proxy never became healthy")
@@ -129,12 +130,14 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
         monkeypatch.setattr(commands_module, "poll_liveliness", _raise_launch_error)
         monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 12345)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
         result = self.runner.invoke(up)
 
         assert result.exit_code != 0
         assert "boom" in result.output
+        assert terminate_calls == [555]
         assert not pid_record_path.exists()
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == original_settings

@@ -70,7 +70,10 @@ def run_configure_wizard(ctx: click.Context) -> Path:
     client = Client(base_url=base_url, api_key=api_key)
 
     raw_groups = client.model_groups.info()
-    assert isinstance(raw_groups, list)
+    if not isinstance(raw_groups, list):
+        raise click.ClickException(
+            f"Unexpected response from /model_group/info: expected a list, got {type(raw_groups).__name__}"
+        )
     discovered = parse_discovered_models(raw_groups)
     chat_pool = chat_models(discovered)
     embedding_pool = embedding_models(discovered)

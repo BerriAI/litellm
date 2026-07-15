@@ -183,6 +183,14 @@ class TestRunConfigureWizardNoChatModels:
         assert "no chat-capable models" in result.output.lower()
         assert not config_path.exists()
 
+    def test_surfaces_clean_error_when_response_is_not_a_list(self, tmp_path):
+        result, config_path = _run(tmp_path, {"data": CHAT_AND_EMBEDDING_GROUPS}, {}, input_str="")
+
+        assert result.exit_code != 0
+        assert result.exception is None or not isinstance(result.exception, AssertionError)
+        assert "Unexpected response from /model_group/info" in result.output
+        assert not config_path.exists()
+
 
 class TestRunConfigureWizardNotInteractive:
     def test_fails_cleanly_when_not_a_tty(self, tmp_path):
