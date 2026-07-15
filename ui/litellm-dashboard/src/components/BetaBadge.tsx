@@ -9,10 +9,10 @@ export default function BetaBadge({ children, dot = false }: { children?: React.
   }
 
   return children ? (
-    <Badge color="gold" count={dot ? undefined : "Beta"} dot={dot}>
+    <Badge color="blue" count={dot ? undefined : "Beta"} dot={dot}>
       {children}
     </Badge>
   ) : (
-    <Badge color="gold" count={dot ? undefined : "Beta"} dot={dot} />
+    <Badge color="blue" count={dot ? undefined : "Beta"} dot={dot} />
   );
 }
