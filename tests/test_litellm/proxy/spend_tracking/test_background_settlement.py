@@ -39,12 +39,14 @@ INTERACTION_ID = "interactions/bg-foreign"
 def _settlement_context(
     reservation: Optional[SettlementReservation] = None,
     model_group: Optional[str] = None,
+    deployment: Optional[str] = None,
 ) -> BackgroundSettlementContext:
     return BackgroundSettlementContext(
         interaction_id=INTERACTION_ID,
         custom_llm_provider="gemini",
         model="gemini-2.5-flash",
         model_group=model_group,
+        deployment=deployment,
         litellm_call_id="original-create-call-id",
         call_type="acreate_interaction",
         attribution=SettlementKeyAttribution(
@@ -117,7 +119,7 @@ class _FakeRowStore:
 
 @pytest.mark.asyncio
 async def test_rebuilt_logging_bills_with_original_attribution_and_request_id():
-    logging_obj = rebuild_logging_for_settlement(_settlement_context())
+    logging_obj = rebuild_logging_for_settlement(_settlement_context(deployment="gemini/gemini-2.5-flash"))
     response = _response("completed", with_usage=True)
 
     await logging_obj.async_log_background_interaction_completion(result=response)
@@ -134,6 +136,7 @@ async def test_rebuilt_logging_bills_with_original_attribution_and_request_id():
     assert payload["team_id"] == "team-456"
     assert payload["api_key"]
     assert payload["spend"] > 0
+    assert payload["model"] == "gemini/gemini-2.5-flash"
 
 
 def test_rebuilt_logging_start_time_is_naive_for_duration_math():

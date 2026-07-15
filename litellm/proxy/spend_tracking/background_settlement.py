@@ -128,7 +128,11 @@ def rebuild_logging_for_settlement(context: BackgroundSettlementContext) -> "Lit
     )
     attribution = {key: value for key, value in context.attribution.model_dump().items() if value is not None}
     reservation = context.budget_reservation.model_dump() if context.budget_reservation is not None else None
-    metadata = attribution if reservation is None else {**attribution, "user_api_key_budget_reservation": reservation}
+    optional_entries = (
+        ("user_api_key_budget_reservation", reservation),
+        ("deployment", context.deployment),
+    )
+    metadata = {**attribution, **{key: value for key, value in optional_entries if value is not None}}
     logging_obj.update_environment_variables(
         litellm_params={
             "litellm_call_id": context.litellm_call_id,

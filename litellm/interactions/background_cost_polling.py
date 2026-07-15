@@ -86,6 +86,7 @@ class BackgroundSettlementContext(BaseModel):
     custom_llm_provider: str
     model: str
     model_group: Optional[str] = None
+    deployment: Optional[str] = None
     litellm_call_id: str
     litellm_trace_id: Optional[str] = None
     call_type: str
@@ -209,11 +210,13 @@ def build_settlement_context(
     metadata = get_litellm_metadata_from_kwargs(kwargs=context.logging_obj.model_call_details)
     reservation_dict = metadata.get("user_api_key_budget_reservation")
     model_group = metadata.get("deployment_model_name")
+    deployment = metadata.get("deployment")
     return BackgroundSettlementContext(
         interaction_id=context.interaction_id,
         custom_llm_provider=context.custom_llm_provider,
         model=str(context.logging_obj.model or context.logging_obj.model_call_details.get("model")),
         model_group=model_group if isinstance(model_group, str) else None,
+        deployment=deployment if isinstance(deployment, str) else None,
         litellm_call_id=str(context.logging_obj.litellm_call_id),
         litellm_trace_id=context.logging_obj.model_call_details.get("litellm_trace_id"),
         call_type=str(context.logging_obj.call_type),

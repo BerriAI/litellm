@@ -390,6 +390,7 @@ def _attributed_litellm_params(reservation: Optional[dict] = None) -> dict:
         "user_api_key_user_id": "user-123",
         "user_api_key_team_id": "team-456",
         "deployment_model_name": "gemini-3-flash-preview",
+        "deployment": "gemini/gemini-3-flash-preview",
     }
     if reservation is not None:
         metadata["user_api_key_budget_reservation"] = reservation
@@ -415,6 +416,7 @@ async def test_poller_persists_settlement_context_with_attribution_and_reservati
     assert context.attribution.user_api_key_team_id == "team-456"
     assert context.model == "gemini-2.5-flash"
     assert context.model_group == "gemini-3-flash-preview"
+    assert context.deployment == "gemini/gemini-3-flash-preview"
     assert context.custom_llm_provider == "gemini"
     assert context.call_type == "acreate_interaction"
     assert context.litellm_call_id == "bg-interactions-call-id"
