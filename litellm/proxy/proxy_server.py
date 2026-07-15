@@ -7377,7 +7377,7 @@ async def _iter_with_keepalive(aiter: Any, keepalive_seconds: float) -> AsyncGen
             pending.cancel()
             try:
                 await pending
-            except BaseException:
+            except asyncio.CancelledError:
                 pass
 
 
