@@ -12,7 +12,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_request_base_url,
-    is_mcp_gateway_dcr_enabled,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
@@ -133,14 +132,12 @@ def _is_aggregate_gateway_dcr_challenge_scope(
 ) -> bool:
     """True when an unauthenticated request to the aggregate ``/mcp`` endpoint
     should receive the RFC 9728 401 challenge that advertises the gateway as
-    the authorization server (``mcp_gateway_dcr`` front door).
+    the authorization server.
 
     Fires only for a genuine 401 on the aggregate scope: any named target
     (path or ``x-mcp-servers``) belongs to the per-server challenge paths, and
     client-supplied MCP auth headers mean the caller is not a cold-start DCR
     client. Fails closed to the original admission error otherwise."""
-    if not is_mcp_gateway_dcr_enabled():
-        return False
     if not _is_litellm_auth_admission_error(exc):
         return False
     if mcp_servers:

@@ -70,29 +70,6 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-MCP_GATEWAY_DCR_SETTING = "mcp_gateway_dcr"
-
-
-def is_mcp_gateway_dcr_enabled() -> bool:
-    """True when ``general_settings.mcp_gateway_dcr`` opts this deployment into
-    the gateway-level DCR front door for the aggregate ``/mcp`` endpoint: root
-    OAuth discovery advertises the gateway itself as the authorization server
-    (instead of resolving the single configured oauth2 server), and the
-    anonymous aggregate 401 carries the RFC 9728 ``resource_metadata``
-    challenge so DCR clients (Claude Desktop, MCP Inspector) can start the
-    sign-in flow. Off by default; flag-off behavior is unchanged."""
-    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415  # circular import at module load
-
-    if not isinstance(general_settings, dict):
-        return False
-    raw = general_settings.get(MCP_GATEWAY_DCR_SETTING)
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, str):
-        return raw.strip().lower() == "true"
-    return False
-
-
 def _resolve_proxy_base_url_env() -> Optional[str]:
     global _warned_invalid_proxy_base_url
     configured = os.environ.get("PROXY_BASE_URL", "").strip()
