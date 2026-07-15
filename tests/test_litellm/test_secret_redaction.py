@@ -371,3 +371,46 @@ def test_non_pem_private_key_value_redacted():
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
     assert redact_string(msg) == msg
+
+
+def test_github_pat_redacted():
+    """GitHub PATs leak because LiteLLM supports the github/ model provider.
+    Both classic (ghp_) and fine-grained (github_pat_) forms must be scrubbed."""
+    # Tokens are built dynamically to avoid tripping secret scanners.
+    classic_pat = "ghp_" + "A" * 36
+    fine_grained_pat = "github_pat_" + "B" * 22
+    cases = [
+        f"Authorization: Bearer {classic_pat}",
+        f"auth token {fine_grained_pat} for github/gpt-4o",
+    ]
+    for line in cases:
+        result = redact_string(line)
+        assert "ghp_" not in result, f"GitHub classic PAT not redacted: {line!r}"
+        assert "github_pat_" not in result, f"GitHub fine-grained PAT not redacted: {line!r}"
+        assert "REDACTED" in result
+
+
+def test_slack_token_redacted():
+    """Bare Slack tokens (xoxb-/xoxp-/...) must be redacted; the existing
+    slack_webhook_url key-name pattern does not cover token values."""
+    bot_token = "xoxb-" + "1" * 30
+    user_token = "xoxp-" + "2" * 30
+    cases = [
+        f"Slack alert using {bot_token}",
+        f"configured with {user_token}",
+    ]
+    for line in cases:
+        result = redact_string(line)
+        assert "xox" not in result, f"Slack token not redacted: {line!r}"
+        assert "REDACTED" in result
+
+
+def test_github_slack_patterns_no_false_positives():
+    """The new token patterns must not redact ordinary strings that happen to
+    contain similar prefixes."""
+    safe_cases = [
+        "see https://example.com/ghp_ docs",  # ghp_ not followed by 36 alnum
+        "channel named xoxb-test",  # xoxb- followed by only 4 chars (< 10)
+    ]
+    for line in safe_cases:
+        assert redact_string(line) == line, f"False positive on: {line!r}"
