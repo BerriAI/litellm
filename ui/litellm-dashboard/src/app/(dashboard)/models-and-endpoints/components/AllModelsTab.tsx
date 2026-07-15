@@ -14,13 +14,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Grid, TabPanel } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
 type ModelViewMode = "all" | "current_team";
-
-const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const { Text } = Typography;
 
 interface AllModelsTabProps {
@@ -61,17 +59,23 @@ const AllModelsTab = ({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
 
-  const debouncedUpdateSearch = useDebouncedCallback(
-    (value: string) => {
-      setDebouncedSearch(value);
-      setCurrentPage(1);
-      setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-    },
-    { wait: SEARCH_DEBOUNCE_WAIT_MS },
+  // Debounce search input
+  const debouncedUpdateSearch = useMemo(
+    () =>
+      debounce((value: string) => {
+        setDebouncedSearch(value);
+        // Reset to page 1 when search changes
+        setCurrentPage(1);
+        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+      }, 200),
+    [],
   );
 
   useEffect(() => {
     debouncedUpdateSearch(modelNameSearch);
+    return () => {
+      debouncedUpdateSearch.cancel();
+    };
   }, [modelNameSearch, debouncedUpdateSearch]);
 
   // Determine teamId to pass to the query - only pass if not "personal"

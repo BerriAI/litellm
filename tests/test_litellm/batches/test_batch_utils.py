@@ -818,29 +818,6 @@ def test_anthropic_usage_conversion_includes_cache_tokens():
     assert usage.prompt_tokens_details.cache_creation_tokens == 2000
 
 
-def test_bedrock_model_output_line_success_check():
-    row = {
-        "recordId": "1",
-        "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
-    }
-    assert bu._batch_response_was_successful(row, custom_llm_provider="bedrock") is True
-    assert bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
-
-
-def test_bedrock_cost_uses_deployment_model_name():
-    row = {
-        "recordId": "1",
-        "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
-    }
-    cost = bu._get_batch_job_cost_from_file_content(
-        file_content_dictionary=[row],
-        custom_llm_provider="bedrock",
-        model_name="us.anthropic.claude-sonnet-4-6",
-        model_info={},
-    )
-    assert cost > 0
-
-
 def test_anthropic_total_usage_sums_succeeded_only():
     rows = [
         _anthropic_succeeded_row(usage=_anthropic_usage(10, 5)),

@@ -39,13 +39,8 @@ def _output_item_added_chunk():
     return SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
 
 
-def _created_chunk(response_id: str):
-    response = ResponsesAPIResponse(id=response_id, created_at=0, output=[])
-    return SimpleNamespace(type=ResponsesAPIStreamEvents.RESPONSE_CREATED, response=response)
-
-
-def _completed_chunk(output, response_id: str = "resp-1"):
-    response = ResponsesAPIResponse(id=response_id, created_at=0, output=output)
+def _completed_chunk(output):
+    response = ResponsesAPIResponse(id="resp-1", created_at=0, output=output)
     return SimpleNamespace(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=response)
 
 
@@ -57,12 +52,12 @@ def _text_message(text: str):
     return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
 
 
-def _tool_call_stream(call_id: str, tool_name: str, response_id: str = "resp-1") -> _FakeAsyncStream:
-    return _FakeAsyncStream([_completed_chunk([_function_call(call_id, tool_name)], response_id=response_id)])
+def _tool_call_stream(call_id: str, tool_name: str) -> _FakeAsyncStream:
+    return _FakeAsyncStream([_completed_chunk([_function_call(call_id, tool_name)])])
 
 
-def _text_only_stream(text: str, response_id: str = "resp-1") -> _FakeAsyncStream:
-    return _FakeAsyncStream([_completed_chunk([_text_message(text)], response_id=response_id)])
+def _text_only_stream(text: str) -> _FakeAsyncStream:
+    return _FakeAsyncStream([_completed_chunk([_text_message(text)])])
 
 
 def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
@@ -175,85 +170,3 @@ async def test_tool_call_rounds_are_capped(monkeypatch):
     for call in aresponses_mock.call_args_list[:-1]:
         assert "tools" in call.kwargs
     assert "tools" not in aresponses_mock.call_args_list[-1].kwargs
-
-
-@pytest.mark.asyncio
-async def test_continuation_id_is_final_round_not_interim_tool_call(monkeypatch):
-    """
-    Regression test for the broken `previous_response_id` continuation after a
-    gateway-executed MCP tool call. Each auto-execute round is a distinct
-    upstream response: the interim round holds only the model's function_call
-    (no tool output), the final round holds the answer. The client must be
-    handed the FINAL round's response id, because that is the one whose stored
-    chain includes the function_call_output. Pinning every event to the interim
-    round's id made the next turn continue from a response with a dangling
-    function_call, which the provider rejects with
-    "No tool output found for function call ...".
-    """
-    _mock_mcp_environment(monkeypatch)
-
-    aresponses_mock = AsyncMock(side_effect=[_text_only_stream("The first item is Alpha.", response_id="resp-final")])
-    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
-
-    iterator = _make_iterator(
-        [
-            _created_chunk("resp-interim"),
-            _output_item_added_chunk(),
-            _completed_chunk([_function_call("call_1", "read_wiki_contents")], response_id="resp-interim"),
-        ]
-    )
-
-    chunks = [chunk async for chunk in iterator]
-    completed = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
-
-    assert completed[-1].response.output[0]["content"][0]["text"] == "The first item is Alpha."
-    assert completed[-1].response.id == "resp-final"
-    assert completed[-1].response.id != "resp-interim"
-
-
-@pytest.mark.asyncio
-async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
-    """
-    Regression test for the silent-swallow path: when the follow-up LLM call
-    raises, the stream must emit a terminal `error` event instead of ending
-    silently after the tool events (which surfaced to clients as a successful
-    but empty completion).
-    """
-    _mock_mcp_environment(monkeypatch)
-
-    aresponses_mock = AsyncMock(side_effect=RuntimeError("boom from provider"))
-    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
-
-    iterator = _make_iterator(
-        [
-            _output_item_added_chunk(),
-            _completed_chunk([_function_call("call_1", "read_wiki_contents")]),
-        ]
-    )
-
-    chunks = [chunk async for chunk in iterator]
-    error_events = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.ERROR]
-
-    assert len(error_events) == 1
-    assert error_events[0].error.type == "mcp_gateway_error"
-    assert "boom from provider" in error_events[0].error.message
-
-
-@pytest.mark.asyncio
-async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
-    """
-    Regression test: a failing initial LLM call must be stashed as
-    `_initial_creation_error` so `aresponses_api_with_mcp` can re-raise it as a
-    real 4xx before any SSE bytes are written, instead of returning HTTP 200
-    with an empty stream.
-    """
-    _mock_mcp_environment(monkeypatch)
-
-    aresponses_mock = AsyncMock(side_effect=RuntimeError("initial boom"))
-    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
-
-    iterator = _make_iterator([_output_item_added_chunk()])
-    await iterator._create_initial_response_iterator()
-
-    assert iterator._initial_creation_error is not None
-    assert "initial boom" in str(iterator._initial_creation_error)

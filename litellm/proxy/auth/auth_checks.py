@@ -102,7 +102,7 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -626,29 +626,26 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            if user_object is None or user_object.max_budget is None:
-                return
-            skip_for_team = (
-                general_settings.get("skip_user_budget_on_team_key") is True
-                and team_object is not None
-                and team_object.team_id is not None
-            )
-            if skip_for_team:
-                return
-            from litellm.proxy.proxy_server import get_current_spend
+            # 4.1 personal budget, if personal key
+            if (
+                (team_object is None or team_object.team_id is None)
+                and user_object is not None
+                and user_object.max_budget is not None
+            ):
+                from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget = user_object.max_budget
-            user_spend = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
-                fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget,
-            )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
+                user_budget = user_object.max_budget
+                user_spend = await get_current_spend(
+                    counter_key=f"spend:user:{user_object.user_id}",
+                    fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                 )
+                if math.isfinite(user_budget) and user_spend >= user_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=user_spend,
+                        max_budget=user_budget,
+                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                    )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -729,7 +726,6 @@ async def common_checks(
         route=route,
         request_body=request_body,
         fetch_team_org_id=_fetch_team_org_id,
-        route_template=get_request_route_template(request),
     )
 
     _is_route_allowed = _is_api_route_allowed(
@@ -4386,23 +4382,14 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     or
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
-
-    A model that already carries a namespace get_llm_provider did not consume
-    (e.g. `bedrockz/anthropic.claude-...`) is never granted here: its provider was
-    inferred from a fragment of the full string, so rebuilding
-    `{provider}/{model}` would produce `bedrock/bedrockz/...` and slip an
-    unrecognized namespace through a `bedrock/*` key.
     """
     try:
-        stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         return False
 
-    if stripped_model == model and "/" in model:
-        return False
-
     return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{stripped_model}",
+        model=f"{custom_llm_provider}/{model}",
         allowed_model_pattern=allowed_model_pattern,
     )
 

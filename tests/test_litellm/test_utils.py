@@ -615,8 +615,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
-        "input_cost_per_video_token",
-        "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -734,7 +732,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
-                "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -810,7 +807,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -859,7 +855,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
-                "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
@@ -879,7 +874,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/embeddings",
                             "/v1/chat/completions",
                             "/v1/completions",
-                            "/v1/messages",
                             "/v1/images/generations",
                             "/v1/realtime",
                             "/v1/realtime/transcription_sessions",
@@ -890,6 +884,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
+                            "/v1/realtime/transcription_sessions",
                         ],
                     },
                 },
@@ -1096,8 +1091,8 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
     """A regional profile with no dedicated cost-map entry must still resolve to its
     region-stripped base entry."""
-    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
-    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
+    assert "jp.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/jp.anthropic.claude-opus-4-8")
     assert info["key"] == "anthropic.claude-opus-4-8"
 
 
@@ -4714,30 +4709,3 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "vertex_ai/gemini-2.5-flash-image",
-        "vertex_ai/gemini-3-pro-image",
-        "vertex_ai/gemini-3-pro-image-preview",
-        "vertex_ai/gemini-3.1-flash-image",
-        "vertex_ai/gemini-3.1-flash-image-preview",
-        "gemini/gemini-2.5-flash-image",
-        "gemini/gemini-3-pro-image",
-        "gemini/gemini-3-pro-image-preview",
-        "gemini/gemini-3.1-flash-image",
-        "gemini/gemini-3.1-flash-image-preview",
-    ],
-)
-def test_gemini_image_models_do_not_support_reasoning(
-    model: str, local_model_cost_map: None
-) -> None:
-    assert model in litellm.model_cost, (
-        f"{model} is missing from the local model cost map. "
-        "Add its entry to litellm/model_prices_and_context_window_backup.json."
-    )
-    assert litellm.supports_reasoning(model) is False, (
-        f"{model} incorrectly classified as reasoning-capable. "
-        "Add 'supports_reasoning: false' to its model_cost entry."
-    )

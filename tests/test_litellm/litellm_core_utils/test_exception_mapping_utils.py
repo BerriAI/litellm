@@ -78,18 +78,6 @@ context_window_test_cases = [
         "CerebrasException - Please reduce the length of the messages or completion. Current length is 50000 while limit is 40000",
         True,
     ),
-    (
-        "Invalid 'input[0]': maximum input length is 8192 tokens.",
-        True,
-    ),
-    (
-        "OpenAIException - Error code: 400 - {'error': {'message': \"Invalid 'input[0]': maximum input length is 8192 tokens.\", 'type': 'invalid_request_error'}}",
-        True,
-    ),
-    (
-        "Invalid 'metadata': maximum input length is 512 characters.",
-        False,
-    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),

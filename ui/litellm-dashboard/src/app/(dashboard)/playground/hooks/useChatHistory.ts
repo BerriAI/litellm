@@ -1,11 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { MessageType, A2ATaskMetadata } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { MCPEvent } from "@/components/mcp_tools/types";
 import { truncateString } from "@/utils/textUtils";
-
-const CHAT_HISTORY_PERSIST_WAIT_MS = 500;
 
 export interface UseChatHistoryReturn {
   // State
@@ -67,20 +64,20 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     return saved ? JSON.parse(saved) : true; // Default to API session management
   });
 
-  const persistDebouncer = useDebouncer(
-    (history: MessageType[]) => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(history));
-    },
-    { wait: CHAT_HISTORY_PERSIST_WAIT_MS },
-  );
-
+  // Debounced chatHistory persistence
   useEffect(() => {
-    if (simplified || chatHistory.length === 0) {
-      persistDebouncer.cancel();
-      return;
-    }
-    persistDebouncer.maybeExecute(chatHistory);
-  }, [chatHistory, simplified, persistDebouncer]);
+    if (simplified) return; // Do not persist chat history in simplified (embedded) mode
+    // When chatHistory is empty (e.g. after clearChatHistory removed the key),
+    // don't re-write an empty array back into sessionStorage.
+    if (chatHistory.length === 0) return;
+    const handler = setTimeout(() => {
+      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
+    }, 500); // Debounce by 500ms
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [chatHistory, simplified]);
 
   // messageTraceId/responsesSessionId/useApiSessionManagement persistence
   useEffect(() => {

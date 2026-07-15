@@ -36,7 +36,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
     allowed_routes: Optional[list] = []
-    key_type: str | None = None
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}

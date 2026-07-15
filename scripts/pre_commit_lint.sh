@@ -4,7 +4,6 @@
 # before `git commit`; it inspects your staged files and runs only the matching
 # gating CI checks, so a clean run means a green CI lint:
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
-#   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -26,7 +25,6 @@ staged_match() { printf '%s\n' "$staged" | grep -E "$1" || true; }
 # scripts-only commit can't turn it red; scope the trigger there to skip the slow
 # make lint when it couldn't catch anything.
 litellm_py_files=$(staged_match '^litellm/.*\.py$')
-e2e_py_files=$(staged_match '^tests/e2e/.*\.py$')
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
@@ -77,22 +75,17 @@ EOF
             npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_rel[@]}" || rc=1
         fi
         # Whole-folder lint budgets, exactly as the frontend-lint job runs them: the
-        # counts are not diff-scoped, so a local pass here means the budget step will
-        # pass in CI too.
+        # counts and the committed metrics file are not diff-scoped, so a local pass
+        # here means the budget step will pass in CI too.
         report=$(mktemp)
         npx eslint . -f json -o "$report" || true
-        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
+        node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json --check eslint-metrics.json || rc=1
         rm -f "$report"
         exit $rc
     )
 }
 
 status=0
-
-bootstrap_hint() {
-    echo "  This checkout looks unprovisioned (fresh worktree or clone)." >&2
-    echo "  Fix: make bootstrap" >&2
-}
 
 if [ -n "$litellm_py_files" ]; then
     echo "pre-commit: linting Python (make lint)"
@@ -107,20 +100,9 @@ if [ -n "$litellm_py_files" ]; then
     fi
 fi
 
-if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
-    echo "pre-commit: type-checking tests/e2e (make lint-e2e-basedpyright)"
-    make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make pre-commit." >&2; status=1; }
-fi
-
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
-    if [ ! -d ui/litellm-dashboard/node_modules ]; then
-        echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
-        bootstrap_hint
-        status=1
-    else
-        lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
-    fi
+    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
 fi
 
 if [ -n "$spec_files" ]; then
@@ -129,15 +111,7 @@ if [ -n "$spec_files" ]; then
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
-    if [ ! -d ui/litellm-dashboard/node_modules ]; then
-        echo "✗ ui/litellm-dashboard/node_modules is missing; the gen:api sync check cannot run." >&2
-        bootstrap_hint
-        status=1
-    elif ! uv run --no-sync python -c "import orjson, prisma" 2>/dev/null; then
-        echo "✗ The Python env lacks the proxy deps (orjson/prisma) that gen:api needs." >&2
-        bootstrap_hint
-        status=1
-    elif ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
+    if ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
         echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then

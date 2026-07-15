@@ -12,10 +12,8 @@ export interface Team {
   rpm_limit: number | null;
   organization_id: string;
   created_at: string;
-  updated_at?: string | null;
   keys: KeyResponse[];
   keys_count?: number;
-  members_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
@@ -47,7 +45,6 @@ export interface KeyResponse {
   budget_reset_at: string;
   allowed_cache_controls: string[];
   allowed_routes: string[];
-  key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;

@@ -104,15 +104,6 @@ class NomaGuardrail(CustomGuardrail):
     _DEFAULT_API_BASE = "https://api.noma.security/"
     _AIDR_ENDPOINT = "/ai-dr/v2/prompt/scan"
 
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_mcp_call,
-        ]
-
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -156,7 +147,6 @@ class NomaGuardrail(CustomGuardrail):
         else:
             self.anonymize_input = anonymize_input
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
     def _create_background_noma_check(

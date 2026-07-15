@@ -103,7 +103,6 @@ class MCPServer(BaseModel):
     # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens). Must
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
-    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -164,15 +163,6 @@ class MCPServer(BaseModel):
         """True for the delegated-upstream-OAuth mode: LiteLLM still admits the caller (API key / SSO /
         JWT) but forwards the caller's separate upstream ``Authorization`` unchanged, minting nothing."""
         return self.auth_type == MCPAuth.oauth_delegate
-
-    @property
-    def is_dcr_bridge(self) -> bool:
-        """True when this client-forwarded-token server serves the gateway-hosted DCR front door
-        (gateway-self protected-resource and authorization-server metadata plus the register,
-        authorize, and token relays) instead of relaying the upstream's own OAuth discovery
-        verbatim. ``dcr_bridge`` is rejected on every other auth type at create, update, and
-        config load, so the mode gate here only defends rows edited outside those paths."""
-        return bool(self.dcr_bridge) and (self.is_true_passthrough or self.is_oauth_delegate)
 
     @property
     def requires_per_user_auth(self) -> bool:

@@ -67,16 +67,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers = None
 
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-            GuardrailEventHooks.pre_mcp_call,
-        ]
-
     # Class variables or attributes
     def __init__(
         self,
@@ -97,7 +87,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if logging_only is True:
             self.logging_only = True
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
         self.guardrail_provider = "presidio"
         self.pii_tokens: dict = {}  # mapping of PII token to original text - only used with Presidio `replace` operation

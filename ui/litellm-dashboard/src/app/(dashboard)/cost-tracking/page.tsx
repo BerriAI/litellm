@@ -1,6 +1,6 @@
 "use client";
 
-import { CostTrackingSettings } from "./_components";
+import { CostTrackingSettings } from "./components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function CostTracking() {

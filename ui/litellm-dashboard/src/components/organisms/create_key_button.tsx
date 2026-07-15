@@ -10,9 +10,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import React, { useEffect, useState } from "react";
+import debounce from "lodash/debounce";
+import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -689,7 +688,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
+  const debouncedSearch = useCallback(
+    debounce((text: string) => fetchUsers(text), 300),
+    [accessToken],
+  );
+
+  const handleUserSearch = (value: string): void => {
+    debouncedSearch(value);
+  };
 
   const handleUserSelect = (_value: string, option: UserOption): void => {
     const selectedUser = option.user;

@@ -1,11 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { TextInput, Text } from "@tremor/react";
 import { Select } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-
-const MODEL_SELECT_DEBOUNCE_MS = 500;
 
 interface ModelSelectorProps {
   accessToken: string;
@@ -33,6 +30,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setSelectedModel(value);
@@ -69,13 +67,19 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
   };
 
-  const debouncedSelect = useDebouncedCallback(
-    (value: string) => {
+  const handleCustomModelChange = (value: string) => {
+    // Using setTimeout to create a simple debounce effect
+    if (customModelTimeout.current) {
+      clearTimeout(customModelTimeout.current);
+    }
+
+    customModelTimeout.current = setTimeout(() => {
       setSelectedModel(value);
-      onChange?.(value);
-    },
-    { wait: MODEL_SELECT_DEBOUNCE_MS },
-  );
+      if (onChange) {
+        onChange(value);
+      }
+    }, 500); // 500ms delay after typing stops
+  };
 
   return (
     <div>
@@ -105,7 +109,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <TextInput
           className="mt-2"
           placeholder="Enter custom model name"
-          onValueChange={debouncedSelect}
+          onValueChange={handleCustomModelChange}
           disabled={disabled}
         />
       )}

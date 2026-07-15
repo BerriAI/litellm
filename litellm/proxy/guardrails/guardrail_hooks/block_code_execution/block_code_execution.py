@@ -351,7 +351,11 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 _event_hook = GuardrailEventHooks(event_hook)
         super().__init__(
             guardrail_name=guardrail_name or "block_code_execution",
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=[
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.during_call,
+            ],
             event_hook=_event_hook
             or [
                 GuardrailEventHooks.pre_call,
@@ -373,14 +377,6 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         )
 
         return BlockCodeExecutionGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.during_call,
-        ]
 
     def _find_blocks(self, text: str) -> List[Tuple[int, int, str, str, float, CodeBlockActionTaken]]:
         """

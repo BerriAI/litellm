@@ -28,19 +28,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
-    CallTypes,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
-
-_PASS_THROUGH_CALL_TYPES: frozenset[str] = frozenset(
-    {
-        CallTypes.pass_through.value,
-        CallTypes.llm_passthrough_route.value,
-        CallTypes.allm_passthrough_route.value,
-    }
-)
 
 
 class _ProxyDBLogger(CustomLogger):
@@ -228,13 +219,11 @@ class _ProxyDBLogger(CustomLogger):
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
-                call_type: Optional[str] = kwargs.get("call_type")
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,
                     user_id=user_id,
                     team_id=team_id,
                     end_user_id=end_user_id,
-                    call_type=call_type,
                 ):
                     ## UPDATE DATABASE
                     await _update_database_and_spend_counters(
@@ -423,15 +412,9 @@ def _should_track_cost_callback(
     user_id: Optional[str],
     team_id: Optional[str],
     end_user_id: Optional[str],
-    call_type: Optional[str] = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
-
-    Pass-through endpoints can be configured with ``auth=false``, which leaves
-    the request with no key/user/team/end-user to attribute spend to. Those
-    requests still forward real provider traffic that operators expect to see
-    in request/usage logs, so they are tracked even when unauthenticated.
     """
 
     # don't run track cost callback if user opted into disabling spend
@@ -440,7 +423,7 @@ def _should_track_cost_callback(
 
     if user_api_key is not None or user_id is not None or team_id is not None or end_user_id is not None:
         return True
-    return call_type in _PASS_THROUGH_CALL_TYPES
+    return False
 
 
 def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:

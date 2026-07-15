@@ -1,6 +1,6 @@
 "use client";
 
-import { MCPServers } from "./_components";
+import { MCPServers } from "@/components/mcp_tools";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function McpServers() {

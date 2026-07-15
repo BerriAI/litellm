@@ -27,13 +27,10 @@ class MCPSecurityGuardrail(CustomGuardrail):
         on_violation: Literal["block", "alert"] = "block",
         **kwargs,
     ):
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        if "supported_event_hooks" not in kwargs:
+            kwargs["supported_event_hooks"] = [GuardrailEventHooks.pre_call]
         super().__init__(**kwargs)
         self.on_violation = on_violation
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [GuardrailEventHooks.pre_call]
 
     @log_guardrail_information
     async def async_pre_call_hook(

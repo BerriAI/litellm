@@ -93,36 +93,6 @@ async def test_token_cached_across_calls():
 
 
 @pytest.mark.asyncio
-async def test_m2m_token_not_shared_across_server_ids_with_identical_config():
-    """Two servers with byte-identical client_credentials config but different server_ids must not
-    share a cached M2M token: the cache is keyed by server_id, so a new server entry (even one
-    recreated with the same URL and credentials) mints its own token instead of inheriting the
-    sibling's. Guards against the cache key ever collapsing to the URL or the client config."""
-    cache = MCPOAuth2TokenCache()
-    server_a = _server(server_id="srv-a")
-    server_b = _server(server_id="srv-b")
-    mock_client = AsyncMock()
-    mock_client.post.side_effect = [_token_response("tok-for-a"), _token_response("tok-for-b")]
-
-    with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-            return_value=mock_client,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
-            cache,
-        ),
-    ):
-        token_a = await resolve_mcp_auth(server_a)
-        token_b = await resolve_mcp_auth(server_b)
-
-    assert token_a == "tok-for-a"
-    assert token_b == "tok-for-b"
-    assert mock_client.post.call_count == 2
-
-
-@pytest.mark.asyncio
 async def test_per_request_header_beats_oauth2():
     """An explicit mcp_auth_header takes priority over the OAuth2 token."""
     server = _server()

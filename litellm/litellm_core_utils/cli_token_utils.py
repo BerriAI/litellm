@@ -7,7 +7,6 @@ This module has no dependencies on proxy code and can be safely imported at the 
 
 import json
 import os
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -69,17 +68,3 @@ def get_litellm_gateway_api_key(
         if stored_url != expected_base_url.rstrip("/"):
             return None
     return token_data["key"]
-
-
-def is_cli_token_fresh(token_data: dict, buffer_hours: float = 0.1) -> bool:
-    """Check whether a cached CLI token (as stored in token.json) is still
-    within its expiration window. Used by `lite auth print-token` to fail
-    fast, without a network round trip, once the cached token is past
-    `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
-    from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-
-    timestamp = token_data.get("timestamp")
-    if not isinstance(timestamp, (int, float)):
-        return False
-    age_hours = (time.time() - timestamp) / 3600
-    return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)

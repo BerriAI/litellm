@@ -44,18 +44,12 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
-from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import (
-    GenericGuardrailAPIInputs,
-    GuardrailStatus,
-    StandardLoggingGuardrailInformation,
-)
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -64,13 +58,6 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
     )
-
-
-def _sanitize_scan_result_for_logging(scan_result: dict) -> dict:
-    without_secrets = {key: value for key, value in scan_result.items() if key != "secret_fields"}
-    redacted = redact_nested_match_and_regex_keys(without_secrets)
-    masked = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
-    return masked if isinstance(masked, dict) else without_secrets
 
 
 _DEFAULT_API_BASE = "https://api-xecguard.cycraft.ai"
@@ -132,7 +119,13 @@ class XecGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        if "supported_event_hooks" not in kwargs:
+            kwargs["supported_event_hooks"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.logging_only,
+            ]
 
         super().__init__(**kwargs)
 
@@ -143,15 +136,6 @@ class XecGuardGuardrail(CustomGuardrail):
         )
 
         return XecGuardConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-        ]
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -259,21 +243,16 @@ class XecGuardGuardrail(CustomGuardrail):
                 "guardrail_intervened" if scan_result.get("decision") == "UNSAFE" else "success"
             )
             end_time = datetime.now()
-            slg = StandardLoggingGuardrailInformation(
-                guardrail_name=self.guardrail_name or "xecguard",
-                guardrail_mode=GuardrailEventHooks.logging_only,
-                guardrail_response=_sanitize_scan_result_for_logging(scan_result),
-                guardrail_status=guardrail_status,
-                start_time=start_time.timestamp(),
-                end_time=end_time.timestamp(),
-                duration=(end_time - start_time).total_seconds(),
-                masked_entity_count=None,
-            )
-            existing = kwargs["standard_logging_object"].get("guardrail_information")
-            if isinstance(existing, list):
-                existing.append(slg)
-            else:
-                kwargs["standard_logging_object"]["guardrail_information"] = [slg]
+            kwargs["standard_logging_object"]["guardrail_information"] = {
+                "duration": (end_time - start_time).total_seconds(),
+                "end_time": end_time.timestamp(),
+                "guardrail_mode": "logging_only",
+                "guardrail_name": "xecguard",
+                "guardrail_response": scan_result,
+                "guardrail_status": guardrail_status,
+                "masked_entity_count": None,
+                "start_time": start_time.timestamp(),
+            }
 
         except Exception as exc:
             verbose_proxy_logger.debug(

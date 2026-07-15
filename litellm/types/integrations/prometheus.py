@@ -213,8 +213,6 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_input_audio_tokens_metric",
     "litellm_output_reasoning_tokens_metric",
     "litellm_output_audio_tokens_metric",
-    "litellm_video_duration_seconds_metric",
-    "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
@@ -508,9 +506,6 @@ class PrometheusMetricLabels:
     litellm_output_reasoning_tokens_metric = litellm_output_tokens_metric
     litellm_output_audio_tokens_metric = litellm_output_tokens_metric
 
-    litellm_video_duration_seconds_metric = litellm_output_tokens_metric
-    litellm_images_generated_metric = litellm_output_tokens_metric
-
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -722,8 +717,6 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
-            "litellm_video_duration_seconds_metric",
-            "litellm_images_generated_metric",
         }
     )
     # Managed batch metrics

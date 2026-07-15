@@ -37,15 +37,7 @@ if TYPE_CHECKING:
 
 
 class AporiaGuardrail(CustomGuardrail):
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-        ]
-
     def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]

@@ -1,9 +1,8 @@
 import { cx } from "@/lib/cva.config";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { Input } from "antd";
+import debounce from "lodash/debounce";
 import { LucideIcon } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 interface FilterInputProps {
   placeholder?: string;
@@ -14,6 +13,8 @@ interface FilterInputProps {
   style?: React.CSSProperties;
 }
 
+const DEBOUNCE_DELAY = 300;
+
 export const FilterInput: React.FC<FilterInputProps> = ({ placeholder, value, onChange, icon: Icon, className }) => {
   const [localValue, setLocalValue] = useState(value);
 
@@ -21,13 +22,22 @@ export const FilterInput: React.FC<FilterInputProps> = ({ placeholder, value, on
     setLocalValue(value);
   }, [value]);
 
-  const debouncedOnChange = useDebouncedCallback((val: string) => onChange(val), { wait: DEBOUNCE_WAIT_MS });
+  const debouncedOnChange = useMemo(() => debounce((val: string) => onChange(val), DEBOUNCE_DELAY), [onChange]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    setLocalValue(newValue);
-    debouncedOnChange(newValue);
-  };
+  useEffect(() => {
+    return () => {
+      debouncedOnChange.cancel();
+    };
+  }, [debouncedOnChange]);
+
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newValue = e.target.value;
+      setLocalValue(newValue);
+      debouncedOnChange(newValue);
+    },
+    [debouncedOnChange],
+  );
 
   return (
     <Input

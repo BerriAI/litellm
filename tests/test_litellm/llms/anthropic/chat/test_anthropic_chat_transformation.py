@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.constants import (
-    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
@@ -957,15 +956,15 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-8",
-        "claude-opus-4-6-20260205",
+        "claude-opus-4-6-20250918",
+        "claude-opus-4.6-20250918",
         "claude-opus-4-5-20251101",
         "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that supported Opus models use native Anthropic structured outputs
+    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
@@ -1003,43 +1002,6 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
-
-
-def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model = "claude-opus-4-8"
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {model: {"supports_response_schema": True}},
-    )
-    litellm.get_model_info.cache_clear()
-
-    try:
-        optional_params = AnthropicConfig().map_openai_params(
-            non_default_params={
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "answer",
-                        "schema": {
-                            "type": "object",
-                            "properties": {"answer": {"type": "string"}},
-                            "required": ["answer"],
-                        },
-                    },
-                }
-            },
-            optional_params={},
-            model=model,
-            drop_params=False,
-        )
-    finally:
-        litellm.get_model_info.cache_clear()
-
-    assert "output_format" in optional_params
-    assert "tools" not in optional_params
 
 
 def test_non_structured_output_model_uses_tool_workaround():
@@ -1699,7 +1661,7 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
+    effort_used = model_info.is_effort_used(optional_params=optional_params)
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1915,7 +1877,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
+    assert AnthropicConfig._model_supports_effort_param(model) is True
 
 
 @pytest.mark.parametrize(
@@ -1928,7 +1890,7 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
+    assert AnthropicConfig._model_supports_effort_param(model) is False
 
 
 @pytest.mark.parametrize(
@@ -2255,7 +2217,7 @@ def test_get_config_does_not_leak_module_constants():
 )
 def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
     """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
-    assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
+    assert AnthropicConfig._supports_effort_level(model, level) is expected
 
 
 @pytest.mark.parametrize(
@@ -2277,7 +2239,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
 def test_validate_effort_for_model_centralises_per_model_gating(
     model, effort, expect_error
 ):
-    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
+    err = AnthropicConfig._validate_effort_for_model(model, effort)
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2481,78 +2443,6 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
-def test_raw_adaptive_thinking_translates_to_legacy_for_pre_46_model():
-    """Clients like Claude Code send ``thinking={"type": "adaptive"}`` directly
-    (not via ``reasoning_effort``) on every request, regardless of which model
-    the request routes to. For a pre-4.6 model that doesn't understand
-    adaptive thinking, this must be translated to the legacy
-    ``thinking={type: enabled, budget_tokens}`` interface instead of being
-    forwarded raw, which Anthropic would reject."""
-    config = AnthropicConfig()
-
-    result = config.map_openai_params(
-        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
-        optional_params={},
-        model="claude-haiku-4-5-20251001",
-        drop_params=False,
-    )
-
-    assert result["thinking"]["type"] == "enabled"
-    assert result["thinking"]["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
-
-
-def test_raw_adaptive_thinking_budget_capped_below_max_tokens():
-    """Anthropic requires ``max_tokens > thinking.budget_tokens``. When the
-    default medium budget wouldn't fit, it must be capped below max_tokens
-    rather than forwarded as an invalid combination."""
-    config = AnthropicConfig()
-
-    max_tokens = DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 100
-    result = config.map_openai_params(
-        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": max_tokens},
-        optional_params={},
-        model="claude-haiku-4-5-20251001",
-        drop_params=False,
-    )
-
-    assert result["thinking"]["type"] == "enabled"
-    assert result["thinking"]["budget_tokens"] == max_tokens - 1
-
-
-def test_raw_adaptive_thinking_dropped_when_max_tokens_too_small():
-    """When max_tokens can't fit even the minimum thinking budget, thinking
-    must be dropped entirely so the request still succeeds, matching how the
-    native /v1/messages passthrough already handles this."""
-    config = AnthropicConfig()
-
-    result = config.map_openai_params(
-        non_default_params={
-            "thinking": {"type": "adaptive"},
-            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
-        },
-        optional_params={},
-        model="claude-haiku-4-5-20251001",
-        drop_params=False,
-    )
-
-    assert "thinking" not in result
-
-
-def test_raw_adaptive_thinking_untouched_for_46_plus_model():
-    """Adaptive-thinking models understand ``thinking={"type": "adaptive"}``
-    natively, so it must pass through unmodified."""
-    config = AnthropicConfig()
-
-    result = config.map_openai_params(
-        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
-        optional_params={},
-        model="claude-sonnet-4-6-20260219",
-        drop_params=False,
-    )
-
-    assert result["thinking"] == {"type": "adaptive"}
-
-
 @pytest.fixture
 def local_model_cost_map(monkeypatch):
     original_model_cost = litellm.model_cost
@@ -2600,7 +2490,7 @@ def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
     fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
     non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
     are covered without a code change."""
-    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+    assert AnthropicConfig._is_adaptive_thinking_model(model) is expected
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
@@ -2946,7 +2836,6 @@ def test_effort_beta_header_not_injected_for_46_models():
         result = model_info.is_effort_used(
             optional_params={"output_config": {"effort": "high"}},
             model=model,
-            custom_llm_provider="anthropic",
         )
         assert result is False, f"is_effort_used should return False for {model}"
 
@@ -3058,7 +2947,6 @@ def test_effort_beta_header_still_injected_for_older_models():
     result = model_info.is_effort_used(
         optional_params={"output_config": {"effort": "low"}},
         model="claude-opus-4-5-20251101",
-        custom_llm_provider="anthropic",
     )
     assert result is True
 

@@ -61,7 +61,7 @@ from litellm._lazy_imports import (
 )
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.fallback_generalizations import (
-    match_capability_generalizations,
+    match_fallback_generalization,
 )
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -2651,26 +2651,6 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> Optional[Dict[
     return None
 
 
-def _get_builtin_model_info_for_registration(model: str) -> Optional[ModelInfo]:
-    """Resolve ``model`` to its built-in cost-map entry for registration merging.
-
-    Returns ``None`` when the lookup raises or when it resolved via a
-    fallback-generalization capability rule, detected as the resolved key missing
-    ``litellm.model_cost`` while matching a capability rule. A rule-derived entry
-    carries no pricing, so treating it as a hit would skip the built-in
-    cache-pricing inheritance for prefix-mangled keys.
-    """
-    try:
-        info = get_model_info(model=model)
-    except Exception:
-        return None
-    if info["key"] in litellm.model_cost:
-        return info
-    if match_capability_generalizations(info["key"]) is None:
-        return info
-    return None
-
-
 def register_model(model_cost: Union[str, dict]):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -2711,11 +2691,10 @@ def register_model(model_cost: Union[str, dict]):
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:
-            builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
-            if builtin_model_info is not None:
-                existing_model = cast(dict, builtin_model_info)
+            try:
+                existing_model = cast(dict, get_model_info(model=key))
                 model_cost_key = existing_model["key"]
-            else:
+            except Exception:
                 existing_model = {}
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
@@ -5064,35 +5043,26 @@ def _get_model_info_from_generalization(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: Optional[str],
 ) -> Optional[tuple[str, dict]]:
-    """Resolve an unmapped model via the declarative capability generalization rules.
+    """Resolve an unmapped model via a declarative fallback-generalization rule.
 
     Tries the same name candidates as the exact lookups, in the same order, and
-    returns ``(matched_name, model_info)`` for the first candidate matched by at
-    least one capability rule, with ``litellm_provider`` backfilled from the
-    provider the caller requested. Rules lose to exact entries: if ANY candidate is
-    an exact ``litellm.model_cost`` key (necessarily provider-mismatched, or the
-    exact lookups would have returned it), the model is known rather than unmapped,
-    and resolving it from rules would hand an unpriced rule-derived entry to
-    callers whose fallback ladder (e.g. the cost calculator's model-name variants)
-    still had a priced exact name to try. O(number of rules); only call after the
+    returns ``(matched_name, model_info)`` for the first candidate whose rule also
+    satisfies the provider constraint. O(number of rules); only call after the
     exact lookups have missed.
     """
-    candidates = (
+    candidates = [
         potential_model_names["combined_model_name"],
         model,
         potential_model_names["split_model"],
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
-    )
-    if any(_get_model_cost_key(candidate) is not None for candidate in candidates):
-        return None
+    ]
     for candidate in candidates:
-        generalized_info = match_capability_generalizations(candidate)
-        if generalized_info is None:
-            continue
-        if custom_llm_provider is None:
+        generalized_info = match_fallback_generalization(candidate)
+        if generalized_info is not None and _check_provider_match(
+            model_info=generalized_info, custom_llm_provider=custom_llm_provider
+        ):
             return candidate, generalized_info
-        return candidate, {**generalized_info, "litellm_provider": custom_llm_provider}
     return None
 
 
@@ -5437,7 +5407,6 @@ def _get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
-                input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_image=_model_info.get("input_cost_per_image", None),
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
@@ -5481,7 +5450,6 @@ def _get_model_info_helper(
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
-                output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
                 tiered_pricing=_model_info.get("tiered_pricing", None),
@@ -5504,7 +5472,6 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
-                supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
@@ -8061,16 +8028,6 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
-
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        json_provider = JSONProviderRegistry.get(provider.value)
-        if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
-            from litellm.llms.openai_like.messages.transformation import (
-                JSONProviderAnthropicMessagesConfig,
-            )
-
-            return JSONProviderAnthropicMessagesConfig(json_provider)
         return None
 
     @staticmethod
