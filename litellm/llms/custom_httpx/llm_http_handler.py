@@ -1932,21 +1932,24 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         stream: bool,
         custom_llm_provider: str,
-    ) -> Union[float, httpx.Timeout]:
+    ) -> Optional[Union[float, httpx.Timeout]]:
         from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
         )
         from litellm.utils import supports_httpx_timeout
 
-        model_timeout = litellm_params.get("stream_timeout") if stream else None
-        if model_timeout is None:
-            model_timeout = litellm_params.get("timeout")
+        stream_timeout = litellm_params.get("stream_timeout") if stream else None
+        model_timeout = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        request_timeout = litellm_params.get("request_timeout")
+        global_timeout = get_configured_request_timeout()
+        if model_timeout is None and request_timeout is None and global_timeout is None:
+            return None
         return CompletionTimeout.resolve(
             model_timeout,
-            {"request_timeout": litellm_params.get("request_timeout")},
+            {"request_timeout": request_timeout},
             custom_llm_provider,
-            global_timeout=get_configured_request_timeout(),
+            global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
         )
 

@@ -1091,6 +1091,10 @@ def test_sync_delete_responses_sets_json_content_type():
         ({"request_timeout": 30.0}, False, None, 30.0),
         ({}, False, 1500.0, 1500.0),
         ({"timeout": 5.0, "stream_timeout": 50.0}, True, None, 50.0),
+        ({"timeout": 5.0, "stream_timeout": 50.0}, False, None, 5.0),
+        ({"timeout": 5.0, "request_timeout": 30.0}, False, None, 5.0),
+        ({}, False, None, None),
+        ({}, True, None, None),
     ],
 )
 def test_resolve_anthropic_messages_timeout(
@@ -1166,6 +1170,51 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
 
     assert result is expected_response
     assert mock_client.post.await_args.kwargs["timeout"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    mock_config.get_async_streaming_response_iterator = Mock(return_value=Mock())
+
+    ok_response = Mock()
+    ok_response.raise_for_status = Mock(return_value=None)
+    ok_response.headers = httpx.Headers({})
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=ok_response)
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    logging_obj.dynamic_success_callbacks = []
+
+    await handler.async_anthropic_messages_handler(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=mock_config,
+        anthropic_messages_optional_request_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(timeout=9.0, stream_timeout=0.7),
+        logging_obj=logging_obj,
+        client=mock_client,
+        stream=True,
+        kwargs={},
+    )
+
+    assert mock_client.post.await_args.kwargs["stream"] is True
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.7
 
 
 @pytest.mark.asyncio
