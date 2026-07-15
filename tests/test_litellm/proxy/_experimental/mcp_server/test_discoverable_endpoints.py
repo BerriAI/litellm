@@ -7132,19 +7132,74 @@ async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
     assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 400"}
 
 
-def _patch_gateway_dcr_flag(enabled: bool):
-    return patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.is_mcp_gateway_dcr_enabled",
-        return_value=enabled,
+def test_aggregate_wellknown_routes_serve_gateway_metadata():
+    """Both path-appended aggregate routes serve the gateway documents. Exercises real
+    routing, so this also pins registration order: the parameterized
+    /.well-known/oauth-authorization-server/{name} route would otherwise capture the /mcp
+    suffix as a server name."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
     )
+
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    prm = client.get("/.well-known/oauth-protected-resource/mcp")
+    asm = client.get("/.well-known/oauth-authorization-server/mcp")
+
+    assert prm.status_code == 200
+    assert prm.json()["resource"] == "http://testserver/mcp"
+    assert prm.json()["authorization_servers"] == ["http://testserver/mcp"]
+
+    assert asm.status_code == 200
+    assert asm.json()["issuer"] == "http://testserver/mcp"
+    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize"
+    assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
+
+
+def test_as_aggregate_route_prefers_a_real_server_named_mcp():
+    """A server literally named ``mcp`` wins the single-segment
+    /.well-known/oauth-authorization-server/mcp route (it collides with the parameterized
+    /{server_name} route) and keeps its per-server discovery; the aggregate document is
+    served only when no such server exists."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server_named_mcp = _create_oauth2_server(server_id="mcp_srv", name="mcp", server_name="mcp", alias="mcp")
+    global_mcp_server_manager.registry[server_named_mcp.server_id] = server_named_mcp
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    try:
+        asm = client.get("/.well-known/oauth-authorization-server/mcp")
+        assert asm.status_code == 200
+        # the real server's own document (issuer is the bare origin, endpoint is /mcp/authorize),
+        # not the aggregate one (whose issuer would be {base}/mcp)
+        assert asm.json()["issuer"] == "http://testserver"
+        assert "/mcp/authorize" in asm.json()["authorization_endpoint"]
+    finally:
+        global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_gateway_dcr_root_discovery_describes_gateway_not_single_server():
-    """Flag on: root discovery must keep describing the gateway as the
-    authorization server for the aggregate /mcp resource even when exactly one
-    OAuth2 server exists (flag off, resolution narrows to that server; that
-    behavior is pinned by test_discovery_root_includes_server_name_prefix)."""
+async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
+    """The always-on aggregate front door must not change bare-origin discovery: with one
+    oauth2 server configured, the no-suffix /.well-known/oauth-{authorization-server,
+    protected-resource} still resolves THAT server, so an existing single-server deployment's
+    discovery is unchanged. The aggregate document lives only at the /mcp-suffixed routes."""
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -7164,134 +7219,15 @@ async def test_gateway_dcr_root_discovery_describes_gateway_not_single_server():
     mock_request.headers = {}
 
     try:
-        with _patch_gateway_dcr_flag(True):
-            authorization_response = _build_oauth_authorization_server_response(
-                request=mock_request,
-                mcp_server_name=None,
-            )
-            resource_response = await _build_oauth_protected_resource_response(
-                request=mock_request,
-                mcp_server_name=None,
-                use_standard_pattern=True,
-            )
-
-        assert authorization_response["issuer"] == "https://llm.example.com/mcp"
-        assert authorization_response["authorization_endpoint"] == "https://llm.example.com/authorize"
-        assert authorization_response["token_endpoint"] == "https://llm.example.com/token"
-        assert authorization_response["registration_endpoint"] == "https://llm.example.com/register"
-        assert "none" in authorization_response["token_endpoint_auth_methods_supported"]
-        assert authorization_response["code_challenge_methods_supported"] == ["S256"]
-        assert authorization_response["scopes_supported"] == []
-
-        assert resource_response["resource"] == "https://llm.example.com/mcp"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp"]
-        assert resource_response["scopes_supported"] == []
+        authorization_response = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name=None
+        )
+        resource_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name=None, use_standard_pattern=True
+        )
+        # per-server, not aggregate: the single server's name is in the endpoints
+        assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
+        assert authorization_response["issuer"] == "https://llm.example.com"
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
     finally:
         global_mcp_server_manager.registry.clear()
-
-
-@pytest.mark.asyncio
-async def test_gateway_dcr_named_discovery_unaffected_by_flag():
-    """Flag on must not change named-server discovery: a named oauth2 server
-    still resolves to its own per-server document."""
-    from fastapi import Request
-
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _build_oauth_authorization_server_response,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
-    global_mcp_server_manager.registry.clear()
-    oauth2_server = _create_oauth2_server()
-    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://llm.example.com/"
-    mock_request.headers = {}
-
-    try:
-        with _patch_gateway_dcr_flag(True):
-            response = _build_oauth_authorization_server_response(
-                request=mock_request,
-                mcp_server_name="test_oauth",
-            )
-        assert "/test_oauth/authorize" in response["authorization_endpoint"]
-        assert response["scopes_supported"] == ["read", "write"]
-    finally:
-        global_mcp_server_manager.registry.clear()
-
-
-def test_aggregate_wellknown_routes_404_when_flag_off():
-    """Flag off, the aggregate well-known routes answer 404 exactly like the
-    previously-absent routes: discovery behavior is byte-identical for
-    existing deployments."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
-
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
-    with _patch_gateway_dcr_flag(False):
-        assert client.get("/.well-known/oauth-protected-resource/mcp").status_code == 404
-        assert client.get("/.well-known/oauth-authorization-server/mcp").status_code == 404
-
-
-def test_aggregate_wellknown_routes_serve_gateway_metadata_when_flag_on():
-    """Flag on, both path-appended aggregate routes serve the gateway
-    documents. Exercises real routing, so this also pins registration order:
-    /.well-known/oauth-authorization-server/{name} would otherwise capture
-    the /mcp suffix as a server name and 404."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
-    global_mcp_server_manager.registry.clear()
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
-    with _patch_gateway_dcr_flag(True):
-        prm = client.get("/.well-known/oauth-protected-resource/mcp")
-        asm = client.get("/.well-known/oauth-authorization-server/mcp")
-
-    assert prm.status_code == 200
-    assert prm.json()["resource"] == "http://testserver/mcp"
-    assert prm.json()["authorization_servers"] == ["http://testserver/mcp"]
-
-    assert asm.status_code == 200
-    assert asm.json()["issuer"] == "http://testserver/mcp"
-    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize"
-
-
-def test_is_mcp_gateway_dcr_enabled_reads_general_settings():
-    """The flag reader accepts YAML booleans and env-interpolated strings, and
-    fails closed on anything else."""
-    from litellm.proxy._experimental.mcp_server.oauth_utils import (
-        is_mcp_gateway_dcr_enabled,
-    )
-    from litellm.proxy.proxy_server import general_settings
-
-    for raw, expected in (
-        (True, True),
-        (False, False),
-        ("true", True),
-        ("True", True),
-        ("false", False),
-        ("yes", False),
-        (1, False),
-        (None, False),
-    ):
-        with patch.dict(general_settings, {"mcp_gateway_dcr": raw}):
-            assert is_mcp_gateway_dcr_enabled() is expected, f"raw={raw!r}"
-
-    with patch.dict(general_settings, {}, clear=True):
-        assert is_mcp_gateway_dcr_enabled() is False
