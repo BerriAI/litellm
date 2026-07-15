@@ -1678,6 +1678,8 @@ def _make_keyword_embedding_router(recorded_inputs):
 
     def _vector(text):
         lowered = text.lower()
+        if "kanban" in lowered:
+            return [0.6, 0.8]
         if "linear" in lowered or "issue" in lowered or "ticket" in lowered:
             return [1.0, 0.0]
         return [0.0, 1.0]
@@ -1812,3 +1814,102 @@ async def test_filter_fails_open_when_matches_are_not_in_available_tools():
 
     assert [t.name for t in filtered] == ["linear_stub-get_issue", "linear_stub-list_issues"]
     print("✅ Matches outside available_tools fail open instead of dropping every tool")
+
+
+@pytest.mark.asyncio
+async def test_request_time_context_window_error_is_request_scoped():
+    """
+    Regression test: an oversized tool description hitting the embedding
+    context window while lazily indexing request-time tools must fail only
+    the requesting call. Previously the lazy path reused the startup build
+    and recorded the overflow in the shared context_window_error, after
+    which EVERY user's MCP requests on the worker were blocked with a 400
+    until restart (index poisoning via a single request).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticToolFilterContextWindowError,
+    )
+
+    state = {"raise_context_error": True}
+    filter_instance = _make_context_window_filter(state)
+    tools = [
+        MCPTool(name="tool_a", description="Tool A", inputSchema={"type": "object"}),
+        MCPTool(name="tool_b", description="Tool B", inputSchema={"type": "object"}),
+    ]
+
+    with pytest.raises(SemanticToolFilterContextWindowError):
+        await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    assert filter_instance.context_window_error is None
+    assert filter_instance.tool_router is None
+
+    state["raise_context_error"] = False
+    filtered = await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    assert len(filtered) > 0
+    assert filter_instance.context_window_error is None
+    assert filter_instance.tool_router is not None
+    print("✅ Request-time context window overflow is scoped to the request, not the worker")
+
+
+@pytest.mark.asyncio
+async def test_foreign_index_routes_cannot_displace_available_tools():
+    """
+    Regression test: routes indexed from OTHER principals' tool listings must
+    not occupy the match candidate set for this request. Previously the
+    router matched over the whole shared index, so foreign routes that
+    embedded closer to the query displaced the caller's own tools from
+    top_k, degrading results to the fail-open list (or, before the
+    empty-result guard, stripping every tool). Matching is now scoped to the
+    request's own tool names via route_filter.
+    """
+    filter_instance = _make_keyword_filter([], top_k=1)
+    foreign_tools = [
+        MCPTool(
+            name=f"other_user-linear_tool_{i}",
+            description=f"Get a Linear issue variant {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(6)
+    ]
+    filter_instance._build_router(foreign_tools)
+
+    my_kanban = MCPTool(
+        name="mine-kanban_board",
+        description="Manage kanban board cards",
+        inputSchema={"type": "object"},
+    )
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=[my_kanban, _weather_tool()],
+    )
+
+    assert [t.name for t in filtered] == ["mine-kanban_board"]
+    print("✅ Foreign index routes cannot displace the caller's own tools")
+
+
+@pytest.mark.asyncio
+async def test_top_k_above_router_default_is_respected():
+    """
+    Regression test: semantic-router's SemanticRouter defaults to top_k=5 at
+    the index-query layer, silently capping any configured filter top_k
+    above 5 regardless of the limit passed to __call__. The router must be
+    sized (and resized) to honor the configured top_k.
+    """
+    filter_instance = _make_keyword_filter([], top_k=6)
+    tools = [
+        MCPTool(
+            name=f"linear_stub-tool_{i}",
+            description=f"Work with Linear issues part {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(6)
+    ]
+
+    filtered = await filter_instance.filter_tools(
+        query="Linear ticket work",
+        available_tools=tools,
+    )
+
+    assert len(filtered) == 6
+    print("✅ Configured top_k above the semantic-router default of 5 is honored")
