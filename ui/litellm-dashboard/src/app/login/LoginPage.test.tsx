@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockLoginMutate = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -36,7 +37,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
 
 vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
   useLogin: vi.fn(() => ({
-    mutate: vi.fn(),
+    mutate: mockLoginMutate,
     isPending: false,
     error: null,
   })),
@@ -259,10 +260,10 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue with SSO" })).toBeInTheDocument();
   });
 
-  it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {
+  it("should hide the SSO action when sso_configured is false", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
@@ -286,9 +287,131 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
 
-    const ssoButton = screen.getByRole("button", { name: "Login with SSO" });
-    expect(ssoButton).toBeInTheDocument();
-    expect(ssoButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Continue with SSO" })).not.toBeInTheDocument();
+  });
+
+  it("should allow selecting LDAP and submit it through the single sign-in button", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: "LDAP" })).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole("button", { name: "Sign in" })).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "ldap-password" } });
+    fireEvent.click(screen.getByRole("radio", { name: "LDAP" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(mockLoginMutate).toHaveBeenCalledWith(
+        {
+          username: "alice",
+          password: "ldap-password",
+          authMethod: "ldap",
+          useV3: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("should use LDAP authentication by default when LDAP is configured", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    const ldapAuthOption = await screen.findByRole("radio", { name: "LDAP" });
+    expect(ldapAuthOption).toBeChecked();
+    expect(screen.getAllByRole("radio").map((option) => option.closest("label")?.textContent)).toEqual([
+      "LDAP",
+      "LiteLLM account",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "local-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(mockLoginMutate).toHaveBeenCalledWith(
+        {
+          username: "admin",
+          password: "local-password",
+          authMethod: "ldap",
+          useV3: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("should validate required fields before directory login", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: "LDAP" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "LDAP" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Please enter your username")).toBeInTheDocument();
+      expect(screen.getByText("Please enter your password")).toBeInTheDocument();
+    });
+    expect(mockLoginMutate).not.toHaveBeenCalled();
   });
 
   describe("URL ?token= legacy path is rejected (security regression test)", () => {

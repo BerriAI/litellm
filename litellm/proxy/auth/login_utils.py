@@ -7,7 +7,7 @@ login endpoints (e.g., /login and /v2/login).
 
 import os
 import secrets
-from typing import Literal, Optional, cast
+from typing import Literal, cast
 
 from fastapi import HTTPException
 
@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.ldap_auth import authenticate_ldap_user
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -52,7 +53,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
         )
 
 
-def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
+def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
 
@@ -84,7 +85,7 @@ class LoginResult:
 
     user_id: str
     key: str
-    user_email: Optional[str]
+    user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
 
@@ -92,7 +93,7 @@ class LoginResult:
         self,
         user_id: str,
         key: str,
-        user_email: Optional[str],
+        user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
     ):
@@ -103,11 +104,11 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(
+async def _authenticate_local_user(
     username: str,
     password: str,
-    master_key: Optional[str],
-    prisma_client: Optional[PrismaClient],
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -139,19 +140,20 @@ async def authenticate_user(
     ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
-    _user_row: Optional[LiteLLM_UserTable] = None
-    user_role: Optional[
+    _user_row: LiteLLM_UserTable | None = None
+    user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
-    ] = None
+        | None
+    ) = None
 
     if prisma_client is not None:
         _user_row = cast(
-            Optional[LiteLLM_UserTable],
+            LiteLLM_UserTable | None,
             await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
@@ -218,7 +220,7 @@ async def authenticate_user(
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
-            user_info: Optional[LiteLLM_UserTable] = None
+            user_info: LiteLLM_UserTable | None = None
             if _user_row is not None:
                 user_info = _user_row
             elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
@@ -311,6 +313,76 @@ async def authenticate_user(
             param="invalid_credentials",
             code=401,
         )
+
+
+async def _authenticate_ldap_ui_user(
+    username: str,
+    password: str,
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
+) -> LoginResult:
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.",
+            type=ProxyErrorTypes.auth_error,
+            param="master_key",
+            code=500,
+        )
+
+    ldap_user = await authenticate_ldap_user(
+        username=username,
+        password=password,
+        prisma_client=prisma_client,
+    )
+    user_role = ldap_user.user_role or LitellmUserRoles.INTERNAL_USER.value
+    response = await generate_key_helper_fn(
+        request_type="key",
+        user_role=user_role,
+        duration=LITELLM_UI_SESSION_DURATION,
+        key_max_budget=litellm.max_ui_session_budget,
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        user_id=ldap_user.user_id,
+        team_id="litellm-dashboard",
+    )
+    return LoginResult(
+        user_id=ldap_user.user_id,
+        key=response["token"],
+        user_email=ldap_user.user_email,
+        user_role=user_role,
+        login_method="username_password",
+    )
+
+
+async def authenticate_user(
+    username: str,
+    password: str,
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
+    auth_method: str | None = None,
+) -> LoginResult:
+    if auth_method in (None, "local"):
+        return await _authenticate_local_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
+    if auth_method == "ldap":
+        return await _authenticate_ldap_ui_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
+    raise ProxyException(
+        message=f"Unsupported auth_method: {auth_method}",
+        type=ProxyErrorTypes.auth_error,
+        param="auth_method",
+        code=400,
+    )
 
 
 def create_ui_token_object(

@@ -386,6 +386,98 @@ class TestProxySettingEndpoints:
         call_args = mock_prisma.db.litellm_ssoconfig.find_unique.call_args
         assert call_args.kwargs["where"]["id"] == "sso_config"
 
+    def test_get_ldap_settings_masks_bind_password(self, mock_proxy_config, mock_auth, monkeypatch):
+        """LDAP settings are stored separately from SSO and mask the bind password on read."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.param_value = {
+            "ldap_enabled": True,
+            "ldap_url": "ldaps://ldap.example.com:636",
+            "ldap_base_dn": "dc=example,dc=com",
+            "ldap_bind_dn": "cn=admin,dc=example,dc=com",
+            "ldap_bind_password": "super-secret",
+            "ldap_user_search_filter": "(uid={username})",
+        }
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        def fail_if_setting_env(environment_variables):
+            raise AssertionError("LDAP settings must not be written to os.environ")
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_decrypt_and_set_db_env_variables",
+            fail_if_setting_env,
+        )
+        monkeypatch.setattr(
+            proxy_config,
+            "_decrypt_db_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.get("/get/ldap_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        values = data["values"]
+        assert values["ldap_enabled"] is True
+        assert values["ldap_url"] == "ldaps://ldap.example.com:636"
+        assert values["ldap_bind_password"] != "super-secret"
+        assert "*" in values["ldap_bind_password"]
+        assert data["field_schema"]["properties"]["ldap_url"]["description"]
+        mock_prisma.db.litellm_config.find_unique.assert_called_once_with(
+            where={"param_name": "ldap_settings"}
+        )
+
+    def test_update_ldap_settings_to_database(self, mock_proxy_config, mock_auth, monkeypatch):
+        """LDAP settings can be updated through their own Admin settings endpoint."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        new_ldap_settings = {
+            "ldap_enabled": True,
+            "ldap_url": "ldaps://ldap.example.com:636",
+            "ldap_base_dn": "dc=example,dc=com",
+            "ldap_search_base": "ou=People,dc=example,dc=com",
+            "ldap_bind_dn": "cn=admin,dc=example,dc=com",
+            "ldap_bind_password": "super-secret",
+            "ldap_user_search_filter": "(uid={username})",
+            "ldap_email_attribute": "mail",
+            "ldap_display_name_attribute": "displayName",
+        }
+
+        response = client.patch("/update/ldap_settings", json=new_ldap_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["ldap_enabled"] is True
+        assert data["settings"]["ldap_bind_password"] != "super-secret"
+        assert "*" in data["settings"]["ldap_bind_password"]
+        upsert_data = mock_prisma.db.litellm_config.upsert.call_args.kwargs["data"]
+        assert upsert_data["create"]["param_name"] == "ldap_settings"
+        stored_settings = json.loads(upsert_data["create"]["param_value"])
+        assert stored_settings["ldap_url"] == "ldaps://ldap.example.com:636"
+        assert stored_settings["ldap_bind_password"] == "super-secret"
+
     def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating the SSO settings to the dedicated database table"""
         import json

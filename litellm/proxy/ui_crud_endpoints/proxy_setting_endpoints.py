@@ -1,7 +1,7 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Annotated, Any, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -12,6 +12,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
+from litellm.proxy.auth.ldap_auth import (
+    LDAP_SENSITIVE_FIELDS,
+    LDAP_SETTINGS_PARAM_NAME,
+    LDAPConfig,
+    _parse_db_param_value,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -29,7 +35,7 @@ router = APIRouter()
 # the UI can show "(set)" without ever transporting the plaintext OAuth secret
 # off the server, matching the write-once + masked-on-read contract used for
 # the HashiCorp Vault config override.
-_SSO_SENSITIVE_FIELDS: Set[str] = {
+_SSO_SENSITIVE_FIELDS: set[str] = {
     "google_client_secret",
     "microsoft_client_secret",
     "generic_client_secret",
@@ -44,13 +50,13 @@ class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
 
     # Logo configuration
-    logo_url: Optional[str] = Field(
+    logo_url: str | None = Field(
         default=None,
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
     # Favicon configuration
-    favicon_url: Optional[str] = Field(
+    favicon_url: str | None = Field(
         default=None,
         description="URL to custom favicon image. Must be an HTTP/HTTPS URL to a .ico, .png, or .svg file",
     )
@@ -59,15 +65,21 @@ class UIThemeConfig(BaseModel):
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
 
-    values: Dict[str, Any]
+    values: dict[str, Any]
     """The current configuration values"""
 
-    field_schema: Dict[str, Any]
+    field_schema: dict[str, Any]
     """Schema information including descriptions and property types for UI display"""
 
 
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
+
+    pass
+
+
+class LDAPSettingsResponse(SettingsResponse):
+    """Response model for LDAP settings"""
 
     pass
 
@@ -105,7 +117,7 @@ class UISettings(BaseModel):
         description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
     )
 
-    enabled_ui_pages_internal_users: Optional[List[str]] = Field(
+    enabled_ui_pages_internal_users: list[str] | None = Field(
         default=None,
         description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
     )
@@ -231,16 +243,16 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
 # include generics like ``Optional[int]`` / ``List[str]`` that are not
 # instances of ``type`` — so tightening this to ``type`` would reject
 # valid inputs.
-_EXTRA_UI_SETTINGS_FIELDS: Dict[str, Tuple[Any, FieldInfo]] = {}
+_EXTRA_UI_SETTINGS_FIELDS: dict[str, tuple[Any, FieldInfo]] = {}
 
 # Settings OSS knows about as enterprise-gated. If a caller sends one of
 # these keys and no extension package has registered it, the PATCH
 # endpoint returns 403 instead of silently dropping the value, so the
 # client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: Set[str] = {"enable_projects_ui"}
+_ENTERPRISE_ONLY_UI_SETTINGS: set[str] = {"enable_projects_ui"}
 
 # Memoized effective class; invalidated on registration.
-_EFFECTIVE_UI_SETTINGS_CLASS: Optional[Type[UISettings]] = None
+_EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
 
 
 def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
@@ -257,7 +269,7 @@ def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> N
     _EFFECTIVE_UI_SETTINGS_CLASS = None
 
 
-def _get_effective_ui_settings_class() -> Type[UISettings]:
+def _get_effective_ui_settings_class() -> type[UISettings]:
     """Return UISettings with any extension-registered fields merged in.
 
     Memoized — pydantic ``create_model`` runs metaclass + schema work
@@ -344,7 +356,7 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: List = general_settings.get("allowed_ips", [])
+    _allowed_ips: list = general_settings.get("allowed_ips", [])
     if ip_address.ip not in _allowed_ips:
         _allowed_ips.append(ip_address.ip)
         general_settings["allowed_ips"] = _allowed_ips
@@ -403,7 +415,7 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: List = general_settings.get("allowed_ips", [])
+    _allowed_ips: list = general_settings.get("allowed_ips", [])
     if ip_address.ip in _allowed_ips:
         _allowed_ips.remove(ip_address.ip)
         general_settings["allowed_ips"] = _allowed_ips
@@ -562,7 +574,7 @@ async def get_default_team_settings():
     )
 
 
-async def update_default_team_member_budget(teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
+async def update_default_team_member_budget(teams: list[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
     """
@@ -703,6 +715,120 @@ async def update_default_team_settings(
         success_message="Default team settings updated successfully",
         user_api_key_dict=user_api_key_dict,
     )
+
+
+@router.get(
+    "/get/ldap_settings",
+    tags=["LDAP Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LDAPSettingsResponse,
+)
+async def get_ldap_settings():
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    db_record = await ConfigRepository(prisma_client).table.find_unique(where={"param_name": LDAP_SETTINGS_PARAM_NAME})
+    ldap_settings_dict: dict[str, Any] = {}
+    if db_record and db_record.param_value:
+        ldap_settings_dict = _parse_db_param_value(db_record.param_value)
+
+    decrypted_settings = proxy_config._decrypt_db_variables(ldap_settings_dict)
+    ldap_config = LDAPConfig(**decrypted_settings)
+
+    from pydantic import TypeAdapter
+
+    schema = TypeAdapter(LDAPConfig).json_schema(by_alias=True)
+    ldap_dict = mask_sensitive_keys(ldap_config.model_dump(), LDAP_SENSITIVE_FIELDS)
+
+    result = {
+        "values": ldap_dict,
+        "field_schema": {
+            "description": schema.get("description", ""),
+            "properties": {},
+        },
+    }
+    for field_name, field_info in schema["properties"].items():
+        result["field_schema"]["properties"][field_name] = {
+            "description": field_info.get("description", ""),
+            "type": field_info.get("type", "string"),
+        }
+
+    return result
+
+
+@router.patch(
+    "/update/ldap_settings",
+    tags=["LDAP Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ldap_settings(
+    ldap_config: LDAPConfig,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    from litellm.proxy.proxy_server import (
+        create_config_audit_log,
+        prisma_client,
+        proxy_config,
+        store_model_in_db,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
+        )
+
+    existing_record = await ConfigRepository(prisma_client).table.find_unique(
+        where={"param_name": LDAP_SETTINGS_PARAM_NAME}
+    )
+    before_ldap_data: dict[str, Any] | None = None
+    if existing_record and existing_record.param_value:
+        before_ldap_data = proxy_config._decrypt_db_variables(_parse_db_param_value(existing_record.param_value))
+
+    ldap_data = ldap_config.model_dump()
+    if not ldap_data.get("ldap_bind_password") and before_ldap_data:
+        ldap_data["ldap_bind_password"] = before_ldap_data.get("ldap_bind_password")
+    encrypted_ldap_data = proxy_config._encrypt_env_variables(environment_variables=ldap_data)
+
+    await ConfigRepository(prisma_client).table.upsert(
+        where={"param_name": LDAP_SETTINGS_PARAM_NAME},
+        data={
+            "create": {
+                "param_name": LDAP_SETTINGS_PARAM_NAME,
+                "param_value": json.dumps(encrypted_ldap_data),
+            },
+            "update": {
+                "param_value": json.dumps(encrypted_ldap_data),
+            },
+        },
+    )
+
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name=LDAP_SETTINGS_PARAM_NAME,
+            action="updated",
+            before_value=before_ldap_data,
+            after_value=ldap_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    )
+
+    return {
+        "message": "LDAP settings updated successfully",
+        "status": "success",
+        "settings": mask_sensitive_keys(ldap_data, LDAP_SENSITIVE_FIELDS),
+    }
 
 
 @router.get(
@@ -862,7 +988,7 @@ async def update_sso_settings(
     # create_config_audit_log's secret-name redaction to mask the
     # *_client_secret fields before the audit row is written.
     existing_sso_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-    before_sso_data: Optional[Dict[str, Any]] = None
+    before_sso_data: dict[str, Any] | None = None
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
@@ -984,7 +1110,7 @@ async def get_ui_theme_settings():
     )
 
 
-def _validate_public_image_url(value: Optional[str], field_name: str) -> None:
+def _validate_public_image_url(value: str | None, field_name: str) -> None:
     """
     Reject anything that isn't a plain http(s) URL with a host. This value is
     later served via the unauthenticated /get_image endpoint, so local paths
@@ -1193,7 +1319,7 @@ UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL = 600  # 10 minutes
 
 
-async def get_ui_settings_cached() -> Dict[str, Any]:
+async def get_ui_settings_cached() -> dict[str, Any]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
 
@@ -1212,7 +1338,7 @@ async def get_ui_settings_cached() -> Dict[str, Any]:
         return {}
 
     db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
-    ui_settings: Dict[str, Any] = {}
+    ui_settings: dict[str, Any] = {}
     if db_record and db_record.ui_settings:
         raw = db_record.ui_settings
         ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
@@ -1244,7 +1370,7 @@ async def get_ui_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    ui_settings: Dict[str, Any] = {}
+    ui_settings: dict[str, Any] = {}
 
     db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
 
@@ -1272,7 +1398,7 @@ async def get_ui_settings():
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     # Build config-like object for schema helper
-    config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
+    config: dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
@@ -1287,7 +1413,7 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings_body: Dict[str, Any] = Body(...),
+    settings_body: dict[str, Any] = Body(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
