@@ -23,6 +23,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     COMPRESR_RETRIEVE_TOOL_NAME,
     CompresrGuardrail,
@@ -1130,6 +1131,44 @@ async def test_agentic_plan_preserves_list_shaped_assistant_text(guardrail: Comp
     assistant_message = plan.request_patch.messages[-2]
     assert assistant_message["role"] == "assistant"
     assert assistant_message["content"] == "Let me fetch the original."
+
+
+@pytest.mark.asyncio
+async def test_agentic_plan_strips_other_guardrails_executed_markers(guardrail: CompresrGuardrail):
+    # The retrieval follow-up restores content other pre-call guardrails may
+    # never have inspected, so their executed markers must not be replayed;
+    # only this guardrail's own marker survives (no recompression loop).
+    hash_value = "a" * 24
+    guardrail._store_originals(_scoped_store_key(_logging_obj("call-id-1")), {hash_value: TOOL_OUTPUT})
+    response = _make_openai_response_with_tool_calls([(COMPRESR_RETRIEVE_TOOL_NAME, {"hash": hash_value}, "call_r")])
+    own_marker = guardrail._pre_call_marker()
+    assert own_marker is not None
+    kwargs = {
+        "metadata": {
+            "user_api_key": "key-hash",
+            PRE_CALL_EXECUTED_GUARDRAILS_KEY: [own_marker, "token:pii_guardrail"],
+        },
+        "litellm_metadata": {PRE_CALL_EXECUTED_GUARDRAILS_KEY: ["token:other_guardrail"]},
+    }
+
+    plan = await guardrail.async_build_agentic_loop_plan(
+        tools={"tool_calls": [_retrieve_tool_call(hash_value, "call_r")]},
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "q"}],
+        response=response,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={},
+        logging_obj=_logging_obj("call-id-1"),
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    out = plan.request_patch.kwargs
+    assert out["metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY] == [own_marker]
+    assert out["metadata"]["user_api_key"] == "key-hash"
+    assert PRE_CALL_EXECUTED_GUARDRAILS_KEY not in out["litellm_metadata"]
+    assert kwargs["metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY] == [own_marker, "token:pii_guardrail"]
+    assert kwargs["litellm_metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY] == ["token:other_guardrail"]
 
 
 @pytest.mark.asyncio

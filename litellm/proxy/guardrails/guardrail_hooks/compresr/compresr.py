@@ -32,6 +32,7 @@ from typing_extensions import TypeGuard
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -1175,12 +1176,34 @@ class CompresrGuardrail(CustomGuardrail):
                 messages=follow_up_messages,
                 max_tokens=max_tokens,
                 optional_params=optional_params_without_max_tokens,
-                kwargs={
-                    k: v for k, v in kwargs.items() if not k.startswith("_compresr") and k != "litellm_logging_obj"
-                },
+                kwargs=self._sanitized_follow_up_kwargs(kwargs),
             ),
             metadata={"tool_type": "compresr_retrieve"},
         )
+
+    def _sanitized_follow_up_kwargs(self, kwargs: dict) -> dict[str, object]:
+        """Copy of the request kwargs for the retrieval follow-up with other
+        guardrails' pre-call-executed markers stripped, so input guardrails
+        re-inspect the restored originals; only this guardrail's own marker is
+        kept, to avoid recompressing what it just retrieved."""
+        out: dict[str, object] = {
+            k: v for k, v in kwargs.items() if not k.startswith("_compresr") and k != "litellm_logging_obj"
+        }
+        own_marker = self._pre_call_marker()
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = out.get(meta_key)
+            if not isinstance(meta, dict):
+                continue
+            executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+            if not isinstance(executed, list):
+                continue
+            kept = [m for m in executed if own_marker is not None and m == own_marker]
+            out[meta_key] = (
+                {**meta, PRE_CALL_EXECUTED_GUARDRAILS_KEY: kept}
+                if kept
+                else {k: v for k, v in meta.items() if k != PRE_CALL_EXECUTED_GUARDRAILS_KEY}
+            )
+        return out
 
     @staticmethod
     def get_config_model() -> type[GuardrailConfigModel[object]] | None:
