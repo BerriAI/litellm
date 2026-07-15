@@ -39,7 +39,12 @@ vi.mock("@/components/view_user_spend", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: () => <div>Top Keys</div>,
+  default: ({ topKeys }: { topKeys: Array<{ api_key: string; spend: number }> }) => (
+    <div>
+      Top Keys
+      <div data-testid="top-keys-data">{topKeys.map(({ api_key, spend }) => `${api_key}:${spend}`).join(",")}</div>
+    </div>
+  ),
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
@@ -48,7 +53,14 @@ vi.mock("./EntityUsage/EntityUsage", () => ({
 }));
 
 vi.mock("./EntityUsage/SpendByProvider", () => ({
-  default: () => <div>Spend By Provider</div>,
+  default: ({ providerSpend }: { providerSpend: Array<{ provider: string; spend: number }> }) => (
+    <div>
+      Spend By Provider
+      <div data-testid="provider-spend-data">
+        {providerSpend.map(({ provider, spend }) => `${provider}:${spend}`).join(",")}
+      </div>
+    </div>
+  ),
 }));
 
 vi.mock("./EndpointUsage/EndpointUsage", () => ({
@@ -594,6 +606,46 @@ describe("UsagePage", () => {
     // Check for chart titles (these are in the Cost tab)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("should handle breakdown entries without metrics without poisoning totals", async () => {
+    const sparseSpendData = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            models: {
+              ...mockSpendData.results[0].breakdown.models,
+              "sparse-model": { metadata: {}, api_key_breakdown: {} },
+            },
+            model_groups: {
+              ...mockSpendData.results[0].breakdown.model_groups,
+              "sparse-model-group": { metadata: {}, api_key_breakdown: {} },
+            },
+            api_keys: {
+              ...mockSpendData.results[0].breakdown.api_keys,
+              "sparse-key": { metadata: { key_alias: "Sparse Key", tags: ["partial"] } },
+            },
+            providers: {
+              ...mockSpendData.results[0].breakdown.providers,
+              "sparse-provider": { metadata: {} },
+            },
+          },
+        },
+      ],
+    };
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(sparseSpendData);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("top-keys-data")).toHaveTextContent("sk-test123:125.75");
+      expect(screen.getByTestId("top-keys-data")).toHaveTextContent("sparse-key:0");
+      expect(screen.getByTestId("provider-spend-data")).toHaveTextContent("openai:125.75");
+      expect(screen.getByTestId("provider-spend-data")).toHaveTextContent("sparse-provider:0");
+    });
   });
 
   it("should render the daily spend and top models charts with cyan bars", async () => {

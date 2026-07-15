@@ -369,6 +369,8 @@ export const processActivityData = (
 
   dailyActivity.results.forEach((day) => {
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
+      if (!modelData?.metrics) return;
+
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
           label:

@@ -51,7 +51,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
@@ -64,6 +64,30 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
 }
+
+const createEmptySpendMetrics = (): SpendMetrics => ({
+  spend: 0,
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+  api_requests: 0,
+  successful_requests: 0,
+  failed_requests: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+});
+
+const addSpendMetrics = (total: SpendMetrics, metrics?: Partial<SpendMetrics>): SpendMetrics => ({
+  spend: total.spend + (metrics?.spend ?? 0),
+  prompt_tokens: total.prompt_tokens + (metrics?.prompt_tokens ?? 0),
+  completion_tokens: total.completion_tokens + (metrics?.completion_tokens ?? 0),
+  total_tokens: total.total_tokens + (metrics?.total_tokens ?? 0),
+  api_requests: total.api_requests + (metrics?.api_requests ?? 0),
+  successful_requests: total.successful_requests + (metrics?.successful_requests ?? 0),
+  failed_requests: total.failed_requests + (metrics?.failed_requests ?? 0),
+  cache_read_input_tokens: total.cache_read_input_tokens + (metrics?.cache_read_input_tokens ?? 0),
+  cache_creation_input_tokens: total.cache_creation_input_tokens + (metrics?.cache_creation_input_tokens ?? 0),
+});
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
@@ -254,30 +278,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
           modelSpend[model] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
+            metrics: createEmptySpendMetrics(),
             metadata: {},
             api_key_breakdown: {},
           };
         }
-        modelSpend[model].metrics.spend += metrics.metrics.spend;
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        modelSpend[model].metrics = addSpendMetrics(modelSpend[model].metrics, metrics?.metrics);
       });
     });
 
@@ -300,31 +306,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
         if (!modelGroupSpend[modelGroup]) {
           modelGroupSpend[modelGroup] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
+            metrics: createEmptySpendMetrics(),
             metadata: {},
             api_key_breakdown: {},
           };
         }
-        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
-        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
-        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
+        modelGroupSpend[modelGroup].metrics = addSpendMetrics(modelGroupSpend[modelGroup].metrics, metrics?.metrics);
       });
     });
 
@@ -348,31 +335,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
         if (!providerSpendMap[provider]) {
           providerSpendMap[provider] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
+            metrics: createEmptySpendMetrics(),
             metadata: {},
             api_key_breakdown: {},
           };
         }
-        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
-        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpendMap[provider].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
+        providerSpendMap[provider].metrics = addSpendMetrics(providerSpendMap[provider].metrics, metrics?.metrics);
       });
     });
 
@@ -393,33 +361,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
+            metrics: createEmptySpendMetrics(),
             metadata: {
-              key_alias: metrics.metadata.key_alias,
+              key_alias: metrics?.metadata?.key_alias ?? null,
               team_id: null,
-              tags: metrics.metadata.tags || [],
+              tags: metrics?.metadata?.tags ?? [],
             },
           };
         }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        keySpend[key].metrics = addSpendMetrics(keySpend[key].metrics, metrics?.metrics);
       });
     });
 
@@ -1014,6 +964,8 @@ const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: a
 
   userSpendData.results.forEach((day: DailyData) => {
     Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+      if (!metrics?.metrics) return;
+
       if (!modelData[model]) {
         modelData[model] = {
           total_requests: 0,
