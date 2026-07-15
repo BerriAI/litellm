@@ -9,10 +9,10 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Optional, Tuple, Union, cast
+from typing import Any, Dict, Optional, Tuple, Union, cast
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocketState
 
@@ -569,7 +569,28 @@ async def anthropic_proxy_route(
 ):
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+
+    When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+    the request model to a backend via glob matching and forwards with
+    automatic health-aware failover across multiple backends.
     """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+        AnthropicProxy,
+        extract_model_from_body,
+        get_anthropic_router,
+    )
+
+    router = get_anthropic_router()
+    if router is not None:
+        return await _route_anthropic_with_multi_backend(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            router=router,
+        )
+
+    # --- Default single-backend behaviour (unchanged) ---
     base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -609,6 +630,154 @@ async def anthropic_proxy_route(
     )
 
     return received_value
+
+
+async def _route_anthropic_with_multi_backend(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    router: Any,
+) -> Response:
+    """Forward an Anthropic request through the multi-backend router.
+
+    Resolves the model to an ordered list of backends, tries each in
+    sequence, and returns the first successful response.  Streaming
+    requests are forwarded to the first healthy backend only (failover
+    mid-stream is not possible).
+
+    When all backends are exhausted, returns a 502 with a descriptive
+    error body.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+        AnthropicProxy,
+        extract_model_from_body,
+    )
+
+    # Read and cache the request body so the passthrough pipeline can re-read it
+    body: bytes = await request.body()
+    model: str = extract_model_from_body(body)
+    backends = router.resolve(model)
+
+    if not backends:
+        verbose_proxy_logger.warning(
+            "anthropic_router: no route matched model=%s", model
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": {
+                    "type": "router_error",
+                    "message": f"No backend configured for model '{model}'.",
+                }
+            },
+        )
+
+    encoded_endpoint: str = httpx.URL(endpoint).path
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Preserve incoming headers (the passthrough pipeline will strip auth)
+    incoming_headers: Dict[str, str] = dict(request.headers)
+
+    is_streaming = await is_streaming_request_fn(request)
+    last_error: Optional[str] = None
+
+    for backend in backends:
+        target_url = f"{backend.url.rstrip('/')}{encoded_endpoint}"
+
+        verbose_proxy_logger.debug(
+            "anthropic_router: trying backend=%s url=%s model=%s",
+            backend.name, target_url, model,
+        )
+
+        try:
+            # --- Try the standard passthrough pipeline with this backend ---
+            auth_header = _build_backend_auth_header(backend)
+
+            endpoint_func = create_pass_through_route(
+                endpoint=endpoint,
+                target=target_url,
+                custom_headers=auth_header,
+                _forward_headers=True,
+                is_streaming_request=is_streaming,
+                custom_llm_provider="anthropic",
+            )
+
+            received_value = await endpoint_func(
+                request,
+                fastapi_response,
+                user_api_key_dict,
+            )
+
+            # Success — record and return
+            router.health.record_success(backend.name)
+            return received_value
+
+        except ProxyException as e:
+            last_error = getattr(e, "message", str(e))
+            verbose_proxy_logger.warning(
+                "anthropic_router: backend=%s failed with ProxyException: %s",
+                backend.name, last_error,
+            )
+            router.health.record_failure(backend.name)
+
+            # If this was a streaming request, we can't retry — the SSE
+            # stream may have already started sending to the client.
+            if is_streaming:
+                verbose_proxy_logger.warning(
+                    "anthropic_router: streaming request failed on backend=%s "
+                    "— cannot failover mid-stream",
+                    backend.name,
+                )
+                raise
+
+        except Exception as e:
+            last_error = str(e)
+            verbose_proxy_logger.warning(
+                "anthropic_router: backend=%s failed unexpectedly: %s",
+                backend.name, last_error,
+            )
+            router.health.record_failure(backend.name)
+
+            if is_streaming:
+                raise
+
+    # All backends exhausted
+    verbose_proxy_logger.error(
+        "anthropic_router: all %d backend(s) exhausted for model=%s",
+        len(backends), model,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "error": {
+                "type": "router_error",
+                "message": (
+                    f"All backends for model '{model}' are unavailable. "
+                    f"Last error: {last_error}"
+                ),
+            }
+        },
+    )
+
+
+def _build_backend_auth_header(backend: Any) -> Dict[str, str]:
+    """Build the auth header dict for a backend config.
+
+    Reads the credential from the environment variable named in
+    ``backend.auth.key_env`` (supports ``os.environ/…`` syntax via
+    LiteLLM's secret manager).
+    """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+        AnthropicProxy,
+    )
+
+    key = AnthropicProxy._resolve_credential(backend.auth.key_env)
+    if backend.auth.type == "api-key":
+        return {"x-api-key": key}
+    else:
+        return {"Authorization": f"Bearer {key}"}
 
 
 # Bedrock endpoint actions - consolidated list used for model extraction and streaming detection
