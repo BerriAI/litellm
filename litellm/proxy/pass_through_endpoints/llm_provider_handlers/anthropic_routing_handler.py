@@ -402,7 +402,16 @@ def get_anthropic_router() -> AnthropicRouter | None:
     # --- Hot-reload: config changed since last init ---
     if _state.instance is not None and new_fingerprint != _state.config_fingerprint:
         verbose_proxy_logger.info("anthropic_router: config fingerprint changed — re-initialising")
-        init_anthropic_router_from_config(config_dict)
+        try:
+            init_anthropic_router_from_config(config_dict)
+        except Exception:  # noqa: BLE001 — Pydantic ValidationError or config parse error
+            verbose_proxy_logger.warning(
+                "anthropic_router: hot-reload failed — keeping previous config. "
+                "Fix the anthropic_router section and reload again."
+            )
+            # Keep the existing router and fingerprint so the operator can retry
+            # after fixing the config.
+            return _state.instance
         _state.config_fingerprint = new_fingerprint
         return _state.instance
 
