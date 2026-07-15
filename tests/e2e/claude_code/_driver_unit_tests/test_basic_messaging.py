@@ -184,8 +184,8 @@ def test_verify_streaming_requires_all_models_to_stream(monkeypatch):
     fake_result = _FakeResult()
     outcomes = {
         "claude-haiku-4-5": DriverResult(text="ok", events=_streamed_events(5)),
-        "claude-sonnet-4-6": DriverResult(text="ok", events=_buffered_events()),
-        "claude-opus-4-7": DriverResult(text="ok", events=_streamed_events(5)),
+        "claude-sonnet-5": DriverResult(text="ok", events=_buffered_events()),
+        "claude-opus-4-8": DriverResult(text="ok", events=_streamed_events(5)),
     }
     _install_fake_runner(monkeypatch, outcomes_by_model=outcomes)
 

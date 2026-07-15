@@ -21,13 +21,13 @@ model_list:
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-sonnet-4-6
+  - model_name: claude-sonnet-5
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
+      model: anthropic/claude-sonnet-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-opus-4-7
+  - model_name: claude-opus-4-8
     litellm_params:
-      model: anthropic/claude-opus-4-7
+      model: anthropic/claude-opus-4-8
       api_key: os.environ/ANTHROPIC_API_KEY
 
   # ---- Bedrock (InvokeModel) ----
@@ -35,13 +35,13 @@ model_list:
     litellm_params:
       model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-6-bedrock-invoke
+  - model_name: claude-sonnet-5-bedrock-invoke
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-6
+      model: bedrock/us.anthropic.claude-sonnet-5
       aws_region_name: us-east-1
-  - model_name: claude-opus-4-7-bedrock-invoke
+  - model_name: claude-opus-4-8-bedrock-invoke
     litellm_params:
-      model: bedrock/us.anthropic.claude-opus-4-7
+      model: bedrock/us.anthropic.claude-opus-4-8
       aws_region_name: us-east-1
 
   # ---- Bedrock (Converse) ----
@@ -49,13 +49,13 @@ model_list:
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-6-bedrock-converse
+  - model_name: claude-sonnet-5-bedrock-converse
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      model: bedrock/converse/us.anthropic.claude-sonnet-5
       aws_region_name: us-east-1
-  - model_name: claude-opus-4-7-bedrock-converse
+  - model_name: claude-opus-4-8-bedrock-converse
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-opus-4-7
+      model: bedrock/converse/us.anthropic.claude-opus-4-8
       aws_region_name: us-east-1
 
   # ---- Vertex AI ----
@@ -86,9 +86,9 @@ model_list:
       model: azure_ai/claude-sonnet-4-6
       api_base: os.environ/AZURE_FOUNDRY_API_BASE
       api_key: os.environ/AZURE_FOUNDRY_API_KEY
-  - model_name: claude-opus-4-7-azure
+  - model_name: claude-opus-4-8-azure
     litellm_params:
-      model: azure_ai/claude-opus-4-7
+      model: azure_ai/claude-opus-4-8
       api_base: os.environ/AZURE_FOUNDRY_API_BASE
       api_key: os.environ/AZURE_FOUNDRY_API_KEY
 

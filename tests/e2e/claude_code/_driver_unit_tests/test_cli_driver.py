@@ -97,7 +97,7 @@ def test_run_claude_overlays_proxy_env():
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://proxy.example:4000",
         api_key="sk-abc",
         runner=runner,
@@ -112,7 +112,7 @@ def test_run_claude_extra_env_is_added_to_subprocess_env():
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         extra_env={"MAX_THINKING_TOKENS": "4096"},
@@ -146,7 +146,7 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         runner=runner,
@@ -178,7 +178,7 @@ def test_run_claude_uses_isolated_per_invocation_home(monkeypatch, tmp_path):
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         runner=runner,
@@ -209,7 +209,7 @@ def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch):
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         runner=runner,
@@ -219,7 +219,7 @@ def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch):
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         runner=runner,
@@ -243,7 +243,7 @@ def test_run_claude_isolated_home_cleaned_up_after_run(monkeypatch):
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         runner=runner,
@@ -275,7 +275,7 @@ def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(monkeypatch):
     with pytest.raises(ClaudeCLIError):
         run_claude(
             prompt="hi",
-            model="claude-opus-4-7",
+            model="claude-opus-4-8",
             base_url="http://localhost",
             api_key="sk-abc",
             runner=runner,
@@ -294,7 +294,7 @@ def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(monkeypatch
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         base_url="http://localhost",
         api_key="sk-abc",
         extra_env={"ANTHROPIC_API_KEY": "from-arg"},

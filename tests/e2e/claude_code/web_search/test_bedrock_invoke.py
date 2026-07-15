@@ -43,8 +43,8 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-sonnet-5-bedrock-invoke",
+    "claude-opus-4-8-bedrock-invoke",
 ]
 
 # A prompt the model cannot answer from training data alone — it forces

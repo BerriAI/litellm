@@ -38,8 +38,8 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-sonnet-5-bedrock-invoke",
+    "claude-opus-4-8-bedrock-invoke",
 ]
 
 # Set both the modern and the deprecated-but-honored Bedrock var so we
