@@ -24,7 +24,7 @@ let mockUseDisableBouncingIconImpl = () => false;
 let mockHealthDataImpl = (): { litellm_version?: string } | undefined => ({ litellm_version: "1.99.0" });
 
 let mockGetLocalStorageItemImpl = (key: string): string | null => {
-  if (key === "disableShowNewBadge") return null;
+  if (key === "disableShowBadges") return null;
   if (key === "disableShowPrompts") return null;
   return null;
 };
@@ -86,7 +86,7 @@ describe("SidebarAccountMenu", () => {
     mockUseDisableBouncingIconImpl = () => false;
     mockHealthDataImpl = () => ({ litellm_version: "1.99.0" });
     mockGetLocalStorageItemImpl = (key: string): string | null => {
-      if (key === "disableShowNewBadge") return null;
+      if (key === "disableShowBadges") return null;
       if (key === "disableShowPrompts") return null;
       return null;
     };
@@ -205,26 +205,26 @@ describe("SidebarAccountMenu", () => {
     expect(mockOnLogout).toHaveBeenCalledTimes(1);
   });
 
-  it("should toggle hide new feature indicators on", async () => {
+  it("should toggle hide feature badges on", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
 
     await openMenu(user);
 
-    const toggle = screen.getByLabelText("Toggle hide new feature indicators");
+    const toggle = screen.getByLabelText("Toggle hide feature badges");
     expect(toggle).not.toBeChecked();
 
     await user.click(toggle);
 
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
-    expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge", "true");
-    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
+    expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowBadges", "true");
+    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowBadges");
   });
 
-  it("should toggle hide new feature indicators off", async () => {
+  it("should toggle hide feature badges off", async () => {
     const user = userEvent.setup();
     mockGetLocalStorageItemImpl = (key: string): string | null => {
-      if (key === "disableShowNewBadge") return "true";
+      if (key === "disableShowBadges") return "true";
       return null;
     };
 
@@ -232,14 +232,14 @@ describe("SidebarAccountMenu", () => {
 
     await openMenu(user);
 
-    const toggle = screen.getByLabelText("Toggle hide new feature indicators");
+    const toggle = screen.getByLabelText("Toggle hide feature badges");
     expect(toggle).toBeChecked();
 
     await user.click(toggle);
 
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
-    expect(localStorageUtils.removeLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge");
-    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
+    expect(localStorageUtils.removeLocalStorageItem).toHaveBeenCalledWith("disableShowBadges");
+    expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowBadges");
   });
 
   it("should toggle hide all prompts on", async () => {
@@ -258,10 +258,10 @@ describe("SidebarAccountMenu", () => {
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowPrompts");
   });
 
-  it("should initialize hide new feature indicators from localStorage", async () => {
+  it("should initialize hide feature badges from localStorage", async () => {
     const user = userEvent.setup();
     mockGetLocalStorageItemImpl = (key: string): string | null => {
-      if (key === "disableShowNewBadge") return "true";
+      if (key === "disableShowBadges") return "true";
       return null;
     };
 
@@ -269,7 +269,7 @@ describe("SidebarAccountMenu", () => {
 
     await openMenu(user);
 
-    const toggle = screen.getByLabelText("Toggle hide new feature indicators");
+    const toggle = screen.getByLabelText("Toggle hide feature badges");
     expect(toggle).toBeChecked();
   });
 

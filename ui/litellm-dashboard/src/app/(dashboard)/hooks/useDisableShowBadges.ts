@@ -1,18 +1,18 @@
-// hooks/useDisableShowNewBadge.ts
+// hooks/useDisableShowBadges.ts
 import { useSyncExternalStore } from "react";
 import { getLocalStorageItem } from "@/utils/localStorageUtils";
 import { LOCAL_STORAGE_EVENT } from "@/utils/localStorageUtils";
 
 function subscribe(callback: () => void) {
   const onStorage = (e: StorageEvent) => {
-    if (e.key === "disableShowNewBadge") {
+    if (e.key === "disableShowBadges") {
       callback();
     }
   };
 
   const onCustom = (e: Event) => {
     const { key } = (e as CustomEvent).detail;
-    if (key === "disableShowNewBadge") {
+    if (key === "disableShowBadges") {
       callback();
     }
   };
@@ -27,9 +27,9 @@ function subscribe(callback: () => void) {
 }
 
 function getSnapshot() {
-  return getLocalStorageItem("disableShowNewBadge") === "true";
+  return getLocalStorageItem("disableShowBadges") === "true";
 }
 
-export function useDisableShowNewBadge() {
+export function useDisableShowBadges() {
   return useSyncExternalStore(subscribe, getSnapshot);
 }

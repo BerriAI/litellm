@@ -2,7 +2,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
-import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
+import { useDisableShowBadges } from "@/app/(dashboard)/hooks/useDisableShowBadges";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { emitLocalStorageChange, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
@@ -89,7 +89,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const disableUsageIndicator = useDisableUsageIndicator();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
-  const disableShowNewBadge = useDisableShowNewBadge();
+  const disableShowBadges = useDisableShowBadges();
 
   const setFlag = (key: string, checked: boolean) => {
     if (checked) {
@@ -102,11 +102,11 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
 
   const toggles = [
     {
-      key: "disableShowNewBadge",
-      label: "Hide New Feature Indicators",
-      ariaLabel: "Toggle hide new feature indicators",
-      checked: disableShowNewBadge,
-      onCheckedChange: (checked: boolean) => setFlag("disableShowNewBadge", checked),
+      key: "disableShowBadges",
+      label: "Hide Feature Badges",
+      ariaLabel: "Toggle hide feature badges",
+      checked: disableShowBadges,
+      onCheckedChange: (checked: boolean) => setFlag("disableShowBadges", checked),
     },
     {
       key: "disableShowPrompts",

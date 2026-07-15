@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import NewBadge from "./NewBadge";
+import BetaBadge from "./BetaBadge";
 
 // Mock the hook directly
 vi.mock("@/app/(dashboard)/hooks/useDisableShowBadges", () => ({
@@ -11,7 +11,7 @@ import { useDisableShowBadges } from "@/app/(dashboard)/hooks/useDisableShowBadg
 
 const mockUseDisableShowBadges = vi.mocked(useDisableShowBadges);
 
-describe("NewBadge", () => {
+describe("BetaBadge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -19,69 +19,52 @@ describe("NewBadge", () => {
   it("should render the badge when disableShowBadges is false", () => {
     mockUseDisableShowBadges.mockReturnValue(false);
 
-    render(<NewBadge>Test Content</NewBadge>);
+    render(<BetaBadge>Test Content</BetaBadge>);
 
-    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
     expect(screen.getByText("Test Content")).toBeInTheDocument();
   });
 
   it("should render the badge when disableShowBadges is not set", () => {
     mockUseDisableShowBadges.mockReturnValue(false);
 
-    render(<NewBadge />);
+    render(<BetaBadge />);
 
-    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
   });
 
   it("should render only children when disableShowBadges is true", () => {
     mockUseDisableShowBadges.mockReturnValue(true);
 
-    render(<NewBadge>Test Content</NewBadge>);
+    render(<BetaBadge>Test Content</BetaBadge>);
 
-    expect(screen.queryByText("New")).not.toBeInTheDocument();
+    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
     expect(screen.getByText("Test Content")).toBeInTheDocument();
   });
 
   it("should render nothing when disableShowBadges is true and no children", () => {
     mockUseDisableShowBadges.mockReturnValue(true);
 
-    const { container } = render(<NewBadge />);
+    const { container } = render(<BetaBadge />);
 
     expect(container.firstChild).toBeNull();
   });
 
-  it("should render badge with dot when dot prop is true", () => {
+  it("should render badge with dot instead of text when dot prop is true", () => {
     mockUseDisableShowBadges.mockReturnValue(false);
 
-    render(<NewBadge dot={true}>Test Content</NewBadge>);
+    render(<BetaBadge dot={true}>Test Content</BetaBadge>);
 
-    expect(screen.queryByText("New")).not.toBeInTheDocument();
+    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
     expect(screen.getByText("Test Content")).toBeInTheDocument();
   });
 
-  it("should render badge with 'New' text when dot prop is false", () => {
+  it("should render badge with 'Beta' text when dot prop is not provided (defaults to false)", () => {
     mockUseDisableShowBadges.mockReturnValue(false);
 
-    render(<NewBadge dot={false}>Test Content</NewBadge>);
+    render(<BetaBadge>Test Content</BetaBadge>);
 
-    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
     expect(screen.getByText("Test Content")).toBeInTheDocument();
-  });
-
-  it("should render badge with 'New' text when dot prop is not provided (defaults to false)", () => {
-    mockUseDisableShowBadges.mockReturnValue(false);
-
-    render(<NewBadge>Test Content</NewBadge>);
-
-    expect(screen.getByText("New")).toBeInTheDocument();
-    expect(screen.getByText("Test Content")).toBeInTheDocument();
-  });
-
-  it("should render badge with dot when dot is true and no children", () => {
-    mockUseDisableShowBadges.mockReturnValue(false);
-
-    render(<NewBadge dot={true} />);
-
-    expect(screen.queryByText("New")).not.toBeInTheDocument();
   });
 });
