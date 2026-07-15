@@ -48,11 +48,20 @@ GUARDED_STUB_TOOLS = ("echo", "recorded_headers")
 class TestMcpOauthAuthorizationCode:
     """An authorization_code server challenges unauthenticated sessions, runs
     the full interactive dance with a real MCP host, and serves tools with the
-    per-user token the gateway obtained from the IdP."""
+    per-user token the gateway obtained from the IdP.
+
+    There is deliberately no authorization-bearer twin of this test: the OAuth
+    token owns the `Authorization` header on MCP traffic, so the virtual key
+    must ride `x-litellm-api-key`. A key presented in `Authorization` instead
+    never even reaches the dance on current gateways: any bearer there skips
+    the pre-session 401 challenge and the session is served a masked, empty
+    tool list, so an OAuth-capable host (which engages on 401) never starts
+    authorizing. That gap is a known product issue, reproduced live while
+    building this test; when it is fixed, the twin belongs here."""
 
     @pytest.mark.covers("mcp.list_tools.oauth.completes_authorization_code_flow")
     @pytest.mark.covers("mcp.call_tool.oauth.uses_per_user_token")
-    def test_challenge_then_authorization_code_dance_reaches_tools(
+    def test_list_and_call_tools_with_x_litellm_api_key_header(
         self, client: McpClient, resources: ResourceManager
     ) -> None:
         marker = unique_marker()
