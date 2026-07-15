@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+from collections.abc import Mapping
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -1969,6 +1970,25 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
+def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> dict[str, object]:
+    valid_keys = ResponsesAPIOptionalRequestParams.__annotations__.keys()
+    optional_params = {key: value for key, value in kwargs.items() if key in valid_keys and value is not None}
+    reasoning_effort = kwargs.get("reasoning_effort")
+    if "reasoning" not in optional_params and isinstance(reasoning_effort, str):
+        reasoning = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+        if reasoning is not None:
+            optional_params["reasoning"] = reasoning
+    elif "reasoning" not in optional_params and isinstance(reasoning_effort, dict):
+        optional_params["reasoning"] = reasoning_effort
+    extra_body = kwargs.get("extra_body")
+    provider_defaults = (
+        {key: value for key, value in extra_body.items() if isinstance(key, str)}
+        if isinstance(extra_body, dict)
+        else {}
+    )
+    return {**optional_params, **provider_defaults}
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2058,5 +2078,6 @@ async def _aresponses_websocket(
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
+        request_defaults=_build_responses_websocket_request_defaults(kwargs),
         **remaining_kwargs,
     )
