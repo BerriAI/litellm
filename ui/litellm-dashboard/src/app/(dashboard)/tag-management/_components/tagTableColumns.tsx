@@ -26,14 +26,15 @@ function TagNameCell({ tag, onSelectTag }: { tag: Tag; onSelectTag: (tagName: st
     return (
       <CellTooltip
         content="You cannot view the information of a dynamically generated spend tag"
-        trigger={<span className="block truncate font-mono text-xs">{tag.name}</span>}
+        trigger={<span className="block max-w-60 truncate font-mono text-xs text-muted-foreground">{tag.name}</span>}
       />
     );
   }
   return (
     <IdentityCell
       title={tag.name}
-      titleClassName="font-mono text-xs font-normal"
+      titleClassName="font-mono text-xs font-normal text-primary"
+      className="max-w-60"
       onClick={() => onSelectTag(tag.name)}
     />
   );
@@ -130,7 +131,7 @@ export const getTagTableColumns = ({ onSelectTag, onEdit, onDelete }: TagTableCo
     cell: ({ row }) => {
       const description = row.original.description;
       return (
-        <span className="block truncate text-sm text-muted-foreground" title={description}>
+        <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description}>
           {description || "-"}
         </span>
       );
