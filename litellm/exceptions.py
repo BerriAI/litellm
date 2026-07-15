@@ -1180,20 +1180,6 @@ class ModifyResponseException(Exception):
         super().__init__(message)
 
 
-class GuardrailInterventionNormalStringError(
-    Exception
-):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return self.__str__()
-
-
 class SensitiveDataRouteException(Exception):
     """
     Exception raised when a guardrail detects sensitive data and wants to reroute the request.

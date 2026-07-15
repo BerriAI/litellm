@@ -2081,3 +2081,79 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.prompt_tokens > 0
     assert response.usage.completion_tokens > 0
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "aws_credential_kwargs",
+    [
+        {
+            "aws_session_name": "litellm-gcp",
+            "aws_role_name": "arn:aws:iam::123456789012:role/litellm-bedrock-role",
+            "aws_web_identity_token": "oidc/google/108963886734710037768",
+        },
+        {
+            "aws_access_key_id": "AKIASTATICKEYFORTEST",
+            "aws_secret_access_key": "static-secret-key",
+            "aws_session_token": "static-session-token",
+        },
+    ],
+    ids=["web_identity", "static_keys"],
+)
+async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch, aws_credential_kwargs: dict
+):
+    from botocore.credentials import Credentials
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+    try:
+        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        get_credentials_mock = MagicMock(return_value=Credentials("fake-key", "fake-secret"))
+        monkeypatch.setattr(BaseAWSLLM, "get_credentials", get_credentials_mock)
+
+        respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses").respond(
+            json={
+                "id": "resp_123",
+                "object": "response",
+                "created_at": 1760144904,
+                "status": "completed",
+                "model": "openai.gpt-5.4",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+            }
+        )
+
+        response = await litellm.acompletion(
+            model="bedrock_mantle/openai.gpt-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1",
+            aws_region_name="us-east-2",
+            num_retries=0,
+            **aws_credential_kwargs,
+        )
+
+        assert response.choices[0].message.content == "ok"
+        credential_kwargs = get_credentials_mock.call_args.kwargs
+        assert credential_kwargs["aws_region_name"] == "us-east-2"
+        for key, value in aws_credential_kwargs.items():
+            assert credential_kwargs[key] == value
+        authorization = respx_mock.calls.last.request.headers["Authorization"]
+        assert authorization.startswith("AWS4-HMAC-SHA256")
+        assert "fake-key" in authorization
+    finally:
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
+        litellm.in_memory_llm_clients_cache.flush_cache()
