@@ -170,6 +170,8 @@ services:
 
   mcp-stub:
     build: ./mcp/stub
+    ports:
+      - "8765:8765"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8765), timeout=2)"]
       interval: 3s

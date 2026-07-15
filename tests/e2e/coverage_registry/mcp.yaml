@@ -135,3 +135,19 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_tools.oauth.completes_authorization_code_flow
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: oauth
+  assertions: [completes_authorization_code_flow]
+  source: "auth/user_api_key_auth_mcp.py preemptive 401 challenge + discoverable_endpoints.py gateway AS"
+  rationale: The interactive per-user flow real MCP hosts run (401 challenge, discovery, DCR, PKCE authorize dance, token exchange); the path desktop-client re-auth incidents live on
+- id: mcp.call_tool.oauth.uses_per_user_token
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: oauth
+  assertions: [uses_per_user_token]
+  source: "v2 authorization_code egress arm (per-user DB token)"
+  rationale: Calls on an interactive server must present the user's upstream token, never the caller's virtual key or IdP JWT

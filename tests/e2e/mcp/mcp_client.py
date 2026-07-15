@@ -7,10 +7,10 @@ production MCP hosts use, aimed at the gateway's per-server URL namespace
 {PROXY}/{alias}/mcp.
 
 Every protocol method takes the request headers as a plain dict, built inside
-the test body, so the exact wire format is visible where it is asserted. The
-gateway accepts the LiteLLM virtual key as either
-`x-litellm-api-key: Bearer sk-...` or `Authorization: Bearer sk-...` (both
-Bearer-prefixed on the MCP routes, matching the docs).
+the test body, so the exact wire format is visible where it is asserted. The gateway accepts the LiteLLM
+virtual key as either `x-litellm-api-key: Bearer sk-...` or
+`Authorization: Bearer sk-...` (both Bearer-prefixed on the MCP routes,
+matching the docs).
 """
 
 from __future__ import annotations
@@ -19,13 +19,16 @@ import asyncio
 import time
 from dataclasses import dataclass
 from typing import Mapping, cast
+from urllib.parse import parse_qsl, urljoin
 
 import httpx
 import pytest
 from mcp import ClientSession
+from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
 from e2e_gateway import Gateway, build_gateway
@@ -67,6 +70,11 @@ class StubToolStats(BaseModel):
     completed: int
 
 
+class StubRecordedHeaders(RootModel[dict[str, str]]):
+    """JSON the stub's `recorded_headers` tool returns: the (lowercased) header
+    map of the most recent request its auth guard let through."""
+
+
 def _mcp_url(alias: str) -> str:
     return f"{PROXY_BASE_URL}/{alias}/mcp"
 
@@ -106,6 +114,137 @@ async def _list_tool_names(url: str, headers: dict[str, str]) -> tuple[str, ...]
 
 async def _call_tool(url: str, headers: dict[str, str], tool: str, arguments: ToolArguments) -> McpToolText:
     async with _http_client(headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool, dict(arguments))
+                return McpToolText(text=_first_text(result), is_error=bool(result.isError))
+
+
+# ---------- interactive (authorization_code) OAuth: the MCP-host side ----------
+
+# Where the "browser" lands at the end of the authorize dance. Nothing listens
+# here on purpose: the redirect chaser stops as soon as the chain points at this
+# URL and reads the code/state off the query string, exactly like a desktop MCP
+# host that intercepts its loopback redirect.
+OAUTH_CLIENT_REDIRECT_URI = "http://127.0.0.1:53682/e2e/callback"
+
+
+class InMemoryTokenStorage:
+    """The mcp SDK's TokenStorage protocol, held in memory for one test: the
+    DCR-registered client and the tokens the gateway minted for it."""
+
+    def __init__(self) -> None:
+        self._tokens: OAuthToken | None = None
+        self._client_info: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self._tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self._tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self._client_info
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self._client_info = client_info
+
+
+async def _follow_authorize_redirects(start_url: str) -> tuple[str, str | None]:
+    """Play the browser's role in the authorize dance: chase the redirect chain
+    (gateway authorize -> upstream IdP authorize -> gateway callback -> MCP
+    host redirect_uri) with plain GETs, and return the code/state from the
+    final hop's query string without dereferencing it."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT), follow_redirects=False) as browser:
+        url = start_url
+        for _ in range(10):
+            if url.startswith(OAUTH_CLIENT_REDIRECT_URI):
+                params = dict(parse_qsl(httpx.URL(url).query.decode()))
+                assert "code" in params, f"authorize chain reached the client redirect_uri without a code: {url}"
+                return params["code"], params.get("state")
+            response = await browser.get(url)
+            assert response.status_code in (302, 303, 307), (
+                f"authorize chain broke at {url}: {response.status_code} {response.text[:300]}"
+            )
+            url = urljoin(url, response.headers["location"])
+        raise AssertionError(f"authorize chain never reached {OAUTH_CLIENT_REDIRECT_URI}; last url: {url}")
+
+
+def _oauth_provider(url: str, storage: InMemoryTokenStorage) -> OAuthClientProvider:
+    """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
+    PKCE, token exchange) with the browser leg replaced by the redirect chaser."""
+    code_holder: dict[str, str | None] = {}  # mutable-ok: hand-off between the two SDK callbacks
+
+    async def redirect_handler(authorize_url: str) -> None:
+        code, state = await _follow_authorize_redirects(authorize_url)
+        code_holder["code"] = code
+        code_holder["state"] = state
+
+    async def callback_handler() -> tuple[str, str | None]:
+        code = code_holder.get("code")
+        assert code is not None, "callback_handler ran before the authorize redirect completed"
+        return code, code_holder.get("state")
+
+    return OAuthClientProvider(
+        server_url=url,
+        client_metadata=OAuthClientMetadata.model_validate(
+            {
+                "redirect_uris": [OAUTH_CLIENT_REDIRECT_URI],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "client_name": "e2e-mcp-host",
+            }
+        ),
+        storage=storage,
+        redirect_handler=redirect_handler,
+        callback_handler=callback_handler,
+    )
+
+
+class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
+    """Adds the caller's LiteLLM key header to every outgoing request,
+    including the ones the SDK's OAuth machinery builds internally (discovery,
+    DCR, token exchange). Those bypass httpx client-default headers, but the
+    gateway resolves which user to store the upstream token for from the key
+    on the token exchange, exactly like a production MCP host configured with
+    a LiteLLM key header on the server URL."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str]) -> None:
+        self._inner = inner
+        self._headers = headers
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        for name, value in self._headers.items():
+            if name not in request.headers:
+                request.headers[name] = value
+        return await self._inner.handle_async_request(request)
+
+
+def _oauth_http_client(headers: dict[str, str], auth: OAuthClientProvider) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        headers=headers,
+        auth=auth,
+        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        follow_redirects=True,
+        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers),
+    )
+
+
+async def _oauth_list_tool_names(url: str, headers: dict[str, str], storage: InMemoryTokenStorage) -> tuple[str, ...]:
+    async with _oauth_http_client(headers, _oauth_provider(url, storage)) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                return tuple(sorted(tool.name for tool in listed.tools))
+
+
+async def _oauth_call_tool(
+    url: str, headers: dict[str, str], storage: InMemoryTokenStorage, tool: str, arguments: ToolArguments
+) -> McpToolText:
+    async with _oauth_http_client(headers, _oauth_provider(url, storage)) as http_client:
         async with streamable_http_client(url, http_client=http_client) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -173,9 +312,44 @@ class McpClient:
         behave like independent clients."""
         return asyncio.run(_call_tool(_mcp_url(alias), headers, tool, arguments))
 
+    def poll_oauth_tool_names(
+        self, alias: str, headers: dict[str, str], storage: InMemoryTokenStorage
+    ) -> tuple[str, ...]:
+        """The full interactive flow (discovery, DCR, authorize dance, token
+        exchange, then tools/list) retried to the shared deadline, since the
+        just-created server record and key propagate asynchronously. Tokens
+        land in `storage`, so later calls skip the dance like a real host."""
+        deadline = time.monotonic() + self.gateway.poll_timeout
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                return asyncio.run(_oauth_list_tool_names(_mcp_url(alias), headers, storage))
+            except Exception as exc:  # noqa: BLE001 - retried to the deadline; the last error is surfaced below
+                last_error = exc
+                time.sleep(self.gateway.poll_interval)
+        pytest.fail(
+            f"interactive OAuth flow for {alias!r} never completed within "
+            f"{self.gateway.poll_timeout}s; last error: {last_error!r}"
+        )
+
+    def oauth_call_tool(
+        self, alias: str, headers: dict[str, str], storage: InMemoryTokenStorage, tool: str, arguments: ToolArguments
+    ) -> McpToolText:
+        """One tools/call authenticated by the tokens in `storage` (minted by a
+        prior poll_oauth_tool_names dance), over its own fresh MCP session."""
+        return asyncio.run(_oauth_call_tool(_mcp_url(alias), headers, storage, tool, arguments))
+
     def stub_stats(self, alias: str, headers: dict[str, str], stats_tool: str, marker: str) -> StubToolStats:
         outcome = self.call_tool(alias, headers, stats_tool, {"marker": marker})
         return StubToolStats.model_validate_json(outcome.text)
+
+    def stub_recorded_headers(self, alias: str, headers: dict[str, str], headers_tool: str) -> dict[str, str]:
+        """The headers the stub's auth guard recorded for its most recent
+        authorized request: by construction, the tools/call this method just
+        made, i.e. exactly what the gateway sent upstream on the caller's behalf."""
+        outcome = self.call_tool(alias, headers, headers_tool, {})
+        assert outcome.is_error is False, f"recorded_headers call errored: {outcome.text[:300]}"
+        return StubRecordedHeaders.model_validate_json(outcome.text).root
 
 
 def build_client() -> McpClient:
