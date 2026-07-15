@@ -504,17 +504,13 @@ def update_messages_with_model_file_ids(
                             if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split(
-                                        "llm_output_file_id,"
-                                    )[1].split(";")[0]
+                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
                             if not provider_file_id and is_model_embedded_id(file_id):
                                 # `litellm:<raw_id>;model,<m>` encoding from the
                                 # x-litellm-model upload path. Strip the wrapper
                                 # so the provider sees its own ID.
                                 provider_file_id = get_original_file_id(file_id)
-                            file_object_file_field["file_id"] = (
-                                provider_file_id or file_id
-                            )
+                            file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
                             file_object_file_field["format"] = format
     return messages
@@ -591,9 +587,7 @@ def update_responses_input_with_model_file_ids(
                                 # x-litellm-model upload path. Strip the wrapper
                                 # so the provider sees its own ID.
                                 updated_content_item = content_item.copy()
-                                updated_content_item["file_id"] = get_original_file_id(
-                                    file_id
-                                )
+                                updated_content_item["file_id"] = get_original_file_id(file_id)
                                 updated_content.append(updated_content_item)
                             else:
                                 # Not a managed file, keep as-is
