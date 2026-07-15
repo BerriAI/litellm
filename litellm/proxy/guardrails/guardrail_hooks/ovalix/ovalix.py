@@ -66,6 +66,13 @@ class OvalixGuardrail(CustomGuardrail):
     Monolith backend.
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         tracker_api_base: Optional[str] = None,

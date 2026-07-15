@@ -25,6 +25,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     delete_guardrail,
     get_guardrail_info,
     get_guardrail_submission,
+    get_guardrail_ui_settings,
     list_guardrail_submissions,
     list_guardrails_v2,
     patch_guardrail,
@@ -2079,3 +2080,135 @@ async def test_list_submissions_summary_counts_unaffected_by_filters(mocker):
     assert result.summary.total == 2  # unfiltered
     assert result.summary.pending_review == 1
     assert result.summary.active == 1
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_ui_settings_returns_per_provider_supported_modes():
+    """
+    Regression test for LIT-4226. The Admin UI used to render `pre_mcp_call` as a
+    selectable mode for every guardrail because the settings endpoint returned a
+    single global `supported_modes` list. The proxy then rejected the save because
+    Content Filter and Tool Permission do not accept `pre_mcp_call`. The endpoint
+    must now return per-provider modes so the UI can filter its dropdown.
+    """
+    result = await get_guardrail_ui_settings()
+
+    modes_by_provider = result.supported_modes_by_provider
+
+    # Content Filter now supports pre_mcp_call (LIT-4226 feature half) but not
+    # during_mcp_call; Tool Permission still supports neither, and the settings
+    # endpoint must reflect both so the UI shows exactly the savable modes.
+    assert "pre_mcp_call" in modes_by_provider["litellm_content_filter"]
+    assert "during_mcp_call" not in modes_by_provider["litellm_content_filter"]
+    assert modes_by_provider["tool_permission"] == ["pre_call", "post_call"]
+
+    # MCP-capable guardrails must still advertise the MCP hooks so users who
+    # picked one of them can actually configure pre_mcp_call / during_mcp_call.
+    for provider in ("bedrock", "panw_prisma_airs", "cisco_ai_defense", "custom_code", "pillar"):
+        assert "pre_mcp_call" in modes_by_provider[provider], provider
+        assert "during_mcp_call" in modes_by_provider[provider], provider
+
+    # The union list stays exhaustive for legacy clients that ignore the
+    # per-provider map; it must cover every declared GuardrailEventHooks value.
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    assert set(result.supported_modes) == {m.value for m in GuardrailEventHooks}
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_map_matches_runtime_supported_event_hooks():
+    """
+    Regression guard against the two-copy-of-the-list drift risk. The map the
+    UI reads must agree with what CustomGuardrail._validate_event_hook accepts
+    at save time, otherwise the bug in LIT-4226 comes back one classname at a
+    time as future guardrails drift.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+
+    result = await get_guardrail_ui_settings()
+
+    for provider, guardrail_class in guardrail_class_registry.items():
+        declared = guardrail_class.get_supported_event_hooks()
+        if declared is None:
+            assert (
+                provider not in result.supported_modes_by_provider
+            ), f"{provider} returned None from classmethod but appears in map"
+            continue
+
+        assert provider in result.supported_modes_by_provider, provider
+        assert result.supported_modes_by_provider[provider] == [
+            hook.value for hook in declared
+        ], provider
+
+
+def test_content_filter_runtime_rejects_unsupported_mcp_hook():
+    """
+    Locks the runtime side of the LIT-4226 contract: the ContentFilterGuardrail
+    validator must reject a hook missing from its supported list at
+    construction. pre_mcp_call is supported since the LIT-4226 feature half, so
+    during_mcp_call is the unsupported example now. If someone widens the
+    UI classmethod but forgets to widen the runtime supported_event_hooks (or
+    vice versa), the two-lists-must-agree test above catches the drift and this
+    test catches the specific bug the ticket reported.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        ContentFilterGuardrail(
+            guardrail_name="lit4226-runtime-check",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+
+
+def test_model_armor_runtime_supported_event_hooks_match_classmethod():
+    """
+    Regression for the drift Round 2 caught: the ModelArmorGuardrail classmethod
+    declared its supported hooks for the UI, but __init__ did not seed the
+    runtime instance's `supported_event_hooks` from that classmethod, so the
+    runtime validator accepted any hook (including nonsense like logging_only)
+    while the UI hid them. Ensures the two sides agree at instantiation time.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        ModelArmorGuardrail,
+    )
+
+    instance = ModelArmorGuardrail(
+        guardrail_name="lit4226-model-armor-drift",
+        template_id="t",
+        project_id="p",
+    )
+    assert instance.supported_event_hooks == ModelArmorGuardrail.get_supported_event_hooks()
+
+
+def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog):
+    """
+    Escape hatch for the boot-time behavior change. Deployments upgrading from
+    a build where a guardrail previously silently no-op'd on an unsupported
+    mode should be able to set LITELLM_STRICT_GUARDRAIL_MODES=false and boot
+    with a warning instead of a hard failure while they fix their config.
+    """
+    import logging
+
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-default",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+
+    monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
+    with caplog.at_level(logging.WARNING):
+        instance = ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-off",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+    assert instance is not None
+    assert any("not in the supported event hooks" in rec.message for rec in caplog.records)

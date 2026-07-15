@@ -96,7 +96,9 @@ test.describe("Proxy Admin - Teams", () => {
 
     const teamRow = page.locator("tr", { hasText: E2E_TEAM_DELETE_ALIAS }).first();
     await expect(teamRow).toBeVisible({ timeout: 10_000 });
-    await teamRow.locator("svg, img").last().click();
+    // Actions live in a kebab menu: open it, then click "Delete team".
+    await teamRow.locator('[data-testid^="team-actions-"]').click();
+    await page.getByTestId("team-action-delete").click();
 
     const modal = page.locator(".ant-modal:visible");
     await expect(modal).toBeVisible({ timeout: 5_000 });

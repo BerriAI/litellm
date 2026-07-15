@@ -9,18 +9,19 @@ note; the naming grammar lives in `tests/e2e/CLAUDE.md`.
 
 A **cell** is one customer-noticeable behavior a single e2e test can assert pass/fail
 on, for example `llm.chat_completions.bedrock_converse.tool_use.stream.works`. Cells are
-grouped `module > feature > test`, with LLM cells split into Core LLMs and Non-Core
-LLMs for dashboarding. Each cell carries a tier (P0/P1/P2), a source, and a
+grouped `module > feature > test`, with LLM cells split into `Core LLMs` and
+`Non-Core LLMs` for dashboarding. Each cell carries a tier (P0/P1/P2), a source, and a
 `fail_before_fix` flag.
 
 The rows live in per-prefix YAML files (`llm_*.yaml`, `mgmt.yaml`, `mcp.yaml`,
-`reliability.yaml`, `logging.yaml`, `guardrail.yaml`, `other.yaml`) and validate against
+`reliability.yaml`, `quota_management.yaml`, `logging.yaml`, `guardrail.yaml`,
+`other.yaml`) and validate against
 the discriminated union in `schema.py`, so an LLM row cannot carry a guardrail field and
 vice versa. `llm` rows with `subject_endpoint` of `chat_completions`, `messages`, or
-`responses` roll up to "Core LLMs"; all other LLM endpoints roll up to "Non-Core
-LLMs". LLM endpoint, route, and capability values are typed in `schema.py`, so new
-taxonomy values require an explicit schema change. `logging` and `guardrail` are two
-id-prefixes that roll up into the single "Logging & Guardrails" dashboard module.
+`responses` roll up to `Core LLMs`; all other LLM endpoints roll up to `Non-Core LLMs`.
+LLM endpoint, route, and capability values are typed in `schema.py`, so new taxonomy
+values require an explicit schema change. `logging` and `guardrail` are two id-prefixes
+that roll up into the single `Logging & Guardrails` dashboard module.
 
 A test declares what it covers with a marker:
 
@@ -40,8 +41,17 @@ proxy. Whether a covered cell currently passes or fails is a separate, live conc
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
 ```
 
-Use `--format prometheus` or `--format json` for CI jobs that publish coverage to
-Grafana.
+Use `--format loki` after the e2e pytest run in the same Kubernetes job/pod to print
+structured stdout lines for Loki:
+
+```
+cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --format loki --strict
+```
+
+This emits exactly one `COVERAGE_TOTAL` line and one `COVERAGE_MODULE` line per module
+in `MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from
+`LOKI_MODULE_LABELS` (`core_llms`, `management_ui`, etc.) so existing JSON and
+Prometheus consumers keep their human-readable module names unchanged.
 
 The headline is overall coverage. The collector also lists markers that point at ids
 not in the registry, so a typo or an unenumerated behavior surfaces instead of being

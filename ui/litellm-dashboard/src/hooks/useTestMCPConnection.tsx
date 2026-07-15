@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
-import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
@@ -56,7 +56,8 @@ export const useTestMCPConnection = ({
 
   // Check if we have the minimum required fields to fetch tools
   const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2 && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
-  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
+  const isBrowserHeldTokenMode = isClientForwardedTokenMode(formValues.auth_type);
+  const requiresOAuthToken = (formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth) || isBrowserHeldTokenMode;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
 

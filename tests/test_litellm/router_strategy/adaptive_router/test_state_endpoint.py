@@ -1,7 +1,6 @@
 """Tests for the GET /adaptive_router/state introspection endpoint and the
 underlying `AdaptiveRouter.get_state_snapshot()` helper."""
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,7 +8,7 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
-from litellm.router_strategy.adaptive_router.bandit import BanditCell, apply_delta
+from litellm.router_strategy.adaptive_router.bandit import apply_delta
 from litellm.types.router import (
     AdaptiveRouterConfig,
     AdaptiveRouterPreferences,
@@ -47,8 +46,6 @@ async def test_get_state_snapshot_returns_cell_per_request_type_per_model():
     assert snap["available_models"] == ["fast", "smart"]
     assert snap["weights"] == {"quality": 0.7, "cost": 0.3}
     assert snap["model_costs"] == {"fast": 0.0001, "smart": 0.001}
-    assert snap["owner_cache_live"] == 0
-    assert snap["skipped_updates_total"] == 0
     assert set(snap["queue"].keys()) == {
         "state_pending",
         "session_pending",
@@ -93,26 +90,6 @@ async def test_get_state_snapshot_quality_mean_matches_alpha_over_total():
     # prior mass, so operators aren't misled by the initial value.
     assert cell["samples"] == expected.total_samples
     assert cell["quality_mean"] == pytest.approx(expected_mean)
-
-
-@pytest.mark.asyncio
-async def test_get_state_snapshot_counts_only_live_owner_cache_entries():
-    r = _make_router()
-    now = time.time()
-    r._owner_cache["live-1"] = ("fast", now + 3600)
-    r._owner_cache["live-2"] = ("smart", now + 3600)
-    r._owner_cache["expired-1"] = ("fast", now - 1)
-
-    snap = await r.get_state_snapshot()
-    assert snap["owner_cache_live"] == 2
-
-
-@pytest.mark.asyncio
-async def test_get_state_snapshot_exposes_skipped_updates_total():
-    r = _make_router()
-    r._skipped_updates_total = 7
-    snap = await r.get_state_snapshot()
-    assert snap["skipped_updates_total"] == 7
 
 
 # ---- endpoint --------------------------------------------------------

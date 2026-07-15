@@ -17,11 +17,13 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pytest
+from pydantic import BaseModel
 
 from .registry import load_registry
-from .schema import MODULE_ORDER, Cell, Tier, dashboard_module
+from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 
@@ -35,12 +37,13 @@ class _CoversSink:
         self.collection_errors: tuple[str, ...] = ()
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
-        self.covered_ids = frozenset(
-            arg
+        marker_args: tuple[tuple[object, ...], ...] = tuple(
+            marker.args
             for item in session.items
             for marker in item.iter_markers(name="covers")
-            for arg in marker.args
-            if isinstance(arg, str)
+        )
+        self.covered_ids = frozenset(
+            arg for args in marker_args for arg in args if isinstance(arg, str)
         )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
@@ -239,13 +242,37 @@ def render_prometheus(report: CoverageReport) -> str:
     return "\n".join(lines)
 
 
+def render_loki(report: CoverageReport) -> str:
+    lines = [
+        (
+            f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} "
+            f"covered={report.covered} total={report.total}"
+        )
+    ]
+    lines.extend(
+        (
+            f"COVERAGE_MODULE module={loki_module_label(module.module)} "
+            f"percent={module.coverage_percent:.1f} "
+            f"covered={module.covered} total={module.total}"
+        )
+        for module in report.modules
+    )
+    return "\n".join(lines)
+
+
+class _CliArgs(BaseModel):
+    format: Literal["text", "json", "prometheus", "loki"]
+    strict: bool
+    fail_on_collection_errors: bool
+
+
 def main() -> int:
     parser = ArgumentParser()
     parser.add_argument(
         "--format",
-        choices=("text", "json", "prometheus"),
+        choices=("text", "json", "prometheus", "loki"),
         default="text",
-        help="Output format. Use prometheus or json for Grafana ingestion jobs.",
+        help="Output format. Use loki for structured stdout lines in the e2e job.",
     )
     parser.add_argument(
         "--strict",
@@ -257,7 +284,7 @@ def main() -> int:
         action="store_true",
         help="Exit non-zero if pytest collection errors are found.",
     )
-    args = parser.parse_args()
+    args = _CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
     covered, errors = collect_covered_ids()
     report = compute_coverage(cells, covered, errors)
@@ -265,9 +292,8 @@ def main() -> int:
         "text": render,
         "json": render_json,
         "prometheus": render_prometheus,
-    }[
-        args.format
-    ](report)
+        "loki": render_loki,
+    }[args.format](report)
     print(output)  # noqa: T201  # CLI entrypoint output
     if args.strict and report.orphan_markers:
         return 1
