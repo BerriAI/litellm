@@ -1130,7 +1130,11 @@ def test_resolve_anthropic_messages_timeout(
 
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
     monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
@@ -1174,7 +1178,11 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
 
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
     monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
