@@ -78,7 +78,7 @@ def test_connection_error_prints_friendly_message(cli_runner, args):
     """A dead proxy must yield a friendly 'Error:' line and exit 1, not a raw traceback."""
     base_url = "http://127.0.0.1:59999"
     with patch(
-        "requests.sessions.Session.request",
+        "requests.sessions.Session.send",
         side_effect=requests.exceptions.ConnectionError("connection refused"),
     ):
         result = cli_runner.invoke(cli, ["--base-url", base_url, *args])
