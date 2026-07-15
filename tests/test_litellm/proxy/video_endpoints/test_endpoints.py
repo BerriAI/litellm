@@ -44,7 +44,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
@@ -244,6 +246,60 @@ async def test_generation__input_reference_attached(harness):
         "prompt": "a sunset",
         "input_reference": b"filebytes",
     }
+
+
+def _video_response(video_id: str, hidden_params: Dict[str, Any]) -> VideoObject:
+    """A VideoObject as returned by the create transform: the id is already
+    provider-encoded but with an empty model_id (the proxy flow never has the
+    model at transform time), and the router-set model_id lives in _hidden_params."""
+    obj = VideoObject(id=video_id, object="video", status="queued", created_at=0)
+    obj._hidden_params = hidden_params
+    return obj
+
+
+@pytest.mark.asyncio
+async def test_generation__reencodes_id_with_hidden_params_model_id(harness):
+    """Regression for #33423: create encodes the video id with an empty model_id,
+    so GET status/content later cannot resolve the deployment (and thus the
+    per-model api_key) and fall back to a nonexistent provider key. The endpoint
+    must re-stamp the returned id with the model_id the router recorded in
+    _hidden_params so the id round-trips to a resolvable deployment."""
+    create_time_id = encode_video_id_with_provider("video_orig123", "azure", "")
+    # sanity: the id the transform produced really has an empty model_id
+    assert decode_video_id_with_provider(create_time_id)["model_id"] == ""
+
+    harness.base_process.return_value = _video_response(
+        create_time_id,
+        hidden_params={"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"},
+    )
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    # the returned id now carries the real model_id + provider ...
+    decoded = decode_video_id_with_provider(resp.id)
+    assert decoded["model_id"] == VIDEO_MODEL_ID
+    assert decoded["custom_llm_provider"] == "azure"
+    assert decoded["video_id"] == "video_orig123"
+    # ... and is byte-for-byte what a subsequent status/content call decodes and
+    # resolves to a model name (the router resolver maps VIDEO_MODEL_ID).
+    assert resp.id == AZURE_VIDEO_ID
+    assert harness.resolve_model.side_effect(decoded["model_id"]) == "azure-sora"
+
+
+@pytest.mark.asyncio
+async def test_generation__reencodes_id_falls_back_to_request_model(harness):
+    """When the router did not surface a model_id in _hidden_params, the endpoint
+    falls back to the model from the request body so the id is still stamped."""
+    create_time_id = encode_video_id_with_provider("video_orig123", "openai", "")
+
+    harness.base_process.return_value = _video_response(create_time_id, hidden_params={})
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    decoded = decode_video_id_with_provider(resp.id)
+    assert decoded["model_id"] == "sora-2"
+    assert decoded["custom_llm_provider"] == "openai"
+    assert decoded["video_id"] == "video_orig123"
 
 
 @pytest.mark.asyncio

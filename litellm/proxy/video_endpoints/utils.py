@@ -2,7 +2,13 @@ from typing import Any, Dict, Optional
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> Optional[str]:
@@ -51,4 +57,37 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
             provider=custom_llm_provider,
             model_id=model_id,
         )
+    return response
+
+
+def coerce_optional_str(value: object) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def encode_video_id_in_response(
+    response: object,
+    fallback_provider: Optional[str],
+    fallback_model_id: Optional[str],
+) -> object:
+    if not isinstance(response, VideoObject) or not response.id:
+        return response
+
+    hidden_params = get_hidden_params_dict(response)
+    model_id = coerce_optional_str(hidden_params.get("model_id")) or fallback_model_id
+
+    decoded = decode_video_id_with_provider(response.id)
+    provider = (
+        decoded.get("custom_llm_provider")
+        or coerce_optional_str(hidden_params.get("custom_llm_provider"))
+        or fallback_provider
+    )
+    if not provider:
+        return response
+
+    original_video_id = decoded.get("video_id") or response.id
+    response.id = encode_video_id_with_provider(
+        video_id=original_video_id,
+        provider=provider,
+        model_id=model_id,
+    )
     return response
