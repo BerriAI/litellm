@@ -10,7 +10,6 @@ import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.management_endpoints.team_endpoints as team_endpoints
 from litellm.proxy._types import (
     BulkTeamMemberUpdateRequest,
-    LiteLLM_BudgetTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LitellmUserRoles,
@@ -178,20 +177,15 @@ async def test_team_member_update_rejects_invalid_budget_duration(monkeypatch, b
     upsert_mock.assert_not_called()
 
 
-class _RecordedWrites:
-    def __init__(self):
-        self.budget_update_many: list = []
-        self.budget_creates: list = []
-        self.team_updates: list = []
+class _FakeTx:
+    def __init__(self, team_row, recorder):
+        self._team_row = team_row
+        self._recorder = recorder
+        self.litellm_teamtable = types.SimpleNamespace(update=self._team_update)
 
-
-class _FakeBatcher:
-    def __init__(self, writes: _RecordedWrites):
-        self.litellm_budgettable = types.SimpleNamespace(
-            update_many=lambda **kwargs: writes.budget_update_many.append(kwargs),
-            create=lambda **kwargs: writes.budget_creates.append(kwargs),
-        )
-        self.litellm_teamtable = types.SimpleNamespace(update=lambda **kwargs: writes.team_updates.append(kwargs))
+    async def _team_update(self, **kwargs):
+        self._recorder.team_updates.append(kwargs)
+        return self._team_row
 
     async def __aenter__(self):
         return self
@@ -201,14 +195,11 @@ class _FakeBatcher:
 
 
 class _FakeBulkDb:
-    """Typed fake for the exact prisma surface the bulk endpoint touches, so the
-    tests assert the real queries issued (one update_many, batched creates, one
-    team update) instead of monkeypatching endpoint internals."""
-
-    def __init__(self, team_row, memberships, default_budget=None):
-        self.writes = _RecordedWrites()
+    def __init__(self, team_row, memberships):
+        self.team_row = team_row
+        self.memberships = memberships
         self.membership_find_many_wheres: list = []
-        self.budget_find_unique_wheres: list = []
+        self.team_updates: list = []
 
         async def _team_find_unique(where):
             return team_row
@@ -217,23 +208,24 @@ class _FakeBulkDb:
             self.membership_find_many_wheres.append(where)
             return memberships
 
-        async def _budget_find_unique(where):
-            self.budget_find_unique_wheres.append(where)
-            return default_budget
-
         self.litellm_teamtable = types.SimpleNamespace(find_unique=_team_find_unique)
         self.litellm_teammembership = types.SimpleNamespace(find_many=_membership_find_many)
-        self.litellm_budgettable = types.SimpleNamespace(find_unique=_budget_find_unique)
 
-    def batch_(self):
-        return _FakeBatcher(self.writes)
+    def tx(self):
+        return _FakeTx(self.team_row, self)
 
 
-def _bulk_setup(monkeypatch, team_row, memberships, default_budget=None):
-    db = _FakeBulkDb(team_row, memberships, default_budget)
+def _bulk_setup(monkeypatch, team_row, memberships):
+    db = _FakeBulkDb(team_row, memberships)
     monkeypatch.setattr(proxy_server, "prisma_client", types.SimpleNamespace(db=db))
     monkeypatch.setattr(proxy_server, "premium_user", False)
-    return db
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", object())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", object())
+    upsert_mock = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "_upsert_budget_and_membership", upsert_mock)
+    refresh_mock = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "_refresh_cached_team", refresh_mock)
+    return db, upsert_mock, refresh_mock
 
 
 def _bulk_request():
@@ -243,11 +235,12 @@ def _bulk_request():
 _ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
 
 
+def _upsert_call_by_user(upsert_mock):
+    return {call.kwargs["user_id"]: call.kwargs for call in upsert_mock.await_args_list}
+
+
 @pytest.mark.asyncio
-async def test_bulk_update_patches_private_budgets_with_one_update_many(monkeypatch):
-    """Members that already own a private budget must be covered by a single
-    update_many over their budget ids; a query per member re-introduces the
-    n round trips this endpoint exists to avoid."""
+async def test_bulk_update_delegates_budget_upsert_per_valid_member(monkeypatch):
     team_row = LiteLLM_TeamTable(
         team_id="team-1234",
         members_with_roles=[
@@ -256,7 +249,7 @@ async def test_bulk_update_patches_private_budgets_with_one_update_many(monkeypa
             Member(user_id="user-3", role="user"),
         ],
     )
-    db = _bulk_setup(
+    db, upsert_mock, refresh_mock = _bulk_setup(
         monkeypatch,
         team_row,
         memberships=[
@@ -275,22 +268,22 @@ async def test_bulk_update_patches_private_budgets_with_one_update_many(monkeypa
         user_api_key_dict=_ADMIN,
     )
 
-    assert db.writes.budget_update_many == [
-        {"where": {"budget_id": {"in": ["bud-1", "bud-2"]}}, "data": {"updated_by": "admin", "tpm_limit": 42}}
-    ]
-    assert db.writes.budget_creates == []
-    assert db.writes.team_updates == []
     assert db.membership_find_many_wheres == [{"team_id": "team-1234", "user_id": {"in": ["user-1", "user-2"]}}]
+    calls = _upsert_call_by_user(upsert_mock)
+    assert set(calls) == {"user-1", "user-2"}
+    assert calls["user-1"]["existing_budget_id"] == "bud-1"
+    assert calls["user-2"]["existing_budget_id"] == "bud-2"
+    for kwargs in calls.values():
+        assert kwargs["budget_patch"] == {"tpm_limit": 42}
+        assert kwargs["team_default_budget_id"] is None
+    assert db.team_updates == []
+    refresh_mock.assert_not_awaited()
     assert response.total_requested == 2
     assert [member.user_id for member in response.successful_updates] == ["user-1", "user-2"]
 
 
 @pytest.mark.asyncio
-async def test_bulk_update_clones_default_budget_instead_of_patching_it(monkeypatch):
-    """A member on the team's shared default budget must get their own cloned
-    budget (default limits + patch); patching the shared row in place would
-    change limits for every member outside the request. A member with no
-    membership row gets a new budget wired to a created membership."""
+async def test_bulk_update_forwards_shared_default_only_for_members_still_on_it(monkeypatch):
     team_row = LiteLLM_TeamTable(
         team_id="team-1234",
         members_with_roles=[
@@ -299,11 +292,10 @@ async def test_bulk_update_clones_default_budget_instead_of_patching_it(monkeypa
         ],
         metadata={"team_member_budget_id": "default-bud"},
     )
-    db = _bulk_setup(
+    _db, upsert_mock, _refresh = _bulk_setup(
         monkeypatch,
         team_row,
         memberships=[LiteLLM_TeamMembership(user_id="user-1", team_id="team-1234", budget_id="default-bud")],
-        default_budget=LiteLLM_BudgetTable(budget_id="default-bud", max_budget=100.0),
     )
 
     await bulk_update_team_members(
@@ -316,34 +308,15 @@ async def test_bulk_update_clones_default_budget_instead_of_patching_it(monkeypa
         user_api_key_dict=_ADMIN,
     )
 
-    assert db.writes.budget_update_many == []
-    assert db.budget_find_unique_wheres == [{"budget_id": "default-bud"}]
-    assert db.writes.budget_creates == [
-        {
-            "data": {
-                "created_by": "admin",
-                "updated_by": "admin",
-                "max_budget": 100.0,
-                "tpm_limit": 42,
-                "team_membership": {"connect": [{"user_id_team_id": {"user_id": "user-1", "team_id": "team-1234"}}]},
-            }
-        },
-        {
-            "data": {
-                "created_by": "admin",
-                "updated_by": "admin",
-                "max_budget": 100.0,
-                "tpm_limit": 42,
-                "team_membership": {"create": [{"user_id": "user-2", "team_id": "team-1234"}]},
-            }
-        },
-    ]
+    calls = _upsert_call_by_user(upsert_mock)
+    assert calls["user-1"]["existing_budget_id"] == "default-bud"
+    assert calls["user-2"]["existing_budget_id"] is None
+    for kwargs in calls.values():
+        assert kwargs["team_default_budget_id"] == "default-bud"
 
 
 @pytest.mark.asyncio
-async def test_bulk_update_role_writes_team_row_once(monkeypatch):
-    """A role-only bulk update must rewrite members_with_roles in a single team
-    update covering every targeted member, and must not touch budgets at all."""
+async def test_bulk_update_role_writes_team_row_once_and_refreshes_cache(monkeypatch):
     team_row = LiteLLM_TeamTable(
         team_id="team-1234",
         members_with_roles=[
@@ -352,7 +325,7 @@ async def test_bulk_update_role_writes_team_row_once(monkeypatch):
             Member(user_id="user-3", role="user"),
         ],
     )
-    db = _bulk_setup(monkeypatch, team_row, memberships=[])
+    db, upsert_mock, refresh_mock = _bulk_setup(monkeypatch, team_row, memberships=[])
 
     await bulk_update_team_members(
         team_id="team-1234",
@@ -365,10 +338,9 @@ async def test_bulk_update_role_writes_team_row_once(monkeypatch):
     )
 
     assert db.membership_find_many_wheres == []
-    assert db.writes.budget_update_many == []
-    assert db.writes.budget_creates == []
-    assert len(db.writes.team_updates) == 1
-    update = db.writes.team_updates[0]
+    upsert_mock.assert_not_awaited()
+    assert len(db.team_updates) == 1
+    update = db.team_updates[0]
     assert update["where"] == {"team_id": "team-1234"}
     members = json.loads(update["data"]["members_with_roles"])
     assert [(member["user_id"], member["role"]) for member in members] == [
@@ -377,6 +349,35 @@ async def test_bulk_update_role_writes_team_row_once(monkeypatch):
         ("user-3", "user"),
     ]
     assert members[1]["user_email"] == "two@example.com"
+    refresh_mock.assert_awaited_once()
+    assert refresh_mock.await_args.kwargs["team_row"] is team_row
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_all_members_in_team_dedups_members(monkeypatch):
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[
+            Member(user_id="user-1", role="user"),
+            Member(user_id="user-1", role="user"),
+            Member(user_id="user-2", role="user"),
+        ],
+    )
+    db, upsert_mock, _refresh = _bulk_setup(monkeypatch, team_row, memberships=[])
+
+    response = await bulk_update_team_members(
+        team_id="team-1234",
+        data=BulkTeamMemberUpdateRequest(
+            all_members_in_team=True,
+            update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+        ),
+        http_request=_bulk_request(),
+        user_api_key_dict=_ADMIN,
+    )
+
+    assert db.membership_find_many_wheres == [{"team_id": "team-1234", "user_id": {"in": ["user-1", "user-2"]}}]
+    assert list(_upsert_call_by_user(upsert_mock)) == ["user-1", "user-2"]
+    assert response.total_requested == 2
 
 
 @pytest.mark.asyncio
@@ -385,7 +386,7 @@ async def test_bulk_update_reports_non_members_as_failed(monkeypatch):
         team_id="team-1234",
         members_with_roles=[Member(user_id="user-1", role="user")],
     )
-    db = _bulk_setup(
+    _db, upsert_mock, _refresh = _bulk_setup(
         monkeypatch,
         team_row,
         memberships=[LiteLLM_TeamMembership(user_id="user-1", team_id="team-1234", budget_id="bud-1")],
@@ -405,19 +406,16 @@ async def test_bulk_update_reports_non_members_as_failed(monkeypatch):
     assert [member.user_id for member in response.successful_updates] == ["user-1"]
     assert response.failed_updates[0].user_id == "ghost-user"
     assert "not a member" in response.failed_updates[0].failed_reason
-    assert db.writes.budget_update_many[0]["where"] == {"budget_id": {"in": ["bud-1"]}}
-    assert db.writes.budget_creates == []
+    assert list(_upsert_call_by_user(upsert_mock)) == ["user-1"]
 
 
 @pytest.mark.asyncio
-async def test_bulk_update_explicit_null_duration_clears_reset_at(monkeypatch):
-    """budget_duration: null must clear both the duration and budget_reset_at in
-    the same update_many, otherwise stale reset timestamps keep firing."""
+async def test_bulk_update_explicit_null_duration_forwarded_as_patch(monkeypatch):
     team_row = LiteLLM_TeamTable(
         team_id="team-1234",
         members_with_roles=[Member(user_id="user-1", role="user")],
     )
-    db = _bulk_setup(
+    _db, upsert_mock, _refresh = _bulk_setup(
         monkeypatch,
         team_row,
         memberships=[LiteLLM_TeamMembership(user_id="user-1", team_id="team-1234", budget_id="bud-1")],
@@ -433,12 +431,7 @@ async def test_bulk_update_explicit_null_duration_clears_reset_at(monkeypatch):
         user_api_key_dict=_ADMIN,
     )
 
-    assert db.writes.budget_update_many == [
-        {
-            "where": {"budget_id": {"in": ["bud-1"]}},
-            "data": {"updated_by": "admin", "budget_duration": None, "budget_reset_at": None},
-        }
-    ]
+    assert _upsert_call_by_user(upsert_mock)["user-1"]["budget_patch"] == {"budget_duration": None}
 
 
 @pytest.mark.asyncio

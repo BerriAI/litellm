@@ -194,6 +194,91 @@ async def test_bulk_member_update_writes_member_budget_row(
     assert membership.litellm_budget_table.tpm_limit == 4242
 
 
+async def test_bulk_member_update_clearing_last_limit_disconnects_private_budget(
+    proxy_client, prisma, scratch, world
+):
+    member_id = scratch.tag("member")
+    budget_id = scratch.tag("bud")
+    await create_scratch_team(
+        prisma,
+        scratch.prefix,
+        organization_id=world.org_a_id,
+        member_user_ids=[member_id],
+    )
+    await prisma.db.litellm_budgettable.create(
+        data={"budget_id": budget_id, "tpm_limit": 999, "created_by": "t", "updated_by": "t"}
+    )
+    await prisma.db.litellm_teammembership.create(
+        data={"user_id": member_id, "team_id": scratch.prefix, "budget_id": budget_id}
+    )
+
+    resp = await proxy_client.patch(
+        ROUTE.format(team_id=scratch.prefix),
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"user_ids": [member_id], "update_fields": {"tpm_limit": None}},
+    )
+    assert resp.status_code == 200, resp.text
+
+    membership = await prisma.db.litellm_teammembership.find_unique(
+        where={"user_id_team_id": {"user_id": member_id, "team_id": scratch.prefix}},
+        include={"litellm_budget_table": True},
+    )
+    assert membership is not None
+    assert membership.budget_id is None, "cleared budget must be disconnected"
+    assert membership.litellm_budget_table is None
+
+
+async def test_bulk_member_update_does_not_leak_default_limits_to_null_budget_members(
+    proxy_client, prisma, scratch, world
+):
+    on_default = scratch.tag("ondefault")
+    no_budget = scratch.tag("nobudget")
+    default_budget_id = scratch.tag("defbud")
+    await create_scratch_team(
+        prisma,
+        scratch.prefix,
+        organization_id=world.org_a_id,
+        member_user_ids=[on_default, no_budget],
+        metadata={"team_member_budget_id": default_budget_id},
+    )
+    await prisma.db.litellm_budgettable.create(
+        data={"budget_id": default_budget_id, "max_budget": 100.0, "created_by": "t", "updated_by": "t"}
+    )
+    await prisma.db.litellm_teammembership.create(
+        data={"user_id": on_default, "team_id": scratch.prefix, "budget_id": default_budget_id}
+    )
+    await prisma.db.litellm_teammembership.create(
+        data={"user_id": no_budget, "team_id": scratch.prefix}
+    )
+
+    resp = await proxy_client.patch(
+        ROUTE.format(team_id=scratch.prefix),
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"user_ids": [on_default, no_budget], "update_fields": {"tpm_limit": 42}},
+    )
+    assert resp.status_code == 200, resp.text
+
+    on_default_m = await prisma.db.litellm_teammembership.find_unique(
+        where={"user_id_team_id": {"user_id": on_default, "team_id": scratch.prefix}},
+        include={"litellm_budget_table": True},
+    )
+    assert on_default_m is not None and on_default_m.litellm_budget_table is not None
+    assert on_default_m.budget_id != default_budget_id, "must clone, not patch the shared row"
+    assert on_default_m.litellm_budget_table.tpm_limit == 42
+    assert on_default_m.litellm_budget_table.max_budget == 100.0, "clone inherits the default's limits"
+
+    no_budget_m = await prisma.db.litellm_teammembership.find_unique(
+        where={"user_id_team_id": {"user_id": no_budget, "team_id": scratch.prefix}},
+        include={"litellm_budget_table": True},
+    )
+    assert no_budget_m is not None and no_budget_m.litellm_budget_table is not None
+    assert no_budget_m.litellm_budget_table.tpm_limit == 42
+    assert no_budget_m.litellm_budget_table.max_budget is None, "null-budget member must not inherit default limits"
+
+    default_row = await prisma.db.litellm_budgettable.find_unique(where={"budget_id": default_budget_id})
+    assert default_row is not None and default_row.max_budget == 100.0, "shared default must be untouched"
+
+
 async def test_bulk_member_update_over_max_batch_is_400(
     proxy_client, prisma, scratch, world
 ):
