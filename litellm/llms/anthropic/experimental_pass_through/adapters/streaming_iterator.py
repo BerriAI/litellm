@@ -13,7 +13,10 @@ from typing import (
     List,
     Literal,
     Optional,
+    get_args,
 )
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -21,6 +24,7 @@ from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContextManagementResponse,
+    StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
 )
@@ -28,6 +32,23 @@ from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
+
+
+_STREAMING_DELTA_TYPES = frozenset(get_args(StreamingContentBlockDeltaType))
+
+
+def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
+    match delta_type:
+        case "text_delta":
+            return "text"
+        case "input_json_delta":
+            return "partial_json"
+        case "thinking_delta":
+            return "thinking"
+        case "signature_delta":
+            return "signature"
+        case _:
+            assert_never(delta_type)
 
 
 class _CombinedChunkSplitter:
@@ -837,6 +858,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         so the trigger chunk's delta must be re-queued or the first token of
         the new block (the first non-empty text/thinking delta, or bundled
         tool arguments) is silently dropped.
+
+        Delta types outside ``StreamingContentBlockDeltaType`` — the closed
+        set the translate layer can produce — are treated as empty. The
+        per-type payload lookup is exhaustively matched against that set in
+        ``_delta_payload_field``, so extending the translate layer with a new
+        delta type fails type-checking here until it is handled.
         """
         if processed_chunk.get("type") != "content_block_delta":
             return False
@@ -844,15 +871,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if not isinstance(delta, dict):
             return False
         delta_type = delta.get("type")
-        if delta_type == "text_delta":
-            return bool(delta.get("text"))
-        if delta_type == "input_json_delta":
-            return bool(delta.get("partial_json"))
-        if delta_type == "thinking_delta":
-            return bool(delta.get("thinking"))
-        if delta_type == "signature_delta":
-            return bool(delta.get("signature"))
-        return False
+        if delta_type not in _STREAMING_DELTA_TYPES:
+            return False
+        return bool(delta.get(_delta_payload_field(delta_type)))
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
