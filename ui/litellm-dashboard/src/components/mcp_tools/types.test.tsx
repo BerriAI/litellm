@@ -13,6 +13,7 @@ import {
   preservedDeclaredAppCredentials,
   withoutMintedTokenCredentials,
   credentialAuthClass,
+  isUnsupportedOnGatewayConnect,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -229,5 +230,25 @@ describe("credentialAuthClass", () => {
     expect(credentialAuthClass(AUTH_TYPE.OAUTH_DELEGATE)).toBe("client_forwarded");
     expect(credentialAuthClass(AUTH_TYPE.OAUTH2)).toBe(AUTH_TYPE.OAUTH2);
     expect(credentialAuthClass(null)).toBeNull();
+  });
+});
+
+describe("isUnsupportedOnGatewayConnect", () => {
+  it("flags the modes that need a caller-supplied upstream token or subject", () => {
+    // client-forwarded: caller presents the upstream Authorization per call
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe(true);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH_DELEGATE)).toBe(true);
+    // OBO: caller's own IdP token is the exchange subject, which the session bearer is not
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE)).toBe(true);
+  });
+
+  it("does not flag modes the gateway can serve from server-side state or interactive vaulting", () => {
+    // interactive authorization_code is the one mode the connect grid vaults per user
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2)).toBe(false);
+    // server-configured credentials need no per-user connect
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.API_KEY)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.NONE)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(null)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(undefined)).toBe(false);
   });
 });
