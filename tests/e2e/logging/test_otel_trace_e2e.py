@@ -170,6 +170,8 @@ EXPECTED_ERROR_SPAN_ATTRIBUTES: dict[str, str] = {
     "error": "True",
     "error.type": "AuthenticationError",
     "otel.status_code": "ERROR",
+    "litellm.provider.error.code": "401",
+    "litellm.provider.error.llm_provider": "anthropic",
 }
 
 
@@ -216,6 +218,10 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     )
     assert _tag(span, "otel.status_description") == message, (
         "the span status description must carry the same untruncated message as error.message"
+    )
+    stack = _tag(span, "litellm.provider.error.stack_trace")
+    assert isinstance(stack, str) and stack, (
+        "the error span must carry a non-empty litellm.provider.error.stack_trace"
     )
 
 
