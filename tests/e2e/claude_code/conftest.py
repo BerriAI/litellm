@@ -169,8 +169,9 @@ def _manifest_feature_ids() -> FrozenSet[str]:
 
     Used as a positive filter so only directories that correspond to a
     real matrix row contribute results — utility/support directories
-    (e.g. `cron_vm`, `_driver_unit_tests`) are dropped regardless of
-    naming convention, and the rate-limit summary stays clean.
+    (e.g. `_driver_unit_tests`, `_builder_unit_tests`) are dropped
+    regardless of naming convention, and the rate-limit summary stays
+    clean.
 
     Returns an empty set if the manifest is missing or malformed; the
     caller treats that as "no path is a feature path", which is the
@@ -199,11 +200,10 @@ def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
 
     Path shape:  tests/e2e/claude_code/<feature_id>/test_<provider>.py
     Returns None if the file is not a per-feature test (e.g. unit tests
-    under `_driver_unit_tests/` or support code under `cron_vm/`), so
-    those don't pollute the matrix artifact. We positively filter the
-    parent directory against `manifest.yaml` rather than relying on
-    naming conventions, because non-feature siblings don't all share
-    an underscore prefix.
+    under `_driver_unit_tests/`), so those don't pollute the matrix
+    artifact. We positively filter the parent directory against
+    `manifest.yaml` rather than relying on naming conventions, because
+    non-feature siblings don't all share an underscore prefix.
     """
     name = node_path.name
     if not name.startswith("test_") or not name.endswith(".py"):
