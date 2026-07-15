@@ -17,6 +17,12 @@ MCPInfo = Dict[str, Any]
 
 class MCPOAuthMetadata(BaseModel):
     scopes: Optional[List[str]] = None
+    """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
+    ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
+    supplied one, else the authorization server's ``scopes_supported``. This is the scope value a
+    client requests per the MCP authorization spec Scope Selection Strategy; scope minimization and
+    inflation control are the authorization server's and user's job at consent (RFC 6749 §3.3), not
+    the client's."""
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
