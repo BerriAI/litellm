@@ -605,6 +605,49 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_defers_in_progress_background_interaction():
+    """
+    A background=true interaction create returns in_progress with no usage
+    block, so its success event has a model but no standard_logging_object.
+    The callback must skip quietly (billing happens later via the background
+    poll task) instead of raising 'Cost tracking failed' and alerting.
+    """
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": "acreate_interaction",
+        "model": "gemini/gemini-3-flash-preview",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+    in_progress_response = InteractionsAPIResponse(
+        id="interactions/bg-abc",
+        model="gemini-3-flash-preview",
+        status="in_progress",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging:
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=in_progress_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_proxy_logging.db_spend_update_writer.update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj():
     """
     When an LLM call fails, the proxy calls post_call_failure_hook with

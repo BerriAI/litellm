@@ -3512,3 +3512,32 @@ def test_completion_cost_bills_interactions_api_response():
     )
     assert cost == pytest.approx(expected)
     assert cost > 0
+
+
+def test_completion_cost_bills_interactions_video_output_at_video_rate():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-omni-flash-preview", custom_llm_provider="gemini")
+    video_tokens = 5792 * 8
+    response = InteractionsAPIResponse(
+        id="interactions/video123",
+        model="gemini-omni-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 10 + video_tokens,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": video_tokens,
+            "output_tokens_by_modality": [{"modality": "video", "tokens": video_tokens}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    expected = 10 * model_info["input_cost_per_token"] + video_tokens * model_info["output_cost_per_video_token"]
+    assert model_info["output_cost_per_video_token"] != model_info["output_cost_per_token"]
+    assert cost == pytest.approx(expected)
