@@ -219,7 +219,7 @@ def _endpoints_corroborate_authorization_url(
     value (``trusted_authorization_url is None``) there is nothing to protect: the authorize endpoint
     comes from the same source as the token endpoint, so they corroborate each other by construction.
     """
-    if trusted_authorization_url is None:
+    if not (trusted_authorization_url and trusted_authorization_url.strip()):
         return True
     return bool(source_authorization_url) and _normalized_authorize_endpoint(
         source_authorization_url
@@ -240,43 +240,53 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     servers that never had one configured.
 
     Carry-forward is a non-manual endpoint source, so the same trust rule as discovery applies: the
-    previous ``token_url``/``registration_url`` are carried only when the previous
+    previous ``token_url``/``registration_url``/``scopes`` are carried only when the previous
     ``authorization_url`` corroborates the authorize endpoint this build will use, i.e. when the
     incoming build has no pinned authorize endpoint (``None`` -> we adopt the previous one too, a
     consistent group) or pins the same one. An admin re-pointing ``authorization_url`` to a different
-    server must not keep serving the old token endpoint.
+    server must not keep serving the old server's token endpoint or granted scopes.
     """
     if previous_server is None:
         return
     if previous_server.url != new_server.url or previous_server.auth_type != new_server.auth_type:
         return
-    may_carry_endpoints = _endpoints_corroborate_authorization_url(
+    may_carry = _endpoints_corroborate_authorization_url(
         previous_server.authorization_url, new_server.authorization_url
     )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
-    if may_carry_endpoints and new_server.token_url is None and previous_server.token_url:
+    if may_carry and new_server.token_url is None and previous_server.token_url:
         new_server.token_url = previous_server.token_url
-    if may_carry_endpoints and new_server.registration_url is None and previous_server.registration_url:
+    if may_carry and new_server.registration_url is None and previous_server.registration_url:
         new_server.registration_url = previous_server.registration_url
-    if not new_server.scopes and previous_server.scopes:
+    if may_carry and not new_server.scopes and previous_server.scopes:
         new_server.scopes = previous_server.scopes
 
 
-def _gate_discovered_endpoints_against_manual_authorization_url(
+def _restrict_discovery_to_corroborated_authorization_server(
     metadata: MCPOAuthMetadata | None,
     manual_authorization_url: str | None,
     server_identifier: str,
     is_dcr_bridge: bool,
 ) -> MCPOAuthMetadata | None:
-    """Apply :func:`_endpoints_corroborate_authorization_url` to freshly discovered metadata, the
-    other non-manual endpoint source. Drops the discovered ``token_url``/``registration_url`` (never
-    the scopes, which carry no credentials) when they cannot be vouched for by the pinned authorize
-    endpoint, logging why so an intentional mismatch can be resolved by setting Token URL by hand.
+    """Bound what freshly discovered metadata may backfill into a manually pinned config.
+
+    Discovery is rooted at the MCP resource, so provenance is a property of the whole metadata
+    document, not per field: a compromised upstream can advertise both an attacker ``token_endpoint``
+    (the RFC 9700 mix-up) and inflated ``scopes`` (tricking the user into granting a broader token
+    that then flows to the upstream). Both are closed by one rule. When ``authorization_url`` is
+    admin-pinned, the discovered ``token_url`` and ``registration_url`` are kept only if the document
+    corroborates the pin (its ``authorization_endpoint`` matches), and scopes are taken from the
+    authorization server's own ``scopes_supported`` (``authorization_server_scopes``, trusted tier)
+    rather than the resource-advertised ``scopes`` a compromised upstream controls. A document that
+    does not corroborate backfills nothing. With no pin there is no trust anchor to protect and the
+    authorize endpoint comes from the same chain as everything else, so discovery is returned as-is.
     """
-    if metadata is None or (not metadata.token_url and not metadata.registration_url):
+    if metadata is None or not (manual_authorization_url and manual_authorization_url.strip()):
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
+        return metadata.model_copy(update={"scopes": metadata.authorization_server_scopes})
+    if not metadata.token_url and not metadata.registration_url and not metadata.scopes:
         return metadata
     bridge_note = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -286,15 +296,15 @@ def _gate_discovered_endpoints_against_manual_authorization_url(
     )
     verbose_logger.warning(
         "MCP OAuth discovery for server %s advertised authorization_endpoint %s, which does not match the "
-        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url so "
-        "authorization codes and client credentials only go to endpoints vouched for by the configured "
-        "authorization server. Configure Token URL manually if the mismatch is intentional.%s",
+        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url/scopes "
+        "so authorization codes, client credentials, and granted scopes only follow the configured "
+        "authorization server. Configure Token URL and Scopes manually if the mismatch is intentional.%s",
         server_identifier,
         _normalized_authorize_endpoint(metadata.authorization_url) if metadata.authorization_url else "<absent>",
-        _normalized_authorize_endpoint(manual_authorization_url) if manual_authorization_url else "<absent>",
+        _normalized_authorize_endpoint(manual_authorization_url),
         bridge_note,
     )
-    return metadata.model_copy(update={"token_url": None, "registration_url": None})
+    return metadata.model_copy(update={"token_url": None, "registration_url": None, "scopes": None})
 
 
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
@@ -1126,7 +1136,7 @@ class MCPServerManager:
                 mcp_oauth_metadata = None
 
             gated_oauth_metadata = (
-                _gate_discovered_endpoints_against_manual_authorization_url(
+                _restrict_discovery_to_corroborated_authorization_server(
                     mcp_oauth_metadata,
                     server_config.get("authorization_url"),
                     server_name or server_id,
@@ -1568,7 +1578,7 @@ class MCPServerManager:
                 server_url,
             )
         gated_oauth_metadata = (
-            _gate_discovered_endpoints_against_manual_authorization_url(
+            _restrict_discovery_to_corroborated_authorization_server(
                 mcp_oauth_metadata,
                 mcp_server.authorization_url,
                 mcp_server.server_id,
@@ -3365,6 +3375,7 @@ class MCPServerManager:
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
+                authorization_server_scopes=scopes,
             )
 
             if any(
