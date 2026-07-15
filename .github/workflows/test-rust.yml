@@ -63,3 +63,43 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --workspace --locked
+
+  python-bridge-newest-python:
+    name: python-bridge compiles on Python 3.14
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: litellm-rust
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            litellm-rust/target
+          key: ${{ runner.os }}-cargo-py314-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-py314-
+
+      - name: Compile the PyO3 bridge against Python 3.14
+        run: PYO3_PYTHON="$(which python)" cargo check -p litellm-python-bridge --locked
