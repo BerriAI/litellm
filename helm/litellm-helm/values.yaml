@@ -331,12 +331,28 @@ postgresql:
     # secretKeys:
     #   userPasswordKey: password
 
-# requires cache: true in config file
-# either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
-# with cache: true to use existing redis instance
+# Redis is the proxy's coordination store: cross-pod tpm/rpm rate limits, spend
+# tracking, and the pod lock manager. Enabling this deploys the bundled Redis
+# subchart, wires REDIS_HOST / REDIS_PORT / REDIS_PASSWORD into the proxy, and
+# renders a `general_settings.coordination_redis` block into the proxy config.
+#
+# To point at an existing Redis instead, leave `enabled: false` and pass a
+# secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL; the proxy
+# falls back to those env vars for coordination. Set `cache: true` in the proxy
+# config only if you also want LLM response caching, which is independent of
+# coordination
+#
+# When `redis.sentinel.enabled` is set, the coordination block is rendered with
+# `sentinel_nodes` and `service_name` (from `redis.sentinel.masterSet`) instead
+# of host/port, because a plain Redis client cannot talk to the sentinel port
 redis:
   enabled: false
   architecture: standalone
+  coordination:
+    # Set to false to keep the bundled Redis for response caching only and leave
+    # `general_settings.coordination_redis` out of the rendered config. A
+    # `coordination_redis` block you define yourself in `proxy_config` always wins
+    enabled: true
 
 # Prisma migration job settings
 migrationJob:

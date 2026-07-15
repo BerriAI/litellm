@@ -1,0 +1,14 @@
+{
+  "model": "gpt-5-mini",
+  "input": "List files in /mnt/data and run python --version.",
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "container_auto"
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "max_output_tokens": 256
+}
