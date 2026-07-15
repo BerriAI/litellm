@@ -444,10 +444,9 @@ class _SweepModel:
 
 
 # Chat providers this guard sweeps when the proxy exposes them, each non-streaming and
-# streaming: gemini, anthropic, openai, and bedrock - the surface #25846's negative
-# streaming-cost bug lived on. gemini/anthropic/bedrock are registered by the suite's
-# driver_models; gpt-5.5 is only wired on the stage/docker gateways. Adding a provider
-# is one line.
+# streaming: gemini, anthropic, openai, and bedrock. gemini/anthropic/bedrock are
+# registered by the suite's driver_models; gpt-5.5 is only wired on the stage/docker
+# gateways. Adding a provider is one line.
 _CHAT_SWEEP: tuple[_SweepModel, ...] = (
     _SweepModel("gemini-2.5-flash", "gemini-2.5-flash"),
     _SweepModel("claude-haiku-4-5", "anthropic/claude-haiku-4-5"),
@@ -461,15 +460,22 @@ _EMBEDDING_SWEEP = _SweepModel("openai-text-embedding-3-small", "text-embedding-
 def test_no_provider_logs_negative_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
-    """No provider ever writes a negative spend row. One key sweeps every chat
-    provider the proxy exposes, both non-streaming and streaming, plus an embedding;
-    then every logged row is asserted non-negative. A negative cost is a real billing
-    bug: cache-token accounting that lets a derived token count fall below zero
-    (BerriAI/litellm#25846, a bedrock-anthropic streaming regression) surfaces here as
-    spend < 0, and both bedrock and the streaming leg are exercised on purpose because
-    that is the path that regression rode in on. The per-provider positive-row check
-    keeps the guard non-vacuous - a pipeline that silently logs 0 (or drops the row)
-    fails instead of sliding past a bare `>= 0`."""
+    """No provider ever writes a negative spend row. One key sweeps every chat provider
+    the proxy exposes, both non-streaming and streaming, plus an embedding; then every
+    logged row is asserted non-negative. Negative spend is a billing bug in any form: it
+    credits the customer's budget back, so a key can outspend its cap without ever
+    tripping it. The per-provider positive-row check keeps the guard non-vacuous - a
+    pipeline that silently logs 0 (or drops the row) fails instead of sliding past a
+    bare `>= 0`.
+
+    Scope, deliberately stated: this is a broad invariant sweep, NOT a regression test
+    for the bedrock cache-token bug (#25846). That bug needs prompt_tokens to exclude
+    cache tokens so `prompt_tokens - cache_hit` goes below zero; the traffic here is
+    uncached, so `cache_hit == 0` and that subtraction can't go negative. Reverting
+    #25846's clamp would leave this test green. Verified by mutation on 2026-07-14: the
+    only way to turn it red was an injected fault unrelated to that bug, so the cell
+    stays fail_before_fix=unproven. Proving it needs a test that drives the cache-token
+    path itself (bedrock streaming with a cached prefix)."""
     present = frozenset(entry.model_name for entry in client.gateway.model_info())
     chat = tuple(m for m in _CHAT_SWEEP if m.call in present)
     assert len(chat) >= 2, (
