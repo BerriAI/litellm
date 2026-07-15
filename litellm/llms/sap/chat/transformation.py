@@ -327,6 +327,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
+        optional_params.pop("extra_headers", None)
 
         template = _messages_to_sap_template(messages)
 
