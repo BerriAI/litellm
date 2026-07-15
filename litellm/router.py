@@ -7870,11 +7870,24 @@ class Router:
         upsert/delete cycle leaks one hook (and a deleted router's hook keeps
         firing forever).
         """
-        if not (litellm_model or "").startswith("auto_router/"):
+        litellm_model = litellm_model or ""
+        if not litellm_model.startswith("auto_router/"):
             return
-        self.auto_routers.pop(model_name, None)
-        self.complexity_routers.pop(model_name, None)
-        self.quality_routers.pop(model_name, None)
+
+        # scope the pop to the removed deployment's OWN strategy registry —
+        # model_names are only unique per registry, so a complexity router and
+        # a quality router may legally share a name; deleting one must not
+        # evict the other.
+        if litellm_model.startswith("auto_router/complexity_router"):
+            self.complexity_routers.pop(model_name, None)
+            return
+        if litellm_model.startswith("auto_router/quality_router"):
+            self.quality_routers.pop(model_name, None)
+            return
+        if not litellm_model.startswith("auto_router/adaptive_router"):
+            # plain auto_router/<name> (semantic router)
+            self.auto_routers.pop(model_name, None)
+            return
 
         adaptive_router = self.adaptive_routers.pop(model_name, None)
         if adaptive_router is not None:

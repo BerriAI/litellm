@@ -6020,22 +6020,77 @@ class TestStrategyRegistryCleanupGuards:
             ]
         )
 
+    def test_deleting_one_strategy_does_not_evict_same_named_other_strategy(self):
+        """model_names are only unique per registry — a complexity router and a
+        quality router may share a name; deleting one must not evict the other."""
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "backing-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        tiers = {
+            "SIMPLE": "backing-model",
+            "MEDIUM": "backing-model",
+            "COMPLEX": "backing-model",
+            "REASONING": "backing-model",
+        }
+        router.add_deployment(
+            Deployment(
+                model_name="dual-name",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"tiers": tiers},
+                    complexity_router_default_model="backing-model",
+                ),
+                model_info={"id": "dual-complexity-row"},
+            )
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="dual-name",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/quality_router",
+                    quality_router_config={
+                        "quality_tiers": {"default": "backing-model"},
+                        "default_model": "backing-model",
+                    },
+                ),
+                model_info={"id": "dual-quality-row"},
+            )
+        )
+        assert "dual-name" in router.complexity_routers
+        assert "dual-name" in router.quality_routers
+
+        router.delete_deployment(id="dual-complexity-row")
+
+        assert "dual-name" not in router.complexity_routers
+        assert "dual-name" in router.quality_routers, (
+            "deleting the complexity router must not evict the same-named quality router"
+        )
+
     def test_adaptive_router_delete_retires_post_call_hook(self):
+        baseline = self._count_adaptive_hooks()  # tolerate hooks leaked by other tests
         router = self._adaptive_router()
         assert "adaptive-test-router" in router.adaptive_routers
-        assert self._count_adaptive_hooks() == 1
+        assert self._count_adaptive_hooks() == baseline + 1
 
         router.delete_deployment(id="adaptive-row")
 
         assert "adaptive-test-router" not in router.adaptive_routers
-        assert self._count_adaptive_hooks() == 0, "deleted adaptive router's hook must be retired"
+        assert self._count_adaptive_hooks() == baseline, "deleted adaptive router's hook must be retired"
 
     def test_adaptive_router_upsert_applies_new_config_without_leaking_hooks(self):
         from litellm.types.router import Deployment, LiteLLM_Params
 
+        baseline = self._count_adaptive_hooks()  # tolerate hooks leaked by other tests
         router = self._adaptive_router()
         original = router.adaptive_routers["adaptive-test-router"]
-        assert self._count_adaptive_hooks() == 1
+        assert self._count_adaptive_hooks() == baseline + 1
 
         router.upsert_deployment(
             Deployment(
@@ -6055,6 +6110,6 @@ class TestStrategyRegistryCleanupGuards:
         assert router.adaptive_routers["adaptive-test-router"] is not original, (
             "upsert must rebuild the adaptive router with the new config"
         )
-        assert self._count_adaptive_hooks() == 1, (
+        assert self._count_adaptive_hooks() == baseline + 1, (
             "exactly one hook must remain after upsert (old retired, new registered)"
         )
