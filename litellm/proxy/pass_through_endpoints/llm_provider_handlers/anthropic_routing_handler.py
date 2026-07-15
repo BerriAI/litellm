@@ -16,7 +16,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
@@ -32,6 +32,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 # ---------------------------------------------------------------------------
 # Pydantic models (inline — not imported from the hub)
 # ---------------------------------------------------------------------------
+
 
 class AuthConfig(BaseModel):
     """Authentication configuration for a backend."""
@@ -76,6 +77,7 @@ class AnthropicRouterConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Health tracker
 # ---------------------------------------------------------------------------
+
 
 class Status(Enum):
     HEALTHY = "healthy"
@@ -125,7 +127,9 @@ class HealthTracker:
         if entry.status != Status.HEALTHY:
             verbose_proxy_logger.info(
                 "anthropic_router: backend %s transitioned from %s to %s",
-                name, entry.status.value, Status.HEALTHY.value,
+                name,
+                entry.status.value,
+                Status.HEALTHY.value,
             )
         entry.status = Status.HEALTHY
         entry.failures = 0
@@ -146,7 +150,9 @@ class HealthTracker:
         if entry.status != old_status:
             verbose_proxy_logger.info(
                 "anthropic_router: backend %s transitioned from %s to %s",
-                name, old_status.value, entry.status.value,
+                name,
+                old_status.value,
+                entry.status.value,
             )
 
     def status(self, name: str) -> Status:
@@ -157,6 +163,7 @@ class HealthTracker:
 # ---------------------------------------------------------------------------
 # HTTP proxy
 # ---------------------------------------------------------------------------
+
 
 class AnthropicProxy:
     """Forwards HTTP requests to Anthropic-compatible backends via LiteLLM's
@@ -253,6 +260,7 @@ class AnthropicProxy:
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
+
 
 class AnthropicRouter:
     """Resolves a model name to an ordered list of backends.
@@ -366,9 +374,7 @@ def get_anthropic_router() -> Optional[AnthropicRouter]:
 
     # --- Hot-reload: config changed since last init ---
     if _router_instance is not None and new_fingerprint != _router_config_fingerprint:
-        verbose_proxy_logger.info(
-            "anthropic_router: config fingerprint changed — re-initialising"
-        )
+        verbose_proxy_logger.info("anthropic_router: config fingerprint changed — re-initialising")
         init_anthropic_router_from_config(config_dict)
         _router_config_fingerprint = new_fingerprint
         return _router_instance
@@ -389,9 +395,7 @@ def get_anthropic_router() -> Optional[AnthropicRouter]:
     try:
         router = init_anthropic_router_from_config(config_dict)
     except Exception:
-        verbose_proxy_logger.debug(
-            "anthropic_router: init raised (proxy config may not be ready yet)"
-        )
+        verbose_proxy_logger.debug("anthropic_router: init raised (proxy config may not be ready yet)")
         router = None
 
     if router is not None:

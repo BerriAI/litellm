@@ -9,7 +9,13 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Dict, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
+
+if TYPE_CHECKING:
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+        AnthropicRouter,
+        Backend,
+    )
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
@@ -575,8 +581,6 @@ async def anthropic_proxy_route(
     automatic health-aware failover across multiple backends.
     """
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
-        AnthropicProxy,
-        extract_model_from_body,
         get_anthropic_router,
     )
 
@@ -637,7 +641,7 @@ async def _route_anthropic_with_multi_backend(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    router: Any,
+    router: "AnthropicRouter",
 ) -> Response:
     """Forward an Anthropic request through the multi-backend router.
 
@@ -650,7 +654,6 @@ async def _route_anthropic_with_multi_backend(
     error body.
     """
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
-        AnthropicProxy,
         extract_model_from_body,
     )
 
@@ -660,9 +663,7 @@ async def _route_anthropic_with_multi_backend(
     backends = router.resolve(model)
 
     if not backends:
-        verbose_proxy_logger.warning(
-            "anthropic_router: no route matched model=%s", model
-        )
+        verbose_proxy_logger.warning("anthropic_router: no route matched model=%s", model)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
@@ -677,9 +678,6 @@ async def _route_anthropic_with_multi_backend(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Preserve incoming headers (the passthrough pipeline will strip auth)
-    incoming_headers: Dict[str, str] = dict(request.headers)
-
     is_streaming = await is_streaming_request_fn(request)
     last_error: Optional[str] = None
 
@@ -688,7 +686,9 @@ async def _route_anthropic_with_multi_backend(
 
         verbose_proxy_logger.debug(
             "anthropic_router: trying backend=%s url=%s model=%s",
-            backend.name, target_url, model,
+            backend.name,
+            target_url,
+            model,
         )
 
         # Build the endpoint function for this backend (outside try/except —
@@ -718,7 +718,8 @@ async def _route_anthropic_with_multi_backend(
             last_error = getattr(e, "message", str(e))
             verbose_proxy_logger.warning(
                 "anthropic_router: backend=%s failed with ProxyException: %s",
-                backend.name, last_error,
+                backend.name,
+                last_error,
             )
             router.health.record_failure(backend.name)
 
@@ -726,8 +727,7 @@ async def _route_anthropic_with_multi_backend(
             # stream may have already started sending to the client.
             if is_streaming:
                 verbose_proxy_logger.warning(
-                    "anthropic_router: streaming request failed on backend=%s "
-                    "— cannot failover mid-stream",
+                    "anthropic_router: streaming request failed on backend=%s — cannot failover mid-stream",
                     backend.name,
                 )
                 raise
@@ -736,7 +736,8 @@ async def _route_anthropic_with_multi_backend(
             last_error = str(e)
             verbose_proxy_logger.warning(
                 "anthropic_router: backend=%s failed unexpectedly: %s",
-                backend.name, last_error,
+                backend.name,
+                last_error,
             )
             router.health.record_failure(backend.name)
 
@@ -746,23 +747,21 @@ async def _route_anthropic_with_multi_backend(
     # All backends exhausted
     verbose_proxy_logger.error(
         "anthropic_router: all %d backend(s) exhausted for model=%s",
-        len(backends), model,
+        len(backends),
+        model,
     )
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail={
             "error": {
                 "type": "router_error",
-                "message": (
-                    f"All backends for model '{model}' are unavailable. "
-                    f"Last error: {last_error}"
-                ),
+                "message": (f"All backends for model '{model}' are unavailable. Last error: {last_error}"),
             }
         },
     )
 
 
-def _build_backend_auth_header(backend: Any) -> Dict[str, str]:
+def _build_backend_auth_header(backend: "Backend") -> Dict[str, str]:
     """Build the auth header dict for a backend config.
 
     Reads the credential from the environment variable named in
