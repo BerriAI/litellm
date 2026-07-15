@@ -474,10 +474,6 @@ class ModelNewResponse(BaseModel):
     model_id: str
 
 
-class ModelListEntry(BaseModel):
-    id: str
-
-
 class ModelsListResponse(BaseModel):
     """GET /v1/models on the data plane: the deployments the gateway can actually
     serve right now. Used to confirm a freshly created model has propagated from
