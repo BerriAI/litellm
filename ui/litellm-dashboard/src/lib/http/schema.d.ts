@@ -25408,6 +25408,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -33156,6 +33158,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
