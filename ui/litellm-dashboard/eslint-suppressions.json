@@ -1098,14 +1098,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
       "count": 3
@@ -1149,14 +1141,6 @@
     }
   },
   "src/app/(dashboard)/skills/_components/add_plugin_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/skills/_components/plugin_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -1322,11 +1306,6 @@
       "count": 1
     },
     "react/no-unescaped-entities": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreTable.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
