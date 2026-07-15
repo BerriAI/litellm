@@ -19,9 +19,7 @@ class AnthropicCountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_anthropic_count_tokens_endpoint(
-        self, api_base: Optional[str] = None
-    ) -> str:
+    def get_anthropic_count_tokens_endpoint(self, api_base: Optional[str] = None) -> str:
         """
         Get the Anthropic CountTokens API endpoint.
 

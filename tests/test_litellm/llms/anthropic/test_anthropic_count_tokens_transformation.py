@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
@@ -98,10 +96,7 @@ def test_transform_no_system_no_tools():
 def test_get_endpoint_no_api_base_returns_anthropic_default():
     """#29764 baseline: with no api_base, the endpoint is api.anthropic.com."""
     config = AnthropicCountTokensConfig()
-    assert (
-        config.get_anthropic_count_tokens_endpoint()
-        == "https://api.anthropic.com/v1/messages/count_tokens"
-    )
+    assert config.get_anthropic_count_tokens_endpoint() == "https://api.anthropic.com/v1/messages/count_tokens"
 
 
 def test_get_endpoint_with_api_base_only_appends_full_path():
@@ -120,9 +115,7 @@ def test_get_endpoint_with_api_base_ending_in_v1_appends_messages_count_tokens()
     we don't double up the /v1."""
     config = AnthropicCountTokensConfig()
     assert (
-        config.get_anthropic_count_tokens_endpoint(
-            api_base="http://vllm-host:8000/v1"
-        )
+        config.get_anthropic_count_tokens_endpoint(api_base="http://vllm-host:8000/v1")
         == "http://vllm-host:8000/v1/messages/count_tokens"
     )
 
@@ -132,9 +125,7 @@ def test_get_endpoint_with_api_base_ending_in_messages_appends_count_tokens():
     append /count_tokens — don't repeat /messages."""
     config = AnthropicCountTokensConfig()
     assert (
-        config.get_anthropic_count_tokens_endpoint(
-            api_base="https://example.com/v1/messages"
-        )
+        config.get_anthropic_count_tokens_endpoint(api_base="https://example.com/v1/messages")
         == "https://example.com/v1/messages/count_tokens"
     )
 
@@ -152,8 +143,6 @@ def test_get_endpoint_strips_trailing_slash_on_api_base():
     constructed URL."""
     config = AnthropicCountTokensConfig()
     assert (
-        config.get_anthropic_count_tokens_endpoint(
-            api_base="http://vllm-host:8000/v1/"
-        )
+        config.get_anthropic_count_tokens_endpoint(api_base="http://vllm-host:8000/v1/")
         == "http://vllm-host:8000/v1/messages/count_tokens"
     )
