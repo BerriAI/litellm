@@ -260,15 +260,23 @@ class TestStandardizedResetTime(unittest.TestCase):
         self.assertEqual(sunday_result, datetime(2023, 5, 21, 0, 0, 0, tzinfo=timezone.utc))
 
     def test_invalid_weekly_reset_day_falls_back_to_monday(self):
-        """Test that an invalid weekly_reset_day falls back to Monday."""
+        """Test that an invalid weekly_reset_day falls back to Monday and logs a warning."""
         # Wednesday May 17, 2023
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
 
         # Invalid day - should fall back to Monday (next Monday = May 22)
-        result = get_next_standardized_reset_time(
-            "7d", wednesday, "UTC", weekly_reset_day="funday"
-        )
+        import logging
+
+        with self.assertLogs("LiteLLM", level="WARNING") as log_ctx:
+            result = get_next_standardized_reset_time(
+                "7d", wednesday, "UTC", weekly_reset_day="funday"
+            )
         self.assertEqual(result, datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc))
+        # Verify a warning was logged about the invalid day
+        self.assertTrue(
+            any("funday" in msg for msg in log_ctx.output),
+            f"Expected warning about invalid day 'funday', got: {log_ctx.output}",
+        )
 
     def test_weekly_reset_day_case_insensitive(self):
         """Test that weekly_reset_day is case-insensitive."""

@@ -20,8 +20,8 @@ def get_weekly_budget_reset_day() -> str:
     Get the configured weekly budget reset day from litellm_settings.
     Falls back to "monday" if not specified.
 
-    Set via general_settings in config.yaml:
-        general_settings:
+    Set via litellm_settings in config.yaml:
+        litellm_settings:
             weekly_budget_reset_day: "sunday"
 
     litellm_settings values are set as attributes on the litellm module

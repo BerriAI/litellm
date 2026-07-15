@@ -12,15 +12,8 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
-WEEKDAYS: dict[str, int] = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
-}
+from litellm._logging import verbose_logger
+from litellm.constants import WEEKDAYS
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
@@ -207,7 +200,15 @@ def _handle_day_reset(
     if value == 1:  # Daily reset at midnight
         return base_midnight + timedelta(days=1)
     elif value == 7:  # Weekly reset on configured day at midnight
-        target_weekday = WEEKDAYS.get(weekly_reset_day.lower().strip(), 0)
+        normalized_day = weekly_reset_day.lower().strip()
+        target_weekday = WEEKDAYS.get(normalized_day)
+        if target_weekday is None:
+            verbose_logger.warning(
+                "Invalid weekly_budget_reset_day '%s'; falling back to 'monday'. Valid values: %s",
+                weekly_reset_day,
+                ", ".join(WEEKDAYS.keys()),
+            )
+            target_weekday = 0  # Monday
         days_until_reset = (target_weekday - current_time.weekday()) % 7
         if days_until_reset == 0:  # If today is the reset day
             days_until_reset = 7
