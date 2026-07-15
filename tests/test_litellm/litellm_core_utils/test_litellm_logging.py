@@ -3773,3 +3773,140 @@ def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
     assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
     assert payload["total_tokens"] == 0
     assert payload["completion_tokens"] == 0
+
+
+def _register_fake_interactions_model():
+    litellm.register_model(
+        model_cost={
+            "gemini/fake-interactions-model": {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                "input_cost_per_token": 3e-7,
+                "output_cost_per_token": 2.5e-6,
+            }
+        }
+    )
+
+
+def _interactions_usage_dict():
+    return {
+        "total_tokens": 871,
+        "total_input_tokens": 16,
+        "input_tokens_by_modality": [{"modality": "text", "tokens": 16}],
+        "total_cached_tokens": 0,
+        "total_output_tokens": 561,
+        "output_tokens_by_modality": [{"modality": "text", "tokens": 561}],
+        "total_tool_use_tokens": 0,
+        "total_thought_tokens": 294,
+    }
+
+
+_EXPECTED_INTERACTIONS_COST = 16 * 3e-7 + (561 + 294) * 2.5e-6
+
+
+def _interactions_logging_obj(call_type: str, stream: bool) -> LitellmLogging:
+    import datetime
+
+    logging_obj = LitellmLogging(
+        model="gemini/fake-interactions-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="interactions-cost-test",
+        function_id="interactions-cost-test",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={},
+        model="gemini/fake-interactions-model",
+        optional_params={},
+        litellm_params={"litellm_call_id": "interactions-cost-test"},
+        custom_llm_provider="gemini",
+    )
+    return logging_obj
+
+
+def test_interactions_create_success_tracks_response_cost():
+    import datetime
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    _register_fake_interactions_model()
+    logging_obj = _interactions_logging_obj(call_type="acreate_interaction", stream=False)
+    result = InteractionsAPIResponse(
+        id="interaction_123",
+        model="fake-interactions-model",
+        status="completed",
+        steps=[],
+        usage=_interactions_usage_dict(),
+    )
+
+    logging_obj._success_handler_helper_fn(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_EXPECTED_INTERACTIONS_COST)
+    standard_logging_object = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object["prompt_tokens"] == 16
+    assert standard_logging_object["completion_tokens"] == 561 + 294
+    assert standard_logging_object["total_tokens"] == 871
+    assert standard_logging_object["response_cost"] == pytest.approx(_EXPECTED_INTERACTIONS_COST)
+
+
+def test_interactions_streaming_completed_event_tracks_response_cost():
+    import datetime
+
+    from litellm.types.interactions import InteractionsAPIStreamingResponse
+
+    _register_fake_interactions_model()
+    logging_obj = _interactions_logging_obj(call_type="acreate_interaction", stream=True)
+    result = InteractionsAPIStreamingResponse(
+        event_type="interaction.completed",
+        interaction={
+            "id": "interaction_123",
+            "model": "fake-interactions-model",
+            "status": "completed",
+            "steps": [],
+            "usage": _interactions_usage_dict(),
+        },
+    )
+
+    logging_obj._success_handler_helper_fn(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_EXPECTED_INTERACTIONS_COST)
+    standard_logging_object = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object["prompt_tokens"] == 16
+    assert standard_logging_object["completion_tokens"] == 561 + 294
+
+
+def test_interactions_get_poll_does_not_bill():
+    import datetime
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    _register_fake_interactions_model()
+    logging_obj = _interactions_logging_obj(call_type="aget_interaction", stream=False)
+    result = InteractionsAPIResponse(
+        id="interaction_123",
+        model="fake-interactions-model",
+        status="completed",
+        steps=[],
+        usage=_interactions_usage_dict(),
+    )
+
+    logging_obj._success_handler_helper_fn(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
