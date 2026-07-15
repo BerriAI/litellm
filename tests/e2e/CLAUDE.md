@@ -179,8 +179,8 @@ other.<area>.<case>.<assertion>
 
 - do not overengineer a test, i need you to write readable, clean code of what would look like a natural user scenario
 
-- do not confuse me with types. if something doesnt need it, dont use it. types are only pretty for a api request / response body.
-
+- when it comes to typing an input schema for an api endpoint, have it type X = A | B | C ... where X = exhaustive union of all supported input schemas and A, B, C typically are composed by a base type. types are only pretty for a api request / response body. make sure to compose types instead of repeating the same base attributes over and over again.
+ 
 - use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass
