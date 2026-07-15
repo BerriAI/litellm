@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse, require_successful_call
@@ -203,7 +203,14 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     assert "AnthropicException" in message, (
         f"error.message must carry the upstream provider exception, got: {message[:200]}"
     )
-    provider_error = _ProviderError.model_validate_json(message[message.index("{") : message.rindex("}") + 1])
+    start, end = message.find("{"), message.rfind("}")
+    assert start != -1 and end > start, (
+        f"error.message carries no parseable provider error JSON (truncated?): {message[:200]}"
+    )
+    try:
+        provider_error = _ProviderError.model_validate_json(message[start : end + 1])
+    except ValidationError:
+        pytest.fail(f"the embedded provider error JSON does not parse (truncated?): {message[:300]}")
     assert provider_error.error.message == "invalid x-api-key", (
         f"the embedded provider error must survive untruncated; parsed: {provider_error}"
     )
@@ -536,6 +543,10 @@ class TestOtelTraceCompleteness:
             if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
                 break
             time.sleep(client.gateway.poll_interval)
+        assert "AnthropicException" in outcome.body, (
+            "never saw the upstream provider failure before the deadline; the key may still be "
+            f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
+        )
         assert outcome.status_code == 401, (
             f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
         )
