@@ -7,7 +7,7 @@ from types import FrameType
 
 import click
 import yaml
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from ..up import CLAUDE_SETTINGS_PATH, load_json_or_empty, restore_claude_settings, write_backup
 from ..up import BackupRecord as ClaudeBackupRecord
@@ -46,7 +46,12 @@ def _mint_and_embed_master_key() -> str:
     """
     master_key = secrets.token_urlsafe(32)
     with open(CONFIG_PATH, "r") as f:
-        generated = _GENERATED_CONFIG_ADAPTER.validate_python(yaml.safe_load(f))
+        try:
+            generated = _GENERATED_CONFIG_ADAPTER.validate_python(yaml.safe_load(f))
+        except (yaml.YAMLError, ValidationError):
+            raise click.ClickException(
+                f"{CONFIG_PATH} is empty or corrupt. Run `lite autoroute configure` again to regenerate it."
+            )
     general_settings = generated.get("general_settings")
     updated_settings: dict[str, JsonValue] = {
         **(general_settings if isinstance(general_settings, dict) else {}),
