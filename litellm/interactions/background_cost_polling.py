@@ -22,6 +22,7 @@ from litellm.constants import (
     BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS,
     BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
 )
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
 
 if TYPE_CHECKING:
@@ -87,12 +88,37 @@ async def poll_and_log_background_interaction_cost(
             continue
         if response.usage is not None:
             await context.logging_obj.async_log_background_interaction_completion(result=response)
+        else:
+            await _release_open_budget_reservation(logging_obj=context.logging_obj)
         return
     verbose_logger.warning(
         "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
         context.interaction_id,
         context.timeout_seconds,
     )
+    await _release_open_budget_reservation(logging_obj=context.logging_obj)
+
+
+async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> None:
+    """
+    The proxy keeps the pre-call budget reservation open for an in-progress
+    background interaction so concurrent creates cannot stack past the budget.
+    The completion success event reconciles it to the actual cost; when the
+    interaction terminates without billable usage (or polling gives up), no
+    such event fires, so the poller must release the reservation here or the
+    spend counters stay pinned at the estimated cost.
+    """
+    metadata = get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    budget_reservation = metadata.get("user_api_key_budget_reservation")
+    if not isinstance(budget_reservation, dict):
+        return
+
+    from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation
+
+    try:
+        await release_budget_reservation(budget_reservation=budget_reservation)
+    except Exception:  # noqa: BLE001  # a failed release must not crash the poll task; counters expire via TTL
+        verbose_logger.exception("Failed to release budget reservation for an unbilled background interaction")
 
 
 _ACTIVE_POLL_TASKS: set["asyncio.Task[None]"] = set()  # mutable-ok: asyncio requires strong refs to running tasks

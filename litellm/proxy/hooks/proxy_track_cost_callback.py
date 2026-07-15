@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -278,13 +279,20 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
-                await _release_budget_reservation(budget_reservation=budget_reservation)
                 if _is_unbilled_in_progress_interaction(completion_response):
+                    if BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
+                        verbose_proxy_logger.debug(
+                            "Cost tracking deferred for in-progress background interaction; "
+                            "the budget reservation stays open until the poll task logs the final usage"
+                        )
+                        return
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
                     verbose_proxy_logger.debug(
-                        "Cost tracking deferred for in-progress background interaction; "
-                        "a poll task logs the final usage once it completes"
+                        "Background interaction cost polling is disabled; released the budget "
+                        "reservation for an in-progress interaction that will not be billed"
                     )
                     return
+                await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
