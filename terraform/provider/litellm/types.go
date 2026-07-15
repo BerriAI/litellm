@@ -247,7 +247,6 @@ type VectorStoreInfoRequest struct {
 	VectorStoreID string `json:"vector_store_id"`
 }
 
-// GuardrailSpec is the guardrail object sent to and returned by the proxy.
 type GuardrailSpec struct {
 	GuardrailID   string                 `json:"guardrail_id,omitempty"`
 	GuardrailName string                 `json:"guardrail_name"`
@@ -255,12 +254,10 @@ type GuardrailSpec struct {
 	GuardrailInfo map[string]interface{} `json:"guardrail_info,omitempty"`
 }
 
-// GuardrailRequest wraps a guardrail spec for create and update calls.
 type GuardrailRequest struct {
 	Guardrail GuardrailSpec `json:"guardrail"`
 }
 
-// GuardrailResponse represents guardrail information returned by the proxy.
 type GuardrailResponse struct {
 	GuardrailID   string                 `json:"guardrail_id"`
 	GuardrailName string                 `json:"guardrail_name"`

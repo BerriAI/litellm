@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -74,7 +75,7 @@ func dataSourceLiteLLMGuardrailRead(d *schema.ResourceData, m interface{}) error
 
 	var guardrailResp GuardrailResponse
 	if err := handleGuardrailAPIResponse(resp, &guardrailResp, client); err != nil {
-		if err.Error() == "guardrail_not_found" {
+		if errors.Is(err, errGuardrailNotFound) {
 			return fmt.Errorf("guardrail '%s' not found", guardrailID)
 		}
 		return fmt.Errorf("failed to read guardrail: %w", err)

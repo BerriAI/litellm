@@ -247,24 +247,6 @@ func isVectorStoreNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
-// isGuardrailNotFoundError checks if the error response indicates a guardrail not found
-func isGuardrailNotFoundError(errResp ErrorResponse) bool {
-	if msg, ok := errResp.Error.Message.(string); ok {
-		if strings.Contains(msg, "not found") && strings.Contains(msg, "uardrail") {
-			return true
-		}
-	}
-
-	if errResp.Detail.Error != "" {
-		if strings.Contains(errResp.Detail.Error, "not found") && strings.Contains(errResp.Detail.Error, "uardrail") {
-			return true
-		}
-	}
-
-	return false
-}
-
-// handleGuardrailAPIResponse handles API responses specifically for guardrail operations
 func handleGuardrailAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -272,16 +254,10 @@ func handleGuardrailAPIResponse(resp *http.Response, result interface{}, client 
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("guardrail_not_found")
+		return errGuardrailNotFound
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			if isGuardrailNotFoundError(errResp) {
-				return fmt.Errorf("guardrail_not_found")
-			}
-		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
 			resp.Status, client.redactSensitiveData(string(bodyBytes)))
 	}

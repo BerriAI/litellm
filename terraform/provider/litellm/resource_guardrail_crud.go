@@ -2,11 +2,14 @@ package litellm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
+
+var errGuardrailNotFound = errors.New("guardrail not found")
 
 func buildGuardrailSpec(d *schema.ResourceData) (GuardrailSpec, error) {
 	litellmParams := map[string]interface{}{
@@ -41,7 +44,6 @@ func buildGuardrailSpec(d *schema.ResourceData) (GuardrailSpec, error) {
 	return spec, nil
 }
 
-// parseGuardrailMode returns a []string when the value is a JSON array, otherwise the raw string.
 func parseGuardrailMode(mode string) interface{} {
 	trimmed := strings.TrimSpace(mode)
 	if strings.HasPrefix(trimmed, "[") {
@@ -103,7 +105,7 @@ func resourceLiteLLMGuardrailRead(d *schema.ResourceData, m interface{}) error {
 
 	var guardrailResp GuardrailResponse
 	if err := handleGuardrailAPIResponse(resp, &guardrailResp, client); err != nil {
-		if err.Error() == "guardrail_not_found" {
+		if errors.Is(err, errGuardrailNotFound) {
 			d.SetId("")
 			return nil
 		}
@@ -115,9 +117,6 @@ func resourceLiteLLMGuardrailRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("created_at", guardrailResp.CreatedAt)
 	d.Set("updated_at", guardrailResp.UpdatedAt)
 
-	// Reconcile the non-sensitive params that live inside litellm_params. The
-	// rest of litellm_params is masked by the proxy on read, so persisting it
-	// would produce perpetual diffs; the configured value is left untouched.
 	if guardrail, ok := guardrailResp.LiteLLMParams["guardrail"].(string); ok {
 		d.Set("guardrail", guardrail)
 	}
@@ -185,7 +184,7 @@ func resourceLiteLLMGuardrailDelete(d *schema.ResourceData, m interface{}) error
 	defer resp.Body.Close()
 
 	if err := handleGuardrailAPIResponse(resp, nil, client); err != nil {
-		if err.Error() == "guardrail_not_found" {
+		if errors.Is(err, errGuardrailNotFound) {
 			d.SetId("")
 			return nil
 		}
@@ -196,8 +195,6 @@ func resourceLiteLLMGuardrailDelete(d *schema.ResourceData, m interface{}) error
 	return nil
 }
 
-// suppressEquivalentJSON suppresses diffs between two JSON strings that are
-// semantically equal but differ in key ordering or whitespace.
 func suppressEquivalentJSON(_, oldValue, newValue string, _ *schema.ResourceData) bool {
 	if oldValue == newValue {
 		return true
