@@ -407,6 +407,7 @@ async def route_request(
             "num_retries",
             "timeout",
             "model_group_retry_policy",
+            "routing_strategy",
         ]
 
         # Merge override settings into data (only if not already set in request)

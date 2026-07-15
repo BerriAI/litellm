@@ -629,3 +629,68 @@ async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
         )
 
     assert v1_spy.called, "async dispatch must route v1 strategy through sync method"
+
+
+def test_request_routing_strategy_override_beats_top_level():
+    router = _build_router(routing_strategy="least-busy")
+    strategy, selector = router._get_routing_context(
+        "other-model", {"routing_strategy": "simple-shuffle"}
+    )
+    assert strategy == "simple-shuffle"
+    assert selector is None
+
+
+def test_request_routing_strategy_override_beats_explicit_group():
+    router = _build_router(
+        routing_strategy="simple-shuffle",
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "latency-based-routing",
+            }
+        ],
+    )
+    strategy, _ = router._get_routing_context(
+        "filtered-model", {"routing_strategy": "least-busy"}
+    )
+    assert strategy == "least-busy"
+
+
+def test_request_routing_strategy_override_builds_and_caches_selector():
+    router = _build_router(routing_strategy="simple-shuffle")
+    strategy, selector = router._get_routing_context(
+        "other-model", {"routing_strategy": "latency-based-routing"}
+    )
+    assert strategy == "latency-based-routing"
+    assert selector is not None
+    _, selector_again = router._get_routing_context(
+        "other-model", {"routing_strategy": "latency-based-routing"}
+    )
+    assert selector_again is selector
+
+
+def test_request_routing_strategy_override_matching_global_reuses_default_selector():
+    router = _build_router(routing_strategy="least-busy")
+    _, selector = router._get_routing_context(
+        "other-model", {"routing_strategy": "least-busy"}
+    )
+    assert selector is router.leastbusy_logger
+    assert router._override_selectors == {}
+
+
+def test_invalid_request_routing_strategy_override_falls_back():
+    router = _build_router(routing_strategy="least-busy")
+    strategy, selector = router._get_routing_context(
+        "other-model", {"routing_strategy": "not-a-real-strategy"}
+    )
+    assert strategy == "least-busy"
+    assert selector is router.leastbusy_logger
+
+
+def test_no_override_key_keeps_existing_behavior():
+    router = _build_router(routing_strategy="least-busy")
+    strategy, _ = router._get_routing_context("other-model", {"messages": []})
+    assert strategy == "least-busy"
+    strategy_none_kwargs, _ = router._get_routing_context("other-model", None)
+    assert strategy_none_kwargs == "least-busy"
