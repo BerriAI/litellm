@@ -33,6 +33,8 @@ class Request:
         self.client = MagicMock()
         self.client.host = client_ip
         self.headers: Dict[str, str] = {}
+        if headers:
+            self.headers = {k.lower(): v for k, v in headers.items() if v is not None}
 
 
 @pytest.mark.parametrize(
@@ -86,6 +88,31 @@ def test_check_valid_ip_sent_with_x_forwarded_for(
     request = Request(client_ip, headers={"X-Forwarded-For": client_ip})
 
     assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)[0] == expected_result  # type: ignore
+
+
+@pytest.mark.parametrize(
+    "allowed_ips, xff_header, expected_result, expected_ip",
+    [
+        (["203.0.113.10"], "203.0.113.10, 10.0.0.2", True, "203.0.113.10"),
+        (["203.0.113.10"], "203.0.113.10", True, "203.0.113.10"),
+        (["10.0.0.2"], "203.0.113.10, 10.0.0.2", False, "203.0.113.10"),
+        (["198.51.100.5"], "198.51.100.5, 10.0.0.2, 10.0.0.3", True, "198.51.100.5"),
+        (["203.0.113.10"], " 203.0.113.10 , 10.0.0.2", True, "203.0.113.10"),
+    ],
+)
+def test_check_valid_ip_multi_hop_x_forwarded_for(
+    allowed_ips: List[str],
+    xff_header: str,
+    expected_result: bool,
+    expected_ip: str,
+):
+    from litellm.proxy.auth.auth_utils import _check_valid_ip
+
+    request = Request(client_ip="10.0.0.2", headers={"X-Forwarded-For": xff_header})
+
+    result, ip = _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)  # type: ignore
+    assert result == expected_result
+    assert ip == expected_ip
 
 
 @pytest.mark.asyncio
