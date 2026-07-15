@@ -6,6 +6,8 @@ on:
       - main
       - hotfix/**
       - sync/v*
+      - feature/*
+      - release/*
   workflow_dispatch:  # allows manual trigger for testing
 
 env:
@@ -64,6 +66,8 @@ jobs:
           tags: ${{ steps.image.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            PROXY_EXTRAS_SOURCE=local
 
       - name: Build Summary
         run: |
