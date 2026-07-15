@@ -11014,10 +11014,7 @@ class Router:
             and allowed_fails_policy.BadGatewayErrorAllowedFails is not None
         ):
             return allowed_fails_policy.BadGatewayErrorAllowedFails
-        if (
-            isinstance(exception, litellm.NotFoundError)
-            and allowed_fails_policy.NotFoundErrorAllowedFails is not None
-        ):
+        if isinstance(exception, litellm.NotFoundError) and allowed_fails_policy.NotFoundErrorAllowedFails is not None:
             return allowed_fails_policy.NotFoundErrorAllowedFails
 
     def _initialize_alerting(self):
