@@ -985,7 +985,14 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v
             for k, v in kwargs.items()
             if not k.startswith("_websearch_interception")
-            and k not in {"litellm_logging_obj", "acompletion", "custom_llm_provider", "model_alias_map"}
+            and k
+            not in {
+                "_agentic_loop_api_surface",
+                "litellm_logging_obj",
+                "acompletion",
+                "custom_llm_provider",
+                "model_alias_map",
+            }
         }
 
         full_model_name = model
