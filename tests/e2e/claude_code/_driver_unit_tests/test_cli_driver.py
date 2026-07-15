@@ -139,7 +139,7 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     monkeypatch.setenv("HOME", "/home/runner")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "totally-secret")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-proxy-only")
-    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "azure-secret")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-secret")
     monkeypatch.setenv("VERTEXAI_CREDENTIALS", '{"private_key": "leak"}')
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_xxx")
 
@@ -155,7 +155,7 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     assert env["PATH"] == "/usr/bin:/usr/local/bin"
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert "ANTHROPIC_API_KEY" not in env
-    assert "AZURE_FOUNDRY_API_KEY" not in env
+    assert "AZURE_AI_API_KEY" not in env
     assert "VERTEXAI_CREDENTIALS" not in env
     assert "GITHUB_TOKEN" not in env
 

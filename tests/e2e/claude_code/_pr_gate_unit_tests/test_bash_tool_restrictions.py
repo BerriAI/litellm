@@ -35,8 +35,7 @@ from typing import Iterable
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-CLAUDE_CODE_DIR = REPO_ROOT / "tests" / "e2e" / "claude_code"
+CLAUDE_CODE_DIR = Path(__file__).resolve().parents[1]
 
 # Feature directories whose cells drive the `Bash` built-in tool. Add
 # new entries here when a new Bash-using feature is added; the test
@@ -74,14 +73,14 @@ def _has_bare_bash_token(text: str) -> bool:
 
 
 @pytest.mark.parametrize(
-    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(REPO_ROOT))
+    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(CLAUDE_CODE_DIR))
 )
 def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
     """The cell must pass `Bash(echo pong)` as the allow rule, not the
     unrestricted `Bash` value that was originally flagged."""
     text = cell.read_text()
     assert '"Bash(echo pong)"' in text, (
-        f"{cell.relative_to(REPO_ROOT)} must restrict `--allowed-tools` to "
+        f"{cell.relative_to(CLAUDE_CODE_DIR)} must restrict `--allowed-tools` to "
         f'`Bash(echo pong)` (exact-match pattern). Unrestricted `"Bash"` '
         f"grants arbitrary host command execution to model-controlled "
         f"tool_use blocks, which can read `docker inspect compat-proxy` "
@@ -95,7 +94,7 @@ def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
     # in text` short-circuits to True and lets a stray bare `"Bash"`
     # slip through silently.
     assert not _has_bare_bash_token(text), (
-        f"{cell.relative_to(REPO_ROOT)} still references the unrestricted "
+        f"{cell.relative_to(CLAUDE_CODE_DIR)} still references the unrestricted "
         f'`"Bash"` value outside the `"Bash(echo pong)"` allow rule — '
         f"sweep it out before merging."
     )
@@ -130,7 +129,7 @@ def test_has_bare_bash_token_ignores_unrelated_substrings():
 
 
 @pytest.mark.parametrize(
-    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(REPO_ROOT))
+    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(CLAUDE_CODE_DIR))
 )
 def test_bash_cell_uses_dontask_permission_mode(cell: Path) -> None:
     """The cell must pair the allow rule with `--permission-mode dontAsk`
@@ -139,9 +138,25 @@ def test_bash_cell_uses_dontask_permission_mode(cell: Path) -> None:
     succeed without ever surfacing the security issue)."""
     text = cell.read_text()
     assert '"--permission-mode"' in text and '"dontAsk"' in text, (
-        f"{cell.relative_to(REPO_ROOT)} must pass `--permission-mode dontAsk` "
+        f"{cell.relative_to(CLAUDE_CODE_DIR)} must pass `--permission-mode dontAsk` "
         f"alongside the `Bash(echo pong)` allow rule. Without dontAsk, "
         f"commands outside the allow rule fall back to the default ask-"
         f"mode behavior, which in `--print` (headless) mode is non-"
         f"interactive — defeating the explicit-allow contract."
     )
+
+
+def test_claude_code_dir_anchor_is_layout_independent() -> None:
+    """CLAUDE_CODE_DIR must resolve to the `claude_code/` directory that
+    contains this test file, regardless of how deep the repository is
+    mounted. The previous anchor `Path(__file__).resolve().parents[4]`
+    baked in the host layout (repo root sits four levels up) and broke
+    when the suite runs inside the stage container, where tests/e2e/ is
+    mounted at /app/e2e/ so `parents[4]` resolves to filesystem root and
+    the BASH_FEATURE_DIRS assertion looks for `/tests/e2e/claude_code/
+    tool_use`. Anchoring at `parents[1]` (the sibling of this file's
+    parent) is the same directory in both layouts.
+    """
+    assert CLAUDE_CODE_DIR.name == "claude_code"
+    assert CLAUDE_CODE_DIR.is_dir()
+    assert (CLAUDE_CODE_DIR / "_pr_gate_unit_tests" / Path(__file__).name).is_file()

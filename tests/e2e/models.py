@@ -440,6 +440,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
