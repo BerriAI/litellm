@@ -123,6 +123,7 @@ class SupportedGuardrailIntegrations(Enum):
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     HEADROOM = "headroom"
+    STRAIKER = "straiker"
 
 
 class Role(Enum):
