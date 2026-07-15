@@ -55,14 +55,51 @@ class _RoutingRequest:
 
 @pytest.mark.parametrize("route", ["/models", "/v1/models"])
 def test_model_discovery_routes_skip_virtual_key_budget_checks(route):
-    assert (
-        _should_skip_budget_checks(
-            request_data={},
-            route=route,
-            request=None,
-            llm_router=None,
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.info"
+    ) as mock_info:
+        assert (
+            _should_skip_budget_checks(
+                request_data={},
+                route=route,
+                request=None,
+                llm_router=None,
+            )
+            is True
         )
-        is True
+
+    mock_info.assert_called_once_with(
+        "Skipping budget checks for model discovery route: %s", route
+    )
+
+
+def test_zero_cost_model_skip_logs_budget_bypass():
+    llm_router = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
+            return_value="free-model",
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._is_model_cost_zero",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.info"
+        ) as mock_info,
+    ):
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-model"},
+                route="/v1/chat/completions",
+                request=None,
+                llm_router=llm_router,
+            )
+            is True
+        )
+
+    mock_info.assert_called_once_with(
+        "Skipping budget checks for zero-cost model: %s", "free-model"
     )
 
 

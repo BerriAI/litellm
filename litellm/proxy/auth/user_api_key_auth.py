@@ -1346,13 +1346,6 @@ async def _user_api_key_auth_builder(
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
-                    skip_budget_checks = _should_skip_budget_checks(
-                        request_data=request_data,
-                        route=route,
-                        request=request,
-                        llm_router=llm_router,
-                    )
-
                     # Fetch project object for JWT path if project_id is set
                     _jwt_project_obj = None
                     if valid_token.project_id is not None:
@@ -2438,6 +2431,7 @@ def _should_skip_budget_checks(
     llm_router: Optional[Any],
 ) -> bool:
     if route in MODEL_DISCOVERY_ROUTES:
+        verbose_proxy_logger.info("Skipping budget checks for model discovery route: %s", route)
         return True
     model = _get_model_from_request_context(
         request_data=request_data,
@@ -2445,8 +2439,9 @@ def _should_skip_budget_checks(
         request=request,
         llm_router=llm_router,
     )
-    if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
+    if model is not None and llm_router is not None and _is_model_cost_zero(model=model, llm_router=llm_router):
+        verbose_proxy_logger.info("Skipping budget checks for zero-cost model: %s", model)
+        return True
     return False
 
 
