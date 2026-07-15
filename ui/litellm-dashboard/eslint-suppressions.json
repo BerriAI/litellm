@@ -1161,11 +1161,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/tag-management/_components/TagTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/tag-management/_components/components/CreateTagModal.tsx": {
     "no-restricted-imports": {
       "count": 1
