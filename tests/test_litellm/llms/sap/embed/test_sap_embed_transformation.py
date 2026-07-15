@@ -129,3 +129,4 @@ def test_validate_environment_merges_extra_headers(
         assert result["Authorization"] == "Bearer FAKE_TOKEN"
         assert result["AI-Resource-Group"] == "fake-group"
         assert result["custom-header"] == "custom-value"
+        assert result["Content-Type"] == "application/json"
