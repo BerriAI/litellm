@@ -191,6 +191,7 @@ jobs:
               tests/proxy_unit_tests/test_default_end_user_budget_simple.py
               tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
               tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
+              tests/proxy_unit_tests/test_zero_budget_model_discovery.py
             workers: 4
             dist: loadscope
             timeout: 15
