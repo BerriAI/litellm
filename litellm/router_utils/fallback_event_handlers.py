@@ -36,13 +36,13 @@ def _trigger_cooldown_for_failed_deployment(
     try:
         metadata = kwargs.get("litellm_metadata") or {}
         model_info = metadata.get("model_info") or {}
-        deployment_id: Optional[str] = model_info.get("id") if isinstance(model_info, dict) else None
+        deployment_id: str | None = model_info.get("id") if isinstance(model_info, dict) else None
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no deployment_id in metadata")
             return
 
-        exception_status: Union[str, int] = getattr(exception, "status_code", "")
+        exception_status: str | int = getattr(exception, "status_code", "")
 
         time_to_cooldown = litellm_router.cooldown_time
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
