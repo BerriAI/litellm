@@ -14,9 +14,19 @@ vi.mock("@/app/(dashboard)/hooks/useDisableUsageIndicator", () => ({
   useDisableUsageIndicator: vi.fn(() => false),
 }));
 
-import { getRemainingUsers } from "./networking";
+import { getLicenseInfo, getRemainingUsers } from "./networking";
+import type { LicenseInfo } from "./networking";
 
 const mockGetRemainingUsers = vi.mocked(getRemainingUsers);
+const mockGetLicenseInfo = vi.mocked(getLicenseInfo);
+
+const licenseWithExpiry = (expiration_date: string): LicenseInfo => ({
+  has_license: true,
+  license_type: "enterprise",
+  expiration_date,
+  allowed_features: [],
+  limits: { max_users: null, max_teams: null },
+});
 
 const renderWithClient = (ui: React.ReactElement) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -36,6 +46,7 @@ describe("UsageIndicator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetRemainingUsers.mockResolvedValue(DEFAULT_USAGE_DATA);
+    mockGetLicenseInfo.mockResolvedValue(null);
   });
 
   it("should render when given access token and usage data loads", async () => {
@@ -124,6 +135,23 @@ describe("UsageIndicator", () => {
 
     expect(screen.getByText("Teams")).toBeInTheDocument();
     expect(screen.getByText("Over limit")).toBeInTheDocument();
+  });
+
+  it("should show the exact license expiration date instead of time remaining", async () => {
+    mockGetLicenseInfo.mockResolvedValue(licenseWithExpiry("2099-12-31"));
+
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
+
+    expect(await screen.findByText("Expires Dec 31, 2099")).toBeInTheDocument();
+    expect(screen.queryByText(/(day|days|month|months) remaining/)).not.toBeInTheDocument();
+  });
+
+  it("should show the exact date when the license is expired", async () => {
+    mockGetLicenseInfo.mockResolvedValue(licenseWithExpiry("2020-01-01"));
+
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
+
+    expect(await screen.findByText("Expired Jan 1, 2020")).toBeInTheDocument();
   });
 
   it("should render nothing when accessToken is null", () => {
