@@ -3742,12 +3742,14 @@ class TestAgentMCPPermissions:
 
 
 @pytest.mark.asyncio
-async def test_tool_permission_servers_included_in_allowed_servers():
+async def test_tool_permission_only_server_not_granted_server_access():
     """
-    Servers listed only in mcp_tool_permissions (not in mcp_servers)
-    should still be accessible.
+    mcp_servers is the single source of truth for which servers a key can
+    reach; mcp_tool_permissions only narrows which tools are callable on
+    already-granted servers. A server referenced only in mcp_tool_permissions
+    (absent from mcp_servers/mcp_access_groups) must NOT be reachable.
 
-    Regression test for https://github.com/BerriAI/litellm/issues/21954
+    Regression test for https://github.com/BerriAI/litellm/issues/33397
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -3755,8 +3757,6 @@ async def test_tool_permission_servers_included_in_allowed_servers():
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-    # Register the server id so expand_permission_list resolves it rather than
-    # dropping it as stale.
     global_mcp_server_manager.registry["server_id_123"] = MCPServer(
         server_id="server_id_123",
         name="server_id_123",
@@ -3787,9 +3787,63 @@ async def test_tool_permission_servers_included_in_allowed_servers():
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
                 user_api_key_auth=user_api_key_auth,
             )
-            assert "server_id_123" in result
+            assert "server_id_123" not in result
+            assert result == []
     finally:
         global_mcp_server_manager.registry.pop("server_id_123", None)
+
+
+@pytest.mark.asyncio
+async def test_removing_server_revokes_access_despite_stale_tool_permissions():
+    """
+    Removing a server from mcp_servers must revoke it even when a stale
+    mcp_tool_permissions entry for that server still exists. Only the server
+    still in mcp_servers stays reachable.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33397
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for server_id in ("kept_server", "removed_server"):
+        global_mcp_server_manager.registry[server_id] = MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        perm = MagicMock()
+        perm.mcp_servers = ["kept_server"]
+        perm.mcp_access_groups = []
+        # Stale entry left behind by the dashboard when the server was removed.
+        perm.mcp_tool_permissions = {
+            "kept_server": ["tool_a"],
+            "removed_server": ["tool_b"],
+        }
+
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=perm),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth=user_api_key_auth,
+            )
+            assert result == ["kept_server"]
+    finally:
+        for server_id in ("kept_server", "removed_server"):
+            global_mcp_server_manager.registry.pop(server_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -3963,6 +4017,7 @@ class TestOrgMCPPermissions:
             assert "group_server_1" in result
 
     async def test_get_allowed_mcp_servers_for_org_tool_permissions_only(self):
+        """A server referenced only in mcp_tool_permissions is not granted org access."""
         auth = self._make_auth(org_id="org-123")
 
         mock_perm = MagicMock()
@@ -3985,7 +4040,7 @@ class TestOrgMCPPermissions:
             ),
         ):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
-            assert "tool_only_server" in result
+            assert result == []
 
     async def test_get_allowed_mcp_servers_for_org_no_object_permission(self):
         auth = self._make_auth(org_id="org-123")
