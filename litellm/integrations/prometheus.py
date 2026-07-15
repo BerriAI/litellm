@@ -3971,9 +3971,7 @@ class PrometheusLogger(CustomLogger):
                 methods=["GET"],
                 include_in_schema=False,
             )
-        verbose_proxy_logger.debug(
-            "Starting Prometheus Metrics on /metrics (no authentication)"
-        )
+        verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
 
 
 def _prometheus_labels_from_context(

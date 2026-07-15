@@ -32,9 +32,7 @@ def test_metrics_endpoint_no_trailing_slash_no_redirect(monkeypatch):
 
     response = client.get("/metrics")
 
-    assert (
-        response.status_code == 200
-    ), f"bare /metrics must not 307 (got {response.status_code}); see #30079"
+    assert response.status_code == 200, f"bare /metrics must not 307 (got {response.status_code}); see #30079"
     assert "text/plain" in response.headers.get("content-type", "")
 
 
