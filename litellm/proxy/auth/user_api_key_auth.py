@@ -48,6 +48,8 @@ from litellm.proxy.auth.auth_checks import (
     get_project_object,
     get_team_object,
     get_user_object,
+    is_free_model,
+    is_model_info_route,
     is_valid_fallback_model,
     resolve_and_validate_end_user_id,
 )
@@ -1353,7 +1355,12 @@ async def _user_api_key_auth_builder(
                         llm_router=llm_router,
                     )
                     skip_budget_checks = False
-                    if model is not None and llm_router is not None:
+                    if is_model_info_route(route) or is_free_model(model):
+                        skip_budget_checks = True
+                        verbose_proxy_logger.info(
+                            f"Skipping all budget checks for free/model-info route: {route}, model={model}"
+                        )
+                    elif model is not None and llm_router is not None:
                         from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                         skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -1740,7 +1747,12 @@ async def _user_api_key_auth_builder(
                 llm_router=llm_router,
             )
             skip_budget_checks = False
-            if model is not None and llm_router is not None:
+            if is_model_info_route(route) or is_free_model(model):
+                skip_budget_checks = True
+                verbose_proxy_logger.info(
+                    f"Skipping all budget checks for free/model-info route: {route}, model={model}"
+                )
+            elif model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -1835,6 +1847,7 @@ async def _user_api_key_auth_builder(
                             valid_token=valid_token,
                             proxy_logging_obj=proxy_logging_obj,
                             user_obj=user_obj,
+                            model=model,
                         )
 
                     # Check 6. Soft Budget Check
@@ -2452,6 +2465,8 @@ def _should_skip_budget_checks(
         request=request,
         llm_router=llm_router,
     )
+    if is_model_info_route(route) or is_free_model(model):
+        return True
     if model is not None and llm_router is not None:
         return _is_model_cost_zero(model=model, llm_router=llm_router)
     return False

@@ -11,6 +11,7 @@ Run checks for:
 
 import asyncio
 import math
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
@@ -474,6 +475,32 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
+def is_model_info_route(route: str) -> bool:
+    """Check if the route is a read-only model info/listing route exempt from budget checks."""
+    if route in MODEL_DISCOVERY_ROUTES:
+        return True
+    if route.startswith("/models/") or route.startswith("/v1/models/"):
+        return True
+    return False
+
+
+def _get_free_models_from_env() -> set[str]:
+    free_models_env = os.getenv("FREE_MODELS", "")
+    return {model.strip() for model in free_models_env.split(",") if model.strip()}
+
+
+def is_free_model(model: Optional[Union[str, List[str]]]) -> bool:
+    """Return True when every requested model is configured as free via FREE_MODELS."""
+    if model is None:
+        return False
+    free_models = _get_free_models_from_env()
+    if not free_models:
+        return False
+    if isinstance(model, list):
+        return len(model) > 0 and all(m in free_models for m in model)
+    return model in free_models
+
+
 async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -518,8 +545,11 @@ async def common_checks(
         llm_router=llm_router,
     )
 
-    if route in MODEL_DISCOVERY_ROUTES:
+    if is_model_info_route(route):
         skip_budget_checks = True
+    elif is_free_model(_model):
+        skip_budget_checks = True
+        verbose_proxy_logger.info(f"Skipping all budget checks for free model: {_model}")
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -3432,6 +3462,7 @@ async def _virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
     user_obj: Optional[LiteLLM_UserTable] = None,
+    model: Optional[Union[str, List[str]]] = None,
 ):
     """
     Raises:
@@ -3439,6 +3470,15 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
+    if is_free_model(model):
+        user_email = (
+            user_obj.user_email
+            if user_obj and user_obj.user_email
+            else (user_obj.user_id if user_obj else "unknown")
+        )
+        verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {model}")
+        return
+
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
