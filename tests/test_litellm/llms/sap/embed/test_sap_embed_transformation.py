@@ -106,3 +106,26 @@ def test_embed_with_masking(fake_token_creator, fake_deployment_url):
             headers={},
         )
         assert body["config"]["modules"]["masking"] == masking_config
+
+
+def test_validate_environment_merges_extra_headers(
+    fake_token_creator, fake_deployment_url
+):
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        result = GenAIHubEmbeddingConfig().validate_environment(
+            headers={"custom-header": "custom-value"},
+        )
+
+        assert result["Authorization"] == "Bearer FAKE_TOKEN"
+        assert result["AI-Resource-Group"] == "fake-group"
+        assert result["custom-header"] == "custom-value"

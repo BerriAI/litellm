@@ -639,3 +639,32 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+    def test_validate_environment_merges_extra_headers(self, mock_config):
+        result = mock_config.validate_environment(
+            headers={
+                "ai-inference-observability-persistence-mode": "all",
+            },
+            model="gpt-4o",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result["Authorization"] == "Bearer TEST_TOKEN"
+        assert result["AI-Resource-Group"] == "test-group"
+        assert result["Content-Type"] == "application/json"
+        assert result["AI-Client-Type"] == "LiteLLM"
+        assert result["ai-inference-observability-persistence-mode"] == "all"
+
+    def test_validate_environment_extra_headers_override_defaults(self, mock_config):
+        result = mock_config.validate_environment(
+            headers={"Content-Type": "application/xml"},
+            model="gpt-4o",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result["Content-Type"] == "application/xml"
+        assert result["Authorization"] == "Bearer TEST_TOKEN"
