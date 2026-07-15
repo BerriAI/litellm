@@ -8,7 +8,6 @@ import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/
 const baseProps = {
   isLoading: false,
   onDeleteClick: vi.fn(),
-  onGuardrailUpdated: vi.fn(),
   onGuardrailClick: vi.fn(),
 };
 
