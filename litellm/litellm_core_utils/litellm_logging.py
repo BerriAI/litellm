@@ -1241,8 +1241,9 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
         )
+        tool_call_content = getattr(response_obj, "content", response_obj)
         post_mcp_tool_call_response_obj: MCPPostCallResponseObject = MCPPostCallResponseObject(
-            mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
+            mcp_tool_call_response=tool_call_content, hidden_params=HiddenParams()
         )
         for callback in callbacks:
             try:
@@ -1258,12 +1259,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     # current implementation returns the first modified response
                     ######################################################################
                     if response is not None:
-                        response_obj = self._parse_post_mcp_call_hook_response(response=response)
+                        tool_call_content = self._parse_post_mcp_call_hook_response(response=response)
             except Exception as e:
                 verbose_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(str(e))
                 )
-        return response_obj
+        return tool_call_content
 
     def _parse_post_mcp_call_hook_response(self, response: Optional[MCPPostCallResponseObject]) -> Any:
         """

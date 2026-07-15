@@ -2867,12 +2867,14 @@ if MCP_AVAILABLE:
         callbacks.
         """
         logging_obj.post_call(original_response=result)
-        await logging_obj.async_post_mcp_tool_call_hook(
+        post_hook_content = await logging_obj.async_post_mcp_tool_call_hook(
             kwargs=logging_obj.model_call_details,
             response_obj=result,
             start_time=start_time,
             end_time=end_time,
         )
+        if isinstance(post_hook_content, list) and hasattr(result, "content"):
+            result.content = post_hook_content
         logging_obj.call_type = CallTypes.call_mcp_tool.value
         error_message = extract_mcp_tool_result_error_message(result)
         if error_message is None:

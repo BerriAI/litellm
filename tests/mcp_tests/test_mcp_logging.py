@@ -446,3 +446,91 @@ async def test_mcp_tool_call_hook():
                 logged_standard_logging_payload is not None
             ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
+
+
+class MCPRedactingHook(CustomLogger):
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> Optional[MCPPostCallResponseObject]:
+        response_obj.mcp_tool_call_response = [
+            TextContent(type="text", text="[REDACTED]")
+        ]
+        return response_obj
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_hook_modifies_client_response():
+    """A post-call hook that rewrites mcp_tool_call_response must change the
+    CallToolResult returned to the MCP client, not only the logged payload."""
+    litellm.logging_callback_manager._reset_all_callbacks()
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234 must be redacted")],
+        isError=False,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.list_tools = AsyncMock(
+        return_value=[
+            MCPTool(
+                name="add_tools",
+                description="Test tool",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"test": {"type": "string"}},
+                },
+            )
+        ]
+    )
+
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    local_mcp_server_manager = MCPServerManager()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        mock_client_constructor,
+    ):
+        await local_mcp_server_manager.load_servers_from_config(
+            mcp_servers_config={
+                "zapier_gmail_server": {
+                    "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
+                }
+            }
+        )
+
+        litellm.callbacks = [MCPRedactingHook()]
+
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = (
+            "zapier_gmail_server"
+        )
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "zapier_gmail_server-add_tools"
+        ] = "zapier_gmail_server"
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                local_mcp_server_manager,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                local_mcp_server_manager,
+            ),
+        ):
+            _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
+
+            response = await mcp_server_tool_call(
+                name="zapier_gmail_server-add_tools",
+                arguments={"test": "test"},
+            )
+
+            assert isinstance(response, CallToolResult)
+            assert len(response.content) == 1
+            assert response.content[0].text == "[REDACTED]"
+            assert all(
+                "SECRET-1234" not in getattr(item, "text", "")
+                for item in response.content
+            )
