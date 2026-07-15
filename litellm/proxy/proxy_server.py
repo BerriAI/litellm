@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     AsyncGenerator,
     Callable,
@@ -467,6 +468,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_ai_live_websocket_passthrough,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    deepgram_listen_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -9594,6 +9598,23 @@ async def vertex_ai_live_passthrough_endpoint(
         model=model,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+@app.websocket("/deepgram/v1/listen")
+@app.websocket("/deepgram/listen")
+async def deepgram_listen_passthrough_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+):
+    """
+    Deepgram streaming Speech-to-Text (`/v1/listen`) WebSocket pass-through endpoint
+
+    Delegates to the WebSocket function defined in llm_passthrough_endpoints.py
+    """
+    return await deepgram_listen_websocket_passthrough(
+        websocket=websocket,
         user_api_key_dict=user_api_key_dict,
     )
 

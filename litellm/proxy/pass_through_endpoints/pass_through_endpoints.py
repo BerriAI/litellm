@@ -1825,6 +1825,21 @@ def create_websocket_passthrough_route(
     return websocket_endpoint_func
 
 
+def decode_ws_frame_for_logging(frame: str | bytes) -> dict[str, Any] | None:
+    """
+    Best-effort decode a WebSocket frame into a JSON object for cost tracking.
+
+    Returns the decoded object when the frame is a UTF-8 JSON object, otherwise ``None``.
+    Non-JSON text (e.g. keep-alives) and non-UTF-8 binary frames (e.g. streamed audio) are
+    not decodable and return ``None``; the caller still relays them to the peer verbatim.
+    """
+    try:
+        decoded = json.loads(frame.decode("utf-8") if isinstance(frame, bytes) else frame)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -1834,6 +1849,8 @@ async def websocket_passthrough_request(
     endpoint: Optional[str] = None,
     cost_per_request: Optional[float] = None,
     accept_websocket: bool = True,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -1846,6 +1863,9 @@ async def websocket_passthrough_request(
         forward_headers: Whether to forward incoming headers
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
+        model: Optional model to seed the logging object with (providers that know the
+            model up-front, e.g. Deepgram, pass it so cost tracking has it immediately)
+        custom_llm_provider: Optional provider to seed the logging object with
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1857,6 +1877,7 @@ async def websocket_passthrough_request(
     start_time = datetime.now()
     websocket_messages: list[dict[str, Any]] = []
     litellm_call_id = str(uuid.uuid4())
+    resolved_model = model or "unknown"
 
     verbose_proxy_logger.info(f"WebSocket passthrough ({endpoint}): Starting WebSocket connection to {target}")
 
@@ -1882,7 +1903,7 @@ async def websocket_passthrough_request(
 
     # Initialize logging object similar to HTTP passthrough
     logging_obj = Logging(
-        model="unknown",
+        model=resolved_model,
         messages=[{"role": "user", "content": "WebSocket connection"}],
         stream=True,  # WebSockets are inherently streaming
         call_type="pass_through_endpoint",
@@ -1928,13 +1949,19 @@ async def websocket_passthrough_request(
 
     # Update logging environment variables
     logging_obj.update_environment_variables(
-        model="unknown",
+        model=resolved_model,
         user="unknown",
         optional_params={},
         litellm_params=dict(kwargs.get("litellm_params", {})),
         call_type="pass_through_endpoint",
     )
     logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+    if model is not None:
+        kwargs["model"] = model
+        logging_obj.model_call_details["model"] = model
+    if custom_llm_provider is not None:
+        kwargs["custom_llm_provider"] = custom_llm_provider
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
 
     # Pre-call logging
     logging_obj.pre_call(
@@ -2032,63 +2059,41 @@ async def websocket_passthrough_request(
                     )
                     await upstream_ws.close()
 
+            is_vertex_ai_live = bool(endpoint and "/vertex_ai/live" in endpoint)
+
+            def _maybe_extract_vertex_model(message_data: dict[str, Any]) -> None:
+                """Extract the Vertex AI Live model from the first server frame that carries it."""
+                if not is_vertex_ai_live or kwargs.get("model") not in (None, "unknown"):
+                    return
+                extracted_model = _extract_model_from_vertex_ai_setup(message_data)
+                if not extracted_model:
+                    return
+                kwargs["model"] = extracted_model
+                kwargs["custom_llm_provider"] = "vertex_ai_language_models"
+                logging_obj.model = extracted_model
+                logging_obj.model_call_details["model"] = extracted_model
+                logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai_language_models"
+                verbose_proxy_logger.debug(
+                    f"WebSocket passthrough ({endpoint}): extracted model '{extracted_model}' from server frame"
+                )
+
             async def forward_upstream_to_client() -> None:
-                """Forward messages from upstream to client WebSocket"""
+                """Forward messages from upstream to client WebSocket.
+
+                Forwards every frame verbatim (text or binary) and, best-effort, decodes
+                JSON text/binary frames for cost tracking. Non-JSON and non-UTF-8 binary
+                frames (e.g. streamed audio) are still relayed to the client untouched.
+                """
                 try:
-                    # Wait for the first response from upstream
-                    raw_response = await upstream_ws.recv(decode=False)
-                    # Ensure raw_response is bytes before decoding
-                    if isinstance(raw_response, str):
-                        raw_response = raw_response.encode("ascii")
-                    setup_response = json.loads(raw_response.decode("ascii"))
-                    verbose_proxy_logger.debug(f"Setup response: {setup_response}")
-
-                    # Extract model and provider from setup response for Vertex AI Live
-                    if endpoint and "/vertex_ai/live" in endpoint:
-                        verbose_proxy_logger.debug(
-                            f"WebSocket passthrough ({endpoint}): Processing server setup response for model extraction"
-                        )
-                        extracted_model = _extract_model_from_vertex_ai_setup(setup_response)
-                        if extracted_model:
-                            kwargs["model"] = extracted_model
-                            kwargs["custom_llm_provider"] = "vertex_ai_language_models"
-                            # Update logging object with correct model
-                            logging_obj.model = extracted_model
-                            logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai_language_models"
-                            verbose_proxy_logger.debug(
-                                f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
-                            )
-                        else:
-                            verbose_proxy_logger.warning(
-                                f"WebSocket passthrough ({endpoint}): Failed to extract model from server setup response: {setup_response}"
-                            )
-                    else:
-                        verbose_proxy_logger.debug(
-                            f"WebSocket passthrough ({endpoint}): Not a Vertex AI Live endpoint, skipping model extraction"
-                        )
-
-                    # Send the setup response to the client
-                    await websocket.send_text(json.dumps(setup_response))
-
-                    # Now continuously forward messages from upstream to client
                     async for upstream_message in upstream_ws:
                         if isinstance(upstream_message, bytes):
                             await websocket.send_bytes(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data = json.loads(upstream_message.decode())
-                                websocket_messages.append(message_data)
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
                         else:
                             await websocket.send_text(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data = json.loads(upstream_message)
-                                websocket_messages.append(message_data)
-                            except json.JSONDecodeError:
-                                pass
+                        message_data = decode_ws_frame_for_logging(upstream_message)
+                        if message_data is not None:
+                            websocket_messages.append(message_data)
+                            _maybe_extract_vertex_model(message_data)
 
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug(f"Upstream WebSocket connection closed: {e}")

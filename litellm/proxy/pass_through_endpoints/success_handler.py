@@ -88,6 +88,7 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+        self.TRACKED_DEEPGRAM_LIVE_ROUTES = ["/deepgram/v1/listen", "/deepgram/listen"]
 
     async def _handle_logging(
         self,
@@ -259,6 +260,23 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
+        elif self.is_deepgram_live_route(url_route):
+            from .llm_provider_handlers.deepgram_live_passthrough_logging_handler import (
+                DeepgramLivePassthroughLoggingHandler,
+            )
+
+            deepgram_live_handler = DeepgramLivePassthroughLoggingHandler()
+            deepgram_websocket_messages: list[dict[str, Any]] = response_body if isinstance(response_body, list) else []
+
+            deepgram_live_handler_result = deepgram_live_handler.deepgram_live_passthrough_handler(
+                websocket_messages=deepgram_websocket_messages,
+                start_time=start_time,
+                end_time=end_time,
+                **kwargs,
+            )
+
+            standard_logging_response_object = deepgram_live_handler_result["result"]
+            kwargs = deepgram_live_handler_result["kwargs"]
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
@@ -376,6 +394,15 @@ class PassThroughEndpointLogging:
         if not url_route:
             return False
         for route in self.TRACKED_VERTEX_AI_LIVE_ROUTES:
+            if route in url_route:
+                return True
+        return False
+
+    def is_deepgram_live_route(self, url_route: str):
+        """Check if the URL route is a Deepgram streaming `/listen` WebSocket route."""
+        if not url_route:
+            return False
+        for route in self.TRACKED_DEEPGRAM_LIVE_ROUTES:
             if route in url_route:
                 return True
         return False

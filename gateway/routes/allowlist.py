@@ -83,6 +83,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/aws/",
     "/bedrock/",
     "/cohere/",
+    "/deepgram/",
     "/gemini/",
     "/google/",
     "/vertex_ai/",
