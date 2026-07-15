@@ -1,0 +1,141 @@
+# systemd service for the Claude Code compatibility-matrix populator.
+#
+# Triggered by `litellm-compat-matrix.timer`; not started directly. The
+# unit is a `Type=oneshot` so the timer's `OnCalendar=` semantics
+# describe "run once per day" cleanly — there's no long-lived daemon to
+# supervise; each invocation runs the populator end-to-end and exits.
+#
+# Install
+# -------
+#
+#   sudo cp tests/e2e/claude_code/cron_vm/litellm-compat-matrix.service /etc/systemd/system/
+#   sudo cp tests/e2e/claude_code/cron_vm/litellm-compat-matrix.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now litellm-compat-matrix.timer
+#
+# Paths are hard-coded to /home/mateo rather than using systemd's %h
+# specifier. Why: in *system* units (this one), %h is expanded at
+# parse time against the *manager's* home -- which is /root for PID 1
+# -- and *not* against the User= directive. That mismatch makes
+# ReadWritePaths point at /root/.cache (which doesn't exist), causing
+# the namespace setup to fail with status=226/NAMESPACE before the
+# script ever runs. The runtime user (`User=mateo`) must:
+#
+#   * have a checkout of `BerriAI/litellm` at `~/litellm/litellm` so the
+#     publisher module is importable;
+#   * have a uv venv at `~/litellm/litellm/.venv` (created by
+#     `uv sync --frozen` inside that checkout once);
+#   * have `gh` already authenticated against an account with
+#     `pull-requests: write` on `BerriAI/litellm-docs`;
+#   * have provider credentials exported in `/etc/litellm-compat-matrix.env`
+#     (see `litellm-compat-matrix.env.example` in this directory).
+
+[Unit]
+Description=Claude Code compatibility-matrix populator (oneshot)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=mateo
+Group=mateo
+
+# Provider credentials + any gh/PROXY_PORT overrides live here. Format
+# is the standard `KEY=value` one line per env var.
+EnvironmentFile=-/etc/litellm-compat-matrix.env
+
+# systemd starts with a minimal PATH (~/usr/local/bin:/usr/bin:/bin).
+# `uv` and `claude` are installed under the runtime user's `~/.local/bin`
+# so we have to prepend it explicitly; otherwise run_daily.sh fails at
+# the up-front command-presence check.
+Environment=PATH=/home/mateo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# `HOME` is auto-set to /home/mateo when User=mateo is honored, but be
+# explicit so anything that reads $HOME (e.g. uv's cache lookup, the
+# claude CLI's per-session dir) sees the right value even if a future
+# refactor flips DynamicUser= or PrivateUsers= on.
+Environment=HOME=/home/mateo
+
+WorkingDirectory=/home/mateo/litellm/litellm
+
+ExecStart=/home/mateo/litellm/litellm/tests/e2e/claude_code/cron_vm/run_daily.sh
+
+# 90 minutes is generous: cold runs do `git clone` + `uv sync` of a new
+# tag's lockfile, which can take a couple of minutes on a 2-vCPU VM,
+# plus 30 cells of pytest hitting four cloud providers.
+TimeoutStartSec=90min
+
+# A failed run shouldn't restart automatically — the next timer fire is
+# the right retry. Reruns of the same day's matrix are idempotent.
+Restart=no
+
+# Security hardening: the populator only reads the litellm checkout and
+# the env-file; everything else it writes lives in either the worktree
+# (managed) or `/tmp` (cleaned up by tempfile).
+#
+# `ProtectHome=read-only` blocks writes to /home/mateo but still
+# allows reads. That's safe for the trusted run_daily.sh script
+# itself, but unsafe for any subprocess we don't control: a
+# compromised npm-installed `claude` package, or a model-directed
+# `Read` tool call during a PDF/vision cell, could read sensitive
+# host files like `~/.config/gh/hosts.yml` (gh-host token),
+# `~/.ssh/`, or `~/.bash_history`. We mitigate that at the call
+# boundary: every `claude` subprocess (the up-front `claude --version`
+# probe in run_daily.sh, plus every CLI invocation routed through
+# tests/e2e/claude_code/cli_driver.py) runs with `HOME` pointed at a
+# fresh empty per-invocation tmpdir, not at /home/mateo. The CLI
+# never sees the runtime user's real dotfiles. `gh` invocations in
+# run_daily.sh pass `GH_TOKEN` inline, so they never need to read
+# ~/.config/gh either; that path is intentionally NOT in the
+# whitelist below — keeping it out is the second line of defense if
+# the inline-token convention is ever accidentally regressed.
+#
+# ReadWritePaths whitelist:
+#   * litellm-cron-worktree    - the long-lived stable-tag checkout +
+#                                its `.venv` (`uv sync` rewrites every
+#                                run) + `.uv-bin` (pinned `uv` binary
+#                                cache).
+#   * .cache                   - uv's wheel cache (~/.cache/uv) so we
+#                                don't redownload pinned deps each
+#                                run. Used only by the trusted `uv`
+#                                process; not exposed to `claude`.
+#   * /tmp                     - mktemp -d workdir, proxy logs, and
+#                                the per-`claude`-invocation isolated
+#                                HOME tmpdirs. PrivateTmp=true below
+#                                gives the service its own tmpfs view
+#                                so these don't escape to the host.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/mateo/litellm-cron-worktree /home/mateo/.cache /tmp
+PrivateTmp=true
+
+# Filesystem-level hiding for credential-bearing dotdirs/files. Even
+# though `ProtectHome=read-only` prevents writes, a model-directed
+# `Read` tool call (the PDF cells pass `--allowed-tools Read`) or a
+# compromised `claude` package can read absolute paths under
+# /home/mateo and exfiltrate the contents. `InaccessiblePaths=` makes
+# the listed paths look like empty/missing to every process in the
+# unit's mount namespace -- including the trusted populator script,
+# which is fine because it doesn't need any of these:
+#
+#   * .config/gh   - gh CLI host token; we pass GH_TOKEN inline to
+#                    every `gh` invocation (clone/PR/reviewer) so the
+#                    host config is never consulted.
+#   * .ssh         - never used by the populator.
+#   * .aws         - upstream AWS credentials are passed to the proxy
+#                    via the EnvironmentFile (provider env vars), not
+#                    via shared SDK config files.
+#   * .docker      - the populator never talks to a docker socket.
+#   * .kube        - the populator never talks to a k8s API.
+#   * .gnupg       - no GPG signing on the bot's commits.
+#
+# Leading `-` makes systemd tolerant if a path doesn't exist on the
+# host (the unit is portable across VMs that may not have all of
+# them set up). Anything else under /home/mateo (the litellm
+# checkout, the cron worktree, the uv cache, .local/bin for the
+# claude/uv/gh binaries on PATH) stays read-accessible.
+InaccessiblePaths=-/home/mateo/.config/gh -/home/mateo/.ssh -/home/mateo/.aws -/home/mateo/.docker -/home/mateo/.kube -/home/mateo/.gnupg
+
+[Install]
+WantedBy=multi-user.target
