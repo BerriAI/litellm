@@ -1,6 +1,7 @@
 import os
 import socket
 from typing import Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +12,7 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
     allocate_free_port,
     clear_pid_record,
     is_running,
+    launch_proxy,
     poll_liveliness,
     read_pid_record,
     write_pid_record,
@@ -34,6 +36,22 @@ def test_allocate_free_port_returns_a_bindable_port():
     port = allocate_free_port()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", port))
+
+
+class TestLaunchProxy:
+    def test_binds_loopback_only_not_all_interfaces(self, tmp_path):
+        """proxy_cli.py's own --host default is 0.0.0.0 -- without an explicit override here, the
+        ephemeral proxy would be reachable from other hosts on the network despite base_url always
+        being built from 127.0.0.1, exposing its unauthenticated-until-master-key-lands routes."""
+        config_path = tmp_path / "config.yaml"
+        log_path = tmp_path / "proxy.log"
+
+        with patch.object(process_module.subprocess, "Popen") as mock_popen:
+            launch_proxy(config_path, 12345, log_path)
+
+        args = mock_popen.call_args[0][0]
+        assert "--host" in args
+        assert args[args.index("--host") + 1] == "127.0.0.1"
 
 
 class TestPidRecordRoundTrip:

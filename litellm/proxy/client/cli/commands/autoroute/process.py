@@ -47,7 +47,17 @@ def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Po
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as log_file:
         return subprocess.Popen(
-            [sys.executable, "-m", "litellm.proxy.proxy_cli", "--config", str(config_path), "--port", str(port)],
+            [
+                sys.executable,
+                "-m",
+                "litellm.proxy.proxy_cli",
+                "--config",
+                str(config_path),
+                "--port",
+                str(port),
+                "--host",
+                "127.0.0.1",
+            ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
