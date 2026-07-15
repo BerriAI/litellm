@@ -38,10 +38,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
-from ..utils import is_reasoning_auto_summary_enabled
-
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
+from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
@@ -383,17 +382,17 @@ def _drop_unsupported_anthropic_messages_params(
     custom_llm_provider: Optional[str],
     additional_drop_params: Optional[list] = None,
 ) -> dict:
-    from litellm.utils import _should_drop_param
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.utils import _should_drop_param
 
     additional_drop_params = additional_drop_params or []
     for k in list(anthropic_messages_optional_request_params.keys()):
         if _should_drop_param(k, additional_drop_params):
             anthropic_messages_optional_request_params.pop(k, None)
 
-    if not AnthropicConfig._model_supports_effort_param(model):
+    if not AnthropicConfig._model_supports_effort_param(model, custom_llm_provider or "anthropic"):
         anthropic_messages_optional_request_params.pop("output_config", None)
-    if not AnthropicConfig._supports_model_capability(model, "supports_reasoning"):
+    if not AnthropicConfig._supports_model_capability(model, "supports_reasoning", custom_llm_provider or "anthropic"):
         anthropic_messages_optional_request_params.pop("thinking", None)
     if "context_management" in anthropic_messages_optional_request_params:
         if custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower():
