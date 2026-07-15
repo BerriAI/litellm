@@ -206,8 +206,18 @@ class SemanticMCPToolFilter:
         the filter came through an authenticated expansion; without indexing
         them here they can never be selected, so requests either bypass
         filtering entirely (N->N) or lose every tool to unrelated matches.
+
+        Runs async-only (no synchronous embedding on the request path) and
+        never writes shared error state: an embedding failure here raises and
+        is scoped to the requesting call, so one request's oversized tool
+        description cannot poison the filter for other users on the worker.
         """
+        from semantic_router.routers import SemanticRouter
         from semantic_router.routers.base import Route
+
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
 
         if not self._has_tools_missing_from_index(available_tools):
             return
@@ -215,14 +225,6 @@ class SemanticMCPToolFilter:
         async with self._index_sync_lock:
             missing = self._tools_missing_from_index(available_tools)
             if not missing:
-                return
-
-            if self.tool_router is None:
-                self._build_router(list(missing.values()))
-                if self.tool_router is not None:
-                    verbose_logger.info(
-                        f"Semantic tool filter indexed {len(missing)} request-time tools missing from the startup index"
-                    )
                 return
 
             descriptions = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
@@ -235,7 +237,23 @@ class SemanticMCPToolFilter:
                 )
                 for name, description in descriptions.items()
             ]
-            await self.tool_router.aadd(routes)
+
+            if self.tool_router is None:
+                router = SemanticRouter(
+                    routes=[],
+                    encoder=LiteLLMRouterEncoder(
+                        litellm_router_instance=self.router_instance,
+                        model_name=self.embedding_model,
+                        score_threshold=self.similarity_threshold,
+                    ),
+                    auto_sync="local",
+                    top_k=self.top_k,
+                )
+                await router.aadd(routes)
+                self.tool_router = router
+            else:
+                await self.tool_router.aadd(routes)
+
             self._tool_map.update(missing)
             verbose_logger.info(
                 f"Semantic tool filter indexed {len(routes)} request-time tools missing from the startup index"
@@ -279,19 +297,18 @@ class SemanticMCPToolFilter:
         try:
             await self._ensure_tools_indexed(available_tools)
 
-            if self.context_window_error is not None:
-                raise SemanticToolFilterContextWindowError(
-                    embedding_model=self.embedding_model,
-                    stage="the MCP tool descriptions during semantic router build",
-                    original_error=self.context_window_error,
-                )
-
             if self.tool_router is None:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
                 return available_tools
 
+            available_names = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            if not available_names:
+                return available_tools
+
             limit = top_k or self.top_k
-            matches = self.tool_router(text=query, limit=limit)
+            if self.tool_router.top_k < limit:
+                self.tool_router.top_k = limit
+            matches = self.tool_router(text=query, limit=limit, route_filter=available_names)
             matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
