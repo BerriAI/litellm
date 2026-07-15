@@ -45,6 +45,37 @@ EXPECTED_PROVIDERS = [
     "azure",
 ]
 
+# The GPT-5.6 (Sol / Terra / Luna) columns added 2026-07, in manifest
+# order after the v0 Claude columns. Unlike the v0 columns they only
+# back GPT_FEATURE_IDS below; other rows render not_tested for them.
+GPT_PROVIDERS = [
+    "openai",
+    "azure_openai",
+    "bedrock_mantle",
+    "vertex_ai_gpt",
+]
+
+# GPT columns that drive the claude CLI against a live route.
+# `vertex_ai_gpt` is excluded: GCP does not offer the closed-weight
+# GPT-5.6 family, so its cells are static not_applicable stubs.
+GPT_LIVE_PROVIDERS = [
+    "openai",
+    "azure_openai",
+    "bedrock_mantle",
+]
+
+# Feature rows backed by GPT cells.
+GPT_FEATURE_IDS = [
+    "basic_messaging_non_streaming",
+    "basic_messaging_streaming",
+    "tool_use",
+    "tool_use_streaming",
+]
+
+# Every live GPT cell must exercise the three GPT-5.6 tiers, mirroring
+# the three-Claude-tier rule for the v0 columns.
+GPT_TIER_SUBSTRINGS = ("5-6-sol", "5-6-terra", "5-6-luna")
+
 
 def _all_manifest_feature_ids() -> list[str]:
     """Every feature_id currently declared in `manifest.yaml`.
@@ -80,7 +111,18 @@ def test_manifest_lists_all_six_v0_features_in_order(manifest):
 
 
 def test_manifest_lists_all_five_v0_providers_in_order(manifest):
-    assert manifest["providers"] == EXPECTED_PROVIDERS
+    """The v0 column set stays pinned at positions [0:5] for the
+    lifetime of the schema, mirroring the v0 feature-row pin above;
+    columns added later (the GPT-5.6 set) may only extend the list.
+    """
+    assert manifest["providers"][: len(EXPECTED_PROVIDERS)] == EXPECTED_PROVIDERS
+
+
+def test_manifest_lists_gpt_provider_columns_after_v0(manifest):
+    """The GPT-5.6 columns follow the v0 columns in a fixed order so
+    the rendered matrix keeps Claude and GPT column groups contiguous.
+    """
+    assert manifest["providers"][len(EXPECTED_PROVIDERS) :] == GPT_PROVIDERS
 
 
 def test_manifest_every_feature_has_human_readable_name(manifest):
@@ -156,6 +198,46 @@ def test_per_provider_test_file_imports_and_parametrizes_three_models(
         assert (
             tier in text
         ), f"{feature_id}/test_{provider}.py does not reference {tier}"
+
+
+@pytest.mark.parametrize("feature_id", GPT_FEATURE_IDS)
+@pytest.mark.parametrize("provider", GPT_PROVIDERS)
+def test_gpt_cell_test_file_exists(feature_id, provider):
+    """Every (GPT feature, GPT provider) cell must be backed by a test
+    file; a missing file silently becomes a `not_tested` cell in the
+    published matrix rather than a CI failure surfacing the drift."""
+    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    assert test_file.is_file(), f"missing per-provider test file: {test_file}"
+
+
+@pytest.mark.parametrize("feature_id", GPT_FEATURE_IDS)
+@pytest.mark.parametrize("provider", GPT_LIVE_PROVIDERS)
+def test_gpt_cell_references_three_gpt_tiers(feature_id, provider):
+    """Every live GPT cell must exercise Sol, Terra, and Luna — the
+    same all-tiers-or-red rule the v0 columns apply to the three
+    Claude tiers."""
+    text = (REPO_ROOT / feature_id / f"test_{provider}.py").read_text()
+    for tier in GPT_TIER_SUBSTRINGS:
+        assert (
+            tier in text
+        ), f"{feature_id}/test_{provider}.py does not reference {tier}"
+
+
+@pytest.mark.parametrize("feature_id", GPT_FEATURE_IDS)
+def test_vertex_ai_gpt_cell_is_a_static_not_applicable_stub(feature_id):
+    """GCP does not offer the closed-weight GPT-5.6 family, so the
+    `vertex_ai_gpt` cells must report `not_applicable` and must not
+    drive the claude CLI. If Google adds the models, flip the stubs to
+    live cells and update this pin alongside GPT_LIVE_PROVIDERS."""
+    text = (REPO_ROOT / feature_id / "test_vertex_ai_gpt.py").read_text()
+    assert '"status": "not_applicable"' in text, (
+        f"{feature_id}/test_vertex_ai_gpt.py must report not_applicable while "
+        "GCP Vertex AI does not offer the GPT-5.6 family."
+    )
+    assert "run_claude" not in text, (
+        f"{feature_id}/test_vertex_ai_gpt.py must not drive the claude CLI; "
+        "there is no GPT-5.6 route on Vertex AI to exercise."
+    )
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
