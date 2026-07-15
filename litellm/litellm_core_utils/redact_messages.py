@@ -85,12 +85,40 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _redact_provider_specific_fields(
+            getattr(choice.message, "provider_specific_fields", None)
+        )
     elif isinstance(choice, litellm.utils.StreamingChoices):
         choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
             choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _redact_provider_specific_fields(
+            getattr(choice.delta, "provider_specific_fields", None)
+        )
+
+
+def _redact_provider_specific_fields(psf):
+    """Wholesale-clear a response Message/Delta ``provider_specific_fields`` dict.
+
+    This is a provider-NATIVE grab-bag. Beyond the reasoning duplicates
+    (``reasoning_content``/``thinking_blocks``/``reasoningContentBlocks``),
+    providers stash output-bearing content under ~20 other keys an allowlist can
+    never enumerate: Anthropic ``citations``/``web_search_results``/
+    ``tool_results``/``code_interpreter_results``/``compaction_blocks``, Bedrock
+    ``citationsContent``, Gemini ``thought_signatures``/
+    ``server_side_tool_invocations``, Cohere ``tool_plan``, MCP
+    ``mcp_call_results``, RAG ``search_results``, and so on — the same
+    unenumerable shape as the provider-native request body. Redaction only ever
+    runs on the logging copy, and no consumer reads a named key off that copy
+    (streaming reassembly and multi-turn replay read the untouched live response
+    / request history instead), so we clear the whole dict to close the class
+    instead of chasing keys one provider at a time.
+    """
+    if not isinstance(psf, dict):
+        return
+    psf.clear()
 
 
 def _redact_responses_api_output(output_items):
@@ -162,6 +190,105 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
+# Input-bearing keys that show up in the proxy_server_request.body snapshot.
+# This is the LiteLLM-API (OpenAI-compat) request body, so its input keys are
+# a finite, stable set; it must stay key-based (not wholesale-redacted) because
+# downstream consumers read named keys off it (`user`->Lago billing,
+# `tools`->spend-log index, `input`/`messages`->Responses session).
+# "messages"/"prompt"/"input" are the OpenAI-style payload entry points;
+# "contents" is the Gemini/Vertex native user-turn field.
+# "query"/"documents" are the rerank inputs and "document" the OCR input —
+# all top-level keys the proxy preserves verbatim in this snapshot.
+# "system"/"system_prompt"/"instructions" are the provider-native top-level
+# system-prompt fields (Anthropic `system`, Responses API `instructions`);
+# "system_instruction"/"systemInstruction" are the Gemini/Vertex equivalents.
+# All carry user content just as the messages do.
+# (additional_args.complete_input_dict is the provider-native wire body and is
+# wholesale-redacted in _redact_additional_args_complete_input_dict instead.)
+def _redact_request_body_dict(body: dict):
+    """Scrub the input/system-prompt keys on the proxy_server_request body dict."""
+    if "messages" in body:
+        body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    if "prompt" in body:
+        body["prompt"] = ""
+    if "input" in body:
+        body["input"] = ""
+    if "contents" in body:
+        body["contents"] = [
+            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
+        ]
+    if "query" in body:  # rerank
+        body["query"] = "redacted-by-litellm"
+    if "documents" in body:  # rerank
+        body["documents"] = ["redacted-by-litellm"]
+    if "document" in body:  # OCR
+        body["document"] = "redacted-by-litellm"
+    for key in (
+        "system",
+        "system_prompt",
+        "instructions",
+        "system_instruction",
+        "systemInstruction",
+    ):
+        if key in body:
+            body[key] = "redacted-by-litellm"
+
+
+def _redact_proxy_server_request_body(model_call_details: dict):
+    """Redact the input-bearing keys inside the proxy's body snapshot.
+
+    ``litellm_params["proxy_server_request"]["body"]`` is a separate copy of
+    the request payload built during proxy pre-call (see
+    ``litellm_pre_call_utils.add_litellm_data_to_request``). The flat-field
+    overwrite in ``perform_redaction`` does not reach it, so custom-logger
+    callbacks that inspect this path see the unredacted prompt.
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+    proxy_server_request = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    body = proxy_server_request.get("body")
+    if not isinstance(body, dict):
+        return
+
+    _redact_request_body_dict(body)
+
+
+def _redact_additional_args_complete_input_dict(model_call_details: dict):
+    """Redact the input-bearing keys inside additional_args.complete_input_dict.
+
+    Provider handlers (see ``litellm/llms/<provider>/.../handler.py`` and
+    ``litellm/interactions/http_handler.py``) record the provider-native
+    request payload at ``additional_args["complete_input_dict"]`` so that
+    pre-call logs and OTel spans can show the wire-format request. The
+    flat-field overwrite in ``perform_redaction`` does not reach it, so
+    custom-logger callbacks (and the OTel exporter) see the unredacted
+    prompt even when message logging is disabled.
+    """
+    additional_args = model_call_details.get("additional_args")
+    if not isinstance(additional_args, dict):
+        return
+    complete_input_dict = additional_args.get("complete_input_dict")
+    if not isinstance(complete_input_dict, dict):
+        return
+
+    # complete_input_dict is the provider-NATIVE wire body. User input lands
+    # under ~20+ provider-specific, often nested key shapes (Vertex embeddings
+    # `instances`, rerank `query`/`documents`, image `prompt`, audio `file`,
+    # OCR `document`, Bedrock invoke `inputText`, passthrough arbitrary bodies),
+    # so a key-allowlist cannot close the class. No consumer reads a named key
+    # from this dict (the OTel exporter iterates `.items()` generically; logging
+    # treats it as an opaque curl-command payload), so we wholesale-redact it,
+    # preserving only the non-input `model` for span/debug usefulness.
+    redacted: dict = {"redacted-by-litellm": True}
+    model = complete_input_dict.get("model")
+    if isinstance(model, str):
+        redacted["model"] = model
+    additional_args["complete_input_dict"] = redacted
+
+
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
@@ -173,6 +300,9 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                _redact_provider_specific_fields(
+                    choice["message"].get("provider_specific_fields")
+                )
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
                 if "reasoning_content" in choice["delta"]:
@@ -181,6 +311,9 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                _redact_provider_specific_fields(
+                    choice["delta"].get("provider_specific_fields")
+                )
         else:
             _redact_choice_content(choice)
 
@@ -198,6 +331,8 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
+    _redact_proxy_server_request_body(model_call_details)
+    _redact_additional_args_complete_input_dict(model_call_details)
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response

@@ -352,6 +352,444 @@ class TestPerformRedaction:
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
 
+    def test_redacts_proxy_server_request_body_messages(self):
+        """perform_redaction must scrub the proxy's body snapshot, not just
+        the top-level messages / prompt / input on model_call_details."""
+        details = {
+            "messages": [{"role": "user", "content": "sensitive input"}],
+            "litellm_params": {
+                "proxy_server_request": {
+                    "url": "http://localhost/v1/chat/completions",
+                    "method": "POST",
+                    "body": {
+                        "model": "gpt-4o-mini",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "CANARY_INPUT_should_be_redacted",
+                            }
+                        ],
+                        "prompt": "fallback prompt",
+                        "input": "fallback input",
+                    },
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+        assert body["prompt"] == ""
+        assert body["input"] == ""
+
+    def test_redact_proxy_server_request_body_is_safe_when_missing(self):
+        """No KeyError / TypeError when litellm_params / proxy_server_request /
+        body are absent, None, or not dicts."""
+        # litellm_params missing
+        perform_redaction({}, None)
+        # litellm_params present, proxy_server_request missing
+        perform_redaction({"litellm_params": {}}, None)
+        # proxy_server_request present, body is None
+        perform_redaction(
+            {"litellm_params": {"proxy_server_request": {"body": None}}}, None
+        )
+        # proxy_server_request is not a dict
+        perform_redaction(
+            {"litellm_params": {"proxy_server_request": "not-a-dict"}}, None
+        )
+
+    def test_redacts_provider_specific_fields_on_object_choices(self):
+        """provider_specific_fields is a provider-native grab-bag carrying
+        output content (reasoning, citations, web-search/tool/code-interpreter
+        results, compaction). Redaction wholesale-clears it — every key gone,
+        including otherwise-benign metadata — so no content can slip through."""
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        reasoning_content="message reasoning",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "CHAIN_OF_THOUGHT"}
+                        ],
+                        provider_specific_fields={
+                            "reasoning_content": "psf reasoning",
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "CHAIN_OF_THOUGHT",
+                                    "signature": "RAW_SIGNATURE_BLOB",
+                                }
+                            ],
+                            "citations": ["CANARY_CITATION"],
+                            "web_search_results": ["CANARY_SEARCH"],
+                            "tool_results": ["CANARY_TOOL"],
+                            "code_interpreter_results": ["CANARY_CODE"],
+                            "compaction_blocks": ["CANARY_COMPACTION"],
+                            "container": {"id": "benign-container-id"},
+                        },
+                    )
+                )
+            ]
+        )
+
+        redacted = perform_redaction({}, result)
+
+        psf = redacted.choices[0].message.provider_specific_fields
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "RAW_SIGNATURE_BLOB" not in str(psf)
+
+    def test_redacts_provider_specific_fields_multi_provider_dict_path(self):
+        """The dict path (standard_logging_object) wholesale-clears the same
+        grab-bag across providers — Bedrock reasoning/citations, Gemini thought
+        signatures, MCP tool results, RAG search results — not just the old
+        reasoning keys."""
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "answer",
+                                "reasoning_content": "flat reasoning",
+                                "provider_specific_fields": {
+                                    "reasoningContentBlocks": [
+                                        {"reasoningText": {"text": "BEDROCK_THOUGHT"}}
+                                    ],
+                                    "citationsContent": ["CANARY_BEDROCK_CITE"],
+                                    "thought_signatures": ["CANARY_SIGNATURE"],
+                                    "server_side_tool_invocations": ["CANARY_SSTI"],
+                                    "mcp_call_results": ["CANARY_MCP"],
+                                    "search_results": ["CANARY_RAG"],
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        choice = details["standard_logging_object"]["response"]["choices"][0]
+        psf = choice["message"]["provider_specific_fields"]
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "BEDROCK_THOUGHT" not in str(psf)
+
+    def test_redacts_provider_specific_fields_on_dict_delta(self):
+        """Streaming-style dict path: choice['delta']['provider_specific_fields']
+        is wholesale-cleared too (streaming-only keys like compaction_delta
+        included)."""
+        result = {
+            "choices": [
+                {
+                    "delta": {
+                        "content": "delta content",
+                        "reasoning_content": "delta reasoning",
+                        "thinking_blocks": ["delta thinking"],
+                        "provider_specific_fields": {
+                            "thinking_blocks": [
+                                {"type": "thinking", "thinking": "STREAMED_THOUGHT"}
+                            ],
+                            "reasoning_content": "psf streamed reasoning",
+                            "compaction_delta": {"content": "CANARY_COMPACTION_DELTA"},
+                            "citation": {"text": "CANARY_CITATION_DELTA"},
+                        },
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        psf = redacted["choices"][0]["delta"]["provider_specific_fields"]
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "STREAMED_THOUGHT" not in str(psf)
+
+    def test_redact_provider_specific_fields_is_safe_when_absent(self):
+        """Messages without provider_specific_fields (the common case) must
+        not raise."""
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(message=litellm.Message(content="hi", role="assistant"))
+            ]
+        )
+        redacted = perform_redaction({}, result)
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redacts_additional_args_complete_input_dict_messages(self):
+        """perform_redaction wholesale-redacts the provider-native request
+        payload stashed on additional_args.complete_input_dict: every input
+        key is dropped and only the non-input `model` survives."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "claude-3-7-sonnet",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "CANARY_INPUT_should_be_redacted",
+                                }
+                            ],
+                        }
+                    ],
+                    "prompt": "fallback prompt",
+                    "input": "fallback input",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "claude-3-7-sonnet"}
+        assert "messages" not in cid
+        assert "prompt" not in cid
+        assert "input" not in cid
+        assert "CANARY_INPUT_should_be_redacted" not in str(cid)
+
+    def test_redact_additional_args_complete_input_dict_is_safe_when_missing(self):
+        """No KeyError / TypeError when additional_args / complete_input_dict
+        are absent, None, or not dicts."""
+        # additional_args missing
+        perform_redaction({}, None)
+        # additional_args present, complete_input_dict missing
+        perform_redaction({"additional_args": {}}, None)
+        # complete_input_dict is None
+        perform_redaction({"additional_args": {"complete_input_dict": None}}, None)
+        # additional_args is not a dict
+        perform_redaction({"additional_args": "not-a-dict"}, None)
+
+    def test_redacts_system_prompt_in_proxy_server_request_body(self):
+        """The Anthropic-native top-level `system` prompt (and the
+        `system_prompt` / `instructions` variants) carry user content just
+        like messages — they must be scrubbed from the proxy body snapshot."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "claude-3-7-sonnet",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "system": "CANARY_SYSTEM_should_be_redacted",
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["system"] == "redacted-by-litellm"
+
+    def test_redacts_system_prompt_in_complete_input_dict(self):
+        """Provider-native system-prompt keys (Anthropic `system`, the
+        `system_prompt` variant, Responses API `instructions`) are dropped by
+        the wholesale redaction of the wire-format request body."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "claude-3-7-sonnet",
+                    "system": [
+                        {"type": "text", "text": "CANARY_SYSTEM_should_be_redacted"}
+                    ],
+                    "system_prompt": "CANARY_should_be_redacted",
+                    "instructions": "CANARY_should_be_redacted",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "claude-3-7-sonnet"}
+        assert "system" not in cid
+        assert "system_prompt" not in cid
+        assert "instructions" not in cid
+        assert "CANARY_SYSTEM_should_be_redacted" not in str(cid)
+
+    def test_redacts_gemini_native_fields_in_complete_input_dict(self):
+        """Gemini/Vertex wire-format requests carry the user turn in `contents`
+        and the system prompt in `system_instruction` / `systemInstruction`,
+        not the OpenAI-style `messages` / `system` keys — the wholesale
+        redaction drops them all, preserving only `model`."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "gemini-2.0-flash",
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": "CANARY_INPUT_should_be_redacted"}],
+                        }
+                    ],
+                    "system_instruction": {
+                        "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                    },
+                    "systemInstruction": {
+                        "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                    },
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "gemini-2.0-flash"}
+        assert "contents" not in cid
+        assert "system_instruction" not in cid
+        assert "systemInstruction" not in cid
+        assert "CANARY" not in str(cid)
+
+    def test_redacts_gemini_native_fields_in_proxy_server_request_body(self):
+        """Same Gemini/Vertex native input fields can also land in the proxy
+        body snapshot — `contents` / `system_instruction` must be scrubbed."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "gemini-2.0-flash",
+                        "contents": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": "CANARY_INPUT_should_be_redacted"}],
+                            }
+                        ],
+                        "system_instruction": {
+                            "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                        },
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["contents"] == [
+            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
+        ]
+        assert body["system_instruction"] == "redacted-by-litellm"
+
+    def test_complete_input_dict_wholesale_redacts_embeddings_instances(self):
+        """Vertex embeddings carry user input under `instances` — a key the old
+        allowlist never enumerated. Wholesale redaction drops it regardless."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "text-embedding-004",
+                    "instances": [{"content": "CANARY_INPUT_should_be_redacted"}],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "text-embedding-004"}
+        assert "instances" not in cid
+        assert "CANARY_INPUT_should_be_redacted" not in str(cid)
+
+    def test_complete_input_dict_wholesale_redacts_rerank_query_documents(self):
+        """Cohere/Bedrock rerank carry user input under `query` / `documents` —
+        wholesale redaction of the native body drops both."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "rerank-english-v3.0",
+                    "query": "CANARY_QUERY_should_be_redacted",
+                    "documents": ["CANARY_DOC_should_be_redacted"],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "rerank-english-v3.0"}
+        assert "query" not in cid
+        assert "documents" not in cid
+        assert "CANARY" not in str(cid)
+
+    def test_complete_input_dict_wholesale_redacts_passthrough_arbitrary(self):
+        """An arbitrary/passthrough provider key with no allowlist entry must
+        still be dropped — proving the redaction has no allowlist dependency."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "some-provider/some-model",
+                    "totally_unknown_provider_key": "CANARY_should_be_redacted",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {
+            "redacted-by-litellm": True,
+            "model": "some-provider/some-model",
+        }
+        assert "totally_unknown_provider_key" not in cid
+        assert "CANARY_should_be_redacted" not in str(cid)
+
+    def test_redacts_rerank_keys_in_proxy_server_request_body(self):
+        """The keyed proxy body snapshot scrubs the rerank input keys
+        (`query` / `documents`) while leaving non-input keys (`model`, `user`)
+        intact for downstream consumers."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "rerank-english-v3.0",
+                        "user": "user-123",
+                        "query": "CANARY_QUERY_should_be_redacted",
+                        "documents": ["CANARY_DOC_should_be_redacted"],
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["query"] == "redacted-by-litellm"
+        assert body["documents"] == ["redacted-by-litellm"]
+        assert body["model"] == "rerank-english-v3.0"
+        assert body["user"] == "user-123"
+
+    def test_redacts_ocr_document_in_proxy_server_request_body(self):
+        """The OCR route lands the user's `document` as a top-level key in the
+        proxy body snapshot — it must be scrubbed while `model` survives."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "mistral/mistral-ocr-latest",
+                        "document": {
+                            "type": "document_url",
+                            "document_url": "CANARY_DOC_should_be_redacted",
+                        },
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["document"] == "redacted-by-litellm"
+        assert body["model"] == "mistral/mistral-ocr-latest"
+        assert "CANARY_DOC_should_be_redacted" not in str(body)
+
     def test_redacts_vertex_provider_metadata_in_standard_logging_response(self):
         details = {
             "standard_logging_object": {
