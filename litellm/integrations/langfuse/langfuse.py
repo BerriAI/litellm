@@ -695,9 +695,6 @@ class LangFuseLogger:
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
 
-            if self._supports_completion_start_time():
-                generation_params["completion_start_time"] = kwargs.get("completion_start_time", None)
-
             from langfuse import propagate_attributes
 
             trace_id_value = trace_params.get("id")
@@ -723,8 +720,6 @@ class LangFuseLogger:
             propagated_trace_name = (
                 trace_name_value if isinstance(trace_name_value, str) and trace_name_value else trace_name
             )
-            end_time_ns = int(end_time.timestamp() * 1_000_000_000) if end_time is not None else None
-
             with propagate_attributes(
                 user_id=propagated_user_id,
                 session_id=propagated_session_id,
@@ -749,8 +744,8 @@ class LangFuseLogger:
                     standard_logging_object=standard_logging_object,
                 )
                 generation_client = trace.start_observation(**generation_params)
-                generation_client.end(end_time=end_time_ns)
-                trace.end(end_time=end_time_ns)
+                generation_client.end()
+                trace.end()
 
             return trace_context["trace_id"], generation_client.id
         except Exception:

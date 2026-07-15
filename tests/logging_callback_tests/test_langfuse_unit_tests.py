@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
@@ -337,6 +338,45 @@ def test_langfuse_v4_observations_propagate_trace_attributes():
         assert span.attributes["langfuse.trace.name"] == "completion-trace"
         assert span.attributes["langfuse.version"] == "v4"
         assert span.attributes["langfuse.trace.metadata.request_type"] == "completion"
+
+
+def test_langfuse_v4_observations_do_not_use_historical_end_times():
+    span_exporter = InMemorySpanExporter()
+    langfuse_client = Langfuse(
+        public_key="test-timing-public-key",
+        secret_key="test-secret-key",
+        host="https://cloud.langfuse.com",
+        span_exporter=span_exporter,
+    )
+    logger = object.__new__(LangFuseLogger)
+    logger.Langfuse = langfuse_client
+    logger.langfuse_sdk_version = "4.7.0"
+    end_time = datetime.now() - timedelta(seconds=10)
+
+    logger._log_langfuse_v2(
+        user_id=None,
+        metadata={"trace_id": "a" * 32},
+        litellm_params={"metadata": {}},
+        output={"role": "assistant", "content": "Hello"},
+        start_time=end_time - timedelta(seconds=1),
+        end_time=end_time,
+        kwargs={
+            "model": "openai/test-model",
+            "call_type": "completion",
+            "completion_start_time": end_time - timedelta(milliseconds=500),
+            "standard_logging_object": None,
+        },
+        optional_params={},
+        input={"messages": [{"role": "user", "content": "Hello"}]},
+        response_obj=None,
+        level="DEFAULT",
+        litellm_call_id="call-123",
+    )
+
+    langfuse_client.flush()
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert all(span.end_time >= span.start_time for span in spans)
 
 
 def test_get_chat_content_for_langfuse():
