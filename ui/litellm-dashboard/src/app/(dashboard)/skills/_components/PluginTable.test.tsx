@@ -69,11 +69,11 @@ describe("PluginTable", () => {
     expect(mockOnPluginClick).toHaveBeenCalledWith("plugin-id-newer");
   });
 
-  it("should call onPluginClick with the plugin ID when the row is clicked", async () => {
+  it("should not navigate when clicking elsewhere in the row", async () => {
     const user = userEvent.setup();
     render(<PluginTable {...defaultProps} />);
     await user.click(screen.getByText("A skill for testing"));
-    expect(mockOnPluginClick).toHaveBeenCalledWith("plugin-id-newer");
+    expect(mockOnPluginClick).not.toHaveBeenCalled();
   });
 
   it("should badge the category and fall back to Uncategorized", () => {

@@ -48,7 +48,6 @@ const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDel
       sortingMode="client"
       sorting={sorting}
       onSortingChange={setSorting}
-      onRowClick={(plugin) => onPluginClick(plugin.id)}
       isLoading={isLoading}
       loadingMessage="Loading skills…"
       noDataMessage={<EmptyState />}
