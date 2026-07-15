@@ -833,7 +833,7 @@ class ProxyLogging:
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
 
     def _parse_pre_mcp_call_hook_response(
         self,
@@ -3592,7 +3592,10 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
+            verbose_proxy_logger.debug(
+                "PrismaClient: insert_data: %s",
+                {**data, "token": self.hash_token(token=data["token"])} if data.get("token") is not None else data,
+            )
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
