@@ -72,9 +72,7 @@ class TestOtelAnthropicMessagesInput(unittest.TestCase):
 
         kwargs = _base_kwargs()
         kwargs["messages"] = [{"role": "user", "content": "from kwargs"}]
-        kwargs["optional_params"] = {
-            "messages": [{"role": "user", "content": "from optional"}]
-        }
+        kwargs["optional_params"] = {"messages": [{"role": "user", "content": "from optional"}]}
 
         otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj={"content": []})
 

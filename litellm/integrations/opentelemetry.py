@@ -2300,16 +2300,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # below uses. Without this, gen_ai.input.messages is empty for
             # the entire Anthropic Messages call type (#30121).
             input_messages = (
-                kwargs.get("messages")
-                if kwargs.get("messages") is not None
-                else optional_params.get("messages")
+                kwargs.get("messages") if kwargs.get("messages") is not None else optional_params.get("messages")
             )
             if input_messages:
-                transformed_messages = (
-                    self._transform_messages_to_otel_semantic_conventions(
-                        input_messages
-                    )
-                )
+                transformed_messages = self._transform_messages_to_otel_semantic_conventions(input_messages)
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
@@ -2405,9 +2399,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                         value=value,
                                     )
 
-                elif response_obj.get("content") and isinstance(
-                    response_obj.get("content"), list
-                ):
+                elif response_obj.get("content") and isinstance(response_obj.get("content"), list):
                     # Anthropic Messages API response: top-level "content" is
                     # a list of blocks (text / thinking / tool_use). The
                     # finish reason lives on "stop_reason". Without this
@@ -2421,9 +2413,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         block_d = self._to_dict(block) or {}
                         btype = block_d.get("type")
                         if btype == "text":
-                            parts.append(
-                                {"type": "text", "content": block_d.get("text", "")}
-                            )
+                            parts.append({"type": "text", "content": block_d.get("text", "")})
                         elif btype == "thinking":
                             parts.append(
                                 {
