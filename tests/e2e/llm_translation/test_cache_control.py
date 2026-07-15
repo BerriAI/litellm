@@ -15,7 +15,7 @@ service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-modelled locally with typed content blocks.
+built from the typed content blocks shared in ``endpoints_client.py``.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
+from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
 from models import ChatResponse, LiteLLMParamsBody, Usage
 from passthrough_client import PassthroughClient
@@ -36,21 +37,6 @@ pytestmark = pytest.mark.e2e
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[TextBlock]
 
 
 class CacheChatBody(BaseModel):
@@ -111,12 +97,11 @@ def _assert_cache_read_on_second_call(
     first = unwrap(_cache_chat(client, key, model, prefix))
     assert first.choices, f"{model}: first cache-priming call returned no choices: {first}"
 
-    read_tokens = 0
     deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
+    while True:
         second = unwrap(_cache_chat(client, key, model, prefix))
         read_tokens = _cached_read_tokens(second.usage)
-        if read_tokens > 0:
+        if read_tokens > 0 or time.monotonic() >= deadline:
             break
         time.sleep(3.0)
 

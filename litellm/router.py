@@ -181,7 +181,9 @@ from litellm.types.router import (
     RouterModelGroupAliasItem,
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
+    RoutingContext,
     RoutingGroup,
+    RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
 )
@@ -301,6 +303,7 @@ class Router:
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
+        plugins: list[RoutingPlugin] | None = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[Union[RetryPolicy, dict]] = None,  # set custom retries for different exceptions
         model_group_retry_policy: Dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
@@ -479,6 +482,7 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -2347,6 +2351,8 @@ class Router:
                 self.completed_response = None
                 self.start_time = getattr(source_iterator, "start_time", datetime.now())
                 self._failure_handled = False
+                self._yielded_first_chunk = False
+                self._generated_content = ""
                 self._completed_response_cached = False
                 self._completed_response_logged = False
                 self._completed_response_cache_hit = None
@@ -7553,7 +7559,11 @@ class Router:
         if default_model is None and complexity_router_config:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
-            default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            medium = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            if isinstance(medium, list):
+                default_model = medium[0] if medium else None
+            else:
+                default_model = medium
 
         if default_model is None:
             raise ValueError(
@@ -7590,15 +7600,6 @@ class Router:
             AdaptiveRouterPostCallHook,
         )
 
-        for _cb_list in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            litellm.logging_callback_manager.remove_callbacks_by_type(_cb_list, AdaptiveRouterPostCallHook)
-
         for entry in self.model_list or []:
             lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
             lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
@@ -7607,14 +7608,28 @@ class Router:
             model_name = entry.get("model_name") if isinstance(entry, dict) else entry.model_name
             if not model_name or not lp:
                 continue
-            if model_name in self.adaptive_routers:
-                continue
             deployment = Deployment(
                 model_name=model_name,
                 litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
+            if model_name in self.adaptive_routers:
+                continue
             self.init_adaptive_router_deployment(deployment=deployment)
+
+        for model_name, complexity_router in self.complexity_routers.items():
+            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
+                continue
+            adaptive_router = complexity_router._ensure_adaptive_router()
+            if adaptive_router is not None:
+                self.adaptive_routers[model_name] = adaptive_router
+
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
+            litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
+        for adaptive_router in self.adaptive_routers.values():
+            litellm.logging_callback_manager.add_litellm_callback(
+                AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
+            )
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
@@ -10359,6 +10374,12 @@ class Router:
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
         )
 
+        # narrow to whatever `self.routing_plugins` left in candidate_models
+        healthy_deployments = self._filter_by_routing_plugin_candidates(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
@@ -10634,6 +10655,76 @@ class Router:
                     )
             raise e
 
+    async def _run_routing_plugins(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None,
+    ) -> RoutingContext:
+        """
+        Build a RoutingContext for `model`, run it through `self.routing_plugins`
+        in order, then stash the narrowed candidate list and accumulated signals
+        onto `request_kwargs["metadata"]` so `_filter_by_routing_plugin_candidates`
+        (called later, during healthy-deployment filtering) can consume them.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            resolve_structured_messages,
+        )
+
+        deployments = self.get_model_list(model_name=model) or []
+        candidate_models = [
+            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
+        ]
+
+        metadata_key = self._get_metadata_variable_name_from_kwargs(request_kwargs)
+        metadata = request_kwargs.setdefault(metadata_key, {})
+
+        context = RoutingContext(
+            raw_messages=messages or [],
+            structured_messages=resolve_structured_messages(messages=messages, request_kwargs=request_kwargs) or [],
+            candidate_models=candidate_models,
+            metadata=metadata,
+        )
+
+        for plugin in self.routing_plugins:
+            context = await plugin.run(context)
+
+        metadata["routing_plugin_signals"] = context.signals
+        if len(context.candidate_models) < len(candidate_models):
+            metadata["_routing_plugin_candidate_models"] = context.candidate_models
+
+        return context
+
+    def _filter_by_routing_plugin_candidates(
+        self,
+        healthy_deployments: Union[list[dict], dict],
+        request_kwargs: dict,
+    ) -> Union[list[dict], dict]:
+        """
+        Narrow `healthy_deployments` to whatever `self.routing_plugins` left in
+        `context.candidate_models`. Raises rather than silently falling back to
+        the unfiltered pool -- a plugin narrowing to nothing is a policy decision
+        (e.g. no model this tenant's budget allows), not something to bypass.
+        """
+        if not self.routing_plugins or not isinstance(healthy_deployments, list):
+            return healthy_deployments
+
+        metadata_key = self._get_metadata_variable_name_from_kwargs(request_kwargs)
+        candidate_models = (request_kwargs.get(metadata_key) or {}).get("_routing_plugin_candidate_models")
+        # `is None` (not falsy-check): a plugin narrowing to an empty list must
+        # still hit the "no deployments left" raise below, not be treated the
+        # same as "no plugin ever set this key".
+        if candidate_models is None:
+            return healthy_deployments
+
+        candidate_set = set(candidate_models)
+        filtered = [d for d in healthy_deployments if d.get("litellm_params", {}).get("model") in candidate_set]
+
+        if not filtered:
+            raise ValueError(f"No deployments left after routing-plugin filtering. candidate_models={candidate_models}")
+
+        return filtered
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -10648,55 +10739,47 @@ class Router:
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
         #########################################################
-        # Check if any auto-router should be used
+        # Run the routing-plugin pipeline, if any plugins are configured.
+        # Plugins narrow the candidate deployment pool (consumed later by
+        # `_filter_by_routing_plugin_candidates`) and may attach signals for
+        # downstream strategies (auto-router, complexity-router, ...) to read.
         #########################################################
-        if model in self.auto_routers:
-            return await self.auto_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        if self.routing_plugins:
+            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        #########################################################
-        # Check if any complexity-router should be used
-        #########################################################
-        if model in self.complexity_routers:
-            return await self.complexity_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        router_strategy = (
+            self.auto_routers.get(model)
+            or self.complexity_routers.get(model)
+            or self.adaptive_routers.get(model)
+            or self.quality_routers.get(model)
+        )
+        if router_strategy is None:
+            return None
 
-        #########################################################
-        # Check if an adaptive-router should be used
-        #########################################################
-        adaptive_router = self.adaptive_routers.get(model)
-        if adaptive_router is not None:
-            return await adaptive_router.async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
+            model=model,
+            request_kwargs=request_kwargs,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )
 
-        #########################################################
-        # Check if any quality-router should be used
-        #########################################################
-        if model in self.quality_routers:
-            return await self.quality_routers[model].async_pre_routing_hook(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+        # `model` (the alias, e.g. "smart-router") is never the deployment actually
+        # called - apply the alias's own litellm_params (besides `model` itself,
+        # which is just the alias marker) to the request, since the tier/route
+        # deployment the hook selected won't have them. Router-only fields
+        # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
+        # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
+        # not here.
+        if pre_routing_hook_response is not None:
+            alias_index = self.model_name_to_deployment_indices.get(model, [])
+            if alias_index:
+                alias_litellm_params = self.model_list[alias_index[0]].get("litellm_params", {})
+                for key, value in alias_litellm_params.items():
+                    if key != "model" and value is not None:
+                        request_kwargs.setdefault(key, value)
 
-        return None
+        return pre_routing_hook_response
 
     def get_available_deployment(
         self,
@@ -10709,6 +10792,18 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
+        if self.routing_plugins:
+            raise ValueError(
+                "Router(plugins=[...]) is configured, but this call resolved to the synchronous "
+                "deployment-selection path, which never runs the routing-plugin pipeline. This "
+                "happens for sync Router methods (e.g. Router.completion()) and for async calls "
+                "with a routing_strategy that has no async-native selector (e.g. legacy "
+                "'usage-based-routing', v1). Silently skipping "
+                "configured plugins would let a policy plugin (e.g. a deny-all rule) be bypassed. "
+                "Use an async Router method with a supported routing_strategy (simple-shuffle, "
+                "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
+                "or remove `plugins` from the Router config."
+            )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
