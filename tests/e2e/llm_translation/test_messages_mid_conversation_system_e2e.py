@@ -156,7 +156,7 @@ class TestBedrockInvokeMidConversationSystem:
         model = _register_invoke_deployment(
             endpoints_client, resources, FLAGGED_INVOKE_MODEL
         )
-        key = resources.key()
+        key = resources.key(models=[model])
         system_block = _cacheable_system_block(unique_marker())
 
         primed = _prime_prompt_cache(endpoints_client, key, model, system_block)
@@ -196,7 +196,7 @@ class TestBedrockInvokeMidConversationSystem:
         model = _register_invoke_deployment(
             endpoints_client, resources, UNFLAGGED_INVOKE_MODEL
         )
-        key = resources.key()
+        key = resources.key(models=[model])
 
         body = RichMessagesRequest(
             model=model,
