@@ -77,6 +77,56 @@ def _patch_responses_dispatch():
     ]
 
 
+def _make_cache_control_case() -> tuple[
+    ResponseInputParam,
+    list[AllMessageValues],
+    dict[str, object],
+]:
+    system_message = cast(
+        AllMessageValues,
+        {"role": "system", "content": "Analyze the request"},
+    )
+    assistant_message = cast(
+        AllMessageValues,
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "The code has a bug",
+                    "annotations": [],
+                }
+            ],
+        },
+    )
+    user_message = cast(
+        AllMessageValues,
+        {"role": "user", "content": "Check for security issues"},
+    )
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "encrypted",
+    }
+    original_input = cast(
+        ResponseInputParam,
+        [system_message, reasoning_item, assistant_message, user_message],
+    )
+    _, merged_messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="azure/gpt-5-codex",
+        messages=[system_message, assistant_message, user_message],
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return original_input, merged_messages, reasoning_item
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -263,48 +313,7 @@ class TestResponsesAPIPromptManagement:
         assert len(passed_messages) == 1
 
     def test_cache_control_hook_preserves_reasoning_items(self):
-        system_message = cast(
-            AllMessageValues,
-            {"role": "system", "content": "Analyze the request"},
-        )
-        assistant_message = cast(
-            AllMessageValues,
-            {
-                "type": "message",
-                "id": "msg_1",
-                "role": "assistant",
-                "status": "completed",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": "The code has a bug",
-                        "annotations": [],
-                    }
-                ],
-            },
-        )
-        user_message = cast(
-            AllMessageValues,
-            {"role": "user", "content": "Check for security issues"},
-        )
-        reasoning_item = {
-            "type": "reasoning",
-            "id": "rs_1",
-            "summary": [],
-            "encrypted_content": "encrypted",
-        }
-        original_input = cast(
-            ResponseInputParam,
-            [system_message, reasoning_item, assistant_message, user_message],
-        )
-        _, merged_messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
-            model="azure/gpt-5-codex",
-            messages=[system_message, assistant_message, user_message],
-            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
-            prompt_id=None,
-            prompt_variables=None,
-            dynamic_callback_params={},
-        )
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
         logging_obj = _make_logging_obj(
             merged_model="azure/gpt-5-codex",
             merged_messages=merged_messages,
@@ -331,6 +340,37 @@ class TestResponsesAPIPromptManagement:
         assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
         assert sent_input[1] == reasoning_item
         assert sent_input[2]["id"] == "msg_1"
+
+    def test_all_non_message_input_items_remain_unchanged(self):
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        original_input = cast(ResponseInputParam, [reasoning_item])
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[
+                cast(
+                    AllMessageValues,
+                    {"role": "system", "content": "Analyze the request"},
+                )
+            ],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="gpt-4o",
+                prompt_id="all-non-message",
+                litellm_logging_obj=logging_obj,
+            )
+
+        assert mock_handler.call_args.kwargs["input"] == original_input
 
     def test_model_override_re_resolves_provider(self):
         """[G] When the prompt template overrides the model to a different provider,
@@ -469,3 +509,33 @@ class TestAsyncResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_cache_control_hook_preserves_reasoning_items(self):
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            await litellm.aresponses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"
