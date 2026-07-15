@@ -273,7 +273,6 @@ override-dependencies = [
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
-exclude-newer = "3 days"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }

@@ -583,10 +583,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
+        context_1m_supported: bool = False,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
     ) -> dict:
         betas = set()
+        if context_1m_supported:
+            betas.add("context-1m-2025-08-07")
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -695,8 +698,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
+        _original_model = (litellm_params or {}).get("_original_model", model)
+        _context_1m = bool(re.search(r"\[1m\]$", _original_model))
         anthropic_headers = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
+            context_1m_supported=_context_1m,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,

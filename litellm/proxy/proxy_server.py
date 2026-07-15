@@ -5261,6 +5261,13 @@ class ProxyConfig:
 
             if added is not None:
                 added_models += 1
+
+        # Adaptive-router init is deferred because it needs visibility into
+        # all deployments in available_models. After all DB models are loaded,
+        # finalize any adaptive-router deployments that haven't been initialized.
+        if added_models > 0 and llm_router is not None:
+            llm_router._finalize_adaptive_router_if_configured()
+
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:

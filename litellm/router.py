@@ -7681,7 +7681,16 @@ class Router:
             mi_dict: Dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                try:
+                    model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                except Exception:
+                    verbose_router_logger.warning(
+                        "AdaptiveRouter[%s]: invalid adaptive_router_preferences "
+                        "for model %s, using defaults: %s",
+                        deployment.model_name,
+                        name,
+                        prefs_raw,
+                    )
 
             # `input_cost_per_token` is a LiteLLM_Params field per types/router.py.
             lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
@@ -8096,6 +8105,17 @@ class Router:
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
         self.model_names.add(deployment.model_name)
         self._sync_deployment_budget_config(deployment=deployment)
+
+        # Adaptive-router init is deferred because it needs visibility into
+        # all deployments in available_models. This call handles the case where
+        # downstream models are already loaded (e.g. Management API add).
+        # During startup, the proxy's _add_deployment() calls finalize after
+        # all DB models are loaded, so this is a safe no-op in that path.
+        if self._is_adaptive_router_deployment(
+            litellm_params=deployment.litellm_params
+        ):
+            self._finalize_adaptive_router_if_configured()
+
         return deployment
 
     def _update_deployment_indices_after_removal(self, model_id: str, removal_idx: int) -> None:
@@ -10357,6 +10377,17 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+
+        # Protocol strict-mode filter (opt-in). In bridged mode this is a no-op.
+        from litellm.protocol_routing import filter_deployments_by_protocol
+
+        _route_type = (request_kwargs or {}).get("_route_type")
+        if _route_type is not None:
+            healthy_deployments = filter_deployments_by_protocol(
+                healthy_deployments=cast(List[Dict], healthy_deployments),
+                route_type=_route_type,
+                model=model,
+            )
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,

@@ -355,12 +355,26 @@ async def route_request(
     """
     await add_shared_session_to_data(data)
 
+    # Propagate route_type so downstream filters (protocol_routing) can inspect
+    # the incoming protocol without changing existing function signatures.
+    data["_route_type"] = route_type
+
     # Strip router-internal mock_testing_* flags. Combined with an
     # unauthorized fallback in ``router_settings_override`` they let a
     # caller deterministically execute requests against restricted
     # models. VERIA-44.
     for _key in _MOCK_TESTING_KWARG_NAMES:
         data.pop(_key, None)
+
+    # Strip [1m]/[1M] suffix from model name for routing.
+    # The suffix signals 1M context support; the actual header injection
+    # happens in the Anthropic handler via _original_model.
+    import re as _re
+
+    _model = data.get("model")
+    if _model and _re.search(r"\[1m\]$", _model, _re.IGNORECASE):
+        data["_original_model"] = _model
+        data["model"] = _re.sub(r"\[1m\]$", "", _model, flags=_re.IGNORECASE)
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []

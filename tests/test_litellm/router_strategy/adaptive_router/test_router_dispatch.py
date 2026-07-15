@@ -361,6 +361,50 @@ async def test_async_pre_routing_hook_dispatches_to_correct_router_when_multiple
     premium.pick_model.assert_awaited_once()  # type: ignore[union-attr]
 
 
+def test_upsert_deployment_initializes_adaptive_router():
+    """upsert_deployment must trigger _finalize_adaptive_router_if_configured()
+    so that adaptive-router deployments added via Management API are usable
+    immediately, without requiring a proxy restart."""
+    from litellm.types.router import Deployment
+
+    r = Router(model_list=[])
+    assert "dyn-router" not in r.adaptive_routers
+
+    deployment = Deployment(
+        model_name="dyn-router",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/adaptive_router",
+            adaptive_router_config={"available_models": ["fast", "smart"]},
+        ),
+        model_info={"id": "dyn-001"},
+    )
+    r.upsert_deployment(deployment)
+
+    assert "dyn-router" in r.adaptive_routers
+
+
+def test_add_deployment_initializes_adaptive_router():
+    """add_deployment must trigger _finalize_adaptive_router_if_configured()
+    so that adaptive-router deployments added via Management API are usable
+    immediately, without requiring a proxy restart."""
+    from litellm.types.router import Deployment
+
+    r = Router(model_list=[])
+    assert "dyn-router" not in r.adaptive_routers
+
+    deployment = Deployment(
+        model_name="dyn-router",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/adaptive_router",
+            adaptive_router_config={"available_models": ["fast", "smart"]},
+        ),
+        model_info={"id": "dyn-002"},
+    )
+    r.add_deployment(deployment)
+
+    assert "dyn-router" in r.adaptive_routers
+
+
 def test_init_adaptive_router_rejects_duplicate_model_name():
     """Two adaptive-router deployments with the same model_name must error."""
     from litellm.types.router import AdaptiveRouterConfig, Deployment

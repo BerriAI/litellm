@@ -1,3 +1,4 @@
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
@@ -543,6 +544,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
+        - [1m] suffix: adds 'context-1m-2025-08-07'
 
         Args:
             headers: Request headers dict
@@ -555,6 +557,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
+
+        # Auto-add context-1m beta header when [1m] suffix is present
+        _original_model = optional_params.get("_original_model", "")
+        if re.search(r"\[1m\]$", _original_model):
+            beta_values.add("context-1m-2025-08-07")
 
         # Check for context management
         context_management_param = optional_params.get("context_management")
