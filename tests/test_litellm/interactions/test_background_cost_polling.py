@@ -5,8 +5,10 @@ from typing import Optional
 import pytest
 
 from litellm.interactions.background_cost_polling import (
+    _SETTLED_KEY,
     BackgroundInteractionPollContext,
     maybe_schedule_background_interaction_cost_polling,
+    maybe_settle_background_interaction_before_delete,
     poll_and_log_background_interaction_cost,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -219,6 +221,127 @@ async def test_schedule_skips_non_pollable_results(response, create_kwargs):
     )
 
     assert task is None
+
+
+def _register_poll(logging_obj: LitellmLogging, poll_fetch=None) -> asyncio.Task:
+    import litellm.interactions.background_cost_polling as bg
+
+    if poll_fetch is None:
+        poll_fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+    context = _context(logging_obj)
+    task = asyncio.create_task(poll_and_log_background_interaction_cost(context, fetch_interaction=poll_fetch))
+    bg._ACTIVE_POLLS[context.interaction_id] = bg._ActiveBackgroundPoll(task=task, context=context)
+    task.add_done_callback(lambda finished: bg._discard_poll(context.interaction_id, finished))
+    return task
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_bills_pending_background_interaction():
+    logging_obj = _logging_obj()
+    task = _register_poll(logging_obj)
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=fetch,
+    )
+
+    assert len(calls) == 1
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_releases_reservation_when_still_in_progress():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    task = _register_poll(logging_obj)
+    fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=fetch,
+    )
+
+    assert reservation["finalized"] is True
+    assert logging_obj.model_call_details.get("response_cost") is None
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_releases_reservation_when_prefetch_fails():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    task = _register_poll(logging_obj)
+    fetch, _ = _fetch_sequence(RuntimeError("interaction already deleted"))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=fetch,
+    )
+
+    assert reservation["finalized"] is True
+    assert logging_obj.model_call_details.get("response_cost") is None
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_ignores_interactions_without_pending_poll():
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/never-polled",
+        fetch_interaction=fetch,
+    )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_noop_after_poll_task_finished():
+    logging_obj = _logging_obj()
+    poll_fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+    task = _register_poll(logging_obj, poll_fetch=poll_fetch)
+    await asyncio.wait_for(task, timeout=5)
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+    settle_fetch, settle_calls = _fetch_sequence(_response("completed", with_usage=True))
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=settle_fetch,
+    )
+
+    assert settle_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_does_not_rebill_when_gate_already_claimed():
+    logging_obj = _logging_obj()
+    logging_obj.model_call_details[_SETTLED_KEY] = True
+    task = _register_poll(logging_obj)
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True))
+
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        fetch_interaction=fetch,
+    )
+
+    assert len(calls) == 1
+    assert logging_obj.model_call_details.get("response_cost") is None
+    await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_poller_exits_without_billing_once_settled_elsewhere():
+    logging_obj = _logging_obj()
+    logging_obj.model_call_details[_SETTLED_KEY] = True
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True))
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert calls == []
+    assert logging_obj.model_call_details.get("response_cost") is None
 
 
 @pytest.mark.asyncio
