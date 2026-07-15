@@ -98,8 +98,6 @@ def test_defaults_to_internal_user_viewer_when_no_role():
 @pytest.mark.parametrize(
     "app_roles, expected",
     [
-        # Regression for #33434: the most permissive role wins regardless of
-        # its position in the array, instead of always picking the first entry.
         (["internal_user", "proxy_admin"], LitellmUserRoles.PROXY_ADMIN),
         (["proxy_admin", "internal_user"], LitellmUserRoles.PROXY_ADMIN),
         (
@@ -107,11 +105,9 @@ def test_defaults_to_internal_user_viewer_when_no_role():
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         ),
         (["org_admin", "proxy_admin_viewer"], LitellmUserRoles.ORG_ADMIN),
-        # Unknown roles are ignored; the single valid one is selected.
         (["some_custom_role", "internal_user"], LitellmUserRoles.INTERNAL_USER),
         (["PROXY_ADMIN", "internal_user"], LitellmUserRoles.PROXY_ADMIN),
         (["internal_user"], LitellmUserRoles.INTERNAL_USER),
-        # No valid roles at all.
         (["some_custom_role", "another_unknown_role"], None),
         ([], None),
     ],

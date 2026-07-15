@@ -223,6 +223,43 @@ def test_get_microsoft_callback_response():
     assert result.last_name == "User"
 
 
+def test_get_microsoft_callback_response_picks_most_permissive_app_role():
+    from litellm.proxy._types import LitellmUserRoles
+
+    mock_request = MagicMock(spec=Request)
+    mock_response = {
+        "mail": "microsoft_user@example.com",
+        "displayName": "Microsoft User",
+        "id": "msft123",
+        "givenName": "Microsoft",
+        "surname": "User",
+    }
+
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        mock_verify = AsyncMock(return_value=mock_response)
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            new=mock_verify,
+        ), patch.object(
+            MicrosoftSSOHandler,
+            "get_app_roles_from_id_token",
+            return_value=["internal_user", "proxy_admin"],
+        ):
+            result = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                )
+            )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
 def test_get_microsoft_callback_response_raw_sso_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
