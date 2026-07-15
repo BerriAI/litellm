@@ -553,6 +553,58 @@ def test_get_supported_openai_params():
     assert "reasoning_effort" in supported_params
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us.deepseek.r1-v1:0",
+        "bedrock/converse/us.deepseek.r1-v1:0",
+        "bedrock/deepseek.v3-v1:0",
+        "bedrock/deepseek.v3.2",
+    ],
+)
+def test_bedrock_deepseek_does_not_advertise_thinking(model):
+    """DeepSeek reasons natively on Bedrock and rejects the Anthropic-shaped
+    `thinking`/`reasoning_effort` field, so it must not be advertised as supported
+    (otherwise it leaks into additionalModelRequestFields and Bedrock 400s)."""
+    config = AmazonConverseConfig()
+    supported_params = config.get_supported_openai_params(model=model)
+    assert "thinking" not in supported_params
+    assert "reasoning_effort" not in supported_params
+
+
+def test_bedrock_deepseek_r1_thinking_raises_without_drop_params():
+    """Passing `thinking` to Bedrock DeepSeek R1 must fail client-side with a clear
+    UnsupportedParamsError instead of leaking through and hitting a Bedrock 400."""
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.utils.get_optional_params(
+            model="us.deepseek.r1-v1:0",
+            custom_llm_provider="bedrock",
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
+
+
+def test_bedrock_deepseek_r1_thinking_dropped_does_not_leak_into_request():
+    """With drop_params, `thinking` is dropped rather than forwarded into
+    additionalModelRequestFields for Bedrock DeepSeek R1."""
+    optional_params = litellm.utils.get_optional_params(
+        model="us.deepseek.r1-v1:0",
+        custom_llm_provider="bedrock",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    assert "thinking" not in optional_params
+
+    config = AmazonConverseConfig()
+    request = config._transform_request(
+        model="bedrock/converse/us.deepseek.r1-v1:0",
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "thinking" not in request.get("additionalModelRequestFields", {})
+
+
 def test_get_supported_openai_params_bedrock_converse():
     """
     Test that all documented bedrock converse models have the same set of supported openai params when using
