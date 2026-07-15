@@ -37,7 +37,10 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setIsLoadingTags(false);
+      return;
+    }
     try {
       const response = await tagListCall(accessToken);
       setTags(Object.values(response));
