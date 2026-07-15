@@ -62,6 +62,7 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.tool_search.nonstream.works")
 def test_tool_search_bedrock_invoke(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Bedrock (Invoke)

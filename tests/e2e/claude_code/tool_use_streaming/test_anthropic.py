@@ -99,6 +99,7 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     )
 
 
+@pytest.mark.covers("llm.messages.anthropic.tool_use.stream.works")
 def test_tool_use_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     proxy preserves fine-grained tool streaming end-to-end."""

@@ -56,6 +56,7 @@ VERTEX_AI_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.vertex.count_tokens.nonstream.works")
 def test_count_tokens_vertex_ai(compat_result):
     """Probe `/v1/messages/count_tokens` for each Vertex AI tier and
     assert the response shape."""

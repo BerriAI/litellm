@@ -56,6 +56,7 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
+@pytest.mark.covers("llm.messages.anthropic.prompt_cache_5m.nonstream.works")
 def test_prompt_caching_5m_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream usage block surfaces a non-zero cache token count."""

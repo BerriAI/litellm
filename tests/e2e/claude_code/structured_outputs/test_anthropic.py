@@ -152,6 +152,7 @@ def _validate_against_schema(
     return None
 
 
+@pytest.mark.covers("llm.messages.anthropic.structured_output.nonstream.works")
 def test_structured_outputs_anthropic(compat_result):
     """Drive `claude --json-schema ...` against the LiteLLM proxy and
     assert the trailing `result` event contains a schema-conforming

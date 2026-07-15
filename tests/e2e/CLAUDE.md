@@ -81,8 +81,9 @@ llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
   route      : openai | azure_openai | anthropic | bedrock_converse | bedrock_invoke | vertex
                | azure_foundry | cohere | together_ai
                (vocab varies per endpoint; messages is anthropic-format only)
-  capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
-               | service_tier | mid_conversation_system
+  capability : basic | tool_use | prompt_cache_5m | prompt_cache_1h | vision | thinking
+               | thinking_with_tool_use | structured_output | pdf | web_search | tool_search
+               | count_tokens | long_context | service_tier | mid_conversation_system
   streaming  : stream | nonstream   (omit where n/a)
   assertion  : works | cost_logged | cache_hit
   label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*

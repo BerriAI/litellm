@@ -62,6 +62,7 @@ VERTEX_AI_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.vertex.tool_search.nonstream.works")
 def test_tool_search_vertex_ai(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Vertex AI
