@@ -1030,9 +1030,9 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
         set_request_destinations(destinations)
         try:
             request.state.otel_destinations = destinations_raw
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # request.state mirror is best-effort; the ContextVar is the source of truth
             pass
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # destination hoist is best-effort telemetry setup; it must never fail auth
         verbose_proxy_logger.debug("OTel V2: hoist destination resolution failed: %s", exc)
 
 

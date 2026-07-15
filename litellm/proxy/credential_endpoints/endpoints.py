@@ -140,16 +140,14 @@ async def _caller_admin_scope(
             if m.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value
         )
         org_teams = (
-            await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[union-attr]
-                where={"organization_id": {"in": list(org_admin_of)}}
-            )
+            await prisma_client.db.litellm_teamtable.find_many(where={"organization_id": {"in": list(org_admin_of)}})
             if org_admin_of
             else []
         )
         org_grantable = frozenset(t.team_id for t in org_teams if t.team_id)
 
         return CallerAdminScope(team_admin_of | org_grantable, org_admin_of)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # fail closed to an empty admin scope so a lookup error never widens access
         verbose_proxy_logger.exception("caller admin-scope lookup failed")
         return CallerAdminScope(frozenset(), frozenset())
 
@@ -185,10 +183,8 @@ async def _credential_for_admin_gate(credential_name: str, prisma_client: object
     if prisma_client is None:
         return None
     try:
-        return await CredentialsRepository(
-            prisma_client  # type: ignore[arg-type]
-        ).find_by_name(credential_name)
-    except Exception:  # noqa: BLE001
+        return await CredentialsRepository(prisma_client).find_by_name(credential_name)
+    except Exception:  # noqa: BLE001  # treat any lookup failure as credential-not-found
         return None
 
 

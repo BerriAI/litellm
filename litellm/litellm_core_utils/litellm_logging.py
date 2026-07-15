@@ -4003,7 +4003,7 @@ def _init_custom_logger_compatible_class(
             # ``generic`` destination gets the full trace (incl. the gen-AI span), not
             # just proxy-internal spans. Only meaningful as an admin-owned destination,
             # so there is no legacy fallback: None when no v2 logger is constructed.
-            return _maybe_construct_otel_v2("generic", _in_memory_loggers)  # type: ignore
+            return _maybe_construct_otel_v2("generic", _in_memory_loggers)
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):

@@ -2538,7 +2538,7 @@ async def _validate_update_key_data(
 
 @router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
-async def update_key_fn(  # noqa: C901
+async def update_key_fn(  # noqa: C901  # single endpoint handling many optional key-update fields; decomposition is out of scope here
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -4632,7 +4632,7 @@ async def _execute_virtual_key_regeneration(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(  # noqa: C901
+async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many optional key-regeneration fields; decomposition is out of scope here
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

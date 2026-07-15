@@ -605,7 +605,7 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
                     proxy_logging_obj=proxy_server.proxy_logging_obj,
                 )
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
             pass
 
     if user_api_key_dict.team_id:
@@ -619,7 +619,7 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
                     proxy_logging_obj=proxy_server.proxy_logging_obj,
                 )
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
             pass
 
     if org_id:
@@ -633,7 +633,7 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
                     proxy_logging_obj=proxy_server.proxy_logging_obj,
                 )
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
             pass
 
     return names
@@ -676,6 +676,7 @@ async def _resolve_logging_exporters(
             from litellm.proxy.management_endpoints.logging_exporter_access import (
                 _has_explicit_access_grants,
             )
+
             if _has_explicit_access_grants(info.access):
                 return access_grants(info.access, team_ids, org_ids)
             return True  # no grants = proxy-wide auto

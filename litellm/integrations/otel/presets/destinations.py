@@ -11,7 +11,7 @@ credential values only.
 """
 
 import os
-from typing import Callable, Mapping, Optional
+from typing import Callable, Mapping
 
 from litellm.constants import LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 from litellm.integrations.langfuse.langfuse_otel import (
@@ -37,7 +37,7 @@ def _langfuse_endpoint(host: str) -> str:
     return f"{normalized.rstrip('/')}/api/public/otel"
 
 
-def _langfuse_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
+def _langfuse_destination(values: Mapping[str, str]) -> OtelDestination | None:
     public_key = values.get("langfuse_public_key")
     secret_key = values.get("langfuse_secret_key")
     if not public_key or not secret_key:
@@ -48,7 +48,7 @@ def _langfuse_destination(values: Mapping[str, str]) -> Optional[OtelDestination
     return OtelDestination(endpoint=endpoint, headers={"Authorization": auth})
 
 
-def _arize_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
+def _arize_destination(values: Mapping[str, str]) -> OtelDestination | None:
     space = values.get("arize_space_id") or values.get("arize_space_key")
     api_key = values.get("arize_api_key")
     if not space or not api_key:
@@ -69,7 +69,7 @@ def _arize_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
     )
 
 
-def _weave_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
+def _weave_destination(values: Mapping[str, str]) -> OtelDestination | None:
     api_key = values.get("wandb_api_key")
     if not api_key:
         return None
@@ -94,7 +94,7 @@ def _weave_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
     return OtelDestination(endpoint=endpoint, headers=headers)
 
 
-def _generic_destination(values: Mapping[str, str]) -> Optional[OtelDestination]:
+def _generic_destination(values: Mapping[str, str]) -> OtelDestination | None:
     """Any OTLP backend: an explicit endpoint plus raw headers. The catch-all that
     makes the registry cover self-hosted collectors / Phoenix / Honeycomb / etc."""
     endpoint = values.get("otel_endpoint")
@@ -103,7 +103,7 @@ def _generic_destination(values: Mapping[str, str]) -> Optional[OtelDestination]
     return OtelDestination(endpoint=endpoint, headers=_parse_header_string(values.get("otel_headers", "")))
 
 
-_ADAPTERS: dict[str, Callable[[Mapping[str, str]], Optional[OtelDestination]]] = {
+_ADAPTERS: dict[str, Callable[[Mapping[str, str]], OtelDestination | None]] = {
     "langfuse_otel": _langfuse_destination,
     "arize": _arize_destination,
     "weave_otel": _weave_destination,
@@ -113,7 +113,7 @@ _ADAPTERS: dict[str, Callable[[Mapping[str, str]], Optional[OtelDestination]]] =
 OTEL_V2_DESTINATION_CALLBACKS = frozenset(_ADAPTERS)
 
 
-def build_destination(callback_name: str, values: Mapping[str, str]) -> Optional[OtelDestination]:
+def build_destination(callback_name: str, values: Mapping[str, str]) -> OtelDestination | None:
     """Map an admin credential's ``values`` to an ``OtelDestination`` for
     ``callback_name``, falling back to the generic OTLP passthrough.
 

@@ -348,7 +348,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 continue
             try:
                 processor.on_end(_with_destination_resource(span, destination))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # best-effort fan-out; one destination's failure must not break the others or the request
                 verbose_logger.debug(
                     "OTel V2 fan-out: forwarding span to %s failed: %s",
                     destination.endpoint,
@@ -359,7 +359,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for processor in self._processors.values():
             try:
                 processor.shutdown()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # a single processor's shutdown failure must not abort shutting down the rest
                 verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
         self._processors.clear()
 
@@ -369,7 +369,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             try:
                 if not processor.force_flush(timeout_millis):
                     all_ok = False
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  # a single processor's flush failure must not fail the whole force_flush
                 all_ok = False
         return all_ok
 
@@ -381,8 +381,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return cached
         from litellm.integrations.otel.plumbing.providers import (
             _exporter_from_spec,
-            _processor_for as _build_processor,
             default_otlp_kind_for_backend,
+        )
+        from litellm.integrations.otel.plumbing.providers import (
+            _processor_for as _build_processor,
         )
 
         try:
@@ -394,7 +396,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             )
             exporter = _exporter_from_spec(spec)
             processor = _build_processor(exporter, use_simple=False)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # a malformed destination spec must not break fan-out; skip this destination
             verbose_logger.debug(
                 "OTel V2 fan-out: failed to build processor for %s: %s",
                 destination.endpoint,

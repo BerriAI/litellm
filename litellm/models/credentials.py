@@ -5,8 +5,6 @@ These are the canonical credential types for the proxy. They live in the model
 layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 """
 
-from typing import Optional
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -20,8 +18,8 @@ class CredentialItem(CredentialBase):
 
 
 class CreateCredentialItem(CredentialBase):
-    credential_values: Optional[dict] = None
-    model_id: Optional[str] = None
+    credential_values: dict | None = None
+    model_id: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -40,9 +38,9 @@ class UpdateCredentialItem(BaseModel):
     access). ``credential_name`` is optional because most patches don't rename.
     """
 
-    credential_name: Optional[str] = None
-    credential_values: Optional[dict] = None
-    credential_info: Optional[dict] = None
+    credential_name: str | None = None
+    credential_values: dict | None = None
+    credential_info: dict | None = None
 
 
 class CredentialAccess(BaseModel):
@@ -71,9 +69,9 @@ class CredentialInfo(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    credential_type: Optional[str] = None
-    description: Optional[str] = None
-    host: Optional[str] = None
-    endpoint: Optional[str] = None
-    access: Optional[CredentialAccess] = None
+    credential_type: str | None = None
+    description: str | None = None
+    host: str | None = None
+    endpoint: str | None = None
+    access: CredentialAccess | None = None
     auto_enable: bool = False

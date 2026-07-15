@@ -11,8 +11,6 @@ what enables it. The resolver (``litellm_pre_call_utils``) re-checks visibility 
 request time, so this gate and the resolver agree on what "visible" means.
 """
 
-from typing import Optional
-
 from fastapi import HTTPException, status
 
 import litellm
@@ -26,7 +24,7 @@ from litellm.proxy.management_endpoints.logging_exporter_access import (
 LOGGING_EXPORTERS_KEY = "logging_exporters"
 
 
-def is_admin_gated_credential_info(credential_info: Optional[dict]) -> bool:
+def is_admin_gated_credential_info(credential_info: dict | None) -> bool:
     """Whether a credential write must be proxy-admin only.
 
     True when the credential is a logging destination or carries an ``access`` grant,
@@ -37,7 +35,7 @@ def is_admin_gated_credential_info(credential_info: Optional[dict]) -> bool:
     return credential_info.get("credential_type") == "logging" or "access" in credential_info
 
 
-def validate_credential_access(credential_info: Optional[dict]) -> None:
+def validate_credential_access(credential_info: dict | None) -> None:
     """Validate ``credential_info.access`` shape when the write sets one.
 
     No-op when ``access`` is absent. Otherwise it must be an object whose ``global`` (if
@@ -87,8 +85,8 @@ def _logging_credential_names() -> set[str]:
 def _reject_unassignable_destinations(
     exporters: list[str],
     *,
-    scope_team_id: Optional[str],
-    scope_org_id: Optional[str],
+    scope_team_id: str | None,
+    scope_org_id: str | None,
 ) -> None:
     """Reject names a non-proxy-admin cannot assign in this scope.
 
@@ -142,8 +140,8 @@ def _validate_exporters_shape_and_names(exporters: object) -> None:
 
 
 def _exporter_value_changes(
-    requested_metadata: Optional[dict],
-    existing_metadata: Optional[dict],
+    requested_metadata: dict | None,
+    existing_metadata: dict | None,
 ) -> bool:
     """True if the effective ``metadata.logging_exporters`` value would change.
 
@@ -173,14 +171,14 @@ def _exporter_value_changes(
 
 
 def validate_logging_exporter_field(
-    requested_exporters: Optional[list],
+    requested_exporters: list | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     caller_is_team_admin: bool = False,
     caller_is_org_admin: bool = False,
-    existing_exporters: Optional[list] = None,
-    scope_team_id: Optional[str] = None,
-    scope_org_id: Optional[str] = None,
+    existing_exporters: list | None = None,
+    scope_team_id: str | None = None,
+    scope_org_id: str | None = None,
 ) -> None:
     """Authorize a typed ``logging_exporters`` write (the column-backed field).
 
@@ -205,14 +203,14 @@ def validate_logging_exporter_field(
 
 
 def validate_logging_exporter_assignment(
-    metadata: Optional[dict],
+    metadata: dict | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     caller_is_team_admin: bool = False,
     caller_is_org_admin: bool = False,
-    existing_metadata: Optional[dict] = None,
-    scope_team_id: Optional[str] = None,
-    scope_org_id: Optional[str] = None,
+    existing_metadata: dict | None = None,
+    scope_team_id: str | None = None,
+    scope_org_id: str | None = None,
 ) -> None:
     """Validate a ``metadata.logging_exporters`` write on key / team / org endpoints.
 

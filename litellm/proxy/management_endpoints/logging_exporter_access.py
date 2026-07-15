@@ -15,14 +15,12 @@ admin scope is the given set of team ids and org ids. Single-identity callers
 and orgs, passes the full scope.
 """
 
-from typing import Optional
-
 from pydantic import ValidationError
 
 from litellm.models.credentials import CredentialAccess, CredentialInfo
 
 
-def parse_credential_info(raw: object) -> Optional[CredentialInfo]:
+def parse_credential_info(raw: object) -> CredentialInfo | None:
     """Parse stored ``credential_info`` into the typed model, or ``None`` when it is
     absent or malformed.
 
@@ -38,7 +36,7 @@ def parse_credential_info(raw: object) -> Optional[CredentialInfo]:
         return None
 
 
-def identity_scope(team_id: Optional[str], org_id: Optional[str]) -> tuple[frozenset[str], frozenset[str]]:
+def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[str], frozenset[str]]:
     """A single request identity's admin scope as ``(team_ids, org_ids)`` for
     ``access_grants`` / ``is_destination_visible``."""
     return (
@@ -48,7 +46,7 @@ def identity_scope(team_id: Optional[str], org_id: Optional[str]) -> tuple[froze
 
 
 def access_grants(
-    access: Optional[CredentialAccess],
+    access: CredentialAccess | None,
     team_ids: frozenset[str],
     org_ids: frozenset[str],
 ) -> bool:
@@ -68,7 +66,7 @@ def access_grants(
     return not org_ids.isdisjoint(access.orgs)
 
 
-def _has_explicit_access_grants(access: Optional[CredentialAccess]) -> bool:
+def _has_explicit_access_grants(access: CredentialAccess | None) -> bool:
     """True when ``access`` contains at least one explicit grant (global, team, or org).
 
     Used to distinguish "access intentionally left empty" (proxy-wide fallback) from
