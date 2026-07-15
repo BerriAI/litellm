@@ -1,5 +1,6 @@
 import asyncio
 import time
+from typing import Optional
 
 import pytest
 
@@ -23,7 +24,10 @@ USAGE_BLOCK = {
 }
 
 
-def _logging_obj(call_type: str = "acreate_interaction") -> LitellmLogging:
+def _logging_obj(
+    call_type: str = "acreate_interaction",
+    litellm_params: Optional[dict] = None,
+) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="gemini-2.5-flash",
         messages=[],
@@ -34,13 +38,21 @@ def _logging_obj(call_type: str = "acreate_interaction") -> LitellmLogging:
         function_id="bg-interactions-fn-id",
     )
     logging_obj.update_environment_variables(
-        litellm_params={},
+        litellm_params=litellm_params or {},
         optional_params={},
         model="gemini-2.5-flash",
         custom_llm_provider="gemini",
         input="hi",
     )
     return logging_obj
+
+
+def _reservation() -> dict:
+    return {"reserved_cost": 0.05, "entries": [], "finalized": False, "input_cost": 0.001}
+
+
+def _logging_obj_with_reservation(reservation: dict) -> LitellmLogging:
+    return _logging_obj(litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}})
 
 
 def _context(logging_obj: LitellmLogging, timeout_seconds: float = 1.0) -> BackgroundInteractionPollContext:
@@ -116,6 +128,46 @@ async def test_poller_gives_up_after_timeout_without_billing():
 
     assert len(calls) >= 2
     assert logging_obj.model_call_details.get("response_cost") is None
+
+
+@pytest.mark.asyncio
+async def test_poller_releases_budget_reservation_when_interaction_ends_without_usage():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(_response("failed", with_usage=False))
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_poller_releases_budget_reservation_on_timeout_give_up():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+
+    await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=0.01),
+        fetch_interaction=fetch,
+    )
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_poller_leaves_reservation_reconciliation_to_the_completion_event():
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(
+        _response("in_progress", with_usage=False),
+        _response("completed", with_usage=True),
+    )
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert reservation["finalized"] is False
 
 
 @pytest.mark.asyncio
