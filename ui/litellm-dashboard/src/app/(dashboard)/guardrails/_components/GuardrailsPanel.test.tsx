@@ -105,6 +105,6 @@ describe("GuardrailsPanel", () => {
     expect(screen.getByText("Guardrails")).toBeInTheDocument();
     // Activate the Guardrails tab so its content (including the Add button) is rendered
     fireEvent.click(screen.getByText("Guardrails"));
-    expect(screen.getByText("+ Add New Guardrail")).toBeInTheDocument();
+    expect(screen.getByText("Add New Guardrail")).toBeInTheDocument();
   });
 });

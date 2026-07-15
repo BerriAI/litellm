@@ -186,6 +186,33 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
 )
 
 
+def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_server: MCPServer | None) -> None:
+    """Keep the last known good OAuth endpoints when a rebuild's re-discovery comes back empty.
+
+    A rebuild wholesale-replaces the registry entry, so without this a transient upstream outage
+    during re-discovery downgrades a working server (``authorization_url`` set) to a broken one
+    (``None``, /authorize 400s) with no configuration change. Mirrors the ``short_prefix``
+    carry-forward. Skipped when the server's ``url`` or ``auth_type`` changed, since the previous
+    endpoints may then belong to a different upstream. ``registration_url`` IS carried here even
+    though ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only
+    restores the same in-memory value the previous build already ran with, while persisting it
+    would flip ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for
+    dcr_bridge servers that never had one configured.
+    """
+    if previous_server is None:
+        return
+    if previous_server.url != new_server.url or previous_server.auth_type != new_server.auth_type:
+        return
+    if new_server.authorization_url is None and previous_server.authorization_url:
+        new_server.authorization_url = previous_server.authorization_url
+    if new_server.token_url is None and previous_server.token_url:
+        new_server.token_url = previous_server.token_url
+    if new_server.registration_url is None and previous_server.registration_url:
+        new_server.registration_url = previous_server.registration_url
+    if not new_server.scopes and previous_server.scopes:
+        new_server.scopes = previous_server.scopes
+
+
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
     """Drop a cached entry after the user stores or clears their env var values
     so the next request reads the fresh value instead of a stale one."""
@@ -1343,6 +1370,7 @@ class MCPServerManager:
         *,
         credentials_are_encrypted: bool = True,
         env_vars_are_encrypted: Optional[bool] = None,
+        persist_discovered_endpoints: bool = True,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
@@ -1436,6 +1464,13 @@ class MCPServerManager:
             if needs_discovery
             else None
         )
+        if needs_discovery and mcp_oauth_metadata is None:
+            verbose_logger.warning(
+                "MCP OAuth discovery yielded no metadata for server %s (%s); "
+                "OAuth endpoints stay unresolved until a rebuild succeeds",
+                mcp_server.server_id,
+                server_url,
+            )
 
         resolved_scopes = scopes or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
 
@@ -1506,12 +1541,21 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
-        await self._persist_discovered_obo_token_url(
-            server_id=mcp_server.server_id,
-            auth_type=auth_type,
-            existing_token_url=mcp_server.token_url,
-            discovered_token_url=new_server.token_url,
-        )
+        if persist_discovered_endpoints:
+            await self._persist_discovered_obo_token_url(
+                server_id=mcp_server.server_id,
+                auth_type=auth_type,
+                existing_token_url=mcp_server.token_url,
+                discovered_token_url=new_server.token_url,
+            )
+            await self._persist_discovered_oauth_endpoints(
+                server_id=mcp_server.server_id,
+                auth_type=auth_type,
+                existing_authorization_url=mcp_server.authorization_url,
+                existing_token_url=mcp_server.token_url,
+                existing_scopes=scopes,
+                metadata=mcp_oauth_metadata,
+            )
         return new_server
 
     async def _persist_discovered_obo_token_url(
@@ -1548,6 +1592,69 @@ class MCPServerManager:
             verbose_logger.debug("Persisted discovered OBO token_url for MCP server %s", server_id)
         except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
             verbose_logger.warning("Failed to persist discovered OBO token_url for MCP server %s: %s", server_id, exc)
+
+    async def _persist_discovered_oauth_endpoints(
+        self,
+        *,
+        server_id: str,
+        auth_type: MCPAuthType | None,
+        existing_authorization_url: str | None,
+        existing_token_url: str | None,
+        existing_scopes: list[str] | None,
+        metadata: MCPOAuthMetadata | None,
+    ) -> None:
+        """Write freshly discovered OAuth endpoints back onto the DB row.
+
+        Same rationale as ``_persist_discovered_obo_token_url`` but for the interactive oauth2
+        family: discovered ``authorization_url``/``token_url``/``scopes`` otherwise live only on
+        the in-memory registry entry, which is rebuilt on every client connect (the DCR reuse path
+        calls ``update_server``) and on every post-write DB reload, so one failed re-discovery
+        serves 400 "authorization url is not set" from /authorize until a later rebuild succeeds.
+        Only fills row fields that are currently empty, never persists origin-fallback guesses
+        (RFC 9728/8414-advertised metadata only), and deliberately skips ``registration_url``
+        because ``_dcr_bridge_relays_client_registration`` keys off that column. Best-effort: a
+        failed write re-discovers on the next build. Scopes go through ``update_mcp_server`` so
+        they merge into the credentials blob without touching the stored client credentials.
+        """
+        if auth_type not in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
+            return
+        if metadata is None or metadata.from_origin_fallback:
+            return
+        authorization_url_update = (
+            {"authorization_url": metadata.authorization_url}
+            if metadata.authorization_url and not existing_authorization_url
+            else {}
+        )
+        token_url_update = {"token_url": metadata.token_url} if metadata.token_url and not existing_token_url else {}
+        scopes_update = {"credentials": {"scopes": metadata.scopes}} if metadata.scopes and not existing_scopes else {}
+        updates: dict[str, object] = {**authorization_url_update, **token_url_update, **scopes_update}
+        if not updates:
+            return
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # db.py imports this module at load
+            update_mcp_server,
+        )
+        from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415  # heavy module; import at call time
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime value, set after startup
+
+        if prisma_client is None:
+            return
+        try:
+            await update_mcp_server(
+                prisma_client=prisma_client,
+                data=UpdateMCPServerRequest.model_validate({"server_id": server_id, **updates}),
+                touched_by="mcp_oauth_discovery",
+            )
+            verbose_logger.info(
+                "Persisted discovered OAuth endpoints for MCP server %s: %s",
+                server_id,
+                sorted(updates),
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
+            verbose_logger.warning(
+                "Failed to persist discovered OAuth endpoints for MCP server %s: %s",
+                server_id,
+                exc,
+            )
 
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
@@ -1607,6 +1714,10 @@ class MCPServerManager:
                 existing_prefix = self.registry[mcp_server.server_id].short_prefix
                 if existing_prefix and not new_server.short_prefix:
                     new_server.short_prefix = existing_prefix
+                _carry_forward_resolved_oauth_endpoints(
+                    new_server=new_server,
+                    previous_server=self.registry[mcp_server.server_id],
+                )
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
@@ -2969,16 +3080,20 @@ class MCPServerManager:
                 ) = await self._attempt_well_known_discovery(server_url)
 
             metadata = None
+            used_origin_fallback = False
             if allow_origin_fallback and not authorization_servers:
                 try:
                     parsed_url = urlparse(server_url)
                     if parsed_url.scheme and parsed_url.netloc:
                         authorization_servers = [f"{parsed_url.scheme}://{parsed_url.netloc}"]
+                        used_origin_fallback = True
                 except Exception:
                     authorization_servers = []
 
             if authorization_servers:
                 metadata = await self._fetch_authorization_server_metadata(authorization_servers, server_url)
+                if metadata is not None and used_origin_fallback:
+                    metadata.from_origin_fallback = True
 
             preferred_scopes = scopes or resource_scopes
             if metadata is None and preferred_scopes:
@@ -4489,6 +4604,7 @@ class MCPServerManager:
                 # (if any) so the prefix is stable across reloads.
                 if existing_server is not None and existing_server.short_prefix:
                     new_server.short_prefix = existing_server.short_prefix
+                _carry_forward_resolved_oauth_endpoints(new_server=new_server, previous_server=existing_server)
                 new_registry[server.server_id] = new_server
             except Exception as e:
                 verbose_logger.exception(

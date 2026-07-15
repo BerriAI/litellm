@@ -11,12 +11,13 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `embeddings/` - the `/embeddings` endpoint across providers
 - `batches/` - the `/batches` endpoint (placeholder until the first test lands)
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
-- `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window) and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
+- `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
+- `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees, and does not use the shared transport harness
 
 ## Lay the pattern down in a class
 
@@ -77,13 +78,13 @@ llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
   endpoint   : chat_completions | messages | responses | embeddings | batches | files
                | rerank | images_generations | audio_speech | audio_transcriptions | moderations
                | realtime
-  route      : openai | azure_openai | anthropic | bedrock_converse | vertex | azure_foundry
-               | cohere | together_ai
+  route      : openai | azure_openai | anthropic | bedrock_converse | bedrock_invoke | vertex
+               | azure_foundry | cohere | together_ai
                (vocab varies per endpoint; messages is anthropic-format only)
   capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
-               | service_tier
+               | service_tier | mid_conversation_system
   streaming  : stream | nonstream   (omit where n/a)
-  assertion  : works | cost_logged
+  assertion  : works | cost_logged | cache_hit
   label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*
   e.g.  llm.chat_completions.bedrock_converse.tool_use.stream.works
         llm.messages.anthropic.prompt_cache_1h.nonstream.cache_hit

@@ -270,6 +270,105 @@ def test_image_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
+def test_video_output_tokens_gemini_omni_flash_preview():
+    """Video output tokens are billed at output_cost_per_video_token, not the text rate and not zero."""
+    model = "gemini-omni-flash-preview"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    text_tokens = 100
+    video_tokens = 46336
+    usage = Usage(
+        completion_tokens=text_tokens + video_tokens,
+        prompt_tokens=20,
+        total_tokens=20 + text_tokens + video_tokens,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            video_tokens=video_tokens,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=20),
+    )
+    model_cost_map = litellm.model_cost[f"gemini/{model}"]
+    assert model_cost_map["input_cost_per_token"] == 1.5e-06
+    assert model_cost_map["output_cost_per_token"] == 9e-06
+    assert model_cost_map["output_cost_per_video_token"] == 1.75e-05
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
+        10,
+    )
+    assert round(completion_cost, 10) == round(
+        (model_cost_map["output_cost_per_token"] * text_tokens)
+        + (model_cost_map["output_cost_per_video_token"] * video_tokens),
+        10,
+    )
+
+
+def test_video_input_tokens_gemini_omni_flash_preview():
+    """Video input tokens are billed at the standard input rate instead of being dropped."""
+    model = "gemini-omni-flash-preview"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        completion_tokens=10,
+        prompt_tokens=10050,
+        total_tokens=10060,
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=50, video_tokens=10000),
+    )
+    model_cost_map = litellm.model_cost[f"gemini/{model}"]
+
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
+        10,
+    )
+
+
+def test_video_tokens_fallback_to_base_cost():
+    """Video output tokens fall back to the base output rate when output_cost_per_video_token is not set."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+    }
+
+    usage = Usage(
+        completion_tokens=1720,
+        prompt_tokens=14,
+        total_tokens=1734,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=600,
+            video_tokens=1120,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=14),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="gemini"
+        )
+
+    assert round(prompt_cost, 12) == round(14 * 1e-6, 12)
+    assert round(completion_cost, 12) == round((600 + 1120) * 2e-6, 12)
+
+
 def test_generic_cost_per_token_above_200k_tokens():
     # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
     model = "gemini-2.5-pro"
@@ -1086,6 +1185,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         "text_tokens": 0,
         "audio_tokens": 0,
         "image_tokens": 0,
+        "video_tokens": 0,
         "character_count": 0,
         "image_count": 0,
         "video_length_seconds": 0.0,

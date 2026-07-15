@@ -358,6 +358,23 @@ describe("DataTable loading", () => {
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
 
+  it("gives compact skeleton rows the same height as loaded rows so loading does not shrink the table", () => {
+    const { rerender } = render(
+      <DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" isLoading />,
+    );
+    const skeletonRow = screen.getAllByTestId("skeleton-row").at(0);
+    const loadedRowHeight = "h-8";
+    expect(skeletonRow?.className).toContain(loadedRowHeight);
+
+    rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" />);
+    expect(document.querySelector("[data-row-id]")?.className).toContain(loadedRowHeight);
+  });
+
+  it("does not force the compact height on default-size skeleton rows", () => {
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
+    expect(screen.getAllByTestId("skeleton-row").at(0)?.className).not.toContain("h-8");
+  });
+
   it("varies skeleton shape and width per column instead of one fixed bar", () => {
     const columns: ColumnDef<Person, unknown>[] = [
       { accessorKey: "name", header: "Name", meta: { skeleton: "twoLine" }, cell: () => null },

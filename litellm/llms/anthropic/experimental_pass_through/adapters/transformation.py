@@ -104,6 +104,7 @@ from litellm.types.llms.anthropic import (
     ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
+    StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
 )
@@ -1423,7 +1424,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
     ) -> Tuple[
-        Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"],
+        StreamingContentBlockDeltaType,
         Union[
             ContentTextBlockDelta,
             ContentJsonBlockDelta,

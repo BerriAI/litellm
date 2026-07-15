@@ -301,17 +301,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/edit_guardrail_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/guardrail_info.tsx": {
     "max-params": {
       "count": 1
@@ -336,14 +325,6 @@
       "count": 5
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
