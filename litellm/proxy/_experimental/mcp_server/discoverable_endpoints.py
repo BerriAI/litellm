@@ -1133,7 +1133,6 @@ async def _persist_dcr_client_registration(
                 credentials=credentials,
                 oauth2_flow="authorization_code",
                 **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
-                **({"authorization_url": mcp_server.authorization_url} if mcp_server.authorization_url else {}),
             ),
             touched_by="mcp_oauth_dcr",
         )
