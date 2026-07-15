@@ -181,6 +181,44 @@ def test_trigger_cooldown_skips_when_no_deployment_id():
     mock_set.assert_not_called()
 
 
+def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30}}
+
+    exc = RuntimeError("upstream error")
+    exc.status_code = 429
+
+    kwargs = {"litellm_metadata": {"model_info": {"id": "deployment-abc"}}}
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["time_to_cooldown"] == 30
+
+
+def test_trigger_cooldown_silently_catches_exceptions():
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("upstream error")
+    kwargs = {"litellm_metadata": {"model_info": {"id": "deployment-abc"}}}
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments",
+        side_effect=RuntimeError("cooldown error"),
+    ):
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+
 def test_trigger_cooldown_uses_litellm_metadata_only_not_metadata():
     router = MagicMock()
     router.cooldown_time = 60
