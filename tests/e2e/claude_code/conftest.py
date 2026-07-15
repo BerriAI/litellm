@@ -38,10 +38,14 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Generator, Mapping, Optional, Sequence, TypedDict
 
+import pluggy
 import pytest
 import yaml
+from pydantic import TypeAdapter, ValidationError
+
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONValue
 
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
@@ -86,14 +90,14 @@ class CompatResult:
     pass" rule.
     """
 
-    value: Optional[Dict[str, Any]] = None
-    values: List[Dict[str, Any]] = field(default_factory=list)
+    value: Optional[dict[str, JSONValue]] = None
+    values: list[dict[str, JSONValue]] = field(default_factory=list)
 
-    def set(self, result: Dict[str, Any]) -> None:
+    def set(self, result: Mapping[str, JSONValue]) -> None:
         validated = self._validate(result)
         self.value = validated
 
-    def add(self, result: Dict[str, Any]) -> None:
+    def add(self, result: Mapping[str, JSONValue]) -> None:
         """Append one model's outcome to the per-test results list.
 
         Use this when a single test exercises multiple Claude tiers
@@ -104,7 +108,7 @@ class CompatResult:
         self.values.append(validated)
 
     @staticmethod
-    def _validate(result: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate(result: Mapping[str, JSONValue]) -> dict[str, JSONValue]:
         if not isinstance(result, dict):
             raise TypeError("compat_result requires a dict")
         status = result.get("status")
@@ -121,7 +125,7 @@ class CompatResult:
             )
         return dict(result)
 
-    def collected(self) -> List[Dict[str, Any]]:
+    def collected(self) -> list[dict[str, JSONValue]]:
         """Return every result reported during the test, preserving order.
 
         Multi-model tests use `.add(...)` per model; legacy tests use
@@ -140,12 +144,12 @@ class _CollectedResult:
     feature_id: str
     provider: str
     nodeid: str
-    result: Dict[str, Any]
+    result: dict[str, JSONValue]
 
 
 @dataclass
 class _Collector:
-    items: List[_CollectedResult] = field(default_factory=list)
+    items: list[_CollectedResult] = field(default_factory=list)
 
 
 _COLLECTOR = _Collector()
@@ -164,7 +168,7 @@ def compat_result() -> CompatResult:
 
 
 @functools.lru_cache(maxsize=1)
-def _manifest_feature_ids() -> FrozenSet[str]:
+def _manifest_feature_ids() -> frozenset[str]:
     """Return the set of feature_ids declared in `manifest.yaml`.
 
     Used as a positive filter so only directories that correspond to a
@@ -179,22 +183,20 @@ def _manifest_feature_ids() -> FrozenSet[str]:
     """
     manifest_path = Path(__file__).resolve().parent / "manifest.yaml"
     try:
-        raw = yaml.safe_load(manifest_path.read_text())
-    except (OSError, yaml.YAMLError):
-        return frozenset()
-    if not isinstance(raw, dict):
+        raw = JSON_OBJECT_ADAPTER.validate_python(yaml.safe_load(manifest_path.read_text()))
+    except (OSError, yaml.YAMLError, ValidationError):
         return frozenset()
     features = raw.get("features")
     if not isinstance(features, list):
         return frozenset()
     return frozenset(
-        entry["id"]
+        feature_id
         for entry in features
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        if isinstance(entry, dict) and isinstance(feature_id := entry.get("id"), str)
     )
 
 
-def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
+def _infer_feature_and_provider(node_path: Path) -> Optional[tuple[str, str]]:
     """Infer (feature_id, provider) from a test file path.
 
     Path shape:  tests/e2e/claude_code/<feature_id>/test_<provider>.py
@@ -216,7 +218,9 @@ def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pluggy.Result[pytest.TestReport], None]:
     """Capture compat_result reports at end-of-test and remember them for the artifact.
 
     A single test may report multiple results (one per Claude tier when
@@ -256,8 +260,8 @@ def pytest_runtest_makereport(item, call):
         return
     feature_id, provider = inferred
 
-    fixture = item.funcargs.get("compat_result") if hasattr(item, "funcargs") else None
-    collected: List[Dict[str, Any]] = (
+    fixture = item.funcargs.get("compat_result") if isinstance(item, pytest.Function) else None
+    collected: list[dict[str, JSONValue]] = (
         fixture.collected() if isinstance(fixture, CompatResult) else []
     )
 
@@ -298,7 +302,7 @@ def pytest_runtest_makereport(item, call):
         )
 
 
-def _is_xdist_worker(session) -> bool:
+def _is_xdist_worker(session: pytest.Session) -> bool:
     """Return True iff the current pytest session is an xdist worker.
 
     The standard idiom is to look up `workerinput` on the config; the
@@ -309,11 +313,19 @@ def _is_xdist_worker(session) -> bool:
     return hasattr(session.config, "workerinput")
 
 
-def _xdist_worker_id(session) -> Optional[str]:
-    info = getattr(session.config, "workerinput", None)
+_WORKERINPUT_ADAPTER = TypeAdapter[dict[str, object]](dict[str, object])
+
+
+def _xdist_worker_id(session: pytest.Session) -> Optional[str]:
+    info: object = getattr(session.config, "workerinput", None)
     if not info:
         return None
-    return info.get("workerid")
+    try:
+        workerinput = _WORKERINPUT_ADAPTER.validate_python(info)
+    except ValidationError:
+        return None
+    worker_id = workerinput.get("workerid")
+    return worker_id if isinstance(worker_id, str) else None
 
 
 def _shard_dir(artifact_path: Path) -> Path:
@@ -327,7 +339,7 @@ def _shard_dir(artifact_path: Path) -> Path:
     return artifact_path.with_name(artifact_path.name + ".shards")
 
 
-def _serialize_items(items: List["_CollectedResult"]) -> List[Dict[str, Any]]:
+def _serialize_items(items: Sequence[_CollectedResult]) -> list[dict[str, JSONValue]]:
     return [
         {
             "feature_id": item.feature_id,
@@ -339,9 +351,15 @@ def _serialize_items(items: List["_CollectedResult"]) -> List[Dict[str, Any]]:
     ]
 
 
+class _RateLimitSummary(TypedDict):
+    totals: dict[str, int]
+    per_provider: dict[str, dict[str, int]]
+    rate_limited_examples: list[dict[str, JSONValue]]
+
+
 def _build_rate_limit_summary(
-    rows: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    rows: Sequence[JSONValue],
+) -> _RateLimitSummary:
     """Aggregate per-provider rate-limit signals from the result rows.
 
     We classify any failure whose error string matches `_RATE_LIMIT_RE`
@@ -363,14 +381,19 @@ def _build_rate_limit_summary(
           ],
         }
     """
-    totals: Counter = Counter()
-    per_provider: Dict[str, Counter] = defaultdict(Counter)
-    rate_limited_examples: List[Dict[str, Any]] = []
+    totals: Counter[str] = Counter()
+    per_provider: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    rate_limited_examples: list[dict[str, JSONValue]] = []
 
     for row in rows:
-        result = row.get("result") or {}
-        status = result.get("status") or "unknown"
-        provider = row.get("provider") or "unknown"
+        if not isinstance(row, dict):
+            continue
+        raw_result = row.get("result")
+        result = raw_result if isinstance(raw_result, dict) else {}
+        raw_status = result.get("status")
+        status = raw_status if isinstance(raw_status, str) and raw_status else "unknown"
+        raw_provider = row.get("provider")
+        provider = raw_provider if isinstance(raw_provider, str) and raw_provider else "unknown"
         totals[status] += 1
         per_provider[provider][status] += 1
 
@@ -397,7 +420,7 @@ def _build_rate_limit_summary(
     }
 
 
-def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
+def _print_rate_limit_summary(summary: _RateLimitSummary) -> None:
     """Emit a human-readable per-provider table to stderr.
 
     Pytest only captures stderr when `-s` isn't set; we deliberately
@@ -405,9 +428,9 @@ def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
     with `-q` and grep-checks the structured JSON artifact, while a
     human running locally with `-s` sees the same numbers inline.
     """
-    totals = summary.get("totals", {})
-    per_provider = summary.get("per_provider", {})
-    lines: List[str] = []
+    totals = summary["totals"]
+    per_provider = summary["per_provider"]
+    lines: list[str] = []
     lines.append("[compat] session totals:")
     for status in ("pass", "fail", "rate_limited", "not_applicable", "not_tested"):
         if status in totals:
@@ -430,7 +453,7 @@ def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
     print("\n".join(lines), file=sys.stderr, flush=True)
 
 
-def pytest_sessionstart(session):
+def pytest_sessionstart(session: pytest.Session) -> None:
     """Reset per-session state before tests run.
 
     Two responsibilities:
@@ -469,7 +492,7 @@ def pytest_sessionstart(session):
             continue
 
 
-def pytest_sessionfinish(session, exitstatus):
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Write the per-process results shard, then merge if we're the controller.
 
     Worker processes (xdist `gw0`, `gw1`, ...) only write their shard
@@ -517,10 +540,10 @@ def pytest_sessionfinish(session, exitstatus):
     if _is_xdist_worker(session):
         return
 
-    merged_rows: List[Dict[str, Any]] = []
+    merged_rows: list[JSONValue] = []
     for shard_file in sorted(shard_dir.glob("*.json")):
         try:
-            shard = json.loads(shard_file.read_text())
+            shard = JSON_OBJECT_ADAPTER.validate_json(shard_file.read_text())
         except (OSError, ValueError):
             continue
         rows = shard.get("results")

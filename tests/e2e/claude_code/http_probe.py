@@ -26,12 +26,13 @@ bug).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Mapping, Optional
 
 import httpx
+from pydantic import ValidationError
 
+from claude_code.json_types import JSON_VALUE_ADAPTER, JSONValue
 from claude_code.rate_limiter import (
     RateLimiter,
     get_default_limiter,
@@ -55,7 +56,7 @@ class ProbeResult:
 
     status_code: int
     body: str
-    payload: Optional[Mapping[str, Any]] = None
+    payload: Optional[JSONValue] = None
     error: Optional[str] = None
 
 
@@ -108,8 +109,8 @@ def probe_count_tokens(
 
     body = response.text or ""
     try:
-        payload = response.json() if body else None
-    except (json.JSONDecodeError, ValueError):
+        payload = JSON_VALUE_ADAPTER.validate_json(body) if body else None
+    except ValidationError:
         payload = None
 
     return ProbeResult(
@@ -211,8 +212,8 @@ def probe_tool_search(
 
     body = response.text or ""
     try:
-        payload_out = response.json() if body else None
-    except (json.JSONDecodeError, ValueError):
+        payload_out = JSON_VALUE_ADAPTER.validate_json(body) if body else None
+    except ValidationError:
         payload_out = None
 
     return ProbeResult(

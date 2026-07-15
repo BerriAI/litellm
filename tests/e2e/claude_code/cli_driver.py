@@ -13,7 +13,6 @@ live in `matrix_builder.py`.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -22,8 +21,11 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Mapping, Optional, Protocol, Sequence, Union
 
+from pydantic import ValidationError
+
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONObject, JSONValue
 from claude_code.rate_limiter import (
     RateLimiter,
     get_default_limiter,
@@ -58,7 +60,7 @@ DEFAULT_TIMEOUT_SECONDS = float(
 # or `~/.bash_history` on the cron VM (and on the CircleCI executor
 # the same isolation prevents accidentally exposing checkout-adjacent
 # files even though the runner home is ephemeral there).
-_CLI_ENV_ALLOWLIST: tuple = (
+_CLI_ENV_ALLOWLIST: tuple[str, ...] = (
     "PATH",
     "USER",
     "LOGNAME",
@@ -113,11 +115,49 @@ class DriverResult:
     """
 
     text: str
-    events: List[Dict[str, Any]] = field(default_factory=list)
+    events: list[JSONObject] = field(default_factory=list)
     exit_code: int = 0
     stderr: str = ""
-    usage: Optional[Dict[str, Any]] = None
+    usage: Optional[JSONObject] = None
     duration_ms: Optional[int] = None
+
+
+class CommandRunner(Protocol):
+    def __call__(
+        self,
+        args: Sequence[str],
+        /,
+        *,
+        env: Mapping[str, str],
+        input: Optional[str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _run_subprocess(
+    args: Sequence[str],
+    /,
+    *,
+    env: Mapping[str, str],
+    input: Optional[str],
+    capture_output: bool,
+    text: bool,
+    timeout: float,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    del text
+    return subprocess.run(
+        args,
+        env=env,
+        input=input,
+        capture_output=capture_output,
+        text=True,
+        timeout=timeout,
+        check=check,
+    )
 
 
 def run_claude(
@@ -131,7 +171,7 @@ def run_claude(
     stdin_input: Optional[str] = None,
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    runner: Optional[Any] = None,
+    runner: Optional[CommandRunner] = None,
     rate_limiter: Optional[RateLimiter] = None,
 ) -> DriverResult:
     """Invoke `claude` once in headless stream-JSON mode and return the result.
@@ -179,7 +219,7 @@ def run_claude(
     # the prompt terminates option parsing and leaves the prompt as a
     # plain positional, which works for variadic and non-variadic flags
     # alike.
-    cmd: List[str] = [
+    cmd: list[str] = [
         cli_path,
         "--print",
         "--output-format",
@@ -198,7 +238,7 @@ def run_claude(
     # process-runtime vars from os.environ, plus the explicit proxy
     # creds, plus any caller-supplied overrides. See _CLI_ENV_ALLOWLIST
     # above for the security rationale.
-    env: Dict[str, str] = {
+    env: dict[str, str] = {
         key: os.environ[key] for key in _CLI_ENV_ALLOWLIST if key in os.environ
     }
     env["ANTHROPIC_BASE_URL"] = base_url
@@ -221,7 +261,7 @@ def run_claude(
     provider = infer_provider(model)
     limiter.acquire(provider)
 
-    run_fn = runner or subprocess.run
+    run_fn = runner or _run_subprocess
     try:
         try:
             completed = run_fn(
@@ -276,8 +316,8 @@ def run_claude_models_parallel(
     stdin_input: Optional[str] = None,
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    runner: Optional[Callable[..., Any]] = None,
-) -> Dict[str, ModelResult]:
+    runner: Optional[CommandRunner] = None,
+) -> dict[str, ModelResult]:
     """Invoke `run_claude` for every `models[i]` concurrently and collect outcomes.
 
     Each `claude` CLI invocation is a long-lived subprocess that spends
@@ -300,7 +340,7 @@ def run_claude_models_parallel(
     if not models:
         raise ValueError("models must be a non-empty sequence")
 
-    def _one(model: str) -> Tuple[str, ModelResult, float]:
+    def _one(model: str) -> tuple[str, ModelResult, float]:
         # Per-model wall clock: this is what the matrix run actually pays for.
         # We record it whether the run succeeded or raised so the breakdown
         # log below covers both code paths and surfaces "which model is the
@@ -342,8 +382,8 @@ def run_claude_models_parallel(
             wrapped.__cause__ = exc
             return model, wrapped, elapsed
 
-    outcomes: Dict[str, ModelResult] = {}
-    durations: Dict[str, float] = {}
+    outcomes: dict[str, ModelResult] = {}
+    durations: dict[str, float] = {}
     overall_started = time.monotonic()
     with ThreadPoolExecutor(max_workers=len(models)) as pool:
         futures = [pool.submit(_one, model) for model in models]
@@ -380,11 +420,11 @@ def _log_parallel_breakdown(
     "why didn't this get faster?".
     """
     sequential_total = sum(durations.values())
-    slowest_model = max(durations, key=durations.get) if durations else None
+    slowest_model = max(durations, key=lambda model: durations[model]) if durations else None
     slowest = durations[slowest_model] if slowest_model else 0.0
     speedup = sequential_total / overall_elapsed if overall_elapsed > 0 else 0.0
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("[parallel] per-model wall time:")
     for model in models:
         elapsed = durations.get(model, 0.0)
@@ -406,28 +446,27 @@ def _log_parallel_breakdown(
     print("\n".join(lines), file=sys.stderr, flush=True)
 
 
-def _parse_stream_json(stdout: str) -> List[Dict[str, Any]]:
+def _parse_stream_json(stdout: str) -> list[JSONObject]:
     """Parse newline-delimited JSON emitted by `claude --output-format stream-json`.
 
     Lines that don't parse as JSON are silently skipped — the CLI occasionally
     emits debug output we don't care about, and a single malformed line should
     not abort the whole run. Real failure modes surface via exit code.
     """
-    events: List[Dict[str, Any]] = []
+    events: list[JSONObject] = []
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
+            event = JSON_OBJECT_ADAPTER.validate_json(line)
+        except ValidationError:
             continue
-        if isinstance(obj, dict):
-            events.append(obj)
+        events.append(event)
     return events
 
 
-def _extract_assistant_text(events: Sequence[Mapping[str, Any]]) -> str:
+def _extract_assistant_text(events: Sequence[Mapping[str, JSONValue]]) -> str:
     """Concatenate the text content of every `assistant` event in order.
 
     The non-streaming `--print` path emits a single `assistant` event whose
@@ -435,12 +474,12 @@ def _extract_assistant_text(events: Sequence[Mapping[str, Any]]) -> str:
     join every `text` block — the CLI prints other block types (e.g.
     `tool_use`) which we ignore for the basic-messaging case.
     """
-    chunks: List[str] = []
+    chunks: list[str] = []
     for event in events:
         if event.get("type") != "assistant":
             continue
-        message = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, str):
             chunks.append(content)
             continue
@@ -449,8 +488,9 @@ def _extract_assistant_text(events: Sequence[Mapping[str, Any]]) -> str:
         for block in content:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                chunks.append(block["text"])
+            text = block.get("text")
+            if block.get("type") == "text" and isinstance(text, str):
+                chunks.append(text)
     return "".join(chunks)
 
 
@@ -478,7 +518,7 @@ def failure_diagnostic(result: "DriverResult", *, max_len: int = 800) -> str:
     page from a misbehaving load balancer doesn't blow up the matrix
     JSON.
     """
-    pieces: List[str] = [f"exit={result.exit_code}"]
+    pieces: list[str] = [f"exit={result.exit_code}"]
 
     # api_error_status only appears on the final `result` event when the
     # CLI received an HTTP error from the upstream API. Surfacing it
@@ -503,7 +543,7 @@ def failure_diagnostic(result: "DriverResult", *, max_len: int = 800) -> str:
 
 
 def _extract_api_error_status(
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, JSONValue]],
 ) -> Optional[int]:
     """Return the `api_error_status` from the last `result` event, if any."""
     for event in reversed(list(events)):
@@ -521,14 +561,14 @@ def _truncate(s: str, max_len: int) -> str:
     return s[:max_len] + "...(truncated)"
 
 
-def _extract_usage(events: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+def _extract_usage(events: Sequence[Mapping[str, JSONValue]]) -> Optional[JSONObject]:
     """Return the most recent `usage` block seen on any event, if any.
 
     The CLI surfaces token + cache usage on the final `result` event for
     non-streaming runs, but earlier events also carry partial usage in some
     versions; taking the last non-empty one is the safe default.
     """
-    last: Optional[Dict[str, Any]] = None
+    last: Optional[JSONObject] = None
     for event in events:
         usage = event.get("usage")
         if isinstance(usage, dict) and usage:
