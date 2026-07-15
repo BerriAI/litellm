@@ -11,11 +11,20 @@ from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
+    CiscoAIDefenseGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HeadroomGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+    HiddenlayerGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
@@ -29,32 +38,23 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
-    XecGuardConfigModel,
+from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
+    QostodianNexusConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
-    ToolPermissionGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
-    HiddenlayerGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
-    QostodianNexusConfigModel,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
     RepelloAIGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+    ToolPermissionGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
-    CiscoAIDefenseGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
-    HeadroomGuardrailConfigModel,
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
 )
 
 """
@@ -123,6 +123,7 @@ class SupportedGuardrailIntegrations(Enum):
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     HEADROOM = "headroom"
+    ALIYUN_AI_GUARDRAIL = "aliyun_ai_guardrail"
 
 
 class Role(Enum):
@@ -384,86 +385,6 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     mock_redacted_text: Optional[dict] = Field(default=None, description="Mock redacted text for testing")
 
 
-BedrockChecksContentFilterCategory = Literal["VIOLENCE", "HATE", "SEXUAL", "MISCONDUCT", "INSULTS"]
-BedrockChecksPromptAttackCategory = Literal["JAILBREAK", "PROMPT_INJECTION", "PROMPT_LEAKAGE"]
-BedrockChecksSensitiveInformationEntity = Literal[
-    "ADDRESS",
-    "AGE",
-    "AWS_ACCESS_KEY",
-    "AWS_SECRET_KEY",
-    "CA_HEALTH_NUMBER",
-    "CA_SOCIAL_INSURANCE_NUMBER",
-    "CREDIT_DEBIT_CARD_CVV",
-    "CREDIT_DEBIT_CARD_EXPIRY",
-    "CREDIT_DEBIT_CARD_NUMBER",
-    "DRIVER_ID",
-    "EMAIL",
-    "INTERNATIONAL_BANK_ACCOUNT_NUMBER",
-    "IP_ADDRESS",
-    "LICENSE_PLATE",
-    "MAC_ADDRESS",
-    "NAME",
-    "PASSWORD",
-    "PHONE",
-    "PIN",
-    "SWIFT_CODE",
-    "UK_NATIONAL_HEALTH_SERVICE_NUMBER",
-    "UK_NATIONAL_INSURANCE_NUMBER",
-    "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER",
-    "URL",
-    "USERNAME",
-    "US_BANK_ACCOUNT_NUMBER",
-    "US_BANK_ROUTING_NUMBER",
-    "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
-    "US_PASSPORT_NUMBER",
-    "US_SOCIAL_SECURITY_NUMBER",
-    "VEHICLE_IDENTIFICATION_NUMBER",
-]
-
-
-class BedrockChecksContentFilterCategoryItem(BaseModel):
-    category: BedrockChecksContentFilterCategory
-
-
-class BedrockChecksContentFilterModel(BaseModel):
-    categories: list[BedrockChecksContentFilterCategoryItem]
-
-
-class BedrockChecksPromptAttackCategoryItem(BaseModel):
-    category: BedrockChecksPromptAttackCategory
-
-
-class BedrockChecksPromptAttackModel(BaseModel):
-    categories: list[BedrockChecksPromptAttackCategoryItem]
-
-
-class BedrockChecksSensitiveInformationEntityItem(BaseModel):
-    type: BedrockChecksSensitiveInformationEntity
-
-
-class BedrockChecksSensitiveInformationModel(BaseModel):
-    entities: list[BedrockChecksSensitiveInformationEntityItem]
-
-
-class BedrockChecksConfigModel(BaseModel):
-    """Inline `checks` config for the resource-less Bedrock InvokeGuardrailChecks API.
-
-    Include only the checks you want to run; at least one must be set.
-    """
-
-    contentFilter: BedrockChecksContentFilterModel | None = None
-    promptAttack: BedrockChecksPromptAttackModel | None = None
-    sensitiveInformation: BedrockChecksSensitiveInformationModel | None = None
-
-    @model_validator(mode="after")
-    def _require_at_least_one_check(self) -> "BedrockChecksConfigModel":
-        if self.contentFilter is None and self.promptAttack is None and self.sensitiveInformation is None:
-            raise ValueError(
-                "Bedrock 'checks' must enable at least one of: contentFilter, promptAttack, sensitiveInformation."
-            )
-        return self
-
-
 class BedrockGuardrailConfigModel(BaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
@@ -488,35 +409,6 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
     aws_sts_endpoint: Optional[str] = Field(default=None, description="AWS STS endpoint URL")
     aws_bedrock_runtime_endpoint: Optional[str] = Field(default=None, description="AWS Bedrock runtime endpoint URL")
-    checks: BedrockChecksConfigModel | None = Field(
-        default=None,
-        description="Inline safeguards for the resource-less InvokeGuardrailChecks API "
-        "(contentFilter / promptAttack / sensitiveInformation). When set, the guardrail "
-        "calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier "
-        "is required. Mutually exclusive with guardrailIdentifier.",
-    )
-    content_filter_threshold: float | None = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="InvokeGuardrailChecks: block when any contentFilter severityScore >= "
-        "this value (scores are in [0,1]). Set to null to make the content filter "
-        "detect-only (logged, never blocks).",
-    )
-    prompt_attack_threshold: float | None = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="InvokeGuardrailChecks: block when any promptAttack severityScore >= "
-        "this value (scores are in [0,1]). Set to null to make prompt-attack detection detect-only.",
-    )
-    pii_confidence_threshold: float | None = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore "
-        ">= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
-    )
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -622,6 +514,51 @@ class JavelinGuardrailConfigModel(BaseModel):
     metadata: Optional[Dict] = Field(default=None, description="Additional metadata to send with requests")
     application: Optional[str] = Field(default=None, description="Application name for Javelin service")
     config: Optional[Dict] = Field(default=None, description="Additional configuration for the guardrail")
+
+
+class AliyunAIGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Aliyun AI Security guardrail."""
+
+    level: Optional[str] = Field(
+        default=None,
+        description="Protection level. 'low': block all risks (high protection), 'medium': block medium+high risks, 'high': block high only, 'max': observe mode. Default: medium",
+    )
+    max_text_length: Optional[int] = Field(
+        default=None,
+        description="Maximum text length for a single API call. Text longer than this will be split.",
+    )
+    stream_window_size: Optional[int] = Field(
+        default=None,
+        description="Sliding window size (in chars) for streaming output guardrail checks. Default: 500",
+    )
+    stream_slide_step: Optional[int] = Field(
+        default=None,
+        description="Sliding step (in chars) for streaming output guardrail checks. Default: 300",
+    )
+    stream_first_check_step: Optional[int] = Field(
+        default=None,
+        description="First check threshold (in chars) to reduce first-token latency. Default: 50",
+    )
+    region_id: Optional[str] = Field(
+        default=None,
+        description="Aliyun region ID. Default: cn-shanghai",
+    )
+    service_input: Optional[str] = Field(
+        default=None,
+        description="Service code for input (pre-call) detection. Default: query_security_check",
+    )
+    service_output: Optional[str] = Field(
+        default=None,
+        description="Service code for output (post-call) detection. Default: response_security_check",
+    )
+    access_key_id: Optional[str] = Field(
+        default=None,
+        description="Aliyun Access Key ID for the guardrail. Configure in config.yaml, supports os.environ/ reference",
+    )
+    access_key_secret: Optional[str] = Field(
+        default=None,
+        description="Aliyun Access Key Secret for the guardrail. Configure in config.yaml, supports os.environ/ reference",
+    )
 
 
 class ContentFilterAction(str, Enum):
@@ -919,6 +856,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    AliyunAIGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -1013,7 +951,6 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_entities: List[str]
     supported_actions: List[str]
     supported_modes: List[str]
-    supported_modes_by_provider: Dict[str, List[str]]
     pii_entity_categories: List[PiiEntityCategoryMap]
     content_filter_settings: Optional[Dict[str, Any]] = None
 
