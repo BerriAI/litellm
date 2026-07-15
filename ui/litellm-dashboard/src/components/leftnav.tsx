@@ -72,6 +72,7 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
+import BetaBadge from "./BetaBadge";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -211,7 +212,7 @@ const menuGroups: MenuGroup[] = [
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <NewBadge />
+            Projects <BetaBadge />
           </span>
         ),
         icon: <Folder {...ICON} />,
