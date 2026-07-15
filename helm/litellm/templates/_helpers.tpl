@@ -264,6 +264,10 @@ harmless no-op for the Job and authoritative for the app pods.
 */}}
 - name: DISABLE_SCHEMA_UPDATE
   value: "true"
+{{/* These feed the proxy's coordination Redis (cross-pod rate limits, spend
+     tracking, pod lock manager) via its REDIS_* env fallback. An explicit
+     `general_settings.coordination_redis` block in proxy_config takes
+     precedence over anything emitted here. */}}
 {{- if $root.Values.redis.host }}
 - name: REDIS_HOST
   value: {{ $root.Values.redis.host | quote }}
@@ -277,10 +281,11 @@ harmless no-op for the Job and authoritative for the app pods.
       key: {{ $root.Values.redis.passwordSecret.passwordKey | default "password" }}
 {{- end }}
 {{- if $root.Values.redis.cluster }}
-{{/* The proxy's Cache() reads REDIS_CLUSTER_NODES as JSON and constructs a
-     RedisClusterCache when it's set (litellm/caching/caching.py:169-192).
-     We seed with the single configured endpoint — the cluster client
-     discovers the remaining nodes from CLUSTER SLOTS at startup. */}}
+{{/* The proxy falls back to REDIS_CLUSTER_NODES (JSON) to build a cluster-mode
+     coordination client when `general_settings.coordination_redis` is absent
+     and no plain-Redis response cache is configured. We seed with the single
+     configured endpoint; the cluster client discovers the remaining nodes from
+     CLUSTER SLOTS at startup. */}}
 - name: REDIS_CLUSTER_NODES
   value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
 {{- end }}
