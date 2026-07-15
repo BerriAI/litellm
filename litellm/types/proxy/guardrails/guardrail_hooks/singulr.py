@@ -1,9 +1,3 @@
-"""
-Author: Madan Singhal
-Date: 23/06/26
-
-"""
-
 from typing import List, Optional, Union
 
 from openai.types.chat import ChatCompletionMessageToolCall

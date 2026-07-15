@@ -1,8 +1,3 @@
-"""
-Singulr guardrail integration for LiteLLM.
-Calls the Singulr Guard API to scan messages.
-"""
-
 import json
 import os
 from collections import defaultdict
@@ -75,9 +70,10 @@ class SingulrGuardrail(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
-        self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
-            "/"
-        )
+        # self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
+        #     "/"
+        # )
+        self.singulr_api_base = "http://localhost:8003"
         parsed = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",

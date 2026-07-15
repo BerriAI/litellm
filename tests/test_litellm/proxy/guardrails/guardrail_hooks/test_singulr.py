@@ -1,10 +1,3 @@
-"""
-Tests for the Singulr guardrail integration.
-
-Covers configuration, payload construction from GenericGuardrailAPIInputs,
-allow/block decisions, error handling, and the Pydantic config model.
-"""
-
 from unittest.mock import MagicMock, patch
 
 import httpx
