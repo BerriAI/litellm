@@ -6980,6 +6980,78 @@ class TestMCPToolsListAuthSurfacing:
         assert exc_info.value.server_name == "stdio-srv"
 
     @pytest.mark.asyncio
+    async def test_get_tools_from_server_generic_arm_extracts_nested_auth_challenge(self):
+        """A 401 buried in the exception tree at client-build time must travel the same channel as
+        one raised during the fetch: MCPUpstreamAuthError with the upstream's own challenge. Before
+        the shared choice-point it classified into a challenge-less fault, so single-server routes
+        answered 401 without the WWW-Authenticate the client needs to start the OAuth flow."""
+        import httpx
+
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(server_id="nested-srv", name="nested-srv", transport=MCPTransport.http)
+        causal = httpx.HTTPStatusError(
+            "auth",
+            request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+            response=httpx.Response(
+                401,
+                headers={"www-authenticate": "Bearer realm=upstream"},
+                request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+            ),
+        )
+        wrapper = RuntimeError("client build failed")
+        wrapper.__cause__ = causal
+        manager._create_mcp_client = AsyncMock(side_effect=wrapper)
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == "Bearer realm=upstream"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_generic_arm_strips_challenge_for_dcr_bridge(self):
+        """The dcr_bridge challenge suppression must hold on the generic arm too, not only when the
+        fetch itself raised MCPUpstreamAuthError: a bridge client following the upstream challenge
+        would fail the RFC 9728 resource match against the gateway URL it dialed."""
+        import httpx
+
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        manager = MCPServerManager()
+        bridge_server = MCPServer(
+            server_id="bridge-nested",
+            name="bridge-nested",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+            dcr_bridge=True,
+        )
+        causal = httpx.HTTPStatusError(
+            "auth",
+            request=httpx.Request("POST", "https://upstream.example/mcp"),
+            response=httpx.Response(
+                401,
+                headers={"www-authenticate": 'Bearer resource_metadata="https://upstream.example/.wk"'},
+                request=httpx.Request("POST", "https://upstream.example/mcp"),
+            ),
+        )
+        wrapper = RuntimeError("client build failed")
+        wrapper.__cause__ = causal
+        manager._create_mcp_client = AsyncMock(side_effect=wrapper)
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(bridge_server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate is None
+
+    @pytest.mark.asyncio
     async def test_get_tools_from_server_suppresses_upstream_challenge_for_dcr_bridge(self):
         """A dcr_bridge server must never relay the upstream's own WWW-Authenticate: it points
         clients at the upstream protected-resource metadata, which fails the RFC 9728 resource

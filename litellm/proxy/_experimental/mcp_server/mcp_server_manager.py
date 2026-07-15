@@ -56,7 +56,8 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
-    classify_list_exception,
+    raise_classified_list_failure,
+    upstream_auth_challenge,
 )
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
@@ -470,49 +471,14 @@ def _caller_authorization_fans_out(
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
-    """Walk the exception tree looking for an HTTP 401/403 response from the
-    upstream MCP server.
+    """The upstream 401/403 and its ``WWW-Authenticate`` header from the exception tree, or ``None``.
 
-    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
-    may chain through ``__cause__`` / ``__context__``. We inspect all of those
-    layers for an ``httpx.Response``-bearing exception (typically
-    ``httpx.HTTPStatusError``) and extract the status code and any upstream
-    ``WWW-Authenticate`` header.
-
-    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
-    """
-    seen: set[int] = set()
-    stack: list[BaseException] = [exc]
-    while stack:
-        current = stack.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-
-        response = getattr(current, "response", None)
-        if response is not None:
-            status_code = getattr(response, "status_code", None)
-            if isinstance(status_code, int) and status_code in (401, 403):
-                www_authenticate: Optional[str] = None
-                headers = getattr(response, "headers", None)
-                if headers is not None:
-                    try:
-                        www_authenticate = headers.get("www-authenticate")
-                    except Exception:
-                        www_authenticate = None
-                return status_code, www_authenticate
-
-        # anyio / PEP 654 ExceptionGroup
-        sub_exceptions = getattr(current, "exceptions", None)
-        if sub_exceptions:
-            stack.extend(sub_exceptions)
-
-        if current.__cause__ is not None:
-            stack.append(current.__cause__)
-        if current.__context__ is not None and current.__context__ is not current.__cause__:
-            stack.append(current.__context__)
-
-    return None
+    Delegates to the shared traversal in ``faults.list_outcomes`` so every consumer (tool listing,
+    tool calls, the connect-time probe) selects the same response with the same deliberate order:
+    explicit ``raise ... from`` causes first, ExceptionGroup members in raise order, the incidental
+    ``__context__`` chain last. A response raised while handling the real failure can therefore never
+    shadow the causal one."""
+    return upstream_auth_challenge(exc)
 
 
 def _warn_on_server_name_fields(
@@ -2779,7 +2745,7 @@ class MCPServerManager:
             raise
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            raise MCPServerListError(classify_list_exception(e), server.name) from e
+            raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_prompts_from_server(
         self,
@@ -3365,25 +3331,24 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        An upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
-        instead of being swallowed to an empty tool list, regardless of the
-        server's auth_type. Callers route it by surface: the single-server HTTP
-        routes turn it into a 401 + ``WWW-Authenticate`` challenge so standards-
-        compliant MCP clients trigger the upstream OAuth flow, while the
-        multi-server ``/mcp`` aggregator absorbs it to an empty list so one
-        unauthenticated server doesn't fail the whole listing. Only a 401
-        (missing/invalid credential) drives the re-auth challenge; a 403
-        (authenticated but forbidden, e.g. insufficient scope) is not a re-auth
-        signal and, like other non-auth errors, returns an empty list.
+        Failures never return an empty tool list. An upstream 401 or 403 raises
+        :class:`MCPUpstreamAuthError` carrying the upstream's own
+        ``WWW-Authenticate`` challenge when one was sent (a challenge is only
+        ever fabricated at the HTTP edge, and only for a 401: a 403 means the
+        caller is authenticated but not allowed, so prompting re-auth would be
+        wrong, while an upstream-sent 403 challenge is the RFC 6750
+        insufficient_scope step-up and relays verbatim). Every other failure
+        raises :class:`MCPServerListError` with a classified fault. Each
+        boundary then applies its own policy: single-server routes relay the
+        truthful status, the multi-server aggregator absorbs the failure into
+        that server's listing outcome.
 
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
 
         Returns:
-            List of tools from the server. Failures never return an empty list: an upstream 401/403
-            raises MCPUpstreamAuthError and everything else raises MCPServerListError carrying a
-            classified fault, so each boundary applies its own absorb-or-relay policy.
+            List of tools from the server
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
@@ -3400,17 +3365,8 @@ class MCPServerManager:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            auth_info = _extract_upstream_auth_failure(e)
-            if auth_info is not None and auth_info[0] in (401, 403):
-                status_code, www_authenticate = auth_info
-                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP {status_code}")
-                raise MCPUpstreamAuthError(
-                    status_code=status_code,
-                    www_authenticate=www_authenticate,
-                    server_name=server_name,
-                ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            raise MCPServerListError(classify_list_exception(e), server_name) from e
+            raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 

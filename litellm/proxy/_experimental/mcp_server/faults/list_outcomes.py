@@ -10,7 +10,7 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
-from typing import Literal, NamedTuple, TypeAlias
+from typing import Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
 from mcp.types import Tool as MCPTool
@@ -85,6 +85,42 @@ def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
         if current.__cause__ is not None:
             stack.append(current.__cause__)
     return None
+
+
+def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None:
+    """The upstream 401/403 and its ``WWW-Authenticate`` challenge, both read from the SAME response
+    the deliberate-order traversal selects, so the status that picks the carrier channel and the
+    challenge that rides with it can never come from two different responses in the tree."""
+    response = _find_upstream_response(exc)
+    if response is None or response.status_code not in (401, 403):
+        return None
+    try:
+        challenge = response.headers.get("www-authenticate")
+    except Exception:
+        challenge = None
+    return response.status_code, challenge
+
+
+def raise_classified_list_failure(
+    exc: BaseException,
+    server_name: str,
+    suppress_challenge: bool = False,
+) -> NoReturn:
+    """The one place a failed server fetch chooses its carrier: an upstream 401/403 travels as
+    ``MCPUpstreamAuthError`` with the upstream's own challenge preserved (a challenge is only ever
+    fabricated at the HTTP edge, and only for a 401), everything else as ``MCPServerListError`` with
+    a classified fault. Every fetch site delegates here so the two channels cannot drift apart per
+    call site. ``suppress_challenge`` is for dcr_bridge servers, whose upstream challenge points
+    clients at the wrong protected-resource metadata and must never relay."""
+    auth = upstream_auth_challenge(exc)
+    if auth is not None:
+        status_code, challenge = auth
+        raise MCPUpstreamAuthError(
+            status_code=status_code,
+            www_authenticate=None if suppress_challenge else challenge,
+            server_name=server_name,
+        ) from exc
+    raise MCPServerListError(classify_list_exception(exc), server_name) from exc
 
 
 def classify_list_exception(exc: BaseException) -> ServerListFault:

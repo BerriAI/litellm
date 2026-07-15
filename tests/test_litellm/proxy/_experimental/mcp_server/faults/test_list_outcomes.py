@@ -119,3 +119,58 @@ async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server(
         await manager._fetch_tools_with_timeout(client, "cancelled_srv")
 
     assert exc_info.value.fault.tag == "internal"
+
+
+def test_auth_challenge_and_status_come_from_the_causal_response():
+    """An incidental 403 raised while handling the causal 401 (context chain) must not shadow it:
+    the carrier channel and the challenge both derive from the response on the explicit causal
+    chain, so the caller is challenged to authenticate rather than told it is forbidden."""
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import upstream_auth_challenge
+
+    causal = httpx.HTTPStatusError(
+        "auth",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(
+            401,
+            headers={"www-authenticate": 'Bearer resource_metadata="https://mcp.example.com/.well-known"'},
+            request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        ),
+    )
+    incidental = httpx.HTTPStatusError(
+        "hook",
+        request=httpx.Request("POST", "https://hook.example.com/log"),
+        response=httpx.Response(403, request=httpx.Request("POST", "https://hook.example.com/log")),
+    )
+    wrapper = RuntimeError("fetch failed")
+    wrapper.__cause__ = causal
+    wrapper.__context__ = incidental
+
+    result = upstream_auth_challenge(wrapper)
+    assert result is not None
+    status_code, challenge = result
+    assert status_code == 401
+    assert challenge == 'Bearer resource_metadata="https://mcp.example.com/.well-known"'
+
+
+def test_raise_classified_list_failure_routes_auth_to_upstream_auth_error():
+    """The single choice-point sends 401/403 through MCPUpstreamAuthError with the upstream's own
+    challenge and everything else through MCPServerListError, so fetch sites cannot drift."""
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import raise_classified_list_failure
+
+    auth_exc = httpx.HTTPStatusError(
+        "auth",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(
+            401,
+            headers={"www-authenticate": "Bearer realm=x"},
+            request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        ),
+    )
+    with pytest.raises(MCPUpstreamAuthError) as auth_info:
+        raise_classified_list_failure(auth_exc, "srv")
+    assert auth_info.value.status_code == 401
+    assert auth_info.value.www_authenticate == "Bearer realm=x"
+
+    with pytest.raises(MCPServerListError) as fault_info:
+        raise_classified_list_failure(RuntimeError("boom"), "srv")
+    assert fault_info.value.fault.tag == "internal"
