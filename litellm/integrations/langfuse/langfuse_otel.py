@@ -25,6 +25,20 @@ else:
 
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
+LANGFUSE_OTEL_INGESTION_VERSION_HEADER = "x-langfuse-ingestion-version"
+LANGFUSE_OTEL_INGESTION_VERSION = "4"
+
+
+def build_langfuse_otel_headers(
+    public_key: str,
+    secret_key: str,
+) -> dict[str, str]:
+    auth_string = f"{public_key}:{secret_key}"
+    auth_header = base64.b64encode(auth_string.encode()).decode()
+    return {
+        "Authorization": f"Basic {auth_header}",
+        LANGFUSE_OTEL_INGESTION_VERSION_HEADER: LANGFUSE_OTEL_INGESTION_VERSION,
+    }
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -92,18 +106,34 @@ class LangfuseOtelLogger(OpenTelemetry):
             "version": LangfuseSpanAttributes.GENERATION_VERSION,
             "mask_input": LangfuseSpanAttributes.MASK_INPUT,
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
+            "user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "session_id": LangfuseSpanAttributes.SESSION_ID,
             "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
-            "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
             "trace_version": LangfuseSpanAttributes.TRACE_VERSION,
             "trace_release": LangfuseSpanAttributes.TRACE_RELEASE,
             "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
             "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
             "debug_langfuse": LangfuseSpanAttributes.DEBUG_LANGFUSE,
         }
+
+        trace_metadata = metadata.get("trace_metadata")
+        if isinstance(trace_metadata, dict):
+            for key, value in trace_metadata.items():
+                serialized_value = json.dumps(value) if isinstance(value, (list, dict)) else value
+                safe_set_attribute(
+                    span,
+                    f"{LangfuseSpanAttributes.TRACE_METADATA.value}.{key}",
+                    serialized_value,
+                )
+        elif trace_metadata is not None:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.TRACE_METADATA.value,
+                trace_metadata,
+            )
 
         for key, enum_attr in mapping.items():
             if key in metadata and metadata[key] is not None:
@@ -284,7 +314,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
-        otlp_auth_headers = f"Authorization={auth_header}"
+        otlp_auth_headers = LangfuseOtelLogger._format_otel_headers(
+            LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
+        )
 
         return OpenTelemetryConfig(
             exporter="otlp_http",
@@ -333,7 +365,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
-        otlp_auth_headers = f"Authorization={auth_header}"
+        otlp_auth_headers = LangfuseOtelLogger._format_otel_headers(
+            LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
+        )
 
         # Prevent modification of global env vars which causes leakage
         # os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
@@ -350,9 +384,21 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         Get the authorization header for Langfuse OpenTelemetry.
         """
-        auth_string = f"{public_key}:{secret_key}"
-        auth_header = base64.b64encode(auth_string.encode()).decode()
-        return f"Basic {auth_header}"
+        return build_langfuse_otel_headers(
+            public_key=public_key,
+            secret_key=secret_key,
+        )["Authorization"]
+
+    @staticmethod
+    def _build_langfuse_otel_headers(auth_header: str) -> dict[str, str]:
+        return {
+            "Authorization": auth_header,
+            LANGFUSE_OTEL_INGESTION_VERSION_HEADER: LANGFUSE_OTEL_INGESTION_VERSION,
+        }
+
+    @staticmethod
+    def _format_otel_headers(headers: dict[str, str]) -> str:
+        return ",".join(f"{key}={value}" for key, value in headers.items())
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
@@ -374,7 +420,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
             )
-            dynamic_headers["Authorization"] = auth_header
+            dynamic_headers = LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
 
         return dynamic_headers
 

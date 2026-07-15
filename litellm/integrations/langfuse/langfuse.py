@@ -3,6 +3,7 @@
 import os
 import traceback
 from datetime import datetime
+from importlib.metadata import version as package_version
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,16 +21,16 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
-from litellm.litellm_core_utils.core_helpers import (
-    safe_deep_copy,
-    reconstruct_model_name,
-    filter_exceptions_from_params,
-)
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    reconstruct_model_name,
+    safe_deep_copy,
+)
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -46,12 +47,11 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from langfuse.client import Langfuse, StatefulTraceClient
+    from langfuse import Langfuse, LangfuseSpan
 
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
-    StatefulTraceClient = Any
     Langfuse = Any
 
 
@@ -114,7 +114,6 @@ class LangFuseLogger:
         allow_env_credentials: bool = True,
     ):
         try:
-            import langfuse
             from langfuse import Langfuse
         except Exception as e:
             raise Exception(
@@ -150,10 +149,8 @@ class LangFuseLogger:
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
             "httpx_client": self.langfuse_client,
         }
-        self.langfuse_sdk_version: str = langfuse.version.__version__
+        self.langfuse_sdk_version = package_version("langfuse")
 
-        if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
-            parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
 
         # set the current langfuse project id in the environ
@@ -305,33 +302,20 @@ class LangFuseLogger:
             verbose_logger.debug(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             trace_id = None
             generation_id = None
-            if self._is_langfuse_v2():
-                trace_id, generation_id = self._log_langfuse_v2(
-                    user_id=user_id,
-                    metadata=metadata,
-                    litellm_params=litellm_params,
-                    output=output,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kwargs=kwargs,
-                    optional_params=optional_params,
-                    input=input,
-                    response_obj=response_obj,
-                    level=level,
-                    litellm_call_id=litellm_call_id,
-                )
-            elif response_obj is not None:
-                self._log_langfuse_v1(
-                    user_id=user_id,
-                    metadata=metadata,
-                    output=output,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kwargs=kwargs,
-                    optional_params=optional_params,
-                    input=input,
-                    response_obj=response_obj,
-                )
+            trace_id, generation_id = self._log_langfuse_v2(
+                user_id=user_id,
+                metadata=metadata,
+                litellm_params=litellm_params,
+                output=output,
+                start_time=start_time,
+                end_time=end_time,
+                kwargs=kwargs,
+                optional_params=optional_params,
+                input=input,
+                response_obj=response_obj,
+                level=level,
+                litellm_call_id=litellm_call_id,
+            )
             verbose_logger.debug(f"Langfuse Layer Logging - final response object: {response_obj}")
             verbose_logger.info("Langfuse Layer Logging - logging success")
 
@@ -429,58 +413,6 @@ class LangFuseLogger:
         This approach does not impact latency and runs in the background
         """
 
-    def _is_langfuse_v2(self):
-        import langfuse
-
-        return Version(langfuse.version.__version__) >= Version("2.0.0")
-
-    def _log_langfuse_v1(
-        self,
-        user_id,
-        metadata,
-        output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
-        input,
-        response_obj,
-    ):
-        from langfuse.model import CreateGeneration, CreateTrace  # type: ignore
-
-        verbose_logger.warning(
-            "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
-        )
-
-        trace = self.Langfuse.trace(  # type: ignore
-            CreateTrace(  # type: ignore
-                name=metadata.get("generation_name", "litellm-completion"),
-                input=input,
-                output=output,
-                userId=user_id,
-            )
-        )
-
-        custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
-        model_name = reconstruct_model_name(kwargs.get("model", ""), custom_llm_provider, metadata)
-
-        trace.generation(
-            CreateGeneration(
-                name=metadata.get("generation_name", "litellm-completion"),
-                startTime=start_time,
-                endTime=end_time,
-                model=model_name,
-                modelParameters=optional_params,
-                prompt=input,
-                completion=output,
-                usage={
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                },
-                metadata=metadata,
-            )
-        )
-
     def _log_langfuse_v2(
         self,
         user_id: Optional[str],
@@ -496,7 +428,7 @@ class LangFuseLogger:
         level: str,
         litellm_call_id: Optional[str],
     ) -> tuple:
-        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v4")
 
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
@@ -682,19 +614,7 @@ class LangFuseLogger:
                         if key.lower() not in ["authorization", "cookie", "referer"]:
                             clean_headers[key] = value
 
-            trace: StatefulTraceClient = self.Langfuse.trace(**trace_params)
-
-            # Log provider specific information as a span
-            log_provider_specific_information_as_span(trace, clean_metadata)
-
-            # Log guardrail information as a span
-            self._log_guardrail_information_as_span(
-                trace=trace,
-                standard_logging_object=standard_logging_object,
-            )
-
             generation_id = None
-            usage = None
             usage_details = None
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
@@ -711,12 +631,6 @@ class LangFuseLogger:
                     cache_creation_input_tokens = _usage_obj.get("cache_creation_input_tokens") or 0
                     cache_read_input_tokens = _extract_cache_read_input_tokens(_usage_obj)
 
-                    usage = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_cost": cost if self._supports_costs() else None,
-                    }
-                    # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
                     input_tokens = prompt_tokens - cache_read_input_tokens
                     usage_details = LangfuseUsageDetails(
                         input=input_tokens,
@@ -747,25 +661,28 @@ class LangFuseLogger:
             custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
             model_name = reconstruct_model_name(kwargs.get("model", ""), custom_llm_provider, metadata)
 
+            parent_observation_id_value = metadata.get("parent_observation_id")
+            parent_observation_id = (
+                parent_observation_id_value if isinstance(parent_observation_id_value, str) else None
+            )
+            requested_generation_id = clean_metadata.pop("generation_id", generation_id)
+            generation_metadata = {
+                **log_requester_metadata(clean_metadata),
+                **({"generation_id": requested_generation_id} if requested_generation_id is not None else {}),
+            }
             generation_params = {
                 "name": generation_name,
-                "id": clean_metadata.pop("generation_id", generation_id),
-                "start_time": start_time,
-                "end_time": end_time,
+                "as_type": "generation",
                 "model": model_name,
                 "model_parameters": optional_params,
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
-                "usage": usage,
                 "usage_details": usage_details,
-                "metadata": log_requester_metadata(clean_metadata),
+                "cost_details": {"total": cost} if self._supports_costs() and isinstance(cost, (int, float)) else None,
+                "metadata": generation_metadata,
                 "level": level,
                 "version": clean_metadata.pop("version", None),
             }
-
-            parent_observation_id = metadata.get("parent_observation_id", None)
-            if parent_observation_id is not None:
-                generation_params["parent_observation_id"] = parent_observation_id
 
             if self._supports_prompt():
                 generation_params = _add_prompt_to_generation_params(
@@ -780,19 +697,61 @@ class LangFuseLogger:
             if self._supports_completion_start_time():
                 generation_params["completion_start_time"] = kwargs.get("completion_start_time", None)
 
-            generation_client = trace.generation(**generation_params)
+            from langfuse import propagate_attributes
 
-            # Return the trace_id we set (which should be litellm_call_id when no explicit trace_id provided)
-            # We explicitly set trace_id in trace_params["id"], so langfuse should use it
-            # Verify langfuse accepted our trace_id; if it differs, log a warning but still return our intended value
-            # to match expected test behavior
-            if hasattr(generation_client, "trace_id") and generation_client.trace_id:
-                if generation_client.trace_id != trace_id:
-                    verbose_logger.warning(
-                        f"Langfuse trace_id mismatch: set {trace_id}, but langfuse returned {generation_client.trace_id}. "
-                        "Using our intended trace_id for consistency."
-                    )
-            return trace_id, generation_id
+            trace_id_value = trace_params.get("id")
+            trace_id = trace_id_value if isinstance(trace_id_value, str) else None
+            trace_context = self._create_langfuse_trace_context(
+                trace_id=trace_id,
+                parent_observation_id=parent_observation_id,
+            )
+            trace_metadata = trace_params.get("metadata")
+            propagated_metadata = trace_metadata if isinstance(trace_metadata, dict) else None
+            trace_user_id = trace_params.get("user_id")
+            propagated_user_id = (
+                trace_user_id if isinstance(trace_user_id, str) and trace_user_id else end_user_id or user_id
+            )
+            trace_session_id = trace_params.get("session_id")
+            propagated_session_id = (
+                trace_session_id if isinstance(trace_session_id, str) and trace_session_id else session_id
+            )
+            trace_version = trace_params.get("version")
+            propagated_version = trace_version if isinstance(trace_version, str) else None
+            propagated_tags = tags if tags else None
+            trace_name_value = trace_params.get("name")
+            propagated_trace_name = (
+                trace_name_value if isinstance(trace_name_value, str) and trace_name_value else trace_name
+            )
+            end_time_ns = int(end_time.timestamp() * 1_000_000_000) if end_time is not None else None
+
+            with propagate_attributes(
+                user_id=propagated_user_id,
+                session_id=propagated_session_id,
+                metadata=propagated_metadata,
+                version=propagated_version,
+                tags=propagated_tags,
+                trace_name=propagated_trace_name,
+            ):
+                trace = self.Langfuse.start_observation(
+                    trace_context=trace_context,
+                    name=propagated_trace_name or generation_name,
+                    input=trace_params.get("input"),
+                    output=trace_params.get("output"),
+                    metadata=propagated_metadata,
+                    version=propagated_version,
+                    level=level,
+                    status_message=trace_params.get("status_message"),
+                )
+                log_provider_specific_information_as_span(trace, clean_metadata)
+                self._log_guardrail_information_as_span(
+                    trace=trace,
+                    standard_logging_object=standard_logging_object,
+                )
+                generation_client = trace.start_observation(**generation_params)
+                generation_client.end(end_time=end_time_ns)
+                trace.end(end_time=end_time_ns)
+
+            return trace.trace_id, generation_client.id
         except Exception:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None
@@ -866,6 +825,32 @@ class LangFuseLogger:
                 tags.append(f"cache_key:{_cache_key}")
         return tags
 
+    @staticmethod
+    def _is_valid_langfuse_id(value: str, length: int) -> bool:
+        return (
+            len(value) == length
+            and value != "0" * length
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    def _create_langfuse_trace_context(
+        self,
+        trace_id: Optional[str],
+        parent_observation_id: Optional[str],
+    ) -> dict[str, str]:
+        normalized_trace_id = trace_id.lower().replace("-", "") if trace_id else ""
+        resolved_trace_id = (
+            normalized_trace_id
+            if self._is_valid_langfuse_id(normalized_trace_id, 32)
+            else self.Langfuse.create_trace_id(seed=trace_id)
+        )
+        normalized_parent_id = parent_observation_id.lower().replace("-", "") if parent_observation_id else ""
+        return (
+            {"trace_id": resolved_trace_id, "parent_span_id": normalized_parent_id}
+            if self._is_valid_langfuse_id(normalized_parent_id, 16)
+            else {"trace_id": resolved_trace_id}
+        )
+
     def _supports_tags(self):
         """Check if current langfuse version supports tags"""
         return Version(self.langfuse_sdk_version) >= Version("2.6.3")
@@ -932,7 +917,7 @@ class LangFuseLogger:
 
     def _log_guardrail_information_as_span(
         self,
-        trace: StatefulTraceClient,
+        trace: "LangfuseSpan",
         standard_logging_object: Optional[StandardLoggingPayload],
     ):
         """
@@ -962,8 +947,9 @@ class LangFuseLogger:
                 )
                 continue
 
-            span = trace.span(
+            span = trace.start_observation(
                 name="guardrail",
+                as_type="guardrail",
                 input=guardrail_entry.get("guardrail_request", None),
                 output=guardrail_entry.get("guardrail_response", None),
                 metadata={
@@ -971,8 +957,6 @@ class LangFuseLogger:
                     "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
                     "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
                 },
-                start_time=guardrail_entry.get("start_time", None),  # type: ignore
-                end_time=guardrail_entry.get("end_time", None),  # type: ignore
             )
 
             verbose_logger.debug(f"Logged guardrail information as span: {span}")
@@ -1054,7 +1038,7 @@ def _add_prompt_to_generation_params(
 
 
 def log_provider_specific_information_as_span(
-    trace,
+    trace: "LangfuseSpan",
     clean_metadata,
 ):
     """
@@ -1079,20 +1063,23 @@ def log_provider_specific_information_as_span(
             for elem in vertex_ai_grounding_metadata:
                 if isinstance(elem, dict):
                     for key, value in elem.items():
-                        trace.span(
+                        span = trace.start_observation(
                             name=key,
                             input=value,
                         )
+                        span.end()
                 else:
-                    trace.span(
+                    span = trace.start_observation(
                         name="vertex_ai_grounding_metadata",
                         input=elem,
                     )
+                    span.end()
         else:
-            trace.span(
+            span = trace.start_observation(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
             )
+            span.end()
 
 
 def log_requester_metadata(clean_metadata: dict):

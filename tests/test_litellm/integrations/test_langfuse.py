@@ -42,34 +42,39 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
+        self.mock_langfuse_generation.id = "test-generation-id"
+        self.mock_langfuse_trace.trace_id = "test-trace-id"
 
         # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
         self.mock_langfuse_span = MagicMock()
         self.mock_langfuse_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
+        self.mock_langfuse_trace.start_observation.return_value = self.mock_langfuse_generation
 
         # Setup the trace and generation chain
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
         self.last_trace_kwargs = {}
 
         def _trace_side_effect(*args, **kwargs):
-            self.last_trace_kwargs = kwargs
+            propagated = self.mock_langfuse.propagate_attributes.call_args.kwargs
+            self.last_trace_kwargs = {
+                **kwargs,
+                "id": kwargs["trace_context"]["trace_id"],
+                "session_id": propagated.get("session_id"),
+            }
             return self.mock_langfuse_trace
 
-        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
+        self.mock_langfuse_client.start_observation.side_effect = _trace_side_effect
+        self.mock_langfuse_client.create_trace_id.side_effect = lambda seed=None: (
+            seed or "00000000000000000000000000000001"
+        )
 
         # Mock the langfuse module that's imported locally in methods
-        self.langfuse_module_patcher = patch.dict(
-            "sys.modules", {"langfuse": MagicMock()}
-        )
+        self.langfuse_module_patcher = patch.dict("sys.modules", {"langfuse": MagicMock()})
         self.mock_langfuse_module = self.langfuse_module_patcher.start()
 
         # Create a mock for the langfuse module with version
         self.mock_langfuse = MagicMock()
         self.mock_langfuse.version = MagicMock()
-        self.mock_langfuse.version.__version__ = (
-            "3.0.0"  # Set a version that supports all features
-        )
+        self.mock_langfuse.version.__version__ = "3.0.0"  # Set a version that supports all features
 
         # Mock the Langfuse class
         self.mock_langfuse_class = MagicMock()
@@ -115,9 +120,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # Bind the method to the instance
-        self.logger.log_event_on_langfuse = types.MethodType(
-            log_event_on_langfuse, self.logger
-        )
+        self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
 
         # Make sure _is_langfuse_v2 returns True
         def mock_is_langfuse_v2(self):
@@ -217,6 +220,21 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             # Verify response_obj was passed correctly
             self.assertEqual(call_args["response_obj"], response_obj)
 
+    def test_create_langfuse_trace_context_normalizes_ids(self):
+        self.mock_langfuse_client.create_trace_id.side_effect = None
+        self.mock_langfuse_client.create_trace_id.return_value = "b" * 32
+
+        context = self.logger._create_langfuse_trace_context(
+            trace_id="external-trace-id",
+            parent_observation_id="ABCDEF0123456789",
+        )
+
+        assert context == {
+            "trace_id": "b" * 32,
+            "parent_span_id": "abcdef0123456789",
+        }
+        self.mock_langfuse_client.create_trace_id.assert_called_once_with(seed="external-trace-id")
+
     def test_langfuse_usage_details_optional_fields(self):
         """Test that LangfuseUsageDetails fields are properly defined as Optional"""
         # Create an instance with None values for optional fields
@@ -274,14 +292,16 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_generation.reset_mock(side_effect=True)
 
         # Re-setup the trace and generation chain with clean state
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        self.mock_langfuse_generation.id = "test-generation-id"
+        self.mock_langfuse_trace.trace_id = "test-trace-id"
         mock_span = MagicMock()
         mock_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = mock_span
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_trace.start_observation.return_value = self.mock_langfuse_generation
 
-        # Ensure trace returns our mock
-        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.mock_langfuse_client.start_observation.return_value = self.mock_langfuse_trace
+        self.mock_langfuse_client.create_trace_id.side_effect = lambda seed=None: (
+            seed or "00000000000000000000000000000001"
+        )
         self.logger.Langfuse = self.mock_langfuse_client
 
         with (
@@ -340,23 +360,17 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             except Exception as e:
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
 
-            # Verify that trace was called first
-            self.mock_langfuse_client.trace.assert_called()
+            self.mock_langfuse_client.start_observation.assert_called()
 
-            #  Check the arguments passed to the mocked langfuse generation call
-            self.mock_langfuse_trace.generation.assert_called_once()
-            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
+            self.mock_langfuse_trace.start_observation.assert_called_once()
+            call_args, call_kwargs = self.mock_langfuse_trace.start_observation.call_args
 
-            #  Inspect the usage and usage_details dictionaries
-            usage_arg = call_kwargs.get("usage")
             usage_details_arg = call_kwargs.get("usage_details")
 
-            self.assertIsNotNone(usage_arg)
             self.assertIsNotNone(usage_details_arg)
 
-            # Verify that None values were converted to 0
-            self.assertEqual(usage_arg["prompt_tokens"], 0)
-            self.assertEqual(usage_arg["completion_tokens"], 0)
+            self.assertEqual(usage_details_arg["input"], 0)
+            self.assertEqual(usage_details_arg["output"], 0)
 
             self.assertEqual(usage_details_arg["input"], 0)
             self.assertEqual(usage_details_arg["output"], 0)
@@ -704,12 +718,8 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
 
     try:
         # Mock LangFuseHandler to return our capturing mock logger
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler"
-        ) as mock_handler_class:
-            mock_handler_class.get_langfuse_logger_for_request.return_value = (
-                mock_langfuse_logger
-            )
+        with patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class:
+            mock_handler_class.get_langfuse_logger_for_request.return_value = mock_langfuse_logger
 
             # Call the actual failure_handler
             test_exception = Exception("TestError: model not found")
@@ -721,23 +731,19 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
             )
 
         # Verify log_event_on_langfuse was actually called
-        assert (
-            mock_langfuse_logger.log_event_on_langfuse.called
-        ), "log_event_on_langfuse was not called"
+        assert mock_langfuse_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called"
 
         # Verify original_response is NOT in the kwargs passed to Langfuse
         langfuse_kwargs = captured_kwargs.get("kwargs", {})
-        assert (
-            "original_response" not in langfuse_kwargs
-        ), "original_response should be excluded from kwargs passed to Langfuse"
+        assert "original_response" not in langfuse_kwargs, (
+            "original_response should be excluded from kwargs passed to Langfuse"
+        )
 
         # Verify session_id metadata is preserved in the kwargs
-        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
-            "metadata", {}
+        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get("metadata", {})
+        assert langfuse_metadata.get("session_id") == "test-session-failure", (
+            "session_id should be preserved in kwargs passed to Langfuse"
         )
-        assert (
-            langfuse_metadata.get("session_id") == "test-session-failure"
-        ), "session_id should be preserved in kwargs passed to Langfuse"
 
         # Verify level is ERROR
         assert captured_kwargs.get("level") == "ERROR"
@@ -779,9 +785,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -806,9 +810,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             )
 
             # Verify log_event_on_langfuse was called
-            assert (
-                mock_logger.log_event_on_langfuse.called
-            ), "log_event_on_langfuse was not called for failure event"
+            assert mock_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called for failure event"
             call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
             assert call_kwargs["level"] == "ERROR"
             assert call_kwargs["status_message"] == "API error: model not found"
@@ -848,9 +850,7 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
