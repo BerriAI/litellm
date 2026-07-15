@@ -10518,9 +10518,9 @@
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
-        "max_tokens": 2048,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3.5e-06,
         "supports_pdf_input": true
@@ -10695,9 +10695,9 @@
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 8000,
-        "max_output_tokens": 2048,
-        "max_tokens": 2048,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3.5e-06,
         "supports_pdf_input": true
