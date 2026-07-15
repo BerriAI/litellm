@@ -122,9 +122,10 @@ class MCPServer(BaseModel):
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
     token_validation: Optional[Dict[str, Any]] = None
-    # Optional TTL override (seconds) for the Redis per-user token cache.
-    # Defaults to the token's expires_in minus the expiry buffer, or
-    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
+    # Optional TTL override (seconds) for the Redis per-user token cache, capped
+    # at the token's expires_in minus the expiry buffer so a cached entry never
+    # outlives the token. Defaults to the token's expires_in minus the expiry
+    # buffer, or MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
     timeout: Optional[float] = None
     # Max concurrent outbound tool calls to this server; excess calls queue.
