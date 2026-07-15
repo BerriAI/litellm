@@ -68,6 +68,9 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
+)
 from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
@@ -92,6 +95,10 @@ from litellm.types.llms.openai import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
+)
+from litellm.types.interactions import (
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -1888,6 +1895,11 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, FineTuningJob)
             or isinstance(logging_result, LiteLLMBatch)
             or isinstance(logging_result, ResponsesAPIResponse)
+            or (
+                isinstance(logging_result, InteractionsAPIResponse)
+                and logging_result.usage is not None
+                and self._is_interactions_create_call_type()
+            )
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
@@ -1904,6 +1916,43 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return True
         return False
+
+    def _is_interactions_create_call_type(self) -> bool:
+        """
+        Only interaction creation is billable. GET polls, deletes, and cancels
+        also return an ``InteractionsAPIResponse`` (with usage once completed),
+        so recognizing those would write spend on every poll of a background
+        interaction. The proxy sets ``call_type`` from its route_type
+        (``create_interaction``/``acreate_interaction``); the SDK sets it from
+        the decorated function name (``create``/``acreate``).
+
+        Recognition additionally requires a usage block (checked at the call
+        site): a ``background=true`` create returns ``in_progress`` without
+        usage, and billing it would write a $0 spend log under the interaction
+        id that collides with the row the background poll task writes once the
+        interaction completes (see
+        ``litellm.interactions.background_cost_polling``).
+        """
+        return self.call_type in (
+            CallTypes.create_interaction.value,
+            CallTypes.acreate_interaction.value,
+            "create",
+            "acreate",
+        )
+
+    async def async_log_background_interaction_completion(
+        self,
+        result: InteractionsAPIResponse,
+    ) -> None:
+        """
+        Log the terminal result of a background interaction as a fresh success
+        event. The create request already ran success logging for its
+        ``in_progress`` response (no usage, so no cost was tracked); clearing
+        the dedup flag lets the completed result flow through cost calculation
+        and spend tracking exactly once, spanning create to completion.
+        """
+        self.model_call_details.pop("has_logged_async_success", None)
+        await self.async_success_handler(result=result)
 
     def _flush_passthrough_collected_chunks_helper(
         self,
@@ -1973,7 +2022,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
+                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse, InteractionsAPIResponse]
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -2428,14 +2477,14 @@ class Logging(LiteLLMLoggingBaseClass):
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        complete_streaming_response: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = (
-            self._get_assembled_streaming_response(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_async=True,
-                streaming_chunks=self.streaming_chunks,
-            )
+        complete_streaming_response: (
+            Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse, InteractionsAPIResponse] | None
+        ) = self._get_assembled_streaming_response(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_async=True,
+            streaming_chunks=self.streaming_chunks,
         )
 
         if complete_streaming_response is not None:
@@ -3153,7 +3202,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: List[Any],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
+    ) -> Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse, InteractionsAPIResponse] | None:
         if self.stream is not True:
             return None
         if isinstance(result, ModelResponse):
@@ -3180,8 +3229,30 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                 )
             return result.response
+        elif isinstance(result, InteractionsAPIStreamingResponse):
+            return self._assemble_completed_interaction_response(result)
         else:
             return None
+
+    @staticmethod
+    def _assemble_completed_interaction_response(
+        result: InteractionsAPIStreamingResponse,
+    ) -> InteractionsAPIResponse | None:
+        """
+        The Interactions API streaming iterator hands the terminal event to the
+        success handlers: the new schema (Api-Revision: 2026-05-20) emits
+        ``interaction.completed`` carrying the full interaction object, the
+        legacy schema (2026-05-07) emits a chunk with ``status="completed"``
+        and usage on the chunk itself. Build the equivalent non-streaming
+        response so cost calculation and spend tracking see one shape.
+        """
+        if result.event_type == "interaction.completed" and result.interaction is not None:
+            return InteractionsAPIResponse(**result.interaction)
+        if result.status == "completed":
+            return InteractionsAPIResponse(
+                **result.model_dump(exclude={"event_type", "delta", "index", "step", "interaction_id", "interaction"})
+            )
+        return None
 
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
         """
@@ -4687,6 +4758,8 @@ class StandardLoggingPayloadSetup:
         elif isinstance(usage, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(usage):
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+            if InteractionsUsageObjectTransformation.is_interactions_usage_object(usage):
+                return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage)
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
@@ -4713,6 +4786,8 @@ class StandardLoggingPayloadSetup:
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
+            if InteractionsUsageObjectTransformation.is_interactions_usage_object(_raw):
+                return InteractionsUsageObjectTransformation.transform_interactions_usage_object(_raw).model_dump()
             return _raw
         if isinstance(_raw, Usage):
             return _raw.model_dump()

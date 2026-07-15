@@ -3773,3 +3773,239 @@ def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
     assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
     assert payload["total_tokens"] == 0
     assert payload["completion_tokens"] == 0
+
+
+INTERACTIONS_USAGE_BLOCK = {
+    "total_tokens": 175,
+    "total_input_tokens": 100,
+    "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+    "total_cached_tokens": 0,
+    "total_output_tokens": 50,
+    "output_tokens_by_modality": [{"modality": "text", "tokens": 50}],
+    "total_tool_use_tokens": 0,
+    "total_thought_tokens": 25,
+}
+
+
+def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=stream,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id="interactions-call-id",
+        function_id="interactions-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        input="hi",
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize("call_type", ["create", "acreate", "create_interaction", "acreate_interaction"])
+def test_interactions_response_is_recognized_for_logging(call_type):
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is True
+
+
+@pytest.mark.parametrize("call_type", ["acreate", "acreate_interaction"])
+def test_in_progress_background_create_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_rebills_after_in_progress_success():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.should_run_logging(event_type="async_success") is False
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    ["aget", "get", "aget_interaction", "adelete_interaction", "acancel_interaction"],
+)
+def test_interactions_get_poll_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+
+
+def test_non_streaming_interactions_success_sets_response_cost_and_usage():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    standard_logging_object = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object["prompt_tokens"] == 100
+    assert standard_logging_object["completion_tokens"] == 75
+    assert standard_logging_object["total_tokens"] == 175
+    assert standard_logging_object["response_cost"] == logging_obj.model_call_details["response_cost"]
+
+
+def test_assembled_streaming_response_from_completed_interaction_event():
+    import datetime as dt
+
+    from litellm.types.interactions import (
+        InteractionsAPIResponse,
+        InteractionsAPIStreamingResponse,
+    )
+
+    logging_obj = _interactions_logging_obj(stream=True)
+    completed_event = InteractionsAPIStreamingResponse(
+        event_type="interaction.completed",
+        interaction={
+            "id": "interactions/abc",
+            "model": "gemini-2.5-flash",
+            "status": "completed",
+            "steps": [],
+            "usage": dict(INTERACTIONS_USAGE_BLOCK),
+        },
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=completed_event,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert isinstance(assembled, InteractionsAPIResponse)
+    assert assembled.usage == INTERACTIONS_USAGE_BLOCK
+
+    in_progress_event = InteractionsAPIStreamingResponse(event_type="interaction.in_progress")
+    assert (
+        logging_obj._get_assembled_streaming_response(
+            result=in_progress_event,
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+            is_async=True,
+            streaming_chunks=[],
+        )
+        is None
+    )
+
+
+def test_assembled_streaming_response_from_legacy_completed_chunk():
+    from litellm.types.interactions import (
+        InteractionsAPIResponse,
+        InteractionsAPIStreamingResponse,
+    )
+
+    legacy_chunk = InteractionsAPIStreamingResponse(
+        event_type="interaction.complete",
+        id="interactions/legacy",
+        model="gemini-2.5-flash",
+        status="completed",
+        outputs=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    assembled = LitellmLogging._assemble_completed_interaction_response(legacy_chunk)
+
+    assert isinstance(assembled, InteractionsAPIResponse)
+    assert assembled.id == "interactions/legacy"
+    assert assembled.usage == INTERACTIONS_USAGE_BLOCK
+
+
+def test_standard_logging_payload_maps_interactions_usage():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(
+        response_obj={"usage": dict(INTERACTIONS_USAGE_BLOCK)}
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 75
+    assert usage.total_tokens == 175

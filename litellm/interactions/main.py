@@ -39,6 +39,10 @@ from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional
 import httpx
 
 import litellm
+from litellm.interactions.background_cost_polling import (
+    maybe_schedule_background_interaction_cost_polling,
+    maybe_settle_background_interaction_before_delete,
+)
 from litellm.interactions.http_handler import interactions_http_handler
 from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
@@ -169,6 +173,12 @@ async def acreate(
             response = await init_response
         else:
             response = init_response
+
+        maybe_schedule_background_interaction_cost_polling(
+            response=response,
+            create_kwargs=kwargs,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         return response  # type: ignore
     except Exception as e:
@@ -464,6 +474,8 @@ async def adelete(
     try:
         loop = asyncio.get_event_loop()
         kwargs["adelete_interaction"] = True
+
+        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id)
 
         func = partial(
             delete,

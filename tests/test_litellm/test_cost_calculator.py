@@ -3479,3 +3479,101 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_completion_cost_bills_interactions_api_response():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-2.5-flash", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/abc123",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 175,
+            "total_input_tokens": 100,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 50,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 50}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 25,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        100 * model_info["input_cost_per_token"]
+        + 50 * model_info["output_cost_per_token"]
+        + 25 * reasoning_rate
+    )
+    assert cost == pytest.approx(expected)
+    assert cost > 0
+
+
+def test_completion_cost_bills_interactions_google_search_per_query():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-3-flash-preview", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/search123",
+        model="gemini-3-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 680,
+            "total_input_tokens": 103,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 103}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 226,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 351,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    per_query_cost = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        103 * model_info["input_cost_per_token"]
+        + 226 * model_info["output_cost_per_token"]
+        + 351 * reasoning_rate
+        + 3 * per_query_cost
+    )
+    assert model_info.get("web_search_billing_unit") == "per_query"
+    assert cost == pytest.approx(expected)
+    assert cost > 3 * per_query_cost
+
+
+def test_completion_cost_bills_interactions_video_output_at_video_rate():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-omni-flash-preview", custom_llm_provider="gemini")
+    video_tokens = 5792 * 8
+    response = InteractionsAPIResponse(
+        id="interactions/video123",
+        model="gemini-omni-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 10 + video_tokens,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": video_tokens,
+            "output_tokens_by_modality": [{"modality": "video", "tokens": video_tokens}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    expected = 10 * model_info["input_cost_per_token"] + video_tokens * model_info["output_cost_per_video_token"]
+    assert model_info["output_cost_per_video_token"] != model_info["output_cost_per_token"]
+    assert cost == pytest.approx(expected)
