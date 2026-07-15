@@ -5179,3 +5179,49 @@ async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
         )
 
     assert result is not None, "should return a streaming wrapper without errors"
+
+
+def test_strip_http_framing_headers_removes_framing_and_preserves_rest():
+    from litellm.router import _strip_http_framing_headers
+
+    class _FakeErr(Exception):
+        pass
+
+    exc = _FakeErr("boom")
+    exc.headers = {
+        "content-length": "99",
+        "transfer-encoding": "chunked",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "set-cookie": "session=abc",
+        "cookie": "token=xyz",
+        "proxy-authenticate": "Basic realm=test",
+        "proxy-authorization": "Basic dXNlcjpwYXNz",
+        "x-request-id": "req-1",
+        "retry-after": "30",
+    }
+    _strip_http_framing_headers(exc)
+    headers = exc.headers
+    for stripped in (
+        "content-length", "transfer-encoding", "content-encoding", "content-type",
+        "set-cookie", "cookie", "proxy-authenticate", "proxy-authorization",
+    ):
+        assert stripped not in headers, f"{stripped} must be stripped"
+    assert headers.get("x-request-id") == "req-1"
+    assert headers.get("retry-after") == "30"
+
+
+def test_strip_http_framing_headers_no_headers_attr():
+    from litellm.router import _strip_http_framing_headers
+
+    exc = ValueError("no headers attr")
+    _strip_http_framing_headers(exc)
+
+
+def test_strip_http_framing_headers_non_dict_headers():
+    from litellm.router import _strip_http_framing_headers
+
+    exc = ValueError("non-mappable headers")
+    exc.headers = "not-a-mapping"
+    _strip_http_framing_headers(exc)
+    assert exc.headers == "not-a-mapping"
