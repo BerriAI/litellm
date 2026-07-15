@@ -5721,7 +5721,12 @@ def function_to_dict(input_function) -> dict:  # noqa: C901
 
     for param_name, param in param_info.items():
         if hasattr(param, "annotation"):
-            param_type = json_schema_type(param.annotation.__name__)
+            annotation = param.annotation
+            type_name = getattr(annotation, "__name__", None)
+            if type_name is None:
+                union_members = [a for a in get_args(annotation) if a is not type(None)]
+                type_name = getattr(union_members[0], "__name__", None) if union_members else None
+            param_type = json_schema_type(type_name or str(annotation))
         else:
             param_type = None
         param_description = None

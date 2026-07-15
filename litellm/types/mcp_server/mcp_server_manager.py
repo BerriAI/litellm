@@ -20,6 +20,10 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    from_origin_fallback: bool = False
+    """True when the metadata came from guessing the resource origin as its authorization
+    server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
+    usable in memory but must never be persisted as configuration."""
 
 
 class MCPServer(BaseModel):

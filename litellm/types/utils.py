@@ -3778,3 +3778,6 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+    stream_holdback_chars: List[
+        int
+    ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
