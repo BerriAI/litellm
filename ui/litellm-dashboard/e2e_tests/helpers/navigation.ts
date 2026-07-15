@@ -41,7 +41,7 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
 /**
  * Click on a team ID in the table. Team IDs are rendered differently depending
  * on the component version — try button first (Tremor Button), fall back to
- * clickable span (Teams Typography.Text).
+ * clickable span (OldTeams Typography.Text).
  */
 export async function clickTeamId(page: PlaywrightPage, teamId: string): Promise<void> {
   const cell = page.locator("td").filter({ hasText: teamId }).first();

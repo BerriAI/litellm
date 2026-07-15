@@ -7,44 +7,12 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import ContextWindowExceededError
-from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
-
-
-class SemanticToolFilterContextWindowError(Exception):
-    """Raised when the embedding model exceeds its context window, so semantic filtering cannot run."""
-
-    def __init__(self, embedding_model: str, stage: str, original_error: str):
-        self.embedding_model = embedding_model
-        self.stage = stage
-        self.original_error = original_error
-        super().__init__(
-            f"MCP semantic tool filtering could not run: embedding model '{embedding_model}' "
-            f"exceeded its context window while embedding {stage}. "
-            f"The request was blocked instead of silently passing all tools through. "
-            f"Switch to an embedding model with a larger context window, or disable "
-            f"semantic tool filtering."
-        )
-
-
-def _is_context_window_error(error: Optional[BaseException], max_depth: int = 5) -> bool:
-    """Detect a context-window overflow anywhere in an exception's cause chain."""
-    current = error
-    for _ in range(max_depth):
-        if current is None:
-            return False
-        if isinstance(current, ContextWindowExceededError):
-            return True
-        if ExceptionCheckers.is_error_str_context_window_exceeded(str(current)):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 class SemanticMCPToolFilter:
@@ -74,7 +42,6 @@ class SemanticMCPToolFilter:
         self.embedding_model = embedding_model
         self.router_instance = litellm_router_instance
         self.tool_router: Optional["SemanticRouter"] = None
-        self.context_window_error: Optional[str] = None
         self._tool_map: Dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
 
     async def build_router_from_mcp_registry(self) -> None:
@@ -144,7 +111,6 @@ class SemanticMCPToolFilter:
             return
 
         try:
-            self.context_window_error = None
             # Convert tools to routes
             routes = []
             self._tool_map = {}
@@ -177,9 +143,6 @@ class SemanticMCPToolFilter:
         except Exception as e:
             verbose_logger.error(f"Failed to build semantic router: {e}")
             self.tool_router = None
-            if _is_context_window_error(e):
-                self.context_window_error = str(e)
-                return
             raise
 
     async def filter_tools(
@@ -206,13 +169,6 @@ class SemanticMCPToolFilter:
         if not available_tools:
             return available_tools
 
-        if self.context_window_error is not None:
-            raise SemanticToolFilterContextWindowError(
-                embedding_model=self.embedding_model,
-                stage="the MCP tool descriptions during semantic router build",
-                original_error=self.context_window_error,
-            )
-
         if not query or not query.strip():
             return available_tools
 
@@ -233,16 +189,6 @@ class SemanticMCPToolFilter:
             return self._get_tools_by_names(matched_tool_names, available_tools)
 
         except Exception as e:
-            if _is_context_window_error(e):
-                verbose_logger.error(
-                    f"Semantic tool filter embedding exceeded its context window: {e}",
-                    exc_info=True,
-                )
-                raise SemanticToolFilterContextWindowError(
-                    embedding_model=self.embedding_model,
-                    stage="the user query",
-                    original_error=str(e),
-                ) from e
             verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
             return available_tools
 

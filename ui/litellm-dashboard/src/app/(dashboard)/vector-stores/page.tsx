@@ -1,6 +1,6 @@
 "use client";
 
-import VectorStoreManagement from "./_components";
+import VectorStoreManagement from "@/components/vector_store_management";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function VectorStores() {

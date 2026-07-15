@@ -214,6 +214,10 @@ class AdaptiveRouterPostCallHook(CustomLogger):
     ) -> None:
         try:
             messages = kwargs.get("messages") or []
+            if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
+                # Too few turns for any signal to be meaningful — skip.
+                return
+
             session_key = _resolve_session_key(kwargs)
             if not session_key:
                 return
@@ -227,6 +231,10 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             metadata = litellm_params.get("metadata") or {}
             current_model = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
             if not current_model:
+                return
+
+            if not self.adaptive_router.claim_or_check_owner(session_key, current_model):
+                # A different model owns this conversation — skip attribution.
                 return
 
             user_text = _last_user_content(messages)

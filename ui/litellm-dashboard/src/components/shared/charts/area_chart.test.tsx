@@ -20,13 +20,6 @@ describe("AreaChart", () => {
     expect(strokes).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]));
   });
 
-  it("renders the No data placeholder instead of a chart when data is empty", () => {
-    const { container, getByText } = render(<AreaChart data={[]} index="date" categories={["tokens"]} />);
-
-    expect(getByText("No data")).toBeTruthy();
-    expect(container.querySelector('[data-slot="chart"]')).toBeNull();
-  });
-
   it("renders a fade-out gradient fill per category", () => {
     const { container } = render(
       <AreaChart data={data} index="date" categories={["tokens", "requests"]} colors={["blue", "cyan"]} />,

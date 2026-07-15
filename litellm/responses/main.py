@@ -127,7 +127,7 @@ def mock_responses_api_response(
                 "input_tokens": 36,
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens": 87,
-                "output_tokens_details": {},
+                "output_tokens_details": {"reasoning_tokens": 0},
                 "total_tokens": 123,
             },
             "user": None,
@@ -261,7 +261,7 @@ async def aresponses_api_with_mcp(
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -272,10 +272,6 @@ async def aresponses_api_with_mcp(
             tool_server_map=tool_server_map,
             **kwargs,
         )
-        await mcp_streaming_response._create_initial_response_iterator()
-        if mcp_streaming_response._initial_creation_error is not None:
-            raise mcp_streaming_response._initial_creation_error
-        return mcp_streaming_response
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(

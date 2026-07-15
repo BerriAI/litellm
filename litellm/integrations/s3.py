@@ -161,13 +161,8 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
-    sanitized_s3_file_name = s3_file_name.replace("/", "_")
     s3_object_key = (
-        (s3_path.rstrip("/") + "/" if s3_path else "")
-        + prefix
-        + start_time.strftime("%Y-%m-%d")
-        + "/"
-        + sanitized_s3_file_name
+        (s3_path.rstrip("/") + "/" if s3_path else "") + prefix + start_time.strftime("%Y-%m-%d") + "/" + s3_file_name
     )  # we need the s3 key to include the time, so we log cache hits too
     s3_object_key += ".json"
     return s3_object_key

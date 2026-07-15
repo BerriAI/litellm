@@ -12,39 +12,39 @@ class TestMapReasoningEffort:
     def test_none_returns_none_for_opus_4_6(self):
         """reasoning_effort=None should return None for Opus 4.6, not adaptive."""
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort=None, model="claude-opus-4-6", custom_llm_provider="anthropic"
+            reasoning_effort=None, model="claude-opus-4-6"
         )
         assert result is None
 
     def test_none_returns_none_for_other_models(self):
         """reasoning_effort=None should return None for non-Opus models."""
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort=None, model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+            reasoning_effort=None, model="claude-4-sonnet-20250514"
         )
         assert result is None
 
     def test_opus_4_6_returns_adaptive_for_low(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="low", model="claude-opus-4-6", custom_llm_provider="anthropic"
+            reasoning_effort="low", model="claude-opus-4-6"
         )
         assert result["type"] == "adaptive"
 
     def test_opus_4_6_returns_adaptive_for_high(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="high", model="claude-opus-4-6", custom_llm_provider="anthropic"
+            reasoning_effort="high", model="claude-opus-4-6"
         )
         assert result["type"] == "adaptive"
 
     def test_other_model_low_returns_enabled_with_budget(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="low", model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+            reasoning_effort="low", model="claude-4-sonnet-20250514"
         )
         assert result["type"] == "enabled"
         assert "budget_tokens" in result
 
     def test_other_model_high_returns_enabled_with_budget(self):
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="high", model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+            reasoning_effort="high", model="claude-4-sonnet-20250514"
         )
         assert result["type"] == "enabled"
         assert "budget_tokens" in result
@@ -52,13 +52,13 @@ class TestMapReasoningEffort:
     def test_none_string_returns_none_for_opus_4_6(self):
         """reasoning_effort='none' should return None for Opus 4.6."""
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="none", model="claude-opus-4-6", custom_llm_provider="anthropic"
+            reasoning_effort="none", model="claude-opus-4-6"
         )
         assert result is None
 
     def test_none_string_returns_none_for_other_models(self):
         """reasoning_effort='none' should return None for non-Opus models."""
         result = AnthropicConfig._map_reasoning_effort(
-            reasoning_effort="none", model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+            reasoning_effort="none", model="claude-4-sonnet-20250514"
         )
         assert result is None

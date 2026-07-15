@@ -34,7 +34,6 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
@@ -107,7 +106,7 @@ export interface TeamData {
     budget_reset_at: string | null;
     model_id: string | null;
     litellm_model_table: {
-      model_aliases: Record<string, string> | null;
+      model_aliases: Record<string, string>;
     } | null;
     created_at: string;
     access_group_ids?: string[];
@@ -207,7 +206,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
-  const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
@@ -621,11 +619,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.default_team_member_models = values.default_team_member_models;
       }
 
-      const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
-      if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
-        updateData.model_aliases = teamModelAliases;
-      }
-
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -912,13 +905,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div className="flex justify-between items-center mb-4">
                   <Title>Team Settings</Title>
                   {canEditTeam && !isEditing && (
-                    <Button
-                      icon={<EditOutlined className="h-4 w-4" />}
-                      onClick={() => {
-                        setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                        setIsEditing(true);
-                      }}
-                    >
+                    <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>
                       Edit Settings
                     </Button>
                   )}
@@ -1036,24 +1023,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                         context="team"
                         dataTestId="models-select"
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={
-                        <span>
-                          Model Aliases{" "}
-                          <Tooltip title="Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.">
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </Tooltip>
-                        </span>
-                      }
-                    >
-                      <ModelAliasManager
-                        accessToken={accessToken || ""}
-                        initialModelAliases={teamModelAliases}
-                        onAliasUpdate={setTeamModelAliases}
-                        showExampleConfig={false}
                       />
                     </Form.Item>
 
@@ -1551,26 +1520,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </div>
                       </div>
                     )}
-                    <div>
-                      <Text className="font-medium">Model Aliases</Text>
-                      {(() => {
-                        const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
-                        if (aliasEntries.length === 0) {
-                          return <div className="text-gray-400">No model aliases configured</div>;
-                        }
-                        return (
-                          <div className="mt-1 space-y-1">
-                            {aliasEntries.map(([alias, target]) => (
-                              <div key={alias} className="text-sm">
-                                <span className="font-mono">{alias}</span>
-                                <span className="text-gray-400">{" -> "}</span>
-                                <span className="font-mono">{target}</span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                    </div>
                     <div>
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>

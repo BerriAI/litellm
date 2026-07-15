@@ -1,7 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { BarChart } from "@/components/shared/charts";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
+import { BarChart } from "@tremor/react";
 import { Segmented, Tooltip } from "antd";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";

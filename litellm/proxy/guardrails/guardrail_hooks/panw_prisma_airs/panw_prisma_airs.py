@@ -94,7 +94,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         super().__init__(
             guardrail_name=guardrail_name,
             default_on=default_on,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=[
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.logging_only,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.during_mcp_call,
+            ],
             mask_request_content=_mask_request_content,
             mask_response_content=_mask_response_content,
             violation_message_template=violation_message_template,
@@ -1847,14 +1854,3 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
 
         return PanwPrismaAirsGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-        ]

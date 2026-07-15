@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -208,13 +208,6 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
-
     def __init__(
         self,
         api_base: str | None = None,
@@ -244,7 +237,6 @@ class HeadroomGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
         )
 
     def _should_bypass(self, request_data: dict) -> bool:

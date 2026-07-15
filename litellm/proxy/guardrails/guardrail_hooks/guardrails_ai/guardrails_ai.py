@@ -74,7 +74,12 @@ class GuardrailsAI(CustomGuardrail):
         self.guardrails_ai_guard_name = guard_name
         self.optional_params = kwargs
         self.guardrails_ai_api_input_format = guardrails_ai_api_input_format
-        super().__init__(supported_event_hooks=list(self.get_supported_event_hooks()), **kwargs)
+        supported_event_hooks = [
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.logging_only,
+        ]
+        super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
     async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict) -> GuardrailsAIResponse:
         from httpx import URL
@@ -235,11 +240,3 @@ class GuardrailsAI(CustomGuardrail):
         )
 
         return GuardrailsAIGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.logging_only,
-        ]

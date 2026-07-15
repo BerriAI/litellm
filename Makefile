@@ -5,16 +5,15 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev lint-checks format \
-	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
+	lint-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base
 
 # Default target
 help:
 	@echo "Available commands:"
-	@echo "  make bootstrap          - Provision a fresh clone/worktree"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
@@ -28,7 +27,6 @@ help:
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
-	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e (zero errors allowed)"
 	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
 	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
@@ -56,7 +54,6 @@ UV := uv
 UV_RUN := $(UV) run --no-sync
 
 LINT_DEP_INSTALL ?= install-dev
-LINT_E2E_DEP_INSTALL ?= lint-install
 LINT_DEP_BASE ?= lint-fetch-base
 LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
@@ -71,18 +68,6 @@ info:
 # under a dev's venv (CI installs its own env per job, so it is unaffected by this).
 install-dev:
 	$(UV) sync --inexact --frozen
-
-bootstrap:
-	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
-	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && npm ci --no-audit --no-fund
-	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
-	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
-		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
-	else \
-		echo "bootstrap: .env left untouched"; \
-	fi
-	@echo "bootstrap: done"
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
@@ -126,7 +111,7 @@ lint-fetch-base:
 # CI's). --inexact tops up the venv instead of pruning the proxy extras gen:api and the
 # running proxy need.
 lint-install:
-	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
+	$(UV) sync --inexact --frozen --group proxy-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, identical to test-linting.yml's "Check ruff format" step:
@@ -179,9 +164,6 @@ lint-ruff-FULL-dev: install-dev
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 
-lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
-	$(UV_RUN) basedpyright tests/e2e
-
 # Type-discipline budget (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
@@ -226,9 +208,9 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
 lint: lint-install lint-fetch-base
-	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety

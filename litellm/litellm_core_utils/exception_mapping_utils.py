@@ -95,9 +95,6 @@ class ExceptionCheckers:
         if "current length is" in _error_str_lowercase and "while limit is" in _error_str_lowercase:
             return True
 
-        if "maximum input length is" in _error_str_lowercase and "tokens" in _error_str_lowercase:
-            return True
-
         return False
 
     @staticmethod

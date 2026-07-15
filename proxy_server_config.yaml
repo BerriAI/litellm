@@ -189,7 +189,7 @@ litellm_settings:
       langfuse_host: https://us.cloud.langfuse.com
   # cache: true   # [OPTIONAL] use for caching responses 
   # enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
-  # cache_params:
+  # cache_params:  # And for shared health check
   #   type: redis
   #   host: localhost
   #   port: 6379
@@ -228,11 +228,8 @@ general_settings:
   proxy_batch_write_at: 1
   database_connection_pool_limit: 10
   # background_health_checks: true
-  # use_shared_health_check: true  # needs a coordination Redis (below)
+  # use_shared_health_check: true
   # health_check_interval: 30
-  # coordination_redis:  # standalone Redis for cross-pod coordination: rate limits, spend tracking, pod locks, shared health checks
-  #   host: localhost
-  #   port: 6379
   # cancel_on_disconnect: true # cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot)
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 

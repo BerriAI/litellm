@@ -1,6 +1,6 @@
 "use client";
 
-import NewUsagePage from "./_components/components/UsagePageView";
+import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";

@@ -46,7 +46,6 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   const [testQuery, setTestQuery] = useState("");
   const [testModel, setTestModel] = useState<string>("gpt-4o");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [testError, setTestError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
   const schema = data?.field_schema;
@@ -114,7 +113,6 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
       testQuery,
       setIsTesting,
       setTestResult,
-      setTestError,
     });
   };
 
@@ -287,7 +285,6 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                 onTest={handleTest}
                 filterEnabled={!!values.enabled}
                 testResult={testResult}
-                testError={testError}
                 curlCommand={getCurlCommand(testModel, testQuery)}
               />
             </Col>

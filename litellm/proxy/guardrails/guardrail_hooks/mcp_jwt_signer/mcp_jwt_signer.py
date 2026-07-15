@@ -87,7 +87,6 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 # Module-level singleton for the JWKS discovery endpoint to access.
@@ -212,10 +211,6 @@ class MCPJWTSigner(CustomGuardrail):
     DEFAULT_AUDIENCE = "mcp"
     SIGNING_KEY_ENV = "MCP_JWT_SIGNING_KEY"
 
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [GuardrailEventHooks.pre_mcp_call]
-
     def __init__(
         self,
         # Core signing config
@@ -245,7 +240,6 @@ class MCPJWTSigner(CustomGuardrail):
         allowed_scopes: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> None:
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
         # --- Signing key setup ---

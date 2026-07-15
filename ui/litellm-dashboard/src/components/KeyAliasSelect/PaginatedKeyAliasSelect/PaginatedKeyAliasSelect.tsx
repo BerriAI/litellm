@@ -1,5 +1,4 @@
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { Select } from "antd";
@@ -17,6 +16,7 @@ export interface PaginatedKeyAliasSelectProps {
 }
 
 const SCROLL_THRESHOLD = 0.8;
+const DEBOUNCE_MS = 300;
 
 export const PaginatedKeyAliasSelect = ({
   value,
@@ -30,7 +30,7 @@ export const PaginatedKeyAliasSelect = ({
 }: PaginatedKeyAliasSelectProps) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
-    wait: DEBOUNCE_WAIT_MS,
+    wait: DEBOUNCE_MS,
   });
 
   const teamId = allFilters?.["Team ID"] || undefined;

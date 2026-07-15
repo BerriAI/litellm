@@ -54,9 +54,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             tool_search_used=self.is_tool_search_used(tools=optional_params.get("tools")),
             programmatic_tool_calling_used=self.is_programmatic_tool_calling_used(tools=optional_params.get("tools")),
             input_examples_used=self.is_input_examples_used(tools=optional_params.get("tools")),
-            effort_used=self.is_effort_used(
-                optional_params=optional_params, model=model, custom_llm_provider="anthropic"
-            ),
+            effort_used=self.is_effort_used(optional_params=optional_params, model=model),
             user_anthropic_beta_headers=self._get_user_anthropic_beta_headers(
                 anthropic_beta_header=headers.get("anthropic-beta")
             ),

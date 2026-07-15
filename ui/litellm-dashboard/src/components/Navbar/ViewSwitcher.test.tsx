@@ -49,23 +49,9 @@ describe("ViewSwitcher", () => {
     state.setMode.mockClear();
   });
 
-  it("still renders the selector with a disabled Chat hint when there are no plugins and chat is off", async () => {
-    render(<ViewSwitcher />);
-
-    const button = screen.getByRole("button");
-    expect(button).toHaveTextContent("AI Gateway");
-
-    act(() => {
-      fireEvent.click(button);
-    });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
-    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
-
-    act(() => {
-      fireEvent.click(screen.getByText("Chat"));
-    });
-    expect(assignSpy).not.toHaveBeenCalled();
-    expect(state.setMode).not.toHaveBeenCalled();
+  it("renders nothing with no plugins, chat disabled, and a non-admin user", () => {
+    const { container } = render(<ViewSwitcher />);
+    expect(container.firstChild).toBeNull();
   });
 
   it("labels the button from the active plugin and lists AI Gateway + each plugin", async () => {
@@ -109,7 +95,7 @@ describe("ViewSwitcher", () => {
       fireEvent.click(screen.getByRole("button"));
     });
     await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
-    expect(screen.queryByText(/Admins can enable in Settings/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enable in Admin Settings/i)).not.toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByText("Chat"));
@@ -135,7 +121,7 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("/ui/");
   });
 
-  it("shows Chat as a disabled, non-navigating entry with an admin hint when disabled", async () => {
+  it("hides the Chat entry from everyone when disabled", async () => {
     state.enableChatUI = false;
     state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
     render(<ViewSwitcher />);
@@ -144,12 +130,6 @@ describe("ViewSwitcher", () => {
       fireEvent.click(screen.getByRole("button"));
     });
     await waitFor(() => expect(screen.getByText("Observability")).toBeInTheDocument());
-    expect(screen.getByText("Chat")).toBeInTheDocument();
-    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
-
-    act(() => {
-      fireEvent.click(screen.getByText("Chat"));
-    });
-    expect(assignSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("Chat")).not.toBeInTheDocument();
   });
 });

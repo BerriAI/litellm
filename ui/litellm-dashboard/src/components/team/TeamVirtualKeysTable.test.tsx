@@ -4,11 +4,25 @@ import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(),
+}));
+
+vi.mock("../key_team_helpers/filter_helpers", () => ({
+  fetchTeamFilterOptions: vi.fn().mockResolvedValue({
+    keyAliases: [],
+    organizationIds: [],
+    userIds: [],
+  }),
 }));
 
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
@@ -24,12 +38,8 @@ vi.mock("../templates/key_info_view", () => ({
   )),
 }));
 
-// Resolve the debounced search synchronously so typed input lands in the useKeys query within the test tick.
-vi.mock("@tanstack/react-pacer/debouncer", () => ({
-  useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
-}));
-
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+const mockUseAuthorized = useAuthorized as MockedFunction<typeof useAuthorized>;
 
 const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
@@ -75,6 +85,7 @@ describe("TeamVirtualKeysTable", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" } as any);
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -152,7 +163,7 @@ describe("TeamVirtualKeysTable", () => {
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
   });
 
-  it("should show the current range from total_count when multiple pages exist", async () => {
+  it("should show Page X of Y when multiple pages exist", async () => {
     mockUseKeys.mockReturnValue({
       data: {
         keys: [createMockKey()],
@@ -168,7 +179,7 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
+      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
     });
   });
 
@@ -192,108 +203,15 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
+      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("pagination-next"));
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    await user.click(nextButton);
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.objectContaining({ teamID: "team-1" }));
     });
-  });
-
-  it("routes a sort-header click to useKeys as a server-side sort", async () => {
-    const user = userEvent.setup();
-    mockUseKeys.mockReturnValue({
-      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useKeys>);
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
-    await user.click(screen.getByTestId("sort-header-created_at"));
-
-    await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(
-        1,
-        50,
-        expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
-      ),
-    );
-  });
-
-  it("resets to the first page when the sort changes", async () => {
-    const user = userEvent.setup();
-    mockUseKeys.mockImplementation(
-      (page: number) =>
-        ({
-          data: {
-            keys: [createMockKey({ token: `sk-p${page}`, key_alias: `page${page}_key` })],
-            total_count: 100,
-            current_page: page,
-            total_pages: 2,
-          },
-          isPending: false,
-          isFetching: false,
-          refetch: vi.fn(),
-        }) as unknown as ReturnType<typeof useKeys>,
-    );
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await user.click(await screen.findByTestId("pagination-next"));
-    await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.anything()));
-
-    await user.click(screen.getByTestId("sort-header-created_at"));
-    await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.anything()));
-  });
-
-  it("maps the User ID drawer filter to a server-side useKeys query and clears it", async () => {
-    const user = userEvent.setup();
-    mockUseKeys.mockReturnValue({
-      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useKeys>);
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await user.click(await screen.findByTestId("datatable-filters-trigger"));
-    const drawerBody = await screen.findByTestId("filter-drawer-body");
-    const userInput = drawerBody.querySelector("input") as HTMLElement;
-    await user.type(userInput, "user-42");
-    await user.click(screen.getByTestId("filter-drawer-apply"));
-
-    await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" })),
-    );
-
-    await user.click(screen.getByTestId("datatable-clear-filters"));
-    await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: undefined })),
-    );
-  });
-
-  it("maps the search box to a server-side key-alias query", async () => {
-    const user = userEvent.setup();
-    mockUseKeys.mockReturnValue({
-      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useKeys>);
-
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
-
-    await user.type(await screen.findByTestId("datatable-search"), "check-002");
-
-    await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "check-002" })),
-    );
   });
 
   it("should show Loading keys when isPending", async () => {
@@ -311,7 +229,7 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
-  it("should show the empty state when keys array is empty", async () => {
+  it("should show No keys found when keys array is empty", async () => {
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -322,7 +240,26 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No rows match your search or filters.")).toBeInTheDocument();
+      expect(screen.getByText("No keys found")).toBeInTheDocument();
+    });
+  });
+
+  it("should fetch team-scoped filter options for Key Alias, Organization ID, and User ID", async () => {
+    const mockFetchTeamFilterOptions = vi.mocked(fetchTeamFilterOptions);
+    mockFetchTeamFilterOptions.mockResolvedValue({
+      keyAliases: ["alice_key_team1", "charlie_key_team1"],
+      organizationIds: ["org-123"],
+      userIds: [
+        { id: "user-1", email: "alice@example.com" },
+        { id: "user-2", email: "charlie@example.com" },
+      ],
+    });
+
+    // Use unique teamId to avoid cache hit from previous tests (refetchOnMount: false)
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} teamId="team-filter-options-test" />);
+
+    await waitFor(() => {
+      expect(mockFetchTeamFilterOptions).toHaveBeenCalledWith("test-token", "team-filter-options-test");
     });
   });
 

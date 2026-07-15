@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
@@ -105,7 +105,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=[GuardrailEventHooks.post_call],
             event_hook=_event_hook or GuardrailEventHooks.post_call,
             default_on=default_on,
             **kwargs,
@@ -114,10 +114,6 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [GuardrailEventHooks.post_call]
 
     async def _run_judge(
         self,
@@ -271,13 +267,7 @@ def initialize_guardrail(
     return instance
 
 
-guardrail_class_registry = {
-    SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: LLMAsAJudgeGuardrail,
-}
-
-
 __all__ = [
     "LLMAsAJudgeGuardrail",
-    "guardrail_class_registry",
     "initialize_guardrail",
 ]

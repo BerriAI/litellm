@@ -44,60 +44,6 @@ class TestOpenAIResponsesAPIConfig:
         # The function should return the params unchanged
         assert result == test_params
 
-    @pytest.mark.parametrize("max_output_tokens", [1, 15])
-    def test_map_openai_params_clamps_max_output_tokens_below_minimum(self, max_output_tokens):
-        """OpenAI's Responses API rejects max_output_tokens < 16.
-
-        Claude Code (via the Anthropic Messages -> Responses adapter) sends a
-        max_tokens=1 warmup probe when running `/model`, which produced:
-            "Invalid 'max_output_tokens': integer below minimum value.
-             Expected a value >= 16, but got 1 instead."
-        Clamp anything below the minimum up to 16 instead of erroring.
-        """
-        result = self.config.map_openai_params(
-            response_api_optional_params={"max_output_tokens": max_output_tokens},
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert result["max_output_tokens"] == 16
-
-    def test_map_openai_params_preserves_max_output_tokens_at_or_above_minimum(self):
-        """Values already >= 16 must pass through untouched."""
-        result = self.config.map_openai_params(
-            response_api_optional_params={"max_output_tokens": 256},
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert result["max_output_tokens"] == 256
-
-    def test_map_openai_params_leaves_max_output_tokens_absent(self):
-        """A request without max_output_tokens must not gain the key."""
-        result = self.config.map_openai_params(
-            response_api_optional_params={"input": "hi"},
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert "max_output_tokens" not in result
-
-    @pytest.mark.parametrize(
-        "value, expected",
-        [
-            (1, 16),
-            (15, 16),
-            (16, 16),
-            (17, 17),
-            (256, 256),
-            (None, None),
-        ],
-    )
-    def test_enforce_min_max_output_tokens(self, value, expected):
-        """Below the minimum clamps to 16; the boundary, larger values, and None
-        are returned unchanged so no previously-valid request regresses."""
-        assert self.config._enforce_min_max_output_tokens(value) == expected
-
     def validate_responses_api_request_params(self, params, expected_fields):
         """
         Validate that the params dict has the expected structure of ResponsesAPIRequestParams

@@ -17,10 +17,8 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import pytest
-from pydantic import BaseModel
 
 from .registry import load_registry
 from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
@@ -37,13 +35,12 @@ class _CoversSink:
         self.collection_errors: tuple[str, ...] = ()
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
-        marker_args: tuple[tuple[object, ...], ...] = tuple(
-            marker.args
+        self.covered_ids = frozenset(
+            arg
             for item in session.items
             for marker in item.iter_markers(name="covers")
-        )
-        self.covered_ids = frozenset(
-            arg for args in marker_args for arg in args if isinstance(arg, str)
+            for arg in marker.args
+            if isinstance(arg, str)
         )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
@@ -260,12 +257,6 @@ def render_loki(report: CoverageReport) -> str:
     return "\n".join(lines)
 
 
-class _CliArgs(BaseModel):
-    format: Literal["text", "json", "prometheus", "loki"]
-    strict: bool
-    fail_on_collection_errors: bool
-
-
 def main() -> int:
     parser = ArgumentParser()
     parser.add_argument(
@@ -284,7 +275,7 @@ def main() -> int:
         action="store_true",
         help="Exit non-zero if pytest collection errors are found.",
     )
-    args = _CliArgs.model_validate(vars(parser.parse_args()))
+    args = parser.parse_args()
     cells = load_registry()
     covered, errors = collect_covered_ids()
     report = compute_coverage(cells, covered, errors)

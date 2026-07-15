@@ -38,7 +38,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         default_on=litellm_params.default_on,
         streaming_end_of_stream_only=_get_config_value(litellm_params, optional_params, "streaming_end_of_stream_only"),
         streaming_sampling_rate=_get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
-        streaming_transform_mode=_get_config_value(litellm_params, optional_params, "streaming_transform_mode"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)
