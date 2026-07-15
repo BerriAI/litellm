@@ -10,8 +10,7 @@ Every protocol method takes the request headers as a plain dict, built inside
 the test body, so the exact wire format is visible where it is asserted. The
 gateway accepts the LiteLLM virtual key as either
 `x-litellm-api-key: Bearer sk-...` or `Authorization: Bearer sk-...` (both
-Bearer-prefixed on the MCP routes, matching the docs); `McpHeaderName` names
-those two documented header styles for the tests' parametrized matrices.
+Bearer-prefixed on the MCP routes, matching the docs).
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Literal, Mapping, cast
+from typing import Mapping, cast
 
 import httpx
 import pytest
@@ -32,8 +31,6 @@ from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import NoBody, unwrap
 from models import McpServerCreateBody, McpServerInfo
-
-McpHeaderName = Literal["x-litellm-api-key", "Authorization"]
 
 ToolArguments = Mapping[str, str | float]
 
