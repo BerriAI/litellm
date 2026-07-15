@@ -1734,6 +1734,9 @@ if TYPE_CHECKING:
     from .llms.azure.responses.transformation import (
         AzureOpenAIResponsesAPIConfig as AzureOpenAIResponsesAPIConfig,
     )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
+    )
     from .llms.azure.responses.o_series_transformation import (
         AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig,
     )
