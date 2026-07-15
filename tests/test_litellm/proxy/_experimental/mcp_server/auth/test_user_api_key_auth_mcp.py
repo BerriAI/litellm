@@ -6189,6 +6189,23 @@ class TestAggregateGatewayDcrChallenge:
         www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
         assert www_authenticate == f'Bearer error="invalid_token", {self._EXPECTED_RESOURCE_METADATA}'
 
+    async def test_challenge_inserts_server_root_path(self):
+        """With SERVER_ROOT_PATH set the resource_metadata URL must carry the same path-inserted
+        root segment the aggregate PRM route is registered with (both derive it from
+        well_known_root_suffix), so a DCR client behind a sub-path is pointed at a route that
+        exists instead of a 404. Regression: the challenge used to hard-code /mcp and omit the
+        root path the route inserts."""
+        import os
+
+        with (
+            patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/litellm/mcp"' in www_authenticate
+
     async def test_no_challenge_for_explicit_litellm_key(self):
         """An explicit x-litellm-api-key declares a litellm-key client; a typo
         there must surface the real auth error, never a DCR challenge that

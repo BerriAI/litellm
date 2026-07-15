@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_request_base_url,
+    well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
@@ -157,7 +158,9 @@ def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> H
     spec-compliant clients to re-authorize rather than retry; a request with
     no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
     error_attr = 'error="invalid_token", ' if invalid_token else ""
-    resource_metadata_url = f"{get_request_base_url(request)}/.well-known/oauth-protected-resource/mcp"
+    resource_metadata_url = (
+        f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
+    )
     return HTTPException(
         status_code=401,
         detail={
