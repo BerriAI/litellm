@@ -3684,7 +3684,13 @@ def resolve_complexity_router_plugins(
         for plugin_path in plugin_paths
     ]
     for plugin_path, resolved_plugin in zip(plugin_paths, resolved_plugins):
-        if not isinstance(resolved_plugin, RoutingPlugin):
+        # `@runtime_checkable` only checks that `run` exists as an attribute, not that
+        # it's a coroutine function -- a synchronous `def run(self, context)` would pass
+        # isinstance() here and only fail at request time with a confusing `TypeError:
+        # object RoutingContext can't be used in 'await' expression`.
+        if not isinstance(resolved_plugin, RoutingPlugin) or not inspect.iscoroutinefunction(
+            getattr(resolved_plugin, "run", None)
+        ):
             raise ValueError(
                 f"complexity_router_config.plugins entry {plugin_path!r} on model {model_name!r} "
                 f"resolved to {resolved_plugin!r}, which does not implement the RoutingPlugin "

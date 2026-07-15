@@ -2867,6 +2867,34 @@ class TestRoutingPlugins:
         assert result is not None
         assert result.model == "gpt-4o-nano"
 
+    @pytest.mark.asyncio
+    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(
+        self, mock_router_instance
+    ):
+        """Regression: without plugins configured, the no-user-message path must keep its
+        pre-existing default_model-first priority over the MEDIUM tier exactly as before --
+        closing the plugin-bypass gap must not silently flip model selection for the (much
+        larger) population of users who don't use plugins at all. Flagged by Greptile on
+        PR #33251 after the plugin-bypass fix changed this priority unconditionally."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-medium-tier"]},
+                "default_model": "gpt-4o-configured-default",
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "assistant", "content": "Hello!"},
+            ],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-configured-default"
+
     def test_plugins_and_adaptive_together_raises(self):
         with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
             ComplexityRouterConfig(

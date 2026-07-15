@@ -161,6 +161,30 @@ def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp
         )
 
 
+def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_path):
+    """Regression: @runtime_checkable only checks that `run` exists as an attribute,
+    not that it's a coroutine function. A plugin with a synchronous `run` passes a bare
+    isinstance() check and would only fail at request time with a confusing
+    `TypeError: object RoutingContext can't be used in 'await' expression`. Reported
+    by Greptile on PR #33251."""
+    plugin_file = tmp_path / "sync_plugin.py"
+    plugin_file.write_text(
+        "class _SyncPlugin:\n"
+        "    def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "sync_plugin_instance = _SyncPlugin()\n"
+    )
+    config: Dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.__init__
 # ---------------------------------------------------------------------------
