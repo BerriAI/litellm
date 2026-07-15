@@ -301,6 +301,9 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
 
         genai_span = f"chat {MODEL}"
         hits = otel_reader.poll_traces_for_call(
@@ -348,6 +351,9 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
 
         genai_span = f"chat {MODEL}"
         hits = otel_reader.poll_traces_for_call(
@@ -402,6 +408,9 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         hits = otel_reader.poll_traces_for_call(
