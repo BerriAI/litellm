@@ -138,7 +138,7 @@ for page in 1 2 3 4 5; do
   curl -fsS \
     -H 'Accept: application/vnd.github+json' \
     -H 'User-Agent: litellm-compat-matrix' \
-    "${GH_AUTH_HEADER[@]}" \
+    "${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"}" \
     "https://api.github.com/repos/BerriAI/litellm/releases?per_page=100&page=${page}" \
     >"${PAGE_JSON}"
   jq -s '.[0] + .[1]' "${RELEASES_JSON}" "${PAGE_JSON}" >"${RELEASES_JSON}.merged"
