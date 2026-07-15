@@ -389,7 +389,11 @@ function SkeletonRows<TData>({
   return (
     <Fragment>
       {rowKeys.map((rowKey) => (
-        <TableRow key={`skeleton-${rowKey}`} className="hover:bg-transparent" data-testid="skeleton-row">
+        <TableRow
+          key={`skeleton-${rowKey}`}
+          className={cn("hover:bg-transparent", size === "compact" ? "h-8" : "")}
+          data-testid="skeleton-row"
+        >
           {cells.map((column, columnKey) => (
             <TableCell key={column?.id ?? columnKey} className={size === "compact" ? "px-2 py-1" : ""}>
               <SkeletonCell column={column} index={columnKey} />
