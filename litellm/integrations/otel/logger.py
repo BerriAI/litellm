@@ -432,7 +432,13 @@ class OpenTelemetryV2(CustomLogger):
             if payload is None or not destinations:
                 return None
             self._mark_closed(call_id)
-            return self._emit_deferred_llm_call(payload, destinations, to_ns(start_time), to_ns(end_time))
+            return self._emit_deferred_llm_call(
+                payload,
+                destinations,
+                to_ns(start_time),
+                to_ns(end_time),
+                call.time_to_first_chunk_seconds,
+            )
 
         end_time_ns = to_ns(end_time)
         self._mark_closed(call_id)
@@ -455,6 +461,7 @@ class OpenTelemetryV2(CustomLogger):
             self._destinations_for_backend(call),
             carrier.start_time_ns,
             end_time_ns,
+            call.time_to_first_chunk_seconds,
         )
 
     def _mark_closed(self, call_id: str | None) -> None:
@@ -475,6 +482,7 @@ class OpenTelemetryV2(CustomLogger):
         destinations: "tuple[OtelDestination, ...]",
         start_time_ns: int | None,
         end_time_ns: int | None,
+        time_to_first_chunk_seconds: float | None = None,
     ) -> Span | None:
         """Emit an LLM-call span outside the ``pre_call`` boundary.
 
@@ -484,7 +492,11 @@ class OpenTelemetryV2(CustomLogger):
         Both anchor to the request's root span via the worker-copied context and
         seed identity Baggage so the span is labeled consistently.
         """
-        data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=self.config.capture_span_content)
+        data = LLMCallSpanData.from_standard_logging_payload(
+            payload,
+            capture_content=self.config.capture_span_content,
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+        )
         parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
         return self._emitter.emit_fanout(
             SpanRole.LLM_CALL,
