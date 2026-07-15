@@ -191,6 +191,21 @@ class ChatResponse(BaseModel):
     service_tier: str | None = None
 
 
+class ChatStreamDelta(BaseModel):
+    content: str | None = None
+
+
+class ChatStreamChoice(BaseModel):
+    delta: ChatStreamDelta | None = None
+
+
+class ChatStreamChunk(BaseModel):
+    id: str | None = None
+    object: str | None = None
+    model: str | None = None
+    choices: list[ChatStreamChoice] = []
+
+
 class EmbedBody(BaseModel):
     model: str
     input: str

@@ -121,6 +121,7 @@ class StreamingResponse(BaseModel):
     headers: dict[str, str] = {}
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
+    events: tuple[str, ...] = ()  # SSE "data:" payloads, prefix stripped (streaming only)
     # First in-stream error event, if any. A streamed call commits its HTTP 200
     # before the upstream completes, so upstream failures (e.g. insufficient
     # quota) arrive as SSE error events inside an otherwise-successful response;
@@ -293,20 +294,22 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
             headers=headers,
             body=resp.text,
         )
-    lines = cast("Iterator[bytes]", resp.iter_lines())
-    chunks = 0
-    stream_error: str | None = None
-    for line in lines:
-        if not line:
-            continue
-        chunks += 1
-        if stream_error is None and (
-            line.startswith(b"event: error")
-            or b'"type":"error"' in line
-            or b'"type": "error"' in line
-            or line.startswith(b'data: {"error"')
-        ):
-            stream_error = line.decode(errors="replace")[:300]
+    raw_lines = tuple(
+        line.decode(errors="replace")
+        for line in cast("Iterator[bytes]", resp.iter_lines())
+        if line
+    )
+    stream_error = next(
+        (
+            line[:300]
+            for line in raw_lines
+            if line.startswith("event: error")
+            or '"type":"error"' in line
+            or '"type": "error"' in line
+            or line.startswith('data: {"error"')
+        ),
+        None,
+    )
     return StreamingResponse(
         status_code=resp.status_code,
         call_id=call_id,
@@ -314,7 +317,12 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         content_type=content_type,
         headers=headers,
         body="<streamed>",
-        chunks=chunks,
+        chunks=len(raw_lines),
+        events=tuple(
+            line.removeprefix("data:").strip()
+            for line in raw_lines
+            if line.startswith("data:")
+        ),
         stream_error=stream_error,
     )
 

@@ -66,6 +66,12 @@ configs:
             model: openai/text-embedding-3-small
             api_key: os.environ/OPENAI_API_KEY
 
+        - model_name: azure-gpt-5.4-mini
+          litellm_params:
+            model: azure/gpt-5.4-mini
+            api_base: os.environ/AZURE_API_BASE
+            api_key: os.environ/AZURE_API_KEY
+
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
