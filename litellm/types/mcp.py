@@ -38,6 +38,8 @@ class MCPAuth(str, enum.Enum):
     aws_sigv4 = "aws_sigv4"
     token = "token"
     oauth2_token_exchange = "oauth2_token_exchange"
+    true_passthrough = "true_passthrough"
+    oauth_delegate = "oauth_delegate"
 
 
 # RFC 8693 default subject_token_type. A NULL column / omitted config key means
@@ -60,6 +62,8 @@ MCPAuthType = Optional[
         MCPAuth.aws_sigv4,
         MCPAuth.token,
         MCPAuth.oauth2_token_exchange,
+        MCPAuth.true_passthrough,
+        MCPAuth.oauth_delegate,
     ]
 ]
 
@@ -159,6 +163,15 @@ class MCPCredentials(TypedDict, total=False):
     """
     How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
     sends HTTP Basic; defaults to "client_secret_post" when unset.
+    """
+
+    redirect_uris: Optional[List[str]]
+    """
+    The redirect URIs a dynamically registered (RFC 7591) OAuth client was bound to at
+    registration time. Lets a later registration detect that the proxy's public origin no
+    longer matches the registered callback and re-register instead of reusing a client the
+    IdP will reject. Absent for admin-configured clients and for clients registered before
+    this field existed. Not a secret; stored unencrypted.
     """
 
     token_exchange_profile: Optional[str]

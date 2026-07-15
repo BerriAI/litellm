@@ -115,7 +115,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         keeps working. Non-adaptive models and models without a ceiling are
         left untouched.
         """
-        if not AnthropicConfig._is_adaptive_thinking_model(model):
+        if not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
             return
         effort = params.get("reasoning_effort")
         if not isinstance(effort, str):
@@ -228,7 +228,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 custom_llm_provider="bedrock",
                 key="supports_output_config",
             )
-            or AnthropicConfig._model_supports_effort_param(model)
+            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             if anthropic_request.pop("output_config", None) is not None:
                 verbose_logger.warning(
@@ -269,6 +269,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             prompt_caching_set=False,
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+            custom_llm_provider="bedrock",
         )
         beta_set.update(auto_betas)
 

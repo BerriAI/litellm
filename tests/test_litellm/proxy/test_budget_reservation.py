@@ -26,6 +26,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.router import Router
 
 
 @pytest.fixture()
@@ -576,6 +577,83 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
 
 
 @pytest.mark.asyncio
+async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_state):
+    """A user's personal budget must be reserved even when the key belongs to a team.
+
+    Regression for GitHub issue #12905: previously the reservation path skipped the
+    user spend counter whenever the key had a team, so a team key could overshoot the
+    user's personal max_budget under concurrency.
+    """
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-user-on-team",
+        spend=0.0,
+        user_id="user-on-team",
+        team_id="team-no-budget",
+    )
+    team_object = LiteLLM_TeamTable(team_id="team-no-budget", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="user-on-team", spend=0.0, max_budget=5.0)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.3,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=user_object,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") == pytest.approx(0.3)
+
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_counter_state):
+    """skip_user_budget_on_team_key=True restores the legacy behavior where a user's
+    personal budget is not reserved for a team key."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-user-on-team-skip",
+        spend=0.0,
+        user_id="user-on-team-skip",
+        team_id="team-no-budget-skip",
+    )
+    team_object = LiteLLM_TeamTable(team_id="team-no-budget-skip", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="user-on-team-skip", spend=0.0, max_budget=5.0)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.3,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=user_object,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            skip_user_budget_on_team_key=True,
+        )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-skip") is None
+
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
 async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
@@ -742,6 +820,250 @@ async def test_should_clamp_reservation_to_default_when_output_cap_missing(
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(expected_cost)
     await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reserve_tiered_pricing_cost(spend_counter_state):
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dashscope/qwen3-max",
+                "litellm_params": {
+                    "model": "dashscope/qwen3-max",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "max_input_tokens": 258048,
+                    "max_output_tokens": 65536,
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 6e-06,
+                            "range": [0, 32000],
+                        },
+                        {
+                            "input_cost_per_token": 2.4e-06,
+                            "output_cost_per_token": 1.2e-05,
+                            "range": [32000, 128000],
+                        },
+                    ],
+                },
+            }
+        ]
+    )
+    request_body = {
+        "model": "dashscope/qwen3-max",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    estimated_cost = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+    )
+    assert estimated_cost is not None
+    assert estimated_cost > 0
+
+    valid_token = UserAPIKeyAuth(
+        token="key-tiered-pricing",
+        spend=0.0,
+        max_budget=estimated_cost,
+    )
+    reservation = await reserve_budget_for_request(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+        valid_token=valid_token,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimated_cost)
+    with pytest.raises(litellm.BudgetExceededError):
+        await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    await release_budget_reservation(reservation)
+
+
+def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
+    """Dashscope tiered pricing is all-or-nothing: the tier is chosen by the total
+    input tokens and every token (input and output) is billed at that tier's rate.
+
+    A long-context request with a large output allowance must reserve the output at
+    the input-selected tier, not at the cheapest tier picked from the output volume.
+    The earlier graduated calculation under-reserved such requests, letting a caller
+    slip past a depleted budget."""
+    tiered_pricing = [
+        {"range": [0, 32000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        {"range": [32000, 128000], "input_cost_per_token": 4e-06, "output_cost_per_token": 8e-06},
+    ]
+    input_tokens = 100000  # falls entirely in the second tier
+    output_tokens = 1000
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 4e-06) + (output_tokens * 8e-06)
+    assert estimated == pytest.approx(expected)
+
+    # What the old graduated math (with the output tier taken from output volume)
+    # would have reserved. The all-or-nothing estimate must be strictly larger.
+    graduated_under_reserve = (32000 * 1e-06) + (68000 * 4e-06) + (output_tokens * 2e-06)
+    assert estimated > graduated_under_reserve
+
+
+def test_tiered_reservation_uses_higher_reasoning_output_rate():
+    """Some tiered models price reasoning output above standard output. The
+    reasoning-token share is unknown before the request runs, so reservation must
+    charge every output token at the higher of the two rates to avoid under-reserving
+    reasoning-heavy requests."""
+    tiered_pricing = [
+        {
+            "range": [0, 32000],
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1.2e-06,
+            "output_cost_per_reasoning_token": 4e-06,
+        }
+    ]
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+
+    # Reserving output at the plain rate would under-reserve reasoning-heavy calls.
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
+def test_flat_reservation_uses_higher_reasoning_output_rate():
+    """The same reasoning under-reservation gap exists for flat-rate models that
+    declare output_cost_per_reasoning_token above output_cost_per_token."""
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 1.2e-06,
+                "output_cost_per_reasoning_token": 4e-06,
+                "max_output_tokens": 200000,
+            },
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
+def test_reservation_uses_most_expensive_deployment_in_group():
+    """When a model group mixes deployments with different tiered rates, reservation
+    must estimate against the most expensive one. Reserving the cheaper sibling would
+    let a caller repeatedly hit the alias and exceed the budget once routed to the
+    costlier deployment."""
+    cheap = [{"range": [0, 32000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}]
+    expensive = [{"range": [0, 32000], "input_cost_per_token": 5e-06, "output_cost_per_token": 1e-05}]
+    input_tokens = 1000
+    output_tokens = 10
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
+            return_value=[cheap, expensive],
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected_expensive = (input_tokens * 5e-06) + (output_tokens * 1e-05)
+    expected_cheap = (input_tokens * 1e-06) + (output_tokens * 2e-06)
+    assert expected_expensive > expected_cheap
+    assert estimated == pytest.approx(expected_expensive)
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.litellm_core_utils.fallback_generalizations import (
-    match_fallback_generalization,
+    match_routing_generalization,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -346,6 +346,9 @@ def get_llm_provider(
                     elif endpoint == "https://pinstripes.io/v1":
                         custom_llm_provider = "pinstripes"
                         dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
+                    elif endpoint == "https://api.meta.ai/v1":
+                        custom_llm_provider = "meta"
+                        dynamic_api_key = get_secret_str("META_API_KEY")
                     elif endpoint == "https://gigachat.devices.sberbank.ru/api/v1":
                         custom_llm_provider = "gigachat"
                         dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
@@ -476,12 +479,10 @@ def get_llm_provider(
             custom_llm_provider = "gigachat"
 
         # Last resort for an otherwise-unknown model: a declarative
-        # fallback-generalization rule (e.g. routes future claude-* to anthropic).
+        # fallback-generalization routing rule (e.g. routes future claude-* to anthropic).
         # Exact provider matches above always win; this only runs on a miss.
         if not custom_llm_provider:
-            generalization = match_fallback_generalization(model)
-            if generalization is not None:
-                custom_llm_provider = generalization.get("litellm_provider") or None
+            custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:

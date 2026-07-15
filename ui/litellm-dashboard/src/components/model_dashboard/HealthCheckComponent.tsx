@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Title, Text, Button, Badge } from "@tremor/react";
+import { Title, Text, Button } from "@tremor/react";
 import { Modal } from "antd";
 import { Button as AntdButton } from "antd";
 import { ModelDataTable } from "./table";
@@ -468,21 +468,6 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     onPageChange?.(page);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "healthy":
-        return <Badge color="emerald">healthy</Badge>;
-      case "unhealthy":
-        return <Badge color="red">unhealthy</Badge>;
-      case "checking":
-        return <Badge color="blue">checking</Badge>;
-      case "none":
-        return <Badge color="gray">none</Badge>;
-      default:
-        return <Badge color="gray">unknown</Badge>;
-    }
-  };
-
   const showErrorModal = (modelName: string, cleanedError: string, fullError: string) => {
     setSelectedErrorDetails({
       modelName,
@@ -612,7 +597,6 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             handleModelSelection,
             handleSelectAll,
             runIndividualHealthCheck,
-            getStatusBadge,
             getDisplayModelName,
             showErrorModal,
             showSuccessModal,
