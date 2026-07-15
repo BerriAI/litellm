@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1450,12 +1451,18 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
 
         stateless_called = []
         stateful_called = []
+        instruction_scope_calls = []
 
         async def stateless_handle(s, r, se):
             stateless_called.append(1)
 
         async def stateful_handle(s, r, se):
             stateful_called.append(1)
+
+        @asynccontextmanager
+        async def instruction_scope(*args, **kwargs):
+            instruction_scope_calls.append(1)
+            yield
 
         with (
             patch(
@@ -1490,20 +1497,26 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
                 "_server_instances",
                 {},
             ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._gateway_initialize_instructions_request_scope",
+                side_effect=instruction_scope,
+            ),
         ):
             await handle_streamable_http_mcp(scope, receive, send)
 
-        return bool(stateless_called), bool(stateful_called)
+        return bool(stateless_called), bool(stateful_called), len(instruction_scope_calls)
 
     # initialize → stateful
     init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
-    stateless_called, stateful_called = await make_request(init_body)
+    stateless_called, stateful_called, instruction_scope_calls = await make_request(init_body)
     assert stateful_called and not stateless_called, "initialize (no session) should route to stateful, not stateless"
+    assert instruction_scope_calls == 1
 
     # tools/list → stateless
     tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    stateless_called, stateful_called = await make_request(tools_body)
+    stateless_called, stateful_called, instruction_scope_calls = await make_request(tools_body)
     assert stateless_called and not stateful_called, "tools/list (no session) should route to stateless, not stateful"
+    assert instruction_scope_calls == 0
 
 
 @pytest.mark.asyncio

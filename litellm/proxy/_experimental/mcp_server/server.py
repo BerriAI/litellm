@@ -4216,15 +4216,21 @@ if MCP_AVAILABLE:
                         _track_initialized_stateful_session,
                     )
 
-                async with _gateway_initialize_instructions_request_scope(
-                    user_api_key_auth,
-                    mcp_servers,
-                    _client_ip,
-                    scoped_server_endpoint=scoped_server_endpoint,
-                ):
+                async def _handle_request() -> None:
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
+
+                if is_initialize:
+                    async with _gateway_initialize_instructions_request_scope(
+                        user_api_key_auth,
+                        mcp_servers,
+                        _client_ip,
+                        scoped_server_endpoint=scoped_server_endpoint,
+                    ):
+                        await _handle_request()
+                else:
+                    await _handle_request()
 
             try:
                 if session_lock is not None:
