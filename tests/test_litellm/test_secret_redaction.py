@@ -380,7 +380,7 @@ def test_github_pat_redacted():
     classic_pat = "ghp_" + "A" * 36
     fine_grained_pat = "github_pat_" + "B" * 22
     cases = [
-        f"Authorization: Bearer {classic_pat}",
+        f"github_token={classic_pat}",
         f"auth token {fine_grained_pat} for github/gpt-4o",
     ]
     for line in cases:
@@ -395,9 +395,13 @@ def test_slack_token_redacted():
     slack_webhook_url key-name pattern does not cover token values."""
     bot_token = "xoxb-" + "1" * 30
     user_token = "xoxp-" + "2" * 30
+    app_token = "xapp-" + "3" * 30
+    refresh_token = "xoxe-" + "4" * 30
     cases = [
         f"Slack alert using {bot_token}",
         f"configured with {user_token}",
+        f"app token {app_token}",
+        f"refresh {refresh_token}",
     ]
     for line in cases:
         result = redact_string(line)
