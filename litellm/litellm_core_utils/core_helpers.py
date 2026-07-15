@@ -67,6 +67,8 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "compaction": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI

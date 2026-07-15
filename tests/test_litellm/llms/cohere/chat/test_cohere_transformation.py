@@ -57,6 +57,7 @@ class TestCohereV2Transform:
     def setup_method(self):
         self.config = CohereV2ChatConfig()
         self.model = "command-r"
+        self.logging_obj = MagicMock()
 
     def test_v2_supports_max_completion_tokens(self):
         """max_completion_tokens must be advertised so get_optional_params does not reject it"""
@@ -117,3 +118,44 @@ class TestCohereV2Transform:
         )
 
         assert optional_params["max_tokens"] == 256
+
+    def _transform_v2_response(self, finish_reason: str):
+        """Run transform_response over a minimal v2 body with the given finish_reason."""
+        from litellm.types.utils import ModelResponse
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "id": "abc",
+            "finish_reason": finish_reason,
+            "message": {"content": [{"type": "text", "text": "hi"}]},
+            "usage": {"tokens": {"input_tokens": 3, "output_tokens": 1}},
+        }
+        return self.config.transform_response(
+            model=self.model,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=self.logging_obj,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    def test_v2_finish_reason_max_tokens_maps_to_length(self):
+        """Regression: a truncated (MAX_TOKENS) v2 response must report finish_reason='length',
+        not the default 'stop'. The non-streaming transform previously never read the response's
+        finish_reason, so every completion silently reported 'stop'."""
+        result = self._transform_v2_response("MAX_TOKENS")
+        assert result.choices[0].finish_reason == "length"
+
+    def test_v2_finish_reason_tool_call_maps_to_tool_calls(self):
+        """A TOOL_CALL finish_reason must surface as OpenAI 'tool_calls' so tool-calling
+        callers can branch on it (the v2 streaming path already propagates finish_reason)."""
+        result = self._transform_v2_response("TOOL_CALL")
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_v2_finish_reason_complete_maps_to_stop(self):
+        """A normal COMPLETE finish still maps to 'stop'."""
+        result = self._transform_v2_response("COMPLETE")
+        assert result.choices[0].finish_reason == "stop"
