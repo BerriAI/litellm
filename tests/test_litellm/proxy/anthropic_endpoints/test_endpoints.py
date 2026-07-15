@@ -144,6 +144,50 @@ class TestEventLoggingBatchEndpoint:
         assert response.json() == {"status": "ok"}
 
 
+@pytest.mark.asyncio
+async def test_server_side_fallbacks_are_normalized_before_routing():
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    from litellm.llms.anthropic.common_utils import (
+        ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM,
+    )
+
+    processor = MagicMock()
+    processor.base_process_llm_request = AsyncMock(return_value={"id": "msg_test"})
+    fallbacks = [{"model": "claude-opus-4-8"}]
+    request = MagicMock()
+    request.headers = {
+        "Anthropic-Beta": "other-beta, server-side-fallback-2026-06-01"
+    }
+
+    with (
+        patch.object(
+            ep,
+            "_read_request_body",
+            new=AsyncMock(
+                return_value={
+                    "model": "claude-fable-5",
+                    "fallbacks": fallbacks,
+                }
+            ),
+        ),
+        patch.object(
+            ep,
+            "ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ) as processor_factory,
+    ):
+        result = await ep.anthropic_response(
+            fastapi_response=MagicMock(),
+            request=request,
+            user_api_key_dict=MagicMock(),
+        )
+
+    routed_data = processor_factory.call_args.kwargs["data"]
+    assert result == {"id": "msg_test"}
+    assert "fallbacks" not in routed_data
+    assert routed_data[ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM] == fallbacks
+
+
 class TestStripTotalTokens(unittest.TestCase):
     """Cover ``_strip_total_tokens_from_anthropic_response``.
 

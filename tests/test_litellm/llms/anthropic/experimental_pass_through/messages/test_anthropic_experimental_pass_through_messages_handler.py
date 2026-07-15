@@ -64,6 +64,41 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+def test_anthropic_server_side_fallbacks_forwarded_to_anthropic_request():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    fallbacks = [{"model": "claude-opus-4-8"}]
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        return_value={"id": "msg_test"},
+    ) as mock_anthropic_messages:
+        handler.anthropic_messages_handler(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            model="anthropic/claude-fable-5",
+            custom_llm_provider="anthropic",
+            api_key="test-api-key",
+            anthropic_server_fallbacks=fallbacks,
+        )
+
+    call_kwargs = mock_anthropic_messages.call_args.kwargs
+    optional_params = call_kwargs["anthropic_messages_optional_request_params"]
+    request_body = call_kwargs[
+        "anthropic_messages_provider_config"
+    ].transform_anthropic_messages_request(
+        model=call_kwargs["model"],
+        messages=call_kwargs["messages"],
+        anthropic_messages_optional_request_params=dict(optional_params),
+        litellm_params=call_kwargs["litellm_params"],
+        headers={},
+    )
+    assert optional_params["fallbacks"] == fallbacks
+    assert request_body["fallbacks"] == fallbacks
+    assert "anthropic_server_fallbacks" not in call_kwargs["kwargs"]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     """Regression test for #22930.  The unified /v1/messages path must

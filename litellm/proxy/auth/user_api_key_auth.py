@@ -28,6 +28,9 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.llms.anthropic.common_utils import (
+    is_anthropic_server_side_fallback_request,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -2809,8 +2812,18 @@ async def _enforce_key_and_fallback_model_access(
         # allowlist or a caller can smuggle a restricted model. VERIA-44.
         fallback_names: List[str] = []
         override_settings = request_data.get("router_settings_override")
+        normalized_route = normalize_route_for_root_path(route)
+        has_anthropic_server_side_fallbacks = (
+            normalized_route == "/v1/messages"
+            and request is not None
+            and is_anthropic_server_side_fallback_request(
+                request_data=request_data,
+                headers=_safe_get_request_headers(request),
+            )
+        )
         for _fb_key in ROUTER_FALLBACK_FIELDS:
-            fallback_names.extend(iter_router_fallback_model_names(request_data.get(_fb_key)))
+            if _fb_key != "fallbacks" or not has_anthropic_server_side_fallbacks:
+                fallback_names.extend(iter_router_fallback_model_names(request_data.get(_fb_key)))
             if isinstance(override_settings, dict):
                 fallback_names.extend(iter_router_fallback_model_names(override_settings.get(_fb_key)))
 

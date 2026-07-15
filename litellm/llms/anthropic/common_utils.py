@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import httpx
 
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -30,6 +31,37 @@ _BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
+ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM = "anthropic_server_fallbacks"
+
+
+def is_anthropic_server_side_fallback_request(
+    request_data: Mapping[str, object],
+    headers: Mapping[str, str],
+) -> bool:
+    beta_header = next(
+        (value for key, value in headers.items() if key.lower() == "anthropic-beta"),
+        None,
+    )
+    if beta_header is None or not isinstance(request_data.get("fallbacks"), list):
+        return False
+    return ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value in {
+        value.strip() for value in beta_header.split(",")
+    }
+
+
+def normalize_anthropic_server_side_fallbacks(
+    request_data: Mapping[str, object],
+    headers: Mapping[str, str],
+) -> dict[str, object]:
+    if not is_anthropic_server_side_fallback_request(
+        request_data=request_data,
+        headers=headers,
+    ):
+        return dict(request_data)
+    return {
+        **{key: value for key, value in request_data.items() if key != "fallbacks"},
+        ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM: request_data["fallbacks"],
+    }
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:

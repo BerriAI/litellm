@@ -9,6 +9,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.anthropic.common_utils import (
+    normalize_anthropic_server_side_fallbacks,
+)
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
 )
@@ -89,7 +92,10 @@ async def anthropic_response(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = normalize_anthropic_server_side_fallbacks(
+        request_data=await _read_request_body(request=request),
+        headers=dict(request.headers),
+    )
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
