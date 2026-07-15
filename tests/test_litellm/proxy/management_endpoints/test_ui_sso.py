@@ -2208,12 +2208,13 @@ class TestCLIKeyRegenerationFlow:
         with pytest.raises(HTTPException) as generic_exc:
             _get_cli_sso_flow_or_raise(login_id="not-a-valid-id", cache=mock_cache)
         assert generic_exc.value.status_code == 400
-        assert generic_exc.value.detail == "Invalid CLI login session"
+        assert generic_exc.value.detail == "Invalid CLI login session id"
 
         with pytest.raises(HTTPException) as expired_exc:
             _get_cli_sso_flow_or_raise(login_id="cli-test_1234567890", cache=mock_cache)
         assert expired_exc.value.status_code == 400
-        assert expired_exc.value.detail == "Invalid CLI login session"
+        assert "session not found or expired" in expired_exc.value.detail
+        assert "enable_redis_auth_cache" in expired_exc.value.detail
 
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):

@@ -8,6 +8,7 @@ from unittest.mock import Mock, mock_open, patch
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
+import pytest
 from click.testing import CliRunner
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
@@ -41,7 +42,7 @@ def _mock_cli_sso_start_response(
 
 
 class TestPollingErrorSurfacing:
-    def test_client_error_prints_server_detail_and_stops_polling(self, capsys):
+    def test_client_error_raises_with_server_detail_and_stops_polling(self):
         from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
 
         mock_response = Mock()
@@ -51,14 +52,35 @@ class TestPollingErrorSurfacing:
         }
 
         with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
-            result = _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
+            with pytest.raises(ValueError) as exc_info:
+                _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
 
-        assert result is None
         assert mock_get.call_count == 1
         assert (
-            "Polling error: HTTP 400: Your litellm CLI is out of date and uses a login flow "
-            "this proxy no longer supports." in capsys.readouterr().out
+            "The proxy rejected the login session with HTTP 400: Your litellm CLI is out of date "
+            "and uses a login flow this proxy no longer supports." in str(exc_info.value)
         )
+
+    def test_login_command_shows_server_rejection_to_user(self):
+        mock_context = Mock()
+        mock_context.obj = {"base_url": "https://test.example.com"}
+
+        mock_poll_response = Mock()
+        mock_poll_response.status_code = 400
+        mock_poll_response.json.return_value = {"detail": "CLI login session not found or expired."}
+
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=mock_poll_response),
+            patch("time.sleep"),
+        ):
+            result = CliRunner().invoke(login, obj=mock_context.obj)
+
+        assert result.exit_code == 0
+        assert "❌ Authentication failed:" in result.output
+        assert "CLI login session not found or expired." in result.output
+        assert "Authentication timed out" not in result.output
 
     def test_server_error_without_json_body_retries_until_timeout(self, capsys):
         from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
@@ -87,6 +109,68 @@ class TestPollingErrorSurfacing:
         assert result is None
         assert mock_get.call_count == 2
         assert "Polling error: HTTP 429: Too many CLI login attempts. Try again later." in capsys.readouterr().out
+
+
+class TestStartCliSsoFlowErrors:
+    def test_endpoint_not_found_explains_version_or_base_url(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://old-proxy.example.com")
+
+        message = str(exc_info.value)
+        assert "HTTP 404" in message
+        assert "--base-url" in message
+        assert "older than this CLI" in message
+
+    def test_http_error_includes_server_detail(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://test.example.com")
+
+        assert "HTTP 429" in str(exc_info.value)
+        assert "Too many CLI login attempts. Try again later." in str(exc_info.value)
+
+    def test_non_json_response_names_interception(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("no json")
+        mock_response.headers = {"content-type": "text/html"}
+        mock_response.text = "<html>Sign in to corporate VPN</html>"
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://test.example.com")
+
+        message = str(exc_info.value)
+        assert "non-JSON response" in message
+        assert "text/html" in message
+        assert "Sign in to corporate VPN" in message
+
+    def test_connection_error_points_at_base_url(self):
+        import requests
+
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        with patch("requests.post", side_effect=requests.ConnectionError("Connection refused")):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://unreachable.example.com")
+
+        message = str(exc_info.value)
+        assert "Could not reach the proxy" in message
+        assert "https://unreachable.example.com/sso/cli/start" in message
 
 
 class TestTokenUtilities:
