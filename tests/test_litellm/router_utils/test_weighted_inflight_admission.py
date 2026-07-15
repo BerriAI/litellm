@@ -5,6 +5,8 @@ import pytest
 from litellm.router_utils.weighted_inflight_admission import (
     AdmissionClass,
     AdmissionClosedError,
+    AdmissionQueueTimeoutError,
+    AdmissionRejectedError,
     WeightedInFlightAdmission,
 )
 
@@ -111,6 +113,7 @@ async def test_close_rejects_new_requests_and_releases_waiters(admission):
 
     with pytest.raises(AdmissionClosedError):
         await waiter
+    assert admission.queued == 0
     with pytest.raises(AdmissionClosedError):
         await admission.acquire("interactive")
     await asyncio.gather(*(lease.release() for lease in leases))
@@ -142,3 +145,33 @@ async def test_stream_release_happens_on_close(admission):
     await wrapped.aclose()
 
     assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_timeout_cleans_waiter_and_records_metric():
+    admission = WeightedInFlightAdmission(
+        capacity=1,
+        classes=(AdmissionClass(name="interactive", reservation=1, priority=0),),
+        queue_timeout=0.01,
+    )
+    lease = await admission.acquire("interactive")
+    with pytest.raises(AdmissionQueueTimeoutError):
+        await admission.acquire("interactive")
+    assert admission.queued == 0
+    assert admission.metrics.snapshot()["timed_out"] == 1
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_reject_overflow_records_metric():
+    admission = WeightedInFlightAdmission(
+        capacity=1,
+        classes=(AdmissionClass(name="interactive", reservation=1, priority=0),),
+        overflow="reject",
+    )
+    lease = await admission.acquire("interactive")
+    with pytest.raises(AdmissionRejectedError):
+        await admission.acquire("interactive")
+    assert admission.queued == 0
+    assert admission.metrics.snapshot()["rejected"] == 1
+    await lease.release()
