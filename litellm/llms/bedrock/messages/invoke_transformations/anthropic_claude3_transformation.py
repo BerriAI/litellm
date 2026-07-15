@@ -45,11 +45,9 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
+    swap_tool_search_beta_header_for_bedrock,
 )
-from litellm.types.llms.anthropic import (
-    ANTHROPIC_BETA_HEADER_VALUES,
-    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
-)
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -437,84 +435,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         return is_claude_4_5_on_bedrock(model)
 
-    def _supports_tool_search_on_bedrock(self, model: str) -> bool:
-        """
-        Check if the model supports tool search on Bedrock.
-
-        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
-        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
-
-        Args:
-            model: The model name
-
-        Returns:
-            True if the model supports tool search on Bedrock
-        """
-        model_lower = model.lower()
-
-        # Supported models for tool search on Bedrock
-        supported_patterns = [
-            # Opus 4.5
-            "opus-4.5",
-            "opus_4.5",
-            "opus-4-5",
-            "opus_4_5",
-            # Sonnet 4.5
-            "sonnet-4.5",
-            "sonnet_4.5",
-            "sonnet-4-5",
-            "sonnet_4_5",
-            # Opus 4.6
-            "opus-4.6",
-            "opus_4.6",
-            "opus-4-6",
-            "opus_4_6",
-            # sonnet 4.6
-            "sonnet-4.6",
-            "sonnet_4.6",
-            "sonnet-4-6",
-            "sonnet_4_6",
-            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
-            # as of launch (2026-04-16). Bedrock rejects the tool type with:
-            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
-            # Re-add the opus-4.7 patterns here once AWS announces support.
-        ]
-
-        return any(pattern in model_lower for pattern in supported_patterns)
-
-    def _get_tool_search_beta_header_for_bedrock(
-        self,
-        model: str,
-        tool_search_used: bool,
-        programmatic_tool_calling_used: bool,
-        input_examples_used: bool,
-        beta_set: set,
-    ) -> None:
-        """
-        Adjust tool search beta header for Bedrock.
-
-        Bedrock requires a different beta header for tool search on Opus 4 models
-        when tool search is used without programmatic tool calling or input examples.
-
-        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
-        with the `tool-search-tool-2025-10-19` beta header.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
-
-        Args:
-            model: The model name
-            tool_search_used: Whether tool search is used
-            programmatic_tool_calling_used: Whether programmatic tool calling is used
-            input_examples_used: Whether input examples are used
-            beta_set: The set of beta headers to modify in-place
-        """
-        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
-            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if self._supports_tool_search_on_bedrock(model):
-                beta_set.add("tool-search-tool-2025-10-19")
-
     # Bedrock-InvokeModel-supported ``context_management.edits`` types and the
     # ``anthropic-beta`` header that each one requires. ``clear_thinking_20251015``
     # is intentionally absent — it is LiteLLM-internal, consumed via
@@ -612,12 +532,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set=beta_set,
         )
 
-        self._get_tool_search_beta_header_for_bedrock(
-            model=model,
+        beta_set = swap_tool_search_beta_header_for_bedrock(
+            beta_set=beta_set,
             tool_search_used=tool_search_used,
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
-            beta_set=beta_set,
         )
 
         if "tool-search-tool-2025-10-19" in beta_set:

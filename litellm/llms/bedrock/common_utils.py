@@ -36,6 +36,8 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic_tool_search import TOOL_SEARCH_BETA_HEADER_BEDROCK
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -1272,6 +1274,32 @@ class BedrockEventStreamDecoderBase:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+def swap_tool_search_beta_header_for_bedrock(
+    beta_set: set[str],
+    tool_search_used: bool,
+    programmatic_tool_calling_used: bool,
+    input_examples_used: bool,
+) -> set[str]:
+    """
+    Replace the Anthropic-direct tool-search beta header with Bedrock's
+    ``tool-search-tool-2025-10-19`` whenever a tool-search tool is present in
+    the request (and programmatic tool calling / input examples, which use the
+    Anthropic-direct header instead, are not).
+
+    Bedrock accepts the ``tool_search_tool_*_20251119`` tool types on every
+    live Claude model once this header is attached; without it the request
+    400s with "Input tag 'tool_search_tool_regex_20251119' found using 'type'
+    does not match any of the expected tags". There is deliberately no
+    per-model gate here: earlier hardcoded pattern lists went stale as AWS
+    rolled out support (Haiku 4.5 and Opus 4.7 were missing), and a model
+    that genuinely lacks support rejects the tool type with the same 400
+    whether or not the header is attached.
+    """
+    if not tool_search_used or programmatic_tool_calling_used or input_examples_used:
+        return set(beta_set)
+    return (set(beta_set) - {ANTHROPIC_TOOL_SEARCH_BETA_HEADER}) | {TOOL_SEARCH_BETA_HEADER_BEDROCK}
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
