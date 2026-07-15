@@ -9,7 +9,6 @@ import useAuthorized from "./useAuthorized";
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
 const {
-  replaceMock,
   clearTokenCookiesMock,
   getProxyBaseUrlMock,
   getUiConfigMock,
@@ -17,20 +16,19 @@ const {
   checkTokenValidityMock,
   buildLoginUrlWithReturnMock,
 } = vi.hoisted(() => ({
-  replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
-  getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
+  getProxyBaseUrlMock: vi.fn(() => "https://proxy.example"),
   getUiConfigMock: vi.fn(),
   decodeTokenMock: vi.fn(),
   checkTokenValidityMock: vi.fn(),
   buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
 }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    replace: replaceMock,
-  }),
-}));
+const locationReplaceMock = vi.fn();
+Object.defineProperty(window, "location", {
+  configurable: true,
+  value: { ...window.location, replace: locationReplaceMock },
+});
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
@@ -92,7 +90,7 @@ const clearCookie = () => {
 
 describe("useAuthorized", () => {
   afterEach(() => {
-    replaceMock.mockReset();
+    locationReplaceMock.mockReset();
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
     getUiConfigMock.mockReset();
@@ -140,7 +138,7 @@ describe("useAuthorized", () => {
     expect(result.current.premiumUser).toBe(true);
     expect(result.current.disabledPersonalKeyCreation).toBe(false);
     expect(result.current.showSSOBanner).toBe(true);
-    expect(replaceMock).not.toHaveBeenCalled();
+    expect(locationReplaceMock).not.toHaveBeenCalled();
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
 
@@ -164,7 +162,7 @@ describe("useAuthorized", () => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(locationReplaceMock).toHaveBeenCalledWith("https://proxy.example/ui/login");
     expect(result.current.accessToken).toBeNull();
     expect(result.current.userRole).toBe("Undefined Role");
   });
@@ -197,7 +195,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(locationReplaceMock).toHaveBeenCalledWith("https://proxy.example/ui/login");
     });
 
     expect(result.current.accessToken).toBe("api-key-123");
@@ -221,7 +219,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(locationReplaceMock).toHaveBeenCalledWith("https://proxy.example/ui/login");
     });
 
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
@@ -256,7 +254,7 @@ describe("useAuthorized", () => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(locationReplaceMock).toHaveBeenCalledWith("https://proxy.example/ui/login");
     expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
   });
 });
