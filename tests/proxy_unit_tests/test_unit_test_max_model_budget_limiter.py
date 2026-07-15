@@ -206,6 +206,75 @@ async def test_async_log_success_event_per_model_budget_windows_are_independent(
         assert start_b_after == start_b_before
 
 
+@pytest.mark.asyncio
+async def test_async_log_success_event_end_user_per_model_budget_windows_are_independent(
+    budget_limiter,
+):
+    """
+    Regression test: two models with different budget_durations for the same end user
+    must each get their own budget-window start time. Before the fix, both models
+    wrote to the same `end_user_budget_start_time:{end_user_id}` cache key, so
+    expiring one model's window also reset the other model's window/spend.
+    """
+    end_user_id = "test-user"
+    model_a, duration_a = "model-a", "1h"
+    model_b, duration_b = "model-b", "1d"
+    user_api_key_end_user_model_max_budget = {
+        model_a: {"budget_limit": 10.0, "time_period": duration_a},
+        model_b: {"budget_limit": 20.0, "time_period": duration_b},
+    }
+
+    def _kwargs_for(model: str) -> dict:
+        return {
+            "standard_logging_object": {
+                "response_cost": 1.0,
+                "model": model,
+                "end_user": end_user_id,
+                "metadata": {"user_api_key_end_user_id": end_user_id},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_end_user_model_max_budget": user_api_key_end_user_model_max_budget},
+            },
+        }
+
+    t0 = 1_700_000_000.0
+    # model-a used first, model-b used 10s later (staggered first use);
+    # 3rd timestamp is 3700s after t0 - past model-a's 1h window, nowhere near model-b's 1d window
+    timestamps = iter([t0, t0 + 10, t0 + 3700])
+
+    def _fake_now(tz):
+        return MagicMock(timestamp=lambda: next(timestamps))
+
+    start_a_key = f"end_user_budget_start_time:{end_user_id}:{model_a}:{duration_a}"
+    start_b_key = f"end_user_budget_start_time:{end_user_id}:{model_b}:{duration_b}"
+
+    with patch("litellm.router_strategy.budget_limiter.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = _fake_now
+
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_a), response_obj=None, start_time=None, end_time=None
+        )
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_b), response_obj=None, start_time=None, end_time=None
+        )
+
+        start_a_before = await budget_limiter.dual_cache.async_get_cache(key=start_a_key)
+        start_b_before = await budget_limiter.dual_cache.async_get_cache(key=start_b_key)
+        assert start_a_before == t0
+        assert start_b_before == t0 + 10
+
+        # model-a's window has now expired; this triggers a reset for model-a only
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_a), response_obj=None, start_time=None, end_time=None
+        )
+
+        start_a_after = await budget_limiter.dual_cache.async_get_cache(key=start_a_key)
+        start_b_after = await budget_limiter.dual_cache.async_get_cache(key=start_b_key)
+
+        assert start_a_after == t0 + 3700
+        assert start_b_after == start_b_before
+
+
 # Test is_end_user_within_model_budget
 @pytest.mark.asyncio
 async def test_is_end_user_within_model_budget(budget_limiter):
