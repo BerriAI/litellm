@@ -3846,6 +3846,140 @@ async def test_removing_server_revokes_access_despite_stale_tool_permissions():
             global_mcp_server_manager.registry.pop(server_id, None)
 
 
+@pytest.mark.asyncio
+async def test_team_removing_server_revokes_access_despite_stale_tool_permissions():
+    """Team path: a stale mcp_tool_permissions entry no longer re-grants a
+    server removed from the team's mcp_servers.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33397
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTable,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for server_id in ("kept_server", "removed_server"):
+        global_mcp_server_manager.registry[server_id] = MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        team_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-perm",
+            mcp_servers=["kept_server"],
+            mcp_access_groups=[],
+            mcp_tool_permissions={
+                "kept_server": ["tool_a"],
+                "removed_server": ["tool_b"],
+            },
+            vector_stores=[],
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="team-1",
+            access_group_ids=[],
+            object_permission_id="team-perm",
+        )
+        team_obj.object_permission = team_perm
+        auth = UserAPIKeyAuth(token="test-token", api_key="sk-test", team_id="team-1")
+
+        patches = _patch_proxy_server_globals_for_mcp() + [
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new_callable=AsyncMock,
+                return_value=team_obj,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ]
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+            assert result == ["kept_server"]
+        finally:
+            _stop_patches(patches)
+    finally:
+        for server_id in ("kept_server", "removed_server"):
+            global_mcp_server_manager.registry.pop(server_id, None)
+
+
+@pytest.mark.asyncio
+async def test_end_user_removing_server_revokes_access_despite_stale_tool_permissions():
+    """End-user path: a stale mcp_tool_permissions entry no longer re-grants a
+    server removed from the end user's mcp_servers.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33397
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for server_id in ("kept_server", "removed_server"):
+        global_mcp_server_manager.registry[server_id] = MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        end_user_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="eu-perm",
+            mcp_servers=["kept_server"],
+            mcp_access_groups=[],
+            mcp_tool_permissions={
+                "kept_server": ["tool_a"],
+                "removed_server": ["tool_b"],
+            },
+            vector_stores=[],
+        )
+        end_user_obj = MagicMock()
+        end_user_obj.object_permission = end_user_perm
+        auth = UserAPIKeyAuth(token="test-token", api_key="sk-test", end_user_id="eu-1")
+
+        patches = _patch_proxy_server_globals_for_mcp() + [
+            patch(
+                "litellm.proxy.auth.auth_checks.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=end_user_obj,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ]
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(auth)
+            assert result == ["kept_server"]
+        finally:
+            _stop_patches(patches)
+    finally:
+        for server_id in ("kept_server", "removed_server"):
+            global_mcp_server_manager.registry.pop(server_id, None)
+
+
 # ---------------------------------------------------------------------------
 # Org-level MCP permission tests
 # ---------------------------------------------------------------------------
