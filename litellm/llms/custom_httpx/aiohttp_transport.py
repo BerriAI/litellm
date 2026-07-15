@@ -185,6 +185,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
     @staticmethod
     def _on_threadsafe_close_done(future: "concurrent.futures.Future[None]") -> None:
+        if future.cancelled():
+            return
         exc = future.exception()
         if exc is not None:
             verbose_logger.debug("Error closing recycled aiohttp session on its own loop: %s", exc)

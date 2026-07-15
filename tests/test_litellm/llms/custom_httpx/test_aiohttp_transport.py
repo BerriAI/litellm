@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import os
 import sys
 
@@ -884,6 +885,20 @@ async def test_session_from_other_running_loop_closed_threadsafe():
         holder["loop"].call_soon_threadsafe(holder["loop"].stop)
         thread.join(5)
         await new_session.close()
+
+
+def test_threadsafe_close_done_callback_tolerates_cancelled_future():
+    """
+    Regression test for #24230 (review finding): when the foreign loop stops
+    before the handed-off close coroutine runs, asyncio cancels the
+    concurrent.futures.Future. The done-callback must return quietly instead
+    of letting future.exception() raise CancelledError (a BaseException that
+    escapes _invoke_callbacks and crashes the foreign loop's thread).
+    """
+    future: "concurrent.futures.Future[None]" = concurrent.futures.Future()
+    future.cancel()
+
+    LiteLLMAiohttpTransport._on_threadsafe_close_done(future)
 
 
 @pytest.mark.asyncio
