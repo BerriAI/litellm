@@ -285,7 +285,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 virtual_spend_key = (
                     f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{key_budget_config.budget_duration}"
                 )
-                virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
+                virtual_start_time_key = (
+                    f"virtual_key_budget_start_time:{virtual_key}:{model}:{key_budget_config.budget_duration}"
+                )
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
                     spend_key=virtual_spend_key,
@@ -308,7 +310,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 end_user_spend_key = (
                     f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
                 )
-                end_user_start_time_key = f"end_user_budget_start_time:{end_user_id}"
+                end_user_start_time_key = (
+                    f"end_user_budget_start_time:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+                )
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
                     spend_key=end_user_spend_key,

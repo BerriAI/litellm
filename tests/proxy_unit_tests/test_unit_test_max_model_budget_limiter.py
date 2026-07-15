@@ -1,10 +1,8 @@
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import pytest
 
@@ -27,9 +25,7 @@ def budget_limiter():
 # Test _get_model_without_custom_llm_provider
 def test_get_model_without_custom_llm_provider(budget_limiter):
     # Test with custom provider
-    assert (
-        budget_limiter._get_model_without_custom_llm_provider("openai/gpt-4") == "gpt-4"
-    )
+    assert budget_limiter._get_model_without_custom_llm_provider("openai/gpt-4") == "gpt-4"
 
     # Test without custom provider
     assert budget_limiter._get_model_without_custom_llm_provider("gpt-4") == "gpt-4"
@@ -43,9 +39,7 @@ def test_get_request_model_budget_config(budget_limiter):
     }
 
     # Test direct model match
-    config = budget_limiter._get_request_model_budget_config(
-        model="gpt-4", internal_model_max_budget=internal_budget
-    )
+    config = budget_limiter._get_request_model_budget_config(model="gpt-4", internal_model_max_budget=internal_budget)
     assert config.max_budget == 100.0
 
     # Test model with provider
@@ -72,26 +66,16 @@ async def test_is_key_within_model_budget(budget_limiter):
     )
 
     # Test when model is within budget
-    with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=50.0
-    ):
-        assert (
-            await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
-            is True
-        )
+    with patch.object(budget_limiter, "_get_virtual_key_spend_for_model", return_value=50.0):
+        assert await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4") is True
 
     # Test when model exceeds budget
-    with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
-    ):
+    with patch.object(budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
 
     # Test model not in budget config
-    assert (
-        await budget_limiter.is_key_within_model_budget(user_api_key, "non-existent")
-        is True
-    )
+    assert await budget_limiter.is_key_within_model_budget(user_api_key, "non-existent") is True
 
 
 # Test _get_virtual_key_spend_for_model
@@ -138,9 +122,7 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
             "metadata": {"user_api_key_hash": virtual_key},
         },
         "litellm_params": {
-            "metadata": {
-                "user_api_key_model_max_budget": user_api_key_model_max_budget
-            },
+            "metadata": {"user_api_key_model_max_budget": user_api_key_model_max_budget},
         },
     }
     with patch.object(
@@ -148,25 +130,87 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
         "_increment_spend_for_key",
         new_callable=AsyncMock,
     ) as mock_increment:
-        await budget_limiter.async_log_success_event(
-            kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
-        )
+        assert spend_key == (f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}")
         assert call_kwargs["response_cost"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_per_model_budget_windows_are_independent(
+    budget_limiter,
+):
+    """
+    Regression test: two models with different budget_durations on the same virtual
+    key must each get their own budget-window start time. Before the fix, both models
+    wrote to the same `virtual_key_budget_start_time:{virtual_key}` cache key, so
+    expiring one model's window also reset the other model's window/spend.
+    """
+    virtual_key = "test-key-hash"
+    model_a, duration_a = "model-a", "1h"
+    model_b, duration_b = "model-b", "1d"
+    user_api_key_model_max_budget = {
+        model_a: {"budget_limit": 10.0, "time_period": duration_a},
+        model_b: {"budget_limit": 20.0, "time_period": duration_b},
+    }
+
+    def _kwargs_for(model: str) -> dict:
+        return {
+            "standard_logging_object": {
+                "response_cost": 1.0,
+                "model": model,
+                "metadata": {"user_api_key_hash": virtual_key},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": user_api_key_model_max_budget},
+            },
+        }
+
+    t0 = 1_700_000_000.0
+    # model-a used first, model-b used 10s later (staggered first use);
+    # 3rd timestamp is 3700s after t0 - past model-a's 1h window, nowhere near model-b's 1d window
+    timestamps = iter([t0, t0 + 10, t0 + 3700])
+
+    def _fake_now(tz):
+        return MagicMock(timestamp=lambda: next(timestamps))
+
+    start_a_key = f"virtual_key_budget_start_time:{virtual_key}:{model_a}:{duration_a}"
+    start_b_key = f"virtual_key_budget_start_time:{virtual_key}:{model_b}:{duration_b}"
+
+    with patch("litellm.router_strategy.budget_limiter.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = _fake_now
+
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_a), response_obj=None, start_time=None, end_time=None
+        )
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_b), response_obj=None, start_time=None, end_time=None
+        )
+
+        start_a_before = await budget_limiter.dual_cache.async_get_cache(key=start_a_key)
+        start_b_before = await budget_limiter.dual_cache.async_get_cache(key=start_b_key)
+        assert start_a_before == t0
+        assert start_b_before == t0 + 10
+
+        # model-a's window has now expired; this triggers a reset for model-a only
+        await budget_limiter.async_log_success_event(
+            _kwargs_for(model_a), response_obj=None, start_time=None, end_time=None
+        )
+
+        start_a_after = await budget_limiter.dual_cache.async_get_cache(key=start_a_key)
+        start_b_after = await budget_limiter.dual_cache.async_get_cache(key=start_b_key)
+
+        assert start_a_after == t0 + 3700
+        assert start_b_after == start_b_before
 
 
 # Test is_end_user_within_model_budget
 @pytest.mark.asyncio
 async def test_is_end_user_within_model_budget(budget_limiter):
     # Test when model is within budget
-    with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=50.0
-    ):
+    with patch.object(budget_limiter, "_get_end_user_spend_for_model", return_value=50.0):
         assert (
             await budget_limiter.is_end_user_within_model_budget(
                 "test-user",
@@ -177,9 +221,7 @@ async def test_is_end_user_within_model_budget(budget_limiter):
         )
 
     # Test when model exceeds budget
-    with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=150.0
-    ):
+    with patch.object(budget_limiter, "_get_end_user_spend_for_model", return_value=150.0):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_end_user_within_model_budget(
                 "test-user",
@@ -261,16 +303,12 @@ async def test_async_log_success_event_uses_model_group_for_cache_key(budget_lim
         "_increment_spend_for_key",
         new_callable=AsyncMock,
     ) as mock_increment:
-        await budget_limiter.async_log_success_event(
-            kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
         # The cache key must use the model_group name, NOT the deployment name
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model_group}:{budget_duration}"
-        )
+        assert spend_key == (f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model_group}:{budget_duration}")
         assert call_kwargs["response_cost"] == 0.10
 
 
@@ -310,15 +348,11 @@ async def test_async_log_success_event_falls_back_to_model_when_no_model_group(
         "_increment_spend_for_key",
         new_callable=AsyncMock,
     ) as mock_increment:
-        await budget_limiter.async_log_success_event(
-            kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
-        )
+        assert spend_key == (f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}")
 
 
 @pytest.mark.asyncio
@@ -357,15 +391,11 @@ async def test_async_log_success_event_end_user_uses_model_group(budget_limiter)
         "_increment_spend_for_key",
         new_callable=AsyncMock,
     ) as mock_increment:
-        await budget_limiter.async_log_success_event(
-            kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group}:{budget_duration}"
-        )
+        assert spend_key == (f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group}:{budget_duration}")
 
 
 @pytest.mark.asyncio
@@ -393,9 +423,7 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
             "metadata": {"user_api_key_end_user_id": end_user_id},
         },
         "litellm_params": {
-            "metadata": {
-                "user_api_key_end_user_model_max_budget": user_api_key_end_user_model_max_budget
-            },
+            "metadata": {"user_api_key_end_user_model_max_budget": user_api_key_end_user_model_max_budget},
         },
     }
     with patch.object(
@@ -403,15 +431,11 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
         "_increment_spend_for_key",
         new_callable=AsyncMock,
     ) as mock_increment:
-        await budget_limiter.async_log_success_event(
-            kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
         mock_increment.assert_awaited_once()
         call_kwargs = mock_increment.call_args.kwargs
         spend_key = call_kwargs["spend_key"]
-        assert spend_key == (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}"
-        )
+        assert spend_key == (f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}")
         assert call_kwargs["response_cost"] == 0.05
 
 
@@ -446,9 +470,7 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
             "_push_in_memory_increments_to_redis",
             new_callable=AsyncMock,
         ) as mock_push:
-            await limiter.async_log_success_event(
-                kwargs, response_obj=None, start_time=None, end_time=None
-            )
+            await limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
             mock_push.assert_awaited_once()
 
 
@@ -457,10 +479,7 @@ async def test_get_fallback_model_within_budget_returns_none_without_fallbacks(
     budget_limiter,
 ):
     user_api_key = UserAPIKeyAuth(token="test-key", budget_fallbacks={})
-    assert (
-        await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
-        is None
-    )
+    assert await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4") is None
 
 
 @pytest.mark.asyncio
@@ -472,12 +491,8 @@ async def test_get_fallback_model_within_budget_returns_first_within_budget(
         model_max_budget={"gpt-4o-mini": {"budget_limit": 100.0, "time_period": "1d"}},
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
-    with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=1.0
-    ):
-        result = await budget_limiter.get_fallback_model_within_budget(
-            user_api_key, "gpt-4"
-        )
+    with patch.object(budget_limiter, "_get_virtual_key_spend_for_model", return_value=1.0):
+        result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
     assert result == "gpt-4o-mini"
 
 
@@ -502,9 +517,7 @@ async def test_get_fallback_model_within_budget_skips_exhausted_fallback(
         "_get_virtual_key_spend_for_model",
         side_effect=_spend_for_model,
     ):
-        result = await budget_limiter.get_fallback_model_within_budget(
-            user_api_key, "gpt-4"
-        )
+        result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
     assert result == "claude-haiku"
 
 
@@ -520,12 +533,8 @@ async def test_get_fallback_model_within_budget_returns_none_when_chain_exhauste
         },
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
-    with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
-    ):
-        result = await budget_limiter.get_fallback_model_within_budget(
-            user_api_key, "gpt-4"
-        )
+    with patch.object(budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0):
+        result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
     assert result is None
 
 
@@ -554,7 +563,5 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
             "_push_in_memory_increments_to_redis",
             new_callable=AsyncMock,
         ) as mock_push:
-            await budget_limiter.async_log_success_event(
-                kwargs, response_obj=None, start_time=None, end_time=None
-            )
+            await budget_limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
             mock_push.assert_not_awaited()
