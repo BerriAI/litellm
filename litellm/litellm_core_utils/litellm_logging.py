@@ -354,8 +354,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         set_trace_id(self.litellm_trace_id)
         _sid = (kwargs or {}).get("litellm_session_id")
-        if _sid:
-            set_session_id(str(_sid))
+        set_session_id(str(_sid) if _sid else "")
 
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
