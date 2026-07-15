@@ -5957,9 +5957,8 @@ class TestAggregateGatewayDcrChallenge:
     """The mcp_gateway_dcr front door: a 401 on the aggregate /mcp scope must
     carry the RFC 9728 resource_metadata challenge pointing at the gateway's
     own protected-resource metadata, and must NOT fire for named-server
-    targets, explicit litellm keys, non-401 failures, or with the flag off."""
+    targets, explicit litellm keys, or non-401 failures."""
 
-    _FLAG_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.is_mcp_gateway_dcr_enabled"
     _AUTH_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
     _EXPECTED_RESOURCE_METADATA = 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp"'
 
@@ -5983,11 +5982,10 @@ class TestAggregateGatewayDcrChallenge:
         return _raise
 
     async def test_challenge_on_anonymous_aggregate_mcp(self):
-        """Anonymous request to the aggregate /mcp with the flag on: 401 plus
+        """Anonymous request to the aggregate /mcp: 401 plus
         the bare bearer challenge (no error attribute, RFC 6750 section 3.1)."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())
@@ -6001,7 +5999,6 @@ class TestAggregateGatewayDcrChallenge:
         so a spec client re-authorizes instead of retrying the dead token."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(
@@ -6011,25 +6008,12 @@ class TestAggregateGatewayDcrChallenge:
         www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
         assert www_authenticate == f'Bearer error="invalid_token", {self._EXPECTED_RESOURCE_METADATA}'
 
-    async def test_no_challenge_when_flag_off(self):
-        """Flag off: the original admission error propagates untouched, both
-        with and without a bearer."""
-        for extra_headers in ((), ((b"authorization", b"Bearer some-token"),)):
-            with (
-                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-                patch(self._FLAG_PATCH_TARGET, return_value=False),
-            ):
-                with pytest.raises(ProxyException) as exc_info:
-                    await MCPRequestHandler.process_mcp_request(self._scope(extra_headers=extra_headers))
-            assert str(exc_info.value.code) == "401"
-
     async def test_no_challenge_for_explicit_litellm_key(self):
         """An explicit x-litellm-api-key declares a litellm-key client; a typo
         there must surface the real auth error, never a DCR challenge that
         would send SDKs into a sign-in flow."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(ProxyException):
                 await MCPRequestHandler.process_mcp_request(
@@ -6041,7 +6025,6 @@ class TestAggregateGatewayDcrChallenge:
         own those, so the aggregate challenge must not fire."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(ProxyException):
                 await MCPRequestHandler.process_mcp_request(
@@ -6053,7 +6036,6 @@ class TestAggregateGatewayDcrChallenge:
         fire even when that server does not resolve."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(ProxyException):
                 await MCPRequestHandler.process_mcp_request(self._scope(path="/mcp/github"))
@@ -6063,7 +6045,6 @@ class TestAggregateGatewayDcrChallenge:
         not a cold-start DCR client; keep the original error."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(ProxyException):
                 await MCPRequestHandler.process_mcp_request(
@@ -6078,7 +6059,6 @@ class TestAggregateGatewayDcrChallenge:
 
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=_raise_500),
-            patch(self._FLAG_PATCH_TARGET, return_value=True),
         ):
             with pytest.raises(ProxyException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())

@@ -36,7 +36,6 @@ from litellm.proxy._experimental.mcp_server.faults import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
-    is_mcp_gateway_dcr_enabled,
     validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -2310,12 +2309,6 @@ async def _build_oauth_protected_resource_response(
         global_mcp_server_manager,
     )
 
-    # With the gateway-level DCR front door enabled, unnamed discovery
-    # describes the gateway itself as the authorization server for the
-    # aggregate /mcp resource instead of narrowing to one server.
-    if mcp_server_name is None and is_mcp_gateway_dcr_enabled():
-        return _build_aggregate_protected_resource_response(request)
-
     request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
@@ -2490,13 +2483,20 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     }
 
 
-def _raise_404_unless_gateway_dcr_enabled() -> None:
-    """The aggregate well-known routes exist only under the gateway-level DCR
-    front door; flag-off they 404 exactly like the previously-absent routes so
-    discovery behavior is byte-identical for existing deployments."""
-    if is_mcp_gateway_dcr_enabled():
-        return
-    raise HTTPException(status_code=404, detail="Not Found")
+def _mcp_named_server_exists(request: Request) -> bool:
+    """True when a server literally named ``mcp`` is configured and visible to this caller.
+
+    Its per-server authorization-server document is served at
+    ``/.well-known/oauth-authorization-server/mcp``, a single segment that collides with the
+    aggregate path. When such a server exists the real server wins the route, so that
+    deployment keeps its per-server discovery regardless of whether the aggregate front door
+    is on."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
+        global_mcp_server_manager,
+    )
+
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    return global_mcp_server_manager.get_mcp_server_by_name("mcp", client_ip=client_ip) is not None
 
 
 # RFC 9728 path-appended discovery for the aggregate /mcp endpoint. A client
@@ -2510,10 +2510,12 @@ def _raise_404_unless_gateway_dcr_enabled() -> None:
 )
 async def oauth_protected_resource_aggregate(request: Request):
     """
-    OAuth protected resource discovery for the aggregate /mcp endpoint
-    (gateway-level DCR front door; 404 when the flag is off).
+    OAuth protected resource discovery for the aggregate /mcp endpoint.
+
+    The single-segment ``/mcp`` path does not collide with any per-server PRM pattern
+    (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
+    describes the aggregate resource.
     """
-    _raise_404_unless_gateway_dcr_enabled()
     return _build_aggregate_protected_resource_response(request)
 
 
@@ -2522,13 +2524,15 @@ async def oauth_protected_resource_aggregate(request: Request):
 )
 async def oauth_authorization_server_aggregate(request: Request):
     """
-    OAuth authorization server discovery for the aggregate /mcp endpoint, the
-    RFC 8414 path-inserted form for a client that treats {base}/mcp as its
-    authorization base URL (gateway-level DCR front door; 404 when the flag
-    is off, indistinguishable from an unknown server name on the
-    parameterized route below).
+    OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414
+    path-inserted form for a client that treats {base}/mcp as its authorization base URL.
+
+    This single-segment path collides with the parameterized ``/{mcp_server_name}`` route
+    below, so a server literally named ``mcp`` wins it and keeps its per-server discovery;
+    only when no such server exists is the aggregate document served.
     """
-    _raise_404_unless_gateway_dcr_enabled()
+    if _mcp_named_server_exists(request):
+        return _build_oauth_authorization_server_response(request=request, mcp_server_name="mcp")
     return _build_aggregate_authorization_server_response(request)
 
 
@@ -2590,11 +2594,6 @@ def _build_oauth_authorization_server_response(
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
-
-    # With the gateway-level DCR front door enabled, unnamed discovery keeps
-    # advertising the gateway's own /authorize, /token, and /register.
-    if mcp_server_name is None and is_mcp_gateway_dcr_enabled():
-        return _build_aggregate_authorization_server_response(request)
 
     request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
