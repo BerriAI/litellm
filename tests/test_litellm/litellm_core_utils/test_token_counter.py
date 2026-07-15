@@ -469,6 +469,50 @@ def test_empty_tools():
     print(result)
 
 
+def _tool_with_property_enum(enum_value):
+    return {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "q", "enum": enum_value},
+                    "count": {"type": "integer", "description": "n", "enum": enum_value},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("enum_value", [None, [], {}])
+def test_token_counter_property_enum_null_or_empty_does_not_crash(enum_value):
+    messages = [{"role": "user", "content": "hello"}]
+    tools = [_tool_with_property_enum(enum_value)]
+
+    result = token_counter(model="gpt-4", messages=messages, tools=tools)
+
+    assert isinstance(result, int)
+    assert result > 0
+
+
+def test_token_counter_property_enum_populated_still_counted():
+    messages = [{"role": "user", "content": "hello"}]
+    baseline = token_counter(
+        model="gpt-4",
+        messages=messages,
+        tools=[_tool_with_property_enum(None)],
+    )
+    with_enum = token_counter(
+        model="gpt-4",
+        messages=messages,
+        tools=[_tool_with_property_enum(["alpha", "beta", "gamma"])],
+    )
+    assert with_enum > baseline
+
+
 @pytest.mark.skip(
     reason="Skipping this test temporarily because it relies on a function being called that I am removing."
 )

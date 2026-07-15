@@ -5304,3 +5304,103 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+def _bulky_tool_schema():
+    return {
+        "type": "function",
+        "function": {
+            "name": "run_report",
+            "description": ("Detailed instructions describing every field. " * 30),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    f"field_{i}": {
+                        "type": "string",
+                        "description": (
+                            f"Very detailed description for field {i} with lots of words. " * 6
+                        ),
+                    }
+                    for i in range(30)
+                },
+                "required": [f"field_{i}" for i in range(5)],
+            },
+        },
+    }
+
+
+def _router_with_two_context_windows():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-group",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "sk-fake-key-for-test",
+                },
+                "model_info": {"id": "small", "max_input_tokens": 500},
+            },
+            {
+                "model_name": "test-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_key": "sk-fake-key-for-test",
+                },
+                "model_info": {"id": "large", "max_input_tokens": 200_000},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def test_pre_call_checks_max_input_tokens_ignores_short_message_without_tools():
+    router = _router_with_two_context_windows()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = router._pre_call_checks(
+        model="test-group",
+        healthy_deployments=list(router.model_list),
+        messages=messages,
+        request_kwargs={},
+    )
+
+    remaining_ids = {d["model_info"]["id"] for d in result}
+    assert remaining_ids == {"small", "large"}
+
+
+def test_pre_call_checks_max_input_tokens_counts_tool_schema():
+    router = _router_with_two_context_windows()
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [_bulky_tool_schema()]
+
+    result = router._pre_call_checks(
+        model="test-group",
+        healthy_deployments=list(router.model_list),
+        messages=messages,
+        request_kwargs={"tools": tools},
+    )
+
+    remaining_ids = {d["model_info"]["id"] for d in result}
+    assert remaining_ids == {"large"}, (
+        "The small-context deployment must be filtered out once the tool schema is "
+        f"included in the token count. Got: {remaining_ids}"
+    )
+
+
+def test_pre_call_checks_max_input_tokens_counts_tool_choice_named():
+    router = _router_with_two_context_windows()
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [_bulky_tool_schema()]
+
+    result = router._pre_call_checks(
+        model="test-group",
+        healthy_deployments=list(router.model_list),
+        messages=messages,
+        request_kwargs={
+            "tools": tools,
+            "tool_choice": {"type": "function", "function": {"name": "run_report"}},
+        },
+    )
+
+    remaining_ids = {d["model_info"]["id"] for d in result}
+    assert remaining_ids == {"large"}

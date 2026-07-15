@@ -9877,8 +9877,14 @@ class Router:
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int):
                     if input_tokens is None:
+                        _tools = (request_kwargs or {}).get("tools")
+                        _tool_choice = (request_kwargs or {}).get("tool_choice")
                         try:
-                            input_tokens = litellm.token_counter(messages=messages)
+                            input_tokens = litellm.token_counter(
+                                messages=messages,
+                                tools=_tools,
+                                tool_choice=_tool_choice,
+                            )
                         except Exception as e:
                             verbose_router_logger.error(
                                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
