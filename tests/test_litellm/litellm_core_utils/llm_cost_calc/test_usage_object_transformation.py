@@ -106,6 +106,35 @@ def test_tool_use_tokens_billed_as_input():
     assert usage.prompt_tokens_details.text_tokens == 140
 
 
+def test_google_search_grounding_count_maps_to_web_search_requests():
+    usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+        {
+            "total_input_tokens": 103,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 103}],
+            "total_output_tokens": 226,
+            "total_thought_tokens": 351,
+            "grounding_tool_count": [
+                {"type": "google_search", "count": 3},
+                {"type": "url_context", "count": 2},
+            ],
+        }
+    )
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.web_search_requests == 3
+
+
+def test_no_grounding_leaves_web_search_requests_unset():
+    usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+        {
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_output_tokens": 5,
+        }
+    )
+    assert usage.prompt_tokens_details is not None
+    assert getattr(usage.prompt_tokens_details, "web_search_requests", None) is None
+
+
 def test_document_modality_folds_into_text():
     usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
         {

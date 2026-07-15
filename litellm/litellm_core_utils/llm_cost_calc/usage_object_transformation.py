@@ -62,6 +62,14 @@ def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, i
     }
 
 
+def _google_search_query_count(usage_object: Mapping[str, Any]) -> int:
+    return sum(
+        _token_count(entry.get("count"))
+        for entry in tuple(usage_object.get("grounding_tool_count") or ())
+        if isinstance(entry, Mapping) and entry.get("type") == "google_search"
+    )
+
+
 def _subtract_cached_from_input(
     input_sums: Mapping[str, int],
     cached_sums: Mapping[str, int],
@@ -116,12 +124,14 @@ class InteractionsUsageObjectTransformation:
         completion_tokens = _token_count(usage_object.get("total_output_tokens")) + reasoning_tokens
         total_tokens = _token_count(usage_object.get("total_tokens")) or (prompt_tokens + completion_tokens)
 
+        web_search_requests = _google_search_query_count(usage_object)
         prompt_tokens_details = (
             PromptTokensDetailsWrapper(
                 cached_tokens=total_cached_tokens or None,
+                web_search_requests=web_search_requests or None,
                 **input_sums,
             )
-            if input_sums or total_cached_tokens
+            if input_sums or total_cached_tokens or web_search_requests
             else None
         )
         completion_tokens_details = (
