@@ -30,7 +30,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Modality | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
 | Non-negative spend (all providers, uncached traffic) | `test_anthropic_claude3_transformation.py`, `llm_cost_calc/utils.py` | partial | yes (`test_no_provider_logs_negative_spend`) |
-| Negative cost from bedrock cache-token split (#25846) | `test_anthropic_claude3_transformation.py` (mock) | gap (live) | no - needs bedrock streaming + cached prefix; the sweep above does not reach it |
+| Negative cost from bedrock cache-token split (#25846) | `test_anthropic_claude3_transformation.py` (mock) | unsupported (live) | no - not reproducible on commercial bedrock; see note below. Mock is the right guard |
 | Chat (non-stream) | `test_cost_calculator.py`, `local_testing/test_completion_cost.py` | covered | yes (`test_chat_completion_writes_nonzero_spend_row`) |
 | Chat (streaming) | `test_streaming_interrupt_spend_tracking.py` | partial | yes (`test_streaming_chat_completion_tracks_spend`) |
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
@@ -77,6 +77,29 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_burst_of_concurrent_calls_loses_no_spend` | N parallel calls on one key: N distinct costed rows, key aggregate == sum (no lost increments) |
 | `test_spend_logs_v2_pagination_caps_pages_and_keeps_total` | `/spend/logs/v2` page cap, stable total on out-of-range page, zero total on no-match filter |
 | `test_spend_routes.py` (23) | no spend route 404s or 5xxs |
+
+## Why the #25846 cache-token path is `unsupported` live, not a gap
+
+Probed against real bedrock (`us.anthropic.claude-haiku-4-5`, commercial `us-east-1`) on
+2026-07-14 with a 14713-token cached prefix, streaming `/v1/messages`, cache write then
+cache read. Findings, so nobody re-runs this:
+
+- `message_stop` carries **no** cache breakdown here, only `{input_tokens: 12, output_tokens: N}`.
+  So the "cache fields land on message_stop" reading of the code comment does not hold on
+  commercial bedrock.
+- The raw `message_delta` **already** carries the full breakdown
+  (`input_tokens: 12, cache_read_input_tokens: 14713`), so it is self-consistent on its own.
+  `prompt_tokens` becomes `12 + 14713 = 14725` and `text_tokens = 14725 - 14713 = 12`, never
+  below zero.
+- Confirmed by reverting the fix (`patched_stream = completion_stream`) and re-driving the
+  same cached call: spend stayed **positive** (0.00166463, 0.00165363; prompt_tokens 14725),
+  zero negative rows. `_merge_message_start_cache_into_delta_usage` is a no-op on this
+  deployment.
+
+The bug needs a deployment whose `message_delta` omits the cache breakdown (GovCloud, per the
+transformation docstring / LIT-2411). A live commercial call cannot produce that payload, so
+this cell is `unsupported` for live e2e (excluded from the denominator) rather than a gap to
+chase, and the mock-based unit test is the correct guard. Revisit only if GovCloud is in scope.
 
 ## Design + timing
 

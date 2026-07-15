@@ -472,10 +472,15 @@ def test_no_provider_logs_negative_spend(
     for the bedrock cache-token bug (#25846). That bug needs prompt_tokens to exclude
     cache tokens so `prompt_tokens - cache_hit` goes below zero; the traffic here is
     uncached, so `cache_hit == 0` and that subtraction can't go negative. Reverting
-    #25846's clamp would leave this test green. Verified by mutation on 2026-07-14: the
-    only way to turn it red was an injected fault unrelated to that bug, so the cell
-    stays fail_before_fix=unproven. Proving it needs a test that drives the cache-token
-    path itself (bedrock streaming with a cached prefix)."""
+    #25846's clamp leaves this test green, so the cell is fail_before_fix=unproven.
+
+    Nor could that be fixed by adding a cached bedrock leg here: probing real bedrock
+    (commercial us-east-1) on 2026-07-14 showed its raw message_delta already carries
+    the cache breakdown, so usage stays self-consistent and spend stays positive even
+    with the fix reverted. The bug needs a deployment whose message_delta omits it
+    (GovCloud / LIT-2411), which a live commercial call cannot produce. That path is
+    therefore unsupported live and guarded by the mock unit test instead; see
+    SPEND_TRACKING_COVERAGE_MATRIX.md."""
     present = frozenset(entry.model_name for entry in client.gateway.model_info())
     chat = tuple(m for m in _CHAT_SWEEP if m.call in present)
     assert len(chat) >= 2, (
