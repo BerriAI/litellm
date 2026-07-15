@@ -151,7 +151,6 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
-from litellm.router_utils.weighted_inflight_admission import WeightedInFlightAdmission
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -292,8 +291,6 @@ class Router:
         stream_timeout: Optional[float] = None,
         default_litellm_params: Optional[dict] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
-        weighted_inflight_admission: Optional[WeightedInFlightAdmission] = None,
-        weighted_inflight_admission_class: Optional[str] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         default_fallbacks: Optional[List[str]] = None,  # generic fallbacks, works across all deployments
@@ -476,8 +473,8 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
-        self.weighted_inflight_admission = weighted_inflight_admission
-        self.weighted_inflight_admission_class = weighted_inflight_admission_class
+        self.weighted_inflight_admission = None
+        self.weighted_inflight_admission_class = None
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -6543,7 +6540,7 @@ class Router:
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
-        model_group = cast(Optional[str], kwargs.get("model"))
+        model_group = kwargs.get("model")
         admission_lease = None
         if self.weighted_inflight_admission is not None:
             metadata_value = cast(object, kwargs.get("litellm_metadata") or kwargs.get("metadata"))
