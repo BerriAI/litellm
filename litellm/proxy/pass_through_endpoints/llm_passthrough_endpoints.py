@@ -691,19 +691,19 @@ async def _route_anthropic_with_multi_backend(
             backend.name, target_url, model,
         )
 
+        # Build the endpoint function for this backend (outside try/except —
+        # errors here are programming errors, not backend failures).
+        auth_header = _build_backend_auth_header(backend)
+        endpoint_func = create_pass_through_route(
+            endpoint=endpoint,
+            target=target_url,
+            custom_headers=auth_header,
+            _forward_headers=False,  # Do NOT forward client auth to external backends
+            is_streaming_request=is_streaming,
+            custom_llm_provider="anthropic",
+        )
+
         try:
-            # --- Try the standard passthrough pipeline with this backend ---
-            auth_header = _build_backend_auth_header(backend)
-
-            endpoint_func = create_pass_through_route(
-                endpoint=endpoint,
-                target=target_url,
-                custom_headers=auth_header,
-                _forward_headers=True,
-                is_streaming_request=is_streaming,
-                custom_llm_provider="anthropic",
-            )
-
             received_value = await endpoint_func(
                 request,
                 fastapi_response,

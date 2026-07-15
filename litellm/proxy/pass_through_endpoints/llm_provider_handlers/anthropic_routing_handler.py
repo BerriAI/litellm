@@ -190,6 +190,17 @@ class AnthropicProxy:
     ) -> httpx.Response:
         """Forward a request to the given backend.
 
+        This is a low-level forwarding method that uses LiteLLM's managed
+        httpx client pool directly, bypassing the full passthrough pipeline
+        (guardrails, managed-ID rewriting, spend logging).  The default
+        multi-backend path in ``_route_anthropic_with_multi_backend`` uses
+        ``create_pass_through_route`` instead so that every attempt receives
+        the standard logging and guardrail treatment.
+
+        This method is available for callers that need direct forwarding
+        without the passthrough overhead — health probes, lightweight
+        internal relays, etc.
+
         Args:
             backend: Target backend configuration.
             method: HTTP method (POST, GET, etc.).
