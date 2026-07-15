@@ -216,14 +216,18 @@ class TestConfigLoading:
         router = init_anthropic_router_from_config(config_dict)
         assert router is None
 
-    def test_init_with_invalid_config_returns_none(self):
+    def test_init_with_invalid_config_raises(self):
+        """When the key is present but malformed, raise so the caller can
+        distinguish 'key absent' (intentional) from 'parse error' (retry)."""
+        from pydantic import ValidationError
+
         config_dict = {
             "anthropic_router": {
                 "routes": "not_a_list",  # invalid type
             }
         }
-        router = init_anthropic_router_from_config(config_dict)
-        assert router is None
+        with pytest.raises(ValidationError):
+            init_anthropic_router_from_config(config_dict)
 
     def test_init_with_default_settings(self):
         config_dict = {
@@ -249,13 +253,17 @@ class TestConfigLoading:
         assert router._settings.max_failures == 3
 
     def test_get_anthropic_router_lazy_init(self):
-        # Simulate first call when proxy config is not available
+        """When proxy_config is not available, get_anthropic_router should
+        return None gracefully without permanently disabling the router."""
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_initialized",
-            False,
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            None,
         ), patch(
             "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
             None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_next_retry",
+            0.0,
         ), patch(
             "litellm.proxy.proxy_server.proxy_config",
             None,
@@ -263,6 +271,56 @@ class TestConfigLoading:
             router = get_anthropic_router()
             # Lazy init should not crash when proxy_config is unavailable
             assert router is None
+
+    def test_get_anthropic_router_retries_after_failure(self):
+        """When config is available but parsing fails, the router should
+        schedule a retry instead of permanently disabling itself."""
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
+            None,
+        ):
+            # Simulate config that has the key but with invalid data
+            bad_config = {"anthropic_router": {"routes": "not_a_list"}}
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config.get_config_state",
+                return_value=bad_config,
+            ):
+                router = get_anthropic_router()
+                # Should return None (init failed) but NOT permanently disable
+                assert router is None
+                # _router_key_present should be True (key was present, retry later)
+                from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+                    _router_key_present,
+                    _router_next_retry,
+                )
+                assert _router_key_present is True
+                assert _router_next_retry > 0
+
+    def test_get_anthropic_router_no_key_stops_retrying(self):
+        """When the config has no anthropic_router key, the router should
+        permanently disable itself (it's an intentional configuration)."""
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
+            None,
+        ):
+            empty_config = {"general_settings": {}, "litellm_settings": {}}
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config.get_config_state",
+                return_value=empty_config,
+            ):
+                router = get_anthropic_router()
+                assert router is None
+                # _router_key_present should be False (intentional)
+                from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+                    _router_key_present,
+                )
+                assert _router_key_present is False
 
 
 # ---------------------------------------------------------------------------

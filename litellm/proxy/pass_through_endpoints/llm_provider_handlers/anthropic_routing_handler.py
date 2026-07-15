@@ -295,30 +295,113 @@ class AnthropicRouter:
 # ---------------------------------------------------------------------------
 
 _router_instance: Optional[AnthropicRouter] = None
-_router_initialized: bool = False
+# Tracks whether the last init attempt found the ``anthropic_router`` key.
+# ``None`` = never tried; ``False`` = key absent (intentional, no retry);
+# ``True`` = key present.  Only the True path retries on transient failure.
+_router_key_present: Optional[bool] = None
+_router_config_fingerprint: str = ""
+_router_next_retry: float = 0.0
+_RETRY_COOLDOWN: float = 5.0  # seconds between retries when init fails
+
+
+def _config_fingerprint(config_dict: Dict[str, Any]) -> str:
+    """Return a stable fingerprint for the ``anthropic_router`` section.
+
+    Used to detect config changes at runtime (hot-reload).
+    """
+    import hashlib
+    import json
+
+    section = config_dict.get("anthropic_router")
+    if section is None:
+        return ""
+    try:
+        raw = json.dumps(section, sort_keys=True, default=str)
+        return hashlib.sha256(raw.encode()).hexdigest()
+    except Exception:
+        return ""
 
 
 def get_anthropic_router() -> Optional[AnthropicRouter]:
     """Return the singleton AnthropicRouter instance.
 
     On first call, attempts lazy initialisation from the running proxy
-    config (``proxy_config.get_config_state()``).  Subsequent calls return
-    the cached instance.  Returns ``None`` when no ``anthropic_router``
-    section is present in the config.
+    config (``proxy_config.get_config_state()``).  If the proxy config is
+    not yet available (race at startup), the router will retry on
+    subsequent calls with a short cooldown.
+
+    When the ``anthropic_router`` key is absent from the config the router
+    stays disabled — this is an intentional configuration, not an error.
+
+    Detects config changes at runtime (hot-reload) by comparing a
+    fingerprint of the ``anthropic_router`` section, so ``/config/reload``
+    and Admin-UI updates take effect without a restart.
     """
-    global _router_instance, _router_initialized
+    global _router_instance, _router_key_present, _router_config_fingerprint, _router_next_retry
 
-    if not _router_initialized:
-        _router_initialized = True
-        try:
-            from litellm.proxy.proxy_server import proxy_config
+    # --- Load current config (best-effort) ---
+    config_dict: Dict[str, Any] = {}
+    config_available: bool = False
+    try:
+        from litellm.proxy.proxy_server import proxy_config
 
-            config_dict = proxy_config.get_config_state() if proxy_config else {}
-            init_anthropic_router_from_config(config_dict)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "anthropic_router: lazy init skipped (proxy config not available yet)"
-            )
+        if proxy_config is not None:
+            config_dict = proxy_config.get_config_state()
+            config_available = True
+    except Exception:
+        pass
+
+    new_fingerprint = _config_fingerprint(config_dict)
+
+    # --- Hot-reload: config changed since last init ---
+    if _router_instance is not None and new_fingerprint != _router_config_fingerprint:
+        verbose_proxy_logger.info(
+            "anthropic_router: config fingerprint changed — re-initialising"
+        )
+        init_anthropic_router_from_config(config_dict)
+        _router_config_fingerprint = new_fingerprint
+        return _router_instance
+
+    # --- Fast path: already initialised ---
+    if _router_instance is not None:
+        return _router_instance
+
+    # --- Intentional absence: key never present, don't retry ---
+    if _router_key_present is False:
+        return None
+
+    # --- Cooldown: previous init failed, wait before retrying ---
+    if _router_key_present is True and time.monotonic() < _router_next_retry:
+        return None
+
+    # --- First attempt or retry ---
+    try:
+        router = init_anthropic_router_from_config(config_dict)
+    except Exception:
+        verbose_proxy_logger.debug(
+            "anthropic_router: init raised (proxy config may not be ready yet)"
+        )
+        router = None
+
+    if router is not None:
+        # Success
+        _router_key_present = True
+        _router_config_fingerprint = new_fingerprint
+    elif not config_available:
+        # Proxy config not yet loaded — leave _router_key_present
+        # unchanged so the next request will try again.
+        pass
+    elif config_dict.get("anthropic_router") is None:
+        # Key absent from a successfully-read config — intentional, never retry.
+        _router_key_present = False
+    else:
+        # Key present but init failed (transient) — schedule retry.
+        _router_key_present = True
+        _router_next_retry = time.monotonic() + _RETRY_COOLDOWN
+        verbose_proxy_logger.warning(
+            "anthropic_router: init failed — will retry in %.0fs",
+            _RETRY_COOLDOWN,
+        )
 
     return _router_instance
 
@@ -326,18 +409,21 @@ def get_anthropic_router() -> Optional[AnthropicRouter]:
 def init_anthropic_router_from_config(config_dict: Dict[str, Any]) -> Optional[AnthropicRouter]:
     """Initialise (or re-initialise) the router from a config dictionary.
 
-    Called once at startup and on config hot-reload. When the
-    ``anthropic_router`` key is absent or empty, the router is cleared
-    and the passthrough endpoint falls back to the default single-backend
-    behaviour.
+    When the ``anthropic_router`` key is absent or empty, the router is
+    cleared and the passthrough endpoint falls back to the default
+    single-backend behaviour (this is *not* an error — it means the
+    operator intentionally did not configure multi-backend routing).
+
+    When the key is present but invalid, the router is cleared and the
+    caller should schedule a retry (the parse failure may be transient
+    during a config rollout).
 
     Args:
         config_dict: The full proxy config dictionary (as returned by
             ``proxy_config.get_config_state()``).
 
     Returns:
-        The new AnthropicRouter instance, or None if no ``anthropic_router``
-        key is present.
+        The new AnthropicRouter instance, or None.
     """
     global _router_instance
 
@@ -346,21 +432,13 @@ def init_anthropic_router_from_config(config_dict: Dict[str, Any]) -> Optional[A
         _router_instance = None
         return None
 
-    try:
-        router_config = AnthropicRouterConfig(**section)
-        _router_instance = AnthropicRouter(router_config)
-        verbose_proxy_logger.info(
-            "anthropic_router: initialised with %d route(s)",
-            len(router_config.routes),
-        )
-        return _router_instance
-    except Exception:
-        verbose_proxy_logger.exception(
-            "anthropic_router: failed to parse config section — "
-            "passthrough will fall back to default behaviour"
-        )
-        _router_instance = None
-        return None
+    router_config = AnthropicRouterConfig(**section)
+    _router_instance = AnthropicRouter(router_config)
+    verbose_proxy_logger.info(
+        "anthropic_router: initialised with %d route(s)",
+        len(router_config.routes),
+    )
+    return _router_instance
 
 
 def extract_model_from_body(body: bytes) -> str:
