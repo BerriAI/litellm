@@ -12,7 +12,9 @@ class _AsyncIteratorProtocol(Protocol):
 
 class _LeaseReleasingAsyncIterator:
     def __init__(self, iterator: object, lease: AdmissionLease) -> None:
-        self._iterator = cast(_AsyncIteratorProtocol, iterator)
+        self._iterator = cast(  # cast-ok: async iterator capability is checked before this wrapper is created
+            _AsyncIteratorProtocol, iterator
+        )
         self._lease = lease
 
     def __aiter__(self) -> _LeaseReleasingAsyncIterator:
@@ -32,7 +34,9 @@ class _LeaseReleasingAsyncIterator:
         try:
             close = getattr(self._iterator, "aclose", None)
             if close is not None:
-                await cast(Callable[[], Awaitable[None]], close)()
+                await cast(  # cast-ok: aclose is optional and obtained from the wrapped async iterator
+                    Callable[[], Awaitable[None]], close
+                )()
         finally:
             await self._release()
 
@@ -40,7 +44,9 @@ class _LeaseReleasingAsyncIterator:
         await self._lease.release()
 
     def __getattr__(self, name: str) -> object:
-        return cast(object, getattr(self._iterator, name))
+        return cast(  # cast-ok: dynamic iterator attributes are exposed as opaque objects
+            object, getattr(self._iterator, name)
+        )
 
 
 class AdmissionClosedError(RuntimeError):

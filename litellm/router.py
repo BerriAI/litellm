@@ -6551,12 +6551,18 @@ class Router:
             admission_lease = await self.weighted_inflight_admission.acquire(admission_class)
 
         try:
-            call_kwargs = kwargs.copy()
+            call_kwargs = cast(  # cast-ok: copy isolates untyped Router kwargs before provider dispatch
+                dict[str, object], kwargs.copy()
+            )
             call_kwargs.pop("admission_class", None)
             for metadata_key in ("metadata", "litellm_metadata"):
-                metadata_value = cast(object, call_kwargs.get(metadata_key))
+                metadata_value = call_kwargs.get(metadata_key)
                 if isinstance(metadata_value, dict):
-                    sanitized_metadata = cast(dict[str, object], metadata_value.copy())
+                    sanitized_metadata = (
+                        cast(  # cast-ok: metadata is normalized to string keys before provider dispatch
+                            dict[str, object], metadata_value.copy()
+                        )
+                    )
                     sanitized_metadata.pop("admission_class", None)
                     call_kwargs[metadata_key] = sanitized_metadata
             response = original_function(*args, **call_kwargs)
