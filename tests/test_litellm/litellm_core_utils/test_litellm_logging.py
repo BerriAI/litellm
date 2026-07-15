@@ -32,6 +32,13 @@ def logging_obj():
     )
 
 
+def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
+    assert logging_obj.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
 def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
