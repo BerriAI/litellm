@@ -6553,6 +6553,12 @@ class Router:
         try:
             call_kwargs = kwargs.copy()
             call_kwargs.pop("admission_class", None)
+            for metadata_key in ("metadata", "litellm_metadata"):
+                metadata_value = cast(object, call_kwargs.get(metadata_key))
+                if isinstance(metadata_value, dict):
+                    sanitized_metadata = cast(dict[str, object], metadata_value.copy())
+                    sanitized_metadata.pop("admission_class", None)
+                    call_kwargs[metadata_key] = sanitized_metadata
             response = original_function(*args, **call_kwargs)
             if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
                 response = await response

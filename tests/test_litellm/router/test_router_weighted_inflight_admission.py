@@ -89,8 +89,10 @@ async def test_request_cannot_select_admission_class_or_leak_control_kwarg(route
         original_function,
         admission_class="untrusted-background",
         metadata={"admission_class": "untrusted-background"},
+        litellm_metadata={"admission_class": "untrusted-background"},
     )
     assert response == "response"
-    assert observed["metadata"] == {"admission_class": "untrusted-background"}
+    assert observed["metadata"] == {}
+    assert observed["litellm_metadata"] == {}
     assert "admission_class" not in observed
     assert router.weighted_inflight_admission.metrics.snapshot()["admitted"] == 1
