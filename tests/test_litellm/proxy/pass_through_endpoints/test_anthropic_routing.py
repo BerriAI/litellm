@@ -256,13 +256,13 @@ class TestConfigLoading:
         """When proxy_config is not available, get_anthropic_router should
         return None gracefully without permanently disabling the router."""
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
             None,
         ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
             None,
         ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_next_retry",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.next_retry",
             0.0,
         ), patch(
             "litellm.proxy.proxy_server.proxy_config",
@@ -276,10 +276,10 @@ class TestConfigLoading:
         """When config is available but parsing fails, the router should
         schedule a retry instead of permanently disabling itself."""
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
             None,
         ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
             None,
         ):
             # Simulate config that has the key but with invalid data
@@ -291,22 +291,21 @@ class TestConfigLoading:
                 router = get_anthropic_router()
                 # Should return None (init failed) but NOT permanently disable
                 assert router is None
-                # _router_key_present should be True (key was present, retry later)
+                # _state.key_present should be True (key was present, retry later)
                 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
-                    _router_key_present,
-                    _router_next_retry,
+                    _state,
                 )
-                assert _router_key_present is True
-                assert _router_next_retry > 0
+                assert _state.key_present is True
+                assert _state.next_retry > 0
 
     def test_get_anthropic_router_no_key_stops_retrying(self):
         """When the config has no anthropic_router key, the router should
         permanently disable itself (it's an intentional configuration)."""
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_key_present",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
             None,
         ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._router_instance",
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
             None,
         ):
             empty_config = {"general_settings": {}, "litellm_settings": {}}
@@ -316,11 +315,11 @@ class TestConfigLoading:
             ):
                 router = get_anthropic_router()
                 assert router is None
-                # _router_key_present should be False (intentional)
+                # _state.key_present should be False (intentional)
                 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
-                    _router_key_present,
+                    _state,
                 )
-                assert _router_key_present is False
+                assert _state.key_present is False
 
 
 # ---------------------------------------------------------------------------

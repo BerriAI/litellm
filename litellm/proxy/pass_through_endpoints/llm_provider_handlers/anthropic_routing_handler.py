@@ -18,7 +18,7 @@ import os
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, Field
@@ -56,7 +56,7 @@ class Route(BaseModel):
     """Maps a model name (or glob) to an ordered list of backends."""
 
     model: str  # exact name or fnmatch glob, e.g. "claude-sonnet-*"
-    backends: List[Backend]
+    backends: list[Backend]
 
 
 class RouterSettings(BaseModel):
@@ -70,7 +70,7 @@ class RouterSettings(BaseModel):
 class AnthropicRouterConfig(BaseModel):
     """Top-level config read from ``anthropic_router`` in litellm_config.yaml."""
 
-    routes: List[Route]
+    routes: list[Route]
     settings: RouterSettings = Field(default_factory=RouterSettings)
 
 
@@ -104,7 +104,7 @@ class HealthTracker:
     def __init__(self, cooldown_seconds: int = 30, max_failures: int = 3) -> None:
         self._cooldown_seconds = cooldown_seconds
         self._max_failures = max_failures
-        self._entries: Dict[str, HealthEntry] = {}
+        self._entries: dict[str, HealthEntry] = {}
 
     def _ensure(self, name: str) -> HealthEntry:
         if name not in self._entries:
@@ -191,9 +191,9 @@ class AnthropicProxy:
         backend: Backend,
         method: str,
         path: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         body: bytes,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """Forward a request to the given backend.
 
@@ -234,7 +234,7 @@ class AnthropicProxy:
 
         # Copy headers, stripping auth/host/transfer-encoding
         strip_headers = {"host", "authorization", "transfer-encoding", "x-api-key"}
-        fwd_headers: Dict[str, str] = {}
+        fwd_headers: dict[str, str] = {}
         for k, v in headers.items():
             if k.lower() in strip_headers:
                 continue
@@ -282,11 +282,11 @@ class AnthropicRouter:
         )
 
     @property
-    def routes(self) -> List[Route]:
+    def routes(self) -> list[Route]:
         """Public accessor for configured routes."""
         return self._routes
 
-    def resolve(self, model: str) -> List[Backend]:
+    def resolve(self, model: str) -> list[Backend]:
         """Return backends in priority order for the given model.
 
         Args:
@@ -298,8 +298,8 @@ class AnthropicRouter:
         """
         for route in self._routes:
             if fnmatch.fnmatch(model, route.model):
-                healthy: List[Backend] = []
-                dead: List[Backend] = []
+                healthy: list[Backend] = []
+                dead: list[Backend] = []
                 for b in route.backends:
                     if self.health.is_healthy(b.name):
                         healthy.append(b)
@@ -310,20 +310,33 @@ class AnthropicRouter:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — config loading and model extraction
+# Module-level state — mutable container to avoid ``global`` (PLW0603)
 # ---------------------------------------------------------------------------
 
-_router_instance: Optional[AnthropicRouter] = None
-# Tracks whether the last init attempt found the ``anthropic_router`` key.
-# ``None`` = never tried; ``False`` = key absent (intentional, no retry);
-# ``True`` = key present.  Only the True path retries on transient failure.
-_router_key_present: Optional[bool] = None
-_router_config_fingerprint: str = ""
-_router_next_retry: float = 0.0
+
+@dataclass
+class _RouterState:
+    """Mutable container for the singleton router and its lifecycle flags.
+
+    Using a dataclass instance avoids ``global`` declarations — the function
+    bodies mutate ``_state`` attributes rather than rebinding module-level
+    names.
+    """
+
+    instance: AnthropicRouter | None = None
+    # Tracks whether the last init attempt found the ``anthropic_router`` key.
+    # ``None`` = never tried; ``False`` = key absent (intentional, no retry);
+    # ``True`` = key present.  Only the True path retries on transient failure.
+    key_present: bool | None = None
+    config_fingerprint: str = ""
+    next_retry: float = 0.0
+
+
+_state = _RouterState()
 _RETRY_COOLDOWN: float = 5.0  # seconds between retries when init fails
 
 
-def _config_fingerprint(config_dict: Dict[str, Any]) -> str:
+def _config_fingerprint(config_dict: dict[str, Any]) -> str:
     """Return a stable fingerprint for the ``anthropic_router`` section.
 
     Used to detect config changes at runtime (hot-reload).
@@ -337,11 +350,11 @@ def _config_fingerprint(config_dict: Dict[str, Any]) -> str:
     try:
         raw = json.dumps(section, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode()).hexdigest()
-    except Exception:
+    except (TypeError, ValueError):
         return ""
 
 
-def get_anthropic_router() -> Optional[AnthropicRouter]:
+def get_anthropic_router() -> AnthropicRouter | None:
     """Return the singleton AnthropicRouter instance.
 
     On first call, attempts lazy initialisation from the running proxy
@@ -356,10 +369,8 @@ def get_anthropic_router() -> Optional[AnthropicRouter]:
     fingerprint of the ``anthropic_router`` section, so ``/config/reload``
     and Admin-UI updates take effect without a restart.
     """
-    global _router_instance, _router_key_present, _router_config_fingerprint, _router_next_retry
-
     # --- Load current config (best-effort) ---
-    config_dict: Dict[str, Any] = {}
+    config_dict: dict[str, Any] = {}
     config_available: bool = False
     try:
         from litellm.proxy.proxy_server import proxy_config
@@ -367,61 +378,61 @@ def get_anthropic_router() -> Optional[AnthropicRouter]:
         if proxy_config is not None:
             config_dict = proxy_config.get_config_state()
             config_available = True
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort config load; any error is non-fatal
         pass
 
     new_fingerprint = _config_fingerprint(config_dict)
 
     # --- Hot-reload: config changed since last init ---
-    if _router_instance is not None and new_fingerprint != _router_config_fingerprint:
+    if _state.instance is not None and new_fingerprint != _state.config_fingerprint:
         verbose_proxy_logger.info("anthropic_router: config fingerprint changed — re-initialising")
         init_anthropic_router_from_config(config_dict)
-        _router_config_fingerprint = new_fingerprint
-        return _router_instance
+        _state.config_fingerprint = new_fingerprint
+        return _state.instance
 
     # --- Fast path: already initialised ---
-    if _router_instance is not None:
-        return _router_instance
+    if _state.instance is not None:
+        return _state.instance
 
     # --- Intentional absence: key never present, don't retry ---
-    if _router_key_present is False:
+    if _state.key_present is False:
         return None
 
     # --- Cooldown: previous init failed, wait before retrying ---
-    if _router_key_present is True and time.monotonic() < _router_next_retry:
+    if _state.key_present is True and time.monotonic() < _state.next_retry:
         return None
 
     # --- First attempt or retry ---
     try:
         router = init_anthropic_router_from_config(config_dict)
-    except Exception:
+    except Exception:  # noqa: BLE001 — transient init failure; caller handles retry
         verbose_proxy_logger.debug("anthropic_router: init raised (proxy config may not be ready yet)")
         router = None
 
     if router is not None:
         # Success
-        _router_key_present = True
-        _router_config_fingerprint = new_fingerprint
+        _state.key_present = True
+        _state.config_fingerprint = new_fingerprint
     elif not config_available:
-        # Proxy config not yet loaded — leave _router_key_present
+        # Proxy config not yet loaded — leave _state.key_present
         # unchanged so the next request will try again.
         pass
     elif config_dict.get("anthropic_router") is None:
         # Key absent from a successfully-read config — intentional, never retry.
-        _router_key_present = False
+        _state.key_present = False
     else:
         # Key present but init failed (transient) — schedule retry.
-        _router_key_present = True
-        _router_next_retry = time.monotonic() + _RETRY_COOLDOWN
+        _state.key_present = True
+        _state.next_retry = time.monotonic() + _RETRY_COOLDOWN
         verbose_proxy_logger.warning(
             "anthropic_router: init failed — will retry in %.0fs",
             _RETRY_COOLDOWN,
         )
 
-    return _router_instance
+    return _state.instance
 
 
-def init_anthropic_router_from_config(config_dict: Dict[str, Any]) -> Optional[AnthropicRouter]:
+def init_anthropic_router_from_config(config_dict: dict[str, Any]) -> AnthropicRouter | None:
     """Initialise (or re-initialise) the router from a config dictionary.
 
     When the ``anthropic_router`` key is absent or empty, the router is
@@ -440,20 +451,18 @@ def init_anthropic_router_from_config(config_dict: Dict[str, Any]) -> Optional[A
     Returns:
         The new AnthropicRouter instance, or None.
     """
-    global _router_instance
-
     section = config_dict.get("anthropic_router")
     if section is None:
-        _router_instance = None
+        _state.instance = None
         return None
 
     router_config = AnthropicRouterConfig(**section)
-    _router_instance = AnthropicRouter(router_config)
+    _state.instance = AnthropicRouter(router_config)
     verbose_proxy_logger.info(
         "anthropic_router: initialised with %d route(s)",
         len(router_config.routes),
     )
-    return _router_instance
+    return _state.instance
 
 
 def extract_model_from_body(body: bytes) -> str:

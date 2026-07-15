@@ -679,7 +679,7 @@ async def _route_anthropic_with_multi_backend(
         encoded_endpoint = "/" + encoded_endpoint
 
     is_streaming = await is_streaming_request_fn(request)
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
     for backend in backends:
         target_url = f"{backend.url.rstrip('/')}{encoded_endpoint}"
@@ -761,7 +761,7 @@ async def _route_anthropic_with_multi_backend(
     )
 
 
-def _build_backend_auth_header(backend: "Backend") -> Dict[str, str]:
+def _build_backend_auth_header(backend: "Backend") -> dict[str, str]:
     """Build the auth header dict for a backend config.
 
     Reads the credential from the environment variable named in
