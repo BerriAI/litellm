@@ -103,6 +103,7 @@ class MCPServer(BaseModel):
     # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens). Must
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -153,6 +154,27 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
 
     @property
+    def is_true_passthrough(self) -> bool:
+        """True for the transparent-proxy mode: LiteLLM performs no admission auth and forwards the
+        client's ``Authorization`` to the upstream unchanged."""
+        return self.auth_type == MCPAuth.true_passthrough
+
+    @property
+    def is_oauth_delegate(self) -> bool:
+        """True for the delegated-upstream-OAuth mode: LiteLLM still admits the caller (API key / SSO /
+        JWT) but forwards the caller's separate upstream ``Authorization`` unchanged, minting nothing."""
+        return self.auth_type == MCPAuth.oauth_delegate
+
+    @property
+    def is_dcr_bridge(self) -> bool:
+        """True when this client-forwarded-token server serves the gateway-hosted DCR front door
+        (gateway-self protected-resource and authorization-server metadata plus the register,
+        authorize, and token relays) instead of relaying the upstream's own OAuth discovery
+        verbatim. ``dcr_bridge`` is rejected on every other auth type at create, update, and
+        config load, so the mode gate here only defends rows edited outside those paths."""
+        return bool(self.dcr_bridge) and (self.is_true_passthrough or self.is_oauth_delegate)
+
+    @property
     def requires_per_user_auth(self) -> bool:
         """
         True if this server requires per-user/per-request authentication.
@@ -165,6 +187,9 @@ class MCPServer(BaseModel):
         """
         # OAuth2 without client credentials
         if self.needs_user_oauth_token:
+            return True
+
+        if self.is_true_passthrough or self.is_oauth_delegate:
             return True
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers
