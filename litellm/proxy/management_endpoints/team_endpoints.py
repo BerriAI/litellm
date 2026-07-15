@@ -1137,6 +1137,18 @@ async def new_team(
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
+
+        await validate_team_metadata_if_configured(
+            operation="create",
+            metadata=data.metadata,
+            existing_metadata=None,
+            team_id=data.team_id,
+            team_alias=data.team_alias,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ## ADD TO MODEL TABLE
         _model_id = None
         if data.model_aliases is not None and isinstance(data.model_aliases, dict):
@@ -1150,19 +1162,6 @@ async def new_team(
             )  # type: ignore
 
             _model_id = model_dict.id
-
-        ## Create Team Member Budget Table
-        if isinstance(data.metadata, dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
-
-        await validate_team_metadata_if_configured(
-            operation="create",
-            metadata=data.metadata,
-            existing_metadata=None,
-            team_id=data.team_id,
-            team_alias=data.team_alias,
-            user_api_key_dict=user_api_key_dict,
-        )
 
         data_json = data.json()
 
@@ -1825,10 +1824,12 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
 
         if "metadata" in updated_kv:
+            stored_metadata = dict(existing_team_row.metadata) if isinstance(existing_team_row.metadata, dict) else None
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(stored_metadata)
             await validate_team_metadata_if_configured(
                 operation="update",
                 metadata=updated_kv.get("metadata"),
-                existing_metadata=existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else None,
+                existing_metadata=stored_metadata,
                 team_id=data.team_id,
                 team_alias=data.team_alias if data.team_alias is not None else existing_team_row.team_alias,
                 user_api_key_dict=user_api_key_dict,

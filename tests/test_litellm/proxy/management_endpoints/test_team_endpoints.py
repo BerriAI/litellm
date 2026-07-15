@@ -10147,3 +10147,61 @@ async def test_new_team_validator_accept_proceeds_to_create(mock_db_client, mock
     assert recorded[0].operation == "create"
     assert recorded[0].metadata == {"cost_center": "CC-1001"}
     mock_db_client.db.litellm_teamtable.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_team_rejection_precedes_model_alias_write():
+    """A rejected create must not leave an orphaned LiteLLM_ModelTable row:
+    validation runs before the model_aliases insert."""
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    validator = _recording_validator([], valid=False, error_message="cost_center is required")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        _configured_team_metadata_validator(validator),
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock()
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model-1"))
+        mock_license.is_team_count_over_limit.return_value = False
+
+        with pytest.raises(ProxyException):
+            await new_team(
+                data=NewTeamRequest(
+                    team_alias="alias-orphan-check",
+                    model_aliases={"alias-model": "gpt-4o"},
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+            )
+
+        mock_prisma.db.litellm_modeltable.create.assert_not_awaited()
+        mock_prisma.db.litellm_teamtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_update_existing_metadata_excludes_system_managed_keys(kind):
+    """The validator's existing_metadata must be symmetric with metadata:
+    server-owned keys (team_member_budget_id) are stripped from both, so a
+    key-preservation validator never sees them 'disappear'."""
+    recorded = []
+    stored = {"cost_center": "CC-1001", "team_member_budget_id": "budget-abc"}
+
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        await _drive_team_write(
+            kind,
+            existing_metadata=dict(stored),
+            payload={"metadata": {"notes": "x"}},
+        )
+
+    assert len(recorded) == 1
+    assert recorded[0].existing_metadata == {"cost_center": "CC-1001"}
+    assert "team_member_budget_id" not in recorded[0].metadata
