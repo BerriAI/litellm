@@ -116,34 +116,50 @@ def test_empty_string_env_is_treated_as_unset() -> None:
     )
 
 
-def test_require_proxy_fails_with_helpful_message_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_require_proxy_fails_with_helpful_message_when_env_empty() -> None:
     """The error the user sees must name BOTH the primary and legacy
     env vars — otherwise they can't tell why the test is failing when
     they only set the legacy pair, or vice versa."""
-    for name in (
-        PRIMARY_BASE_URL_ENV,
-        PRIMARY_API_KEY_ENV,
-        LEGACY_BASE_URL_ENV,
-        LEGACY_API_KEY_ENV,
-    ):
-        monkeypatch.delenv(name, raising=False)
     compat = _CompatResultStub()
     with pytest.raises(pytest.fail.Exception) as excinfo:
-        require_proxy(compat)
+        require_proxy(compat, env={})
     assert PRIMARY_BASE_URL_ENV in str(excinfo.value)
     assert PRIMARY_API_KEY_ENV in str(excinfo.value)
     assert compat.calls and compat.calls[0]["status"] == "fail"
     assert LEGACY_BASE_URL_ENV in compat.calls[0]["error"]
 
 
-def test_require_proxy_returns_config_when_primary_env_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(LEGACY_BASE_URL_ENV, raising=False)
-    monkeypatch.delenv(LEGACY_API_KEY_ENV, raising=False)
-    monkeypatch.setenv(PRIMARY_BASE_URL_ENV, "http://localhost:4000")
-    monkeypatch.setenv(PRIMARY_API_KEY_ENV, "sk-1234")
-    cfg = require_proxy(_CompatResultStub())
+def test_require_proxy_returns_config_when_primary_env_supplied() -> None:
+    cfg = require_proxy(
+        _CompatResultStub(),
+        env={
+            PRIMARY_BASE_URL_ENV: "http://localhost:4000",
+            PRIMARY_API_KEY_ENV: "sk-1234",
+        },
+    )
     assert cfg == ProxyConfig("http://localhost:4000", "sk-1234")
+
+
+def test_require_proxy_returns_config_when_only_legacy_env_supplied() -> None:
+    cfg = require_proxy(
+        _CompatResultStub(),
+        env={
+            LEGACY_BASE_URL_ENV: "http://legacy:4000",
+            LEGACY_API_KEY_ENV: "sk-legacy",
+        },
+    )
+    assert cfg == ProxyConfig("http://legacy:4000", "sk-legacy")
+
+
+def test_require_proxy_leaves_compat_result_untouched_on_success() -> None:
+    """A successful resolution must NOT append a spurious fail entry.
+    Would have silently poisoned every compat cell's result rows."""
+    compat = _CompatResultStub()
+    require_proxy(
+        compat,
+        env={
+            PRIMARY_BASE_URL_ENV: "http://localhost:4000",
+            PRIMARY_API_KEY_ENV: "sk-1234",
+        },
+    )
+    assert compat.calls == []

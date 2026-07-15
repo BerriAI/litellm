@@ -78,15 +78,17 @@ def test_pytest_invocation_env_i_excludes_provider_secrets() -> None:
 
 def test_pytest_invocation_passes_proxy_url_and_key_explicitly() -> None:
     block = _pytest_invocation_block()
-    assert "LITELLM_PROXY_BASE_URL=" in block, (
+    assert "LITELLM_PROXY_URL=" in block, (
         "run_daily.sh: the pytest `env -i` block must still pass "
-        "LITELLM_PROXY_BASE_URL so the test suite knows where to find "
-        "the loopback proxy."
+        "LITELLM_PROXY_URL so the test suite knows where to find the "
+        "loopback proxy (this is the suite-wide name `e2e_config.py` "
+        "reads; `LITELLM_PROXY_BASE_URL` was the legacy claude_code-only "
+        "spelling and is no longer produced here)."
     )
-    assert "LITELLM_PROXY_API_KEY=" in block, (
+    assert "LITELLM_MASTER_KEY=" in block, (
         "run_daily.sh: the pytest `env -i` block must still pass "
-        "LITELLM_PROXY_API_KEY so the test suite can authenticate to "
-        "the loopback proxy."
+        "LITELLM_MASTER_KEY so the test suite can authenticate to the "
+        "loopback proxy (previously `LITELLM_PROXY_API_KEY`)."
     )
     assert "COMPAT_RESULTS_PATH=" in block, (
         "run_daily.sh: the pytest `env -i` block must still pass "

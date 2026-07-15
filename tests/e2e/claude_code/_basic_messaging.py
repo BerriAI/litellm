@@ -27,16 +27,20 @@ collecting this module as a test file.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
+    DriverResult,
     failure_diagnostic,
     run_claude_models_parallel,
 )
+
+
+ClaudeRunner = Callable[..., Mapping[str, DriverResult | ClaudeCLIError]]
 
 # Floor on the number of `stream_event` records (with delta payloads)
 # we expect to see when the proxy actually streams. With
@@ -76,6 +80,8 @@ def run_basic_messaging_cell(
     models: Sequence[str],
     prompt: str,
     verify_streaming: bool = False,
+    env: Mapping[str, str] | None = None,
+    runner: ClaudeRunner = run_claude_models_parallel,
 ) -> None:
     """Run the shared `basic_messaging_*` × <provider> cell body.
 
@@ -96,13 +102,13 @@ def run_basic_messaging_cell(
     streamed reply to a single ``assistant`` event in
     ``--print --output-format stream-json`` mode).
     """
-    base_url, api_key = require_proxy(compat_result)
+    base_url, api_key = require_proxy(compat_result, env=env)
 
     extra_args: Sequence[str] = (
         ("--include-partial-messages",) if verify_streaming else ()
     )
 
-    outcomes = run_claude_models_parallel(
+    outcomes = runner(
         models=models,
         prompt=prompt,
         base_url=base_url,

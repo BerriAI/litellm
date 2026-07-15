@@ -46,15 +46,26 @@ def resolve_proxy_from(mapping: Mapping[str, str]) -> ProxyConfig | None:
     return ProxyConfig(base_url=base_url, api_key=api_key)
 
 
-def resolve_proxy() -> ProxyConfig | None:
-    return resolve_proxy_from(os.environ)
+def resolve_proxy(env: Mapping[str, str] | None = None) -> ProxyConfig | None:
+    """Convenience wrapper that defaults to ``os.environ``. Prefer
+    calling ``resolve_proxy_from(env)`` from tests so nothing has to
+    reach into the process environment."""
+    return resolve_proxy_from(os.environ if env is None else env)
 
 
-def require_proxy(compat_result) -> ProxyConfig:
+def require_proxy(
+    compat_result,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> ProxyConfig:
     """Return proxy config or hard-fail the test. Matches the fail-not-
     skip contract in ``tests/e2e/conftest.py``: a live test with the
-    proxy env unset is a real failure, not a skip."""
-    cfg = resolve_proxy()
+    proxy env unset is a real failure, not a skip.
+
+    ``env`` is injected for tests; production callers pass nothing and
+    the process env is used. This keeps tests off ``monkeypatch.setenv``
+    for a check that is a pure function of its inputs."""
+    cfg = resolve_proxy(env)
     if cfg is None:
         compat_result.set(
             {
