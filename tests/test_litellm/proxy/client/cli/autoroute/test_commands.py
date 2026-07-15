@@ -71,6 +71,26 @@ class TestUpCommand:
         assert "lite autoroute down" in result.output
         assert config_path.read_text() == yaml.safe_dump({"model_list": []})
 
+    def test_refuses_when_backup_exists_after_an_unclean_crash(self, monkeypatch, tmp_path):
+        """A prior `up` that was SIGKILL'd leaves no live pid but does leave a stale backup file.
+
+        Without this guard, a fresh `up` would overwrite that backup with the currently-patched
+        (not original) Claude settings, so `down`/Ctrl-C would restore the wrong content forever.
+        """
+        config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "stale-patched-token"}}))
+        write_backup(ClaudeBackupRecord(existed=True, content={"theme": "dark"}), backup_path)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+        assert "lite autoroute down" in result.output
+        assert json.loads(backup_path.read_text())["content"] == {"theme": "dark"}
+
     def test_happy_path_patches_settings_then_restores_everything_on_stop(self, monkeypatch, tmp_path):
         config_path, log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))

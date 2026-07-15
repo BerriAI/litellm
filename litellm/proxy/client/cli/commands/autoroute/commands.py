@@ -83,6 +83,12 @@ def up() -> None:
             "Run `lite autoroute down` first."
         )
 
+    if AUTOROUTE_BACKUP_PATH.exists():
+        raise click.ClickException(
+            f"{AUTOROUTE_BACKUP_PATH} already exists -- `lite autoroute up` looks like it's already "
+            "running (or crashed without cleanup). Run `lite autoroute down` first."
+        )
+
     master_key = _mint_and_embed_master_key()
     port = allocate_free_port()
     base_url = f"http://127.0.0.1:{port}"
