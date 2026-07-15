@@ -20,6 +20,7 @@ export default function UISettings() {
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
+  const enablePtuCostAttributionProperty = schema?.properties?.enable_ptu_cost_attribution;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
@@ -118,6 +119,21 @@ export default function UISettings() {
   const handleToggleEnableChatUI = (checked: boolean) => {
     updateSettings(
       { enable_chat_ui: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          setTimeout(() => window.location.reload(), 1000);
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleEnablePtuCostAttribution = (checked: boolean) => {
+    updateSettings(
+      { enable_ptu_cost_attribution: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully. Refreshing page...");
@@ -364,6 +380,23 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {enableChatUIProperty?.description ??
                   "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.enable_ptu_cost_attribution)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleEnablePtuCostAttribution}
+              aria-label={enablePtuCostAttributionProperty?.description ?? "Enable PTU cost attribution"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Enable PTU cost attribution (page will refresh)</Typography.Text>
+              <Typography.Text type="secondary">
+                {enablePtuCostAttributionProperty?.description ??
+                  "If enabled, unlocks admin-registered PTU reservations and daily flat-cost attribution on team daily spend."}
               </Typography.Text>
             </Space>
           </Space>

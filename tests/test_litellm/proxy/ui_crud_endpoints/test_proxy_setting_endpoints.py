@@ -1336,6 +1336,61 @@ class TestProxySettingEndpoints:
         # Synced into general_settings so the enforcement helper sees it
         assert general_settings.get(flag_name) is True
 
+    def test_update_ui_settings_persists_and_syncs_enable_ptu_cost_attribution(
+        self, mock_auth, monkeypatch
+    ):
+        """enable_ptu_cost_attribution must be allowlisted, persisted, and synced to general_settings so PTU endpoints and rollup pick it up without a proxy restart."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        general_settings: dict = {}
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        flag_name = "enable_ptu_cost_attribution"
+        payload = {flag_name: True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["settings"][flag_name] is True
+
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings[flag_name] is True
+
+        assert general_settings.get(flag_name) is True
+
+    def test_enable_ptu_cost_attribution_registered_as_runtime_flag(self):
+        """The runtime-sync list must include the PTU flag so a UI flip lands in general_settings without a restart."""
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            ALLOWED_UI_SETTINGS_FIELDS,
+        )
+
+        assert "enable_ptu_cost_attribution" in _RUNTIME_GENERAL_SETTINGS_FLAGS
+        assert "enable_ptu_cost_attribution" in ALLOWED_UI_SETTINGS_FIELDS
+
     def test_get_sso_settings_from_database(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

@@ -9718,3 +9718,41 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_ptu_rollup_job_registered_regardless_of_flag(monkeypatch):
+    """The PTU rollup cron must be registered at startup so a UI-time flip of enable_ptu_cost_attribution takes effect without a proxy restart. The job itself no-ops when the flag is off (asserted in test_ptu_reservation_rollup.py)."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.spend_tracking.ptu_reservation_rollup import (
+        PTU_ROLLUP_JOB_ID,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+    ):
+        # Flag OFF at startup — job must still be registered
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={"enable_ptu_cost_attribution": False},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.scheduler is not None
+        assert ps.scheduler.get_job(PTU_ROLLUP_JOB_ID) is not None
