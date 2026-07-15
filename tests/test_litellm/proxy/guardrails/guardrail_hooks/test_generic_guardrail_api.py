@@ -1150,6 +1150,23 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert GenericGuardrailAPI.get_config_model() is GenericGuardrailAPIConfigModel
 
+    def test_streaming_transform_mode_defaults_block_only(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+        )
+        assert guardrail.streaming_transform_mode == "block_only"
+
+    def test_streaming_transform_mode_override(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_transform_mode="incremental_diff",
+        )
+        assert guardrail.streaming_transform_mode == "incremental_diff"
+
     def test_initialize_guardrail_forwards_streaming_flags(self):
         from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             initialize_guardrail,
@@ -1304,6 +1321,86 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert guardrail.streaming_end_of_stream_only is True
         assert guardrail.streaming_sampling_rate == 2
+
+
+class TestGenericGuardrailAPIResponseParsing:
+    """GenericGuardrailAPIResponse.from_dict handling of the streaming holdback field."""
+
+    def test_from_dict_parses_stream_holdback_chars(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["Alice went to Berlin"],
+                "stream_holdback_chars": [5],
+            }
+        )
+
+        assert response.action == "GUARDRAIL_INTERVENED"
+        assert response.texts == ["Alice went to Berlin"]
+        assert response.stream_holdback_chars == [5]
+
+    def test_from_dict_coerces_holdback_values_to_int(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["x", "y"], "stream_holdback_chars": ["3", 0]}
+        )
+
+        assert response.stream_holdback_chars == [3, 0]
+
+    def test_from_dict_holdback_absent_is_none(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict({"action": "NONE", "texts": ["hi"]})
+
+        assert response.stream_holdback_chars is None
+
+    def test_from_dict_malformed_holdback_degrades_to_zero(self):
+        """A null/non-numeric/negative holdback element must not raise; it degrades
+        to 0 (no holdback) so a bad guardrail response can't abort the stream."""
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["a", "b", "c", "d"],
+                "stream_holdback_chars": ["3", None, "bad", -2],
+            }
+        )
+
+        assert response.stream_holdback_chars == [3, 0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_flows_holdback_back_to_inputs(self, generic_guardrail):
+        """A GUARDRAIL_INTERVENED response with stream_holdback_chars is surfaced on
+        the returned inputs so the streaming framework can apply it."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["Alice went to Berlin"],
+            "stream_holdback_chars": [5],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response):
+            result = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Zorg went to Xanadu"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result["texts"] == ["Alice went to Berlin"]
+        assert result["stream_holdback_chars"] == [5]
 
 
 class TestGenericGuardrailAPIStreamingViaUnified:

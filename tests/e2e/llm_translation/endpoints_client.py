@@ -30,6 +30,28 @@ class MessagesRequest(BaseModel):
     messages: list[ChatMessage]
 
 
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
+
+
+class RichMessagesRequest(BaseModel):
+    model: str
+    max_tokens: int = 64
+    system: list[TextBlock]
+    messages: list[RichMessage]
+
+
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
@@ -83,11 +105,19 @@ class AnthropicContentBlock(BaseModel):
     text: str | None = None
 
 
+class MessagesUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 class MessagesResult(BaseModel):
     id: str | None = None
     role: str | None = None
     model: str | None = None
     content: list[AnthropicContentBlock] = []
+    usage: MessagesUsage = MessagesUsage()
 
     @property
     def text(self) -> str:

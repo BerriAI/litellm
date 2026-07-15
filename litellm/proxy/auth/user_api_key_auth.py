@@ -1191,13 +1191,15 @@ async def _user_api_key_auth_builder(
             return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
-            from litellm.proxy.proxy_server import premium_user
-
-            if premium_user is not True:
-                raise ValueError(f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}")
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
+                from litellm.proxy.proxy_server import premium_user
+
+                if premium_user is not True:
+                    raise ValueError(
+                        f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                    )
                 # Try JWT-to-Virtual-Key mapping first to avoid
                 # unnecessary DB queries in auth_builder
                 do_standard_jwt_auth = True
