@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **guardrail**: New `litellm_guardrail` resource and data source to manage database-backed guardrails through the proxy's `/guardrails` API. Provider-specific parameters are supplied as a JSON `litellm_params` object; sensitive values are masked by the proxy on read, so that field is treated as write-mostly to avoid spurious diffs (#33392)
+
 ### Fixed
 
 - **organization**: Send `PATCH` instead of `POST` to `/organization/update` and `/organization/member_update`, matching the methods the LiteLLM proxy serves; organization and organization member updates previously failed with a 405
