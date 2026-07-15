@@ -151,6 +151,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_utils.weighted_inflight_admission import WeightedInFlightAdmission
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -291,6 +292,8 @@ class Router:
         stream_timeout: Optional[float] = None,
         default_litellm_params: Optional[dict] = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: Optional[int] = None,
+        weighted_inflight_admission: Optional[WeightedInFlightAdmission] = None,
+        weighted_inflight_admission_class: Optional[str] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         default_fallbacks: Optional[List[str]] = None,  # generic fallbacks, works across all deployments
@@ -473,6 +476,8 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
+        self.weighted_inflight_admission = weighted_inflight_admission
+        self.weighted_inflight_admission_class = weighted_inflight_admission_class
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -6538,14 +6543,48 @@ class Router:
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
-        model_group = kwargs.get("model")
-        response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-            response = await response
-        ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        model_group = cast(Optional[str], kwargs.get("model"))
+        admission_lease = None
+        if self.weighted_inflight_admission is not None:
+            metadata_value = cast(object, kwargs.get("litellm_metadata") or kwargs.get("metadata"))
+            metadata = cast(dict[str, object], metadata_value) if isinstance(metadata_value, dict) else {}
+            request_admission_class = cast(object, kwargs.get("admission_class"))
+            metadata_admission_class = metadata.get("admission_class")
+            admission_class = (
+                request_admission_class
+                if isinstance(request_admission_class, str)
+                else metadata_admission_class
+                if isinstance(metadata_admission_class, str)
+                else self.weighted_inflight_admission_class
+            )
+            if admission_class is None:
+                raise ValueError(
+                    "weighted_inflight_admission_class is required when weighted_inflight_admission is configured"
+                )
+            admission_lease = await self.weighted_inflight_admission.acquire(admission_class)
 
-        return response
+        try:
+            call_kwargs = kwargs.copy()
+            call_kwargs.pop("admission_class", None)
+            response = original_function(*args, **call_kwargs)
+            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                response = await response
+            response = await self.set_response_headers(
+                response=response, model_group=model_group, request_kwargs=kwargs
+            )
+
+            if admission_lease is not None:
+                if kwargs.get("stream") is True and hasattr(response, "__aiter__"):
+                    response = admission_lease.wrap_async_iterator(response)
+                    admission_lease = None
+                else:
+                    await admission_lease.release()
+                    admission_lease = None
+            return response
+        except BaseException:
+            if admission_lease is not None:
+                await admission_lease.release()
+            raise
 
     def _handle_mock_testing_rate_limit_error(self, kwargs: dict, model_group: Optional[str] = None):
         """
