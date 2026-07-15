@@ -1503,24 +1503,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if any(
-                    substring in model
-                    for substring in {
-                        "sonnet-4.5",
-                        "sonnet-4-5",
-                        "opus-4.1",
-                        "opus-4-1",
-                        "opus-4.5",
-                        "opus-4-5",
-                        "opus-4.6",
-                        "opus-4-6",
-                        "opus-4.7",
-                        "opus-4-7",
-                        "sonnet-4.6",
-                        "sonnet-4-6",
-                        "sonnet_4.6",
-                        "sonnet_4_6",
-                    }
+                if AnthropicConfig._supports_model_capability(
+                    model,
+                    "supports_native_structured_output",
+                    self._resolved_provider,
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:

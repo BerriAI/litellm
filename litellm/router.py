@@ -7297,6 +7297,14 @@ class Router:
                     raise e
         return returned_healthy_deployments
 
+    @staticmethod
+    def _json_default_stable_id(value: object) -> str:
+        """json.dumps default= for _generate_model_id: plain str() on an arbitrary
+        object (e.g. a RoutingPlugin instance) falls back to object.__repr__'s
+        `<module.Class object at 0x...>`, so the hash -- and deployment id -- would
+        change every restart. Use the class name instead, stable across restarts."""
+        return f"{type(value).__module__}.{type(value).__qualname__}"
+
     def _generate_model_id(self, model_group: str, litellm_params: dict):
         """
         Helper function to consistently generate the same id for a deployment
@@ -7312,14 +7320,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k))
+                parts.append(json.dumps(k, default=self._json_default_stable_id))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v))
+                parts.append(json.dumps(v, default=self._json_default_stable_id))
             else:
                 parts.append(str(v))
 

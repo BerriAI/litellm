@@ -657,6 +657,7 @@ async def test_register_client_persists_dcr_client_identity():
     update_data = mock_update.call_args.kwargs["data"]
     assert update_data.server_id == "remote_server"
     assert update_data.token_url == "https://provider.example/oauth/token"
+    assert "authorization_url" not in update_data.fields_set()
     assert update_data.credentials["client_id"] == "generated-client"
     assert update_data.credentials["client_secret"] == "generated-secret"
     assert update_data.credentials["token_endpoint_auth_method"] == "client_secret_basic"
@@ -4374,10 +4375,8 @@ _BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
 
 
 async def _exchange_for_bridge_server(server, upstream_body, key_hash, code="auth-code", fake_client_out=None):
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _ResolvedKey,
-        exchange_token_with_server,
-    )
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
 
     fake_http_response = MagicMock()
     fake_http_response.json.return_value = upstream_body
@@ -4397,7 +4396,7 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, code="aut
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=key_resolver,
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -4808,7 +4807,7 @@ async def _refresh_for_bridge_server(
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=revalidate_result),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5085,7 +5084,7 @@ async def test_bridge_refresh_grant_with_deactivated_user_is_invalid_grant_befor
 async def test_revalidate_active_subject_dispatches_on_subject_type():
     """Subject re-validation routes a key_hash envelope to the key reload and a user_id envelope to the
     user reload, so revocation gates renewal for either identity source through one dispatch point."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _ResolvedKey,
         _revalidate_active_subject,
     )
@@ -5093,11 +5092,11 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=_ResolvedKey(key_hash="kh", key=MagicMock())),
         ) as key_reload,
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
             new=AsyncMock(return_value=None),
         ) as user_reload,
     ):
@@ -5107,11 +5106,11 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(),
         ) as key_reload2,
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
             new=AsyncMock(return_value="no_active_key"),
         ) as user_reload2,
     ):
@@ -5125,7 +5124,7 @@ def test_upstream_refresh_credential_expired_refresh_token_is_not_sealed():
     not be sealed: _upstream_refresh_credential returns None so the exchange degrades to an access-only
     response, mirroring how the access grant refuses an already-elapsed access token rather than capping a
     dead token to the full refresh TTL. A live or unspecified lifetime still yields a credential."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _upstream_refresh_credential
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _upstream_refresh_credential
 
     assert _upstream_refresh_credential({"access_token": "A", "refresh_token": "R", "refresh_expires_in": 0}) is None
     assert _upstream_refresh_credential({"refresh_token": "R", "refresh_expires_in": -5}) is None
@@ -5164,7 +5163,7 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5217,7 +5216,7 @@ async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5244,7 +5243,7 @@ async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_
     """A key_hash refresh envelope whose key is still active but whose OWNING user was SCIM-deactivated must
     fail closed to no_active_key, mirroring how admission's _reject_if_admitted_owner_scim_deactivated
     revokes an offboarded owner's key. Without this, an offboarded user keeps renewing a live key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey, _revalidate_active_subject
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5254,7 +5253,7 @@ async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_
     resolved = _ResolvedKey(key_hash="kh", key=MagicMock(user_id="offboarded-owner"))
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5272,7 +5271,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
     """The key-owner SCIM gate blocks only an explicit scim_active False: an active owner renews (None), and
     a missing owner (get_user_object's wrapped ValueError) fails OPEN, since a key may outlive its owner
     record and a transient blip must not revoke a live key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey, _revalidate_active_subject
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5283,7 +5282,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5295,7 +5294,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5324,7 +5323,7 @@ async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=AsyncMock(return_value="no_active_key"),
         ),
         patch("litellm.proxy.proxy_server.master_key", None),
@@ -5361,7 +5360,7 @@ async def _prepare_only_bridge_exchange(resolver_result):
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=AsyncMock(return_value=resolver_result),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5505,7 +5504,7 @@ def test_classify_upstream_lifetime():
     oversized) is "unspecified" so the envelope caps it, while a parseable non-positive value is
     "expired": the upstream reporting an already-dead token, which the mint must reject rather than
     silently give the 1h cap."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _classify_upstream_lifetime
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _classify_upstream_lifetime
 
     assert _classify_upstream_lifetime(300) == 300
     assert _classify_upstream_lifetime(300.0) == 300
@@ -5538,7 +5537,7 @@ def test_bridge_grant_honors_and_rejects_upstream_lifetime():
     """The grant validator honors a positive lifetime, leaves an unknown one None for the envelope to
     cap, and rejects an explicitly-expired one with "expired_lifetime" so a dead upstream token is
     never sealed into an hour-long envelope."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _bridge_grant_from_token_response
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _bridge_grant_from_token_response
 
     def grant(v):
         return _bridge_grant_from_token_response({"access_token": "x", "expires_in": v})
@@ -5831,7 +5830,7 @@ async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
     """The LiteLLM key arrives on x-litellm-api-key (what Claude Desktop/Code send), not
     Authorization. Reading only Authorization dropped the identity, so the per-user token was
     never stored and the egress 401'd forever. Resolution must honor x-litellm-api-key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
@@ -5856,7 +5855,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
     """Cross-replica, async_get_cache hands back a serialized dict, not a UserAPIKeyAuth.
     Resolution must rehydrate it; the old getattr(cached, "user_id") returned None on a dict,
     which is exactly why a multi-replica gateway never found the stored token."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import hash_token
@@ -5877,7 +5876,7 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
     """A cache miss must read the key from the DB rather than returning None; the old code did a
     cache-only peek and skipped the DB, so any replica that hadn't just authenticated the key
     failed to store the token."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5899,7 +5898,7 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
 @pytest.mark.asyncio
 async def test_extract_user_id_none_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request resolves to None without consulting the resolver."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5916,7 +5915,7 @@ async def test_extract_user_id_rejects_blocked_key(proxy_globals):
     """A blocked LiteLLM key must not resolve an identity. get_key_object returns the DB row without
     checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
     so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5938,7 +5937,7 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
     """An expired LiteLLM key must not resolve an identity, for the same reason as a blocked key."""
     from datetime import datetime, timedelta, timezone
 
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5963,7 +5962,7 @@ async def test_resolve_active_litellm_key_returns_resolved_key_for_active_key(pr
     record. For an active key the resolver returns exactly hash_token(key), the same value
     get_key_object and the whole cache/DB layer key the record by, so the sealed reference resolves
     back to this key at admission."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
         _ResolvedKey,
     )
@@ -5993,10 +5992,10 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     presence wrongly rejected these keys with invalid_request; the active-state gate now checks only
     blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
     store still gets no user for such a key, since there is none to key a stored credential by."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
-        _resolve_active_litellm_key,
         _ResolvedKey,
+        _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6022,7 +6021,7 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
 async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals):
     """A blocked key must not yield a hash, so no gateway-bound envelope is minted for a revoked key;
     the mint fails closed with invalid_request instead."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6045,7 +6044,7 @@ async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
     raise. Before the fix this raised a ValueError instead of returning None."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6065,7 +6064,7 @@ async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy
 @pytest.mark.asyncio
 async def test_resolve_active_litellm_key_no_active_key_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request yields no hash without consulting the resolver."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6083,7 +6082,7 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
     the caller's fault, so the resolver reports "unavailable" (the mint statuses it 503) rather than
     collapsing it to the same value as a missing credential. is_database_service_unavailable_error
     classifies a connection error (an OSError) as an outage, matching admission's egress-side handling."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6104,7 +6103,7 @@ async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_glob
     """With no database connection configured the gateway cannot verify the presented key at all, so
     the resolver reports "unresolvable" (the mint statuses it 500) instead of blaming the caller.
     Mirrors admission, which 500s a missing prisma_client on the egress side."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6138,7 +6137,7 @@ async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_glob
     refresh path maps it to invalid_grant), not unresolvable/500. get_user_object catches the missing row
     and re-raises a bare ValueError, so a missing user must not be misclassified as a DB outage or an
     opaque gateway fault."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -6157,7 +6156,7 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
     a missing user, so the refresh path surfaces "unavailable" (a 503) rather than blaming the caller.
     get_user_object wraps the outage in a bare ValueError, so this exercises the chain-aware classifier; a
     raw ConnectionError would falsely pass even a chain-blind check because it is an OSError."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
