@@ -1039,6 +1039,7 @@ class ApplyGuardrailRequest(BaseModel):
     entities: Optional[List[PiiEntityType]] = None
     input_type: str = "request"
     messages: Optional[List[Dict[str, Any]]] = None
+    metadata: Dict[str, Any] | None = None
 
 
 class ApplyGuardrailResponse(BaseModel):
