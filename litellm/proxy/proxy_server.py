@@ -224,6 +224,8 @@ from litellm.constants import (
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
+    BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    BACKGROUND_SETTLEMENT_SWEEP_INTERVAL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -7901,6 +7903,27 @@ class ProxyStartupEvent:
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
+
+        ### BACKGROUND INTERACTION SETTLEMENT ###
+        if BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
+            from litellm.interactions.background_cost_polling import set_settlement_store
+            from litellm.proxy.spend_tracking.background_settlement import (
+                PrismaBackgroundSettlementStore,
+                sweep_pending_settlements,
+            )
+
+            settlement_store = PrismaBackgroundSettlementStore(prisma_client=prisma_client)
+            set_settlement_store(settlement_store)
+            scheduler.add_job(
+                sweep_pending_settlements,
+                "interval",
+                seconds=BACKGROUND_SETTLEMENT_SWEEP_INTERVAL_SECONDS + random.randint(0, 30),
+                kwargs={"store": settlement_store},
+                id="background_interaction_settlement_sweep_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info("Background interaction settlement sweep job scheduled successfully")
 
         ### CHECK RESPONSES COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:

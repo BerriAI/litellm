@@ -950,6 +950,19 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([team_id, created_at(sort: Desc)])
 }
 
+model LiteLLM_BackgroundInteractionSettlementTable {
+  interaction_id String @id
+  status String @default("pending")
+  outcome String?
+  context Json
+  claimed_by String?
+  timeout_at DateTime
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, created_at], map: "LiteLLM_BackgroundInteractionSettlement_status_created_idx")
+}
+
 model LiteLLM_ManagedVectorStoreTable {
   id String @id @default(uuid())
   unified_resource_id String @unique // The base64 encoded unified vector store ID
