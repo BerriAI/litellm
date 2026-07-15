@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -17,6 +18,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import get_model_from_request
+from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -54,6 +56,61 @@ def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
     }
 
 
+def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: Optional[UserAPIKeyAuth]) -> bool:
+    """
+    Whether an over-budget key's own ``max_budget`` reservation should be
+    released rather than blocked, because the key opted into throttling: the
+    rate limiter slows it instead. Only the key's own ``max_budget`` counter is
+    exempt; team/user/window counters still enforce normally, and under-budget
+    requests never reach this branch so their concurrent-overspend protection is
+    untouched.
+    """
+    if valid_token is None:
+        return False
+    return counter_key == f"spend:key:{valid_token.token}" and should_throttle_budget_exceeded(valid_token)
+
+
+async def _apply_over_budget_reservation_policy(
+    counter: _BudgetCounter,
+    valid_token: Optional[UserAPIKeyAuth],
+    entry: dict[str, Any],
+    applied_entries: list[dict[str, Any]],
+    reservation_cost: float,
+    current_spend: float,
+) -> float:
+    """
+    Decide what to do when a counter is over budget, and return the reservation
+    cost to carry into the next counter. Three outcomes: an over-budget key that
+    opted into throttling releases its own reservation (the rate limiter slows
+    it) and keeps the cost; a partially-remaining budget resizes the reservation
+    down to what is left; anything else hard-blocks by raising.
+    """
+    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
+        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+        applied_entries.remove(entry)
+        return reservation_cost
+
+    remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
+    if remaining_before_reservation > 1e-12:
+        await _resize_applied_reservation(
+            entries=applied_entries,
+            current_reserved_cost=reservation_cost,
+            new_reserved_cost=remaining_before_reservation,
+        )
+        return remaining_before_reservation
+
+    raise litellm.BudgetExceededError(
+        current_cost=current_spend,
+        max_budget=counter.max_budget,
+        message=(
+            "Budget has been exceeded! "
+            f"{counter.entity_type}={counter.entity_id} "
+            f"Current cost: {current_spend}, "
+            f"Max budget: {counter.max_budget}"
+        ),
+    )
+
+
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -66,6 +123,7 @@ async def reserve_budget_for_request(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -84,6 +142,7 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        skip_user_budget_on_team_key=skip_user_budget_on_team_key,
     )
     if not counters:
         return None
@@ -130,25 +189,15 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
-                remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
-                if remaining_before_reservation > 1e-12:
-                    await _resize_applied_reservation(
-                        entries=applied_entries,
-                        current_reserved_cost=reservation_cost,
-                        new_reserved_cost=remaining_before_reservation,
-                    )
-                    reservation_cost = remaining_before_reservation
-                    continue
-                raise litellm.BudgetExceededError(
-                    current_cost=current_spend,
-                    max_budget=counter.max_budget,
-                    message=(
-                        "Budget has been exceeded! "
-                        f"{counter.entity_type}={counter.entity_id} "
-                        f"Current cost: {current_spend}, "
-                        f"Max budget: {counter.max_budget}"
-                    ),
+                reservation_cost = await _apply_over_budget_reservation_policy(
+                    counter=counter,
+                    valid_token=valid_token,
+                    entry=entry,
+                    applied_entries=applied_entries,
+                    reservation_cost=reservation_cost,
+                    current_spend=current_spend,
                 )
+                continue
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
@@ -249,6 +298,7 @@ async def _get_budget_counters(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> List[_BudgetCounter]:
     counters: List[_BudgetCounter] = []
 
@@ -297,8 +347,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        not (is_team_key and skip_user_budget_on_team_key)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
@@ -878,12 +929,25 @@ def _estimate_request_input_cost_for_model(
     model: str,
     llm_router: Router | None,
 ) -> float | None:
-    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
-    if model_info is None:
-        return None
-    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
-    if input_cost_per_token is None:
-        return None
+    estimates = [
+        _input_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
+
+
+def _input_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -891,6 +955,14 @@ def _estimate_request_input_cost_for_model(
         model_info=model_info,
     )
     if input_tokens is None:
+        return None
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            return input_tokens * tier_rate(tier, "input_cost_per_token")
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    if input_cost_per_token is None:
         return None
     return input_tokens * input_cost_per_token
 
@@ -901,10 +973,25 @@ def _estimate_request_max_cost_for_model(
     model: str,
     llm_router: Optional[Router],
 ) -> Optional[float]:
-    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
-    if model_info is None:
-        return None
+    estimates = [
+        _max_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
 
+
+def _max_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
     image_cost = _estimate_image_generation_cost(
         request_body=request_body,
         model_info=model_info,
@@ -912,8 +999,6 @@ def _estimate_request_max_cost_for_model(
     if image_cost is not None:
         return image_cost
 
-    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -928,15 +1013,34 @@ def _estimate_request_max_cost_for_model(
     if input_tokens is None or output_tokens is None:
         return None
 
+    output_multiplier = _get_output_multiplier(request_body=request_body)
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            output_rate = max(
+                tier_rate(tier, "output_cost_per_token"),
+                tier_rate(tier, "output_cost_per_reasoning_token"),
+            )
+            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+                output_tokens * output_multiplier * output_rate
+            )
+
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
+    output_cost_per_reasoning_token = _to_float(model_info.get("output_cost_per_reasoning_token"))
     cost = 0.0
     if input_cost_per_token is not None:
         cost += input_tokens * input_cost_per_token
     elif input_tokens > 0:
         return None
 
-    output_multiplier = _get_output_multiplier(request_body=request_body)
-    if output_cost_per_token is not None:
-        cost += output_tokens * output_multiplier * output_cost_per_token
+    # The reasoning-token share is unknown before the request runs, so reserve every
+    # output token at the higher of the standard and reasoning rates to avoid
+    # under-reserving reasoning-heavy requests.
+    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
+    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
+        cost += output_tokens * output_multiplier * output_rate
     elif output_tokens > 0:
         return None
 
@@ -986,20 +1090,69 @@ def _get_model_cost_info(
     llm_router: Optional[Router],
 ) -> Optional[Dict[str, Any]]:
     if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_group=model)
-            if model_group_info is not None:
-                return model_group_info.model_dump()
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to load router model group info for budget reservation",
-                exc_info=True,
-            )
+        model_group_info = llm_router.get_model_group_info(model_group=model)
+        if model_group_info is not None:
+            return model_group_info.model_dump()
+    return dict(litellm.get_model_info(model=model))
 
+
+def _get_model_cost_infos(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[Dict[str, Any]]:
+    """Cost-info candidates to estimate a request against for one model group.
+
+    Reservation runs before routing, so the deployment that will serve the request
+    is unknown. Rather than guess, we estimate the cost against every eligible
+    pricing shape in the group (the group's flat rates plus each deployment's
+    tiered table) and let the caller reserve the maximum, so a cheaper sibling
+    deployment can never leave the request under-reserved.
+    """
     try:
-        return dict(litellm.get_model_info(model=model))
+        base = _get_model_cost_info(model=model, llm_router=llm_router)
+        if base is None:
+            return []
+        tiered_tables = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
     except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to load model cost info for budget reservation",
+            exc_info=True,
+        )
+        return []
+    if not tiered_tables:
+        return [base]
+    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+
+
+def _deployment_tiered_pricing_table(
+    deployment: Dict[str, Any],
+    llm_router: Router,
+) -> Optional[List[dict]]:
+    model_id = deployment.get("model_info", {}).get("id")
+    backend_model = deployment.get("litellm_params", {}).get("model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
+    deployment_model_info = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
+    if deployment_model_info is None:
+        return None
+    tiered_pricing = deployment_model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return tiered_pricing
+    return None
+
+
+def _get_deployment_tiered_pricing_tables(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[List[dict]]:
+    if llm_router is None:
+        return []
+    deployments = llm_router.get_model_list(model_name=model) or []
+    return [
+        table
+        for deployment in deployments
+        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
+    ]
 
 
 def _estimate_input_tokens(

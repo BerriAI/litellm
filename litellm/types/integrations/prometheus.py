@@ -213,6 +213,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_input_audio_tokens_metric",
     "litellm_output_reasoning_tokens_metric",
     "litellm_output_audio_tokens_metric",
+    "litellm_video_duration_seconds_metric",
+    "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
@@ -283,6 +285,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -295,6 +298,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -307,6 +311,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -319,6 +324,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
@@ -341,6 +347,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -362,6 +369,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -458,6 +466,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_total_tokens_metric = [
@@ -471,6 +480,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_output_tokens_metric = [
@@ -484,6 +494,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     # Token-type detail metrics — reuse the same label set as
@@ -496,6 +507,9 @@ class PrometheusMetricLabels:
     litellm_input_audio_tokens_metric = litellm_input_tokens_metric
     litellm_output_reasoning_tokens_metric = litellm_output_tokens_metric
     litellm_output_audio_tokens_metric = litellm_output_tokens_metric
+
+    litellm_video_duration_seconds_metric = litellm_output_tokens_metric
+    litellm_images_generated_metric = litellm_output_tokens_metric
 
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -682,6 +696,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_cache_hits_metric = _cache_metric_labels
@@ -707,6 +722,8 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
+            "litellm_video_duration_seconds_metric",
+            "litellm_images_generated_metric",
         }
     )
     # Managed batch metrics

@@ -50,6 +50,7 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     """
     # Mock inputs
     response = AsyncMock(spec=httpx.Response)
+    response.status_code = 200
     raw_chunks = [
         b'{"id": "1", "content": "Hello"}',
         b'{"id": "2", "content": "World"}',

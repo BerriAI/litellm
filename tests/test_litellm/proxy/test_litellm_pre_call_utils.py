@@ -856,10 +856,19 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
-                    {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
+                    {
+                        "headers": {"LiteLLM-Disable-Message-Redaction": "true"},
+                        "turn_off_message_logging": "false",
+                    }
                 ),
+                "litellm_params": {
+                    "metadata": {"turn_off_message_logging": False},
+                },
             },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
@@ -871,6 +880,9 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert "turn_off_message_logging" not in updated
+    assert "turn_off_message_logging" not in (updated.get("litellm_params") or {}).get("metadata", {})
+    assert "turn_off_message_logging" not in updated["metadata"]
+    assert "turn_off_message_logging" not in (updated.get("litellm_metadata") or {})
     assert "litellm-disable-message-redaction" not in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -889,6 +901,158 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         header.lower()
         for header in (updated.get("litellm_metadata") or {}).get("headers", {})
     }
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_overrides_global(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = True
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "False"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "False"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is False
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_enables_redaction_when_global_off(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = False
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "True"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "True"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is True
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
 
 
 @pytest.mark.parametrize(
@@ -923,7 +1087,10 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
                     {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
                 ),
@@ -938,6 +1105,7 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert updated["turn_off_message_logging"] is False
+    assert updated["metadata"]["turn_off_message_logging"] is False
     assert "litellm-disable-message-redaction" in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -5260,3 +5428,91 @@ async def test_resolve_org_scoped_via_team_when_token_has_no_org_id(monkeypatch)
         assert {d["endpoint"] for d in destinations} == {"https://otlp.arize.com/v1"}
     finally:
         litellm.credential_list = original
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_merges_metadata_tags_on_responses_route():
+    """Regression for #31584: user-supplied metadata.tags must be merged into
+    litellm_metadata.tags on /v1/responses so they reach SpendLogs.request_tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["cost-center-1", "team-alpha"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "cost-center-1" in updated["litellm_metadata"]["tags"]
+    assert "team-alpha" in updated["litellm_metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags_on_responses_route():
+    """On /v1/responses, tags from metadata.tags AND x-litellm-tags header
+    must both appear in litellm_metadata.tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "header-tag",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["body-tag"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    tags = updated["litellm_metadata"]["tags"]
+    assert "header-tag" in tags
+    assert "body-tag" in tags

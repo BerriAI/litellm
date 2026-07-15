@@ -124,7 +124,10 @@ export default function ModelInfoView({
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
-  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
+  const isAutoRouter =
+    modelData?.litellm_params?.auto_router_config != null ||
+    modelData?.litellm_params?.complexity_router_config != null ||
+    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
@@ -764,7 +767,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.model_name}</div>
                         )}
                       </div>
 
@@ -775,7 +778,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter LiteLLM model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.litellm_model_name}</div>
                         )}
                       </div>
 
@@ -786,7 +789,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.input_cost_per_token
                               ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
@@ -803,7 +806,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.output_cost_per_token
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
@@ -824,7 +827,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
                             localModelData?.litellm_params?.cache_read_input_token_cost !== null
                               ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
@@ -847,7 +850,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.cache_creation_input_token_cost !== undefined &&
                             localModelData?.litellm_params?.cache_creation_input_token_cost !== null
                               ? (localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000).toFixed(4)
@@ -866,7 +869,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter API base" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.api_base || "Not Set"}
                           </div>
                         )}
@@ -879,7 +882,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter custom LLM provider" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.custom_llm_provider || "Not Set"}
                           </div>
                         )}
@@ -892,7 +895,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter organization" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.organization || "Not Set"}
                           </div>
                         )}
@@ -905,7 +908,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter TPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tpm || "Not Set"}
                           </div>
                         )}
@@ -918,7 +921,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter RPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.rpm || "Not Set"}
                           </div>
                         )}
@@ -931,7 +934,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter max retries" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.max_retries || "Not Set"}
                           </div>
                         )}
@@ -944,7 +947,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.timeout || "Not Set"}
                           </div>
                         )}
@@ -957,7 +960,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter stream timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.stream_timeout || "Not Set"}
                           </div>
                         )}
@@ -983,7 +986,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.model_info?.access_groups ? (
                               Array.isArray(localModelData.model_info.access_groups) ? (
                                 localModelData.model_info.access_groups.length > 0 ? (
@@ -1042,7 +1045,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.guardrails ? (
                               Array.isArray(localModelData.litellm_params.guardrails) ? (
                                 localModelData.litellm_params.guardrails.length > 0 ? (
@@ -1094,7 +1097,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.vector_store_ids ? (
                               Array.isArray(localModelData.litellm_params.vector_store_ids) ? (
                                 localModelData.litellm_params.vector_store_ids.length > 0 ? (
@@ -1144,7 +1147,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tags ? (
                               Array.isArray(localModelData.litellm_params.tags) ? (
                                 localModelData.litellm_params.tags.length > 0 ? (
@@ -1192,7 +1195,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.litellm_credential_name || "Manual"}
                           </div>
                         )}
@@ -1228,7 +1231,7 @@ export default function ModelInfoView({
                               />
                             </Form.Item>
                           ) : (
-                            <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                               {localModelData.model_info?.health_check_model || "Not Set"}
                             </div>
                           )}
@@ -1245,7 +1248,7 @@ export default function ModelInfoView({
                       ) : (
                         <div>
                           <Text className="font-medium">Cache Control</Text>
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.cache_control_injection_points ? (
                               <div>
                                 <p>Enabled</p>
@@ -1278,8 +1281,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.model_info, null, 2)}
                             </pre>
                           </div>
@@ -1311,8 +1314,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.litellm_params, null, 2)}
                             </pre>
                           </div>
@@ -1320,7 +1323,9 @@ export default function ModelInfoView({
                       </div>
                       <div>
                         <Text className="font-medium">Team ID</Text>
-                        <div className="mt-1 p-2 bg-gray-50 rounded">{modelData.model_info.team_id || "Not Set"}</div>
+                        <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                          {modelData.model_info.team_id || "Not Set"}
+                        </div>
                       </div>
                     </div>
 
@@ -1352,7 +1357,9 @@ export default function ModelInfoView({
 
           <TabPanel>
             <Card>
-              <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-gray-100 p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(modelData, null, 2)}
+              </pre>
             </Card>
           </TabPanel>
         </TabPanels>

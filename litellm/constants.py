@@ -513,6 +513,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-codestral",
     "text-completion-inception",
     "deepseek",
+    "tencent",
     "sambanova",
     "maritalk",
     "cloudflare",
@@ -719,6 +720,7 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
+    "https://api.meta.ai/v1",
 ]
 
 
@@ -734,6 +736,7 @@ openai_compatible_providers: List = [
     "volcengine",
     "codestral",
     "deepseek",
+    "tencent",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -784,6 +787,7 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
@@ -1507,6 +1511,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "budget_exceeded_throttle_percentage",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

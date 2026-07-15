@@ -9,15 +9,18 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with its Postgres and Redis, serving `gateway/litellm-config.yml`; add any model, pricing override, or guardrail your test needs to that file and read it back in the test rather than hardcoding values. `gateway/` holds proxy configuration only, so never put tests there
+The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with example models (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
-1. Create a .env file and add provider keys:
+1. Create a `.env` file in this directory with the provider keys the example models use:
+
    ```bash
    OPENAI_API_KEY="sk-..."
    ANTHROPIC_API_KEY="sk-..."
- 
+   GEMINI_API_KEY="..."
+   ```
+
 2. Bring the stack up from this directory:
 
    ```bash
@@ -29,6 +32,20 @@ The suites run against a live proxy, so bring one up first. `docker-compose.yml`
 
    ```bash
    uv run pytest tests/e2e/llm_translation/ -v
+   ```
+
+   The browser tests in the `management/` suite drive the dashboard the proxy serves at `/ui` through playwright, an optional dependency behind `importorskip` (the suite's API tests run without it). It lives in the `e2e-dev` dependency group; install it along with its browser:
+
+   ```bash
+   uv sync --inexact --group e2e-dev
+   uv run playwright install chromium
+   ```
+
+   They also need a proxy whose bundled UI contains the change under test. The published `main-latest` image ships the UI from the last release; to test local UI changes, build the image from your branch and point the compose stack at it:
+
+   ```bash
+   docker build -t litellm-local .
+   LITELLM_E2E_IMAGE=litellm-local docker compose up -d
    ```
 
 4. Tear it down when you're done:
@@ -123,7 +140,17 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-- Run basedpyright over your changes; the harness is fully typed and new code must not add `Any` or widen the budgets
-- Bring the stack up with docker-compose from this directory and run your suite locally against it, so you exercise the same skip-vs-fail path CI does
-- Use the config at `tests/e2e/gateway/litellm-config.yml` if your feature needs a model, pricing override, guardrail, or other proxy setting declared up front; add the deployment there and read it back in the test rather than hardcoding values
-- Capture screenshots of the tests passing and attach them to the PR as proof of fix
+1. Run `make lint-e2e-basedpyright` (or `make pre-commit` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+
+2. Add the models your test needs to the inline config in `docker-compose.yml`
+
+3. Bring the stack up and run your suite against it:
+
+   ```bash
+   docker compose up -d
+   uv run pytest tests/e2e/<your_suite>/ -v
+   ```
+
+4. Capture screenshots of the test run and attach them to the PR as proof
+
+5. If a test fails because it surfaced a real issue in the product, flag that explicitly in the PR rather than reworking the test until it passes

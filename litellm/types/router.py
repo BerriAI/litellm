@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hi
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Required, TypedDict
+from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
 
@@ -214,6 +214,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
+    itpm: Optional[int] = None
+    otpm: Optional[int] = None
     timeout: Optional[Union[float, str, httpx.Timeout]] = None  # if str, pass in as os.environ/
     stream_timeout: Optional[Union[float, str]] = (
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
@@ -359,6 +361,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    itpm: Optional[int]
+    otpm: Optional[int]
     order: Optional[int]
     weight: Optional[int]
     max_parallel_requests: Optional[int]
@@ -552,6 +556,8 @@ class ModelGroupInfo(BaseModel):
     ] = Field(default="chat")
     tpm: Optional[int] = None
     rpm: Optional[int] = None
+    itpm: Optional[int] = None
+    otpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
@@ -749,6 +755,8 @@ class RoutingStrategy(enum.Enum):
 class RouterCacheEnum(enum.Enum):
     TPM = "global_router:{id}:{model}:tpm:{current_minute}"
     RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
+    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
 class GenericBudgetWindowDetails(BaseModel):
@@ -819,6 +827,36 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, Any]]]
+
+
+class RoutingContext(BaseModel):
+    """
+    Passed through a Router's `plugins` pipeline before the routing decision is made.
+
+    Each plugin reads and mutates this object; the next plugin sees the previous
+    plugin's changes. `candidate_models` narrows as the pipeline runs -- Router
+    only selects a deployment whose `litellm_params.model` survives the pipeline.
+
+    `raw_messages` and `structured_messages` mirror the pattern
+    `CustomGuardrail.apply_guardrail` uses: the message shape differs by API
+    surface (chat completions, Anthropic /v1/messages, Responses API `input`,
+    ...), so plugins that need a stable, provider-agnostic shape should read
+    `structured_messages` (normalized to OpenAI chat-completions format);
+    plugins that need the exact original payload can read `raw_messages`.
+    """
+
+    raw_messages: list[dict[str, Any]]
+    structured_messages: list[dict[str, Any]]
+    candidate_models: list[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    signals: dict[str, Any] = Field(default_factory=dict)
+
+
+@runtime_checkable
+class RoutingPlugin(Protocol):
+    """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
+
+    async def run(self, context: RoutingContext) -> RoutingContext: ...
 
 
 class RequestType(str, enum.Enum):

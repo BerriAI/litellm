@@ -1300,16 +1300,15 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the POST request - clean and simple, always use data and files
             response = client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1373,16 +1372,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -2084,12 +2082,18 @@ class BaseLLMHTTPHandler:
 
         initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
+            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+                AnthropicMessagesStreamingResponse,
+                anthropic_messages_stream_hidden_params,
+            )
+
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
                 httpx_response=response,
                 request_body=request_body,
                 litellm_logging_obj=logging_obj,
             )
+            stream_hidden_params = anthropic_messages_stream_hidden_params(response.headers)
 
             if not self._has_agentic_completion_hook(logging_obj):
                 # No callback overrides async_should_run_agentic_loop, so the
@@ -2097,7 +2101,10 @@ class BaseLLMHTTPHandler:
                 # and rebuilding the response from SSE at end-of-stream to call
                 # hooks that all return (False, {}). Stream through directly and
                 # skip that per-chunk + end-of-stream overhead.
-                return completion_stream
+                return AnthropicMessagesStreamingResponse(
+                    completion_stream=completion_stream,
+                    hidden_params=stream_hidden_params,
+                )
 
             from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
                 AgenticAnthropicStreamingIterator,
@@ -2114,7 +2121,10 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
             )
-            return initial_response
+            return AnthropicMessagesStreamingResponse(
+                completion_stream=initial_response,
+                hidden_params=stream_hidden_params,
+            )
         else:
             initial_response = anthropic_messages_provider_config.transform_anthropic_messages_response(
                 model=model,
@@ -2647,9 +2657,10 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+        interception_converted_stream = litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) or litellm_params.get("_websearch_interception_converted_stream")
+        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -2902,6 +2913,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2973,9 +2985,9 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=data)
-
+            response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving response: {e}")
+            verbose_logger.debug(f"Error retrieving response: {e}")
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3066,6 +3078,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -3139,6 +3152,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -4725,6 +4739,13 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
         return provider_config.transform_file_content_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4780,6 +4801,13 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5197,6 +5225,8 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
+        hook_kwargs = {**kwargs, "_agentic_loop_api_surface": api_surface}
+
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
@@ -5217,7 +5247,7 @@ class BaseLLMHTTPHandler:
                     tools=tools,
                     stream=stream,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs=hook_kwargs,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5243,7 +5273,7 @@ class BaseLLMHTTPHandler:
             )
 
             try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider = hook_kwargs.copy()
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                 build_plan_overridden = (
                     callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan

@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -23,6 +24,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server_module
+from litellm.caching.caching import RedisCache
+from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
@@ -2581,6 +2586,50 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         assert litellm.max_budget > 0
     finally:
         litellm.max_budget = original_max_budget
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_url_validation_handles_null_and_string_false(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "user_url_allowed_hosts": None,
+                    "user_url_validation": None,
+                    "provider_url_destination_allowed_hosts": None,
+                },
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(null_config_file)
+    )
+    assert litellm.user_url_validation is True
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+    false_config_file = tmp_path / "false_config.yaml"
+    false_config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {"user_url_validation": "false"},
+            }
+        )
+    )
+
+    await ProxyConfig().load_config(
+        router=MagicMock(), config_file_path=str(false_config_file)
+    )
+    assert litellm.user_url_validation is False
 
 
 @pytest.mark.asyncio
@@ -8600,6 +8649,181 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
+    """Related to #12905: the opt-out flag must be discoverable via /config/list so
+    it renders as a Boolean toggle on the Admin UI General Settings table. This
+    requires both the ConfigGeneralSettings field and the allowed_args entry."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "skip_user_budget_on_team_key" in fields
+        assert fields["skip_user_budget_on_team_key"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
+    """The throttle fraction is a litellm_settings scalar surfaced on the General
+    Settings table as a Float field so it sits with the other global limits; it
+    must appear in /config/list reading its live litellm.<attr> value."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.15)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "budget_exceeded_throttle_percentage" in fields
+        assert fields["budget_exceeded_throttle_percentage"]["field_type"] == "Float"
+        assert fields["budget_exceeded_throttle_percentage"]["field_value"] == 0.15
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_persists_to_litellm_settings(monkeypatch):
+    """Editing the throttle Float row on the General Settings table routes to
+    litellm_settings (not general_settings): it sets litellm.<attr> live and
+    persists under litellm_settings so the runtime read is unchanged."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="budget_exceeded_throttle_percentage",
+            field_value=0.1,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.budget_exceeded_throttle_percentage == 0.1
+    assert saved["litellm_settings"]["budget_exceeded_throttle_percentage"] == 0.1
+
+
+@pytest.mark.parametrize("bad_value", [0, -0.1, 1.5, True])
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejects_invalid(monkeypatch, bad_value):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=bad_value,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+    assert exc.value.status_code == 400
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_throttle_rejected_for_non_admin(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", None)
+
+    non_admin = UserAPIKeyAuth(api_key="k", user_id="u", user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException):
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="budget_exceeded_throttle_percentage",
+                field_value=0.1,
+                config_type="general_settings",
+            ),
+            user_api_key_dict=non_admin,
+        )
+    assert litellm.budget_exceeded_throttle_percentage is None
+
+
 def test_preserve_redacted_plugin_keys_keeps_stored_credential():
     """A redacted or blank plugin_key on update must not overwrite the real key."""
     from litellm.proxy.proxy_server import _preserve_redacted_plugin_keys
@@ -8872,6 +9096,76 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_validation",
+            field_value="false",
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=["internal.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=["provider.example"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_validation is False
+    assert litellm.user_url_allowed_hosts == ["internal.example"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="user_url_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="provider_url_destination_allowed_hosts",
+            field_value=None,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+    await asyncio.sleep(0)
+
+    assert litellm.user_url_allowed_hosts is None
+    assert litellm.provider_url_destination_allowed_hosts is None
+
+
+@pytest.mark.asyncio
 async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
@@ -9101,3 +9395,326 @@ def test_update_config_redacts_all_environment_variable_values(
         assert "db.internal" not in data["updated_values"]
     finally:
         restore()
+
+
+class _EnvBuiltRedisCache(RedisCache):
+    """RedisCache stand-in that records its constructor kwargs and never
+    opens a network connection, so tests can assert which connection params
+    the proxy used to build its coordination Redis."""
+
+    def __init__(self, **kwargs):
+        self.init_kwargs = kwargs
+
+
+def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
+    """Run ProxyConfig._init_cache with a stubbed response-cache backend and a
+    controlled REDIS_* environment, returning (redis_usage_cache,
+    spend_counter redis, config-cache redis) as observed after the call."""
+    mock_litellm_cache = MagicMock()
+    mock_litellm_cache.cache = cache_backend
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "llm_router", None),
+        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch(
+            "litellm._redis._redis_kwargs_from_environment",
+            return_value=redis_env_kwargs,
+        ),
+        patch("litellm.Cache", return_value=mock_litellm_cache),
+    ):
+        litellm.cache = None
+        resolved = proxy_server_module.ProxyConfig()._init_cache(cache_params={"type": "qdrant-semantic"})
+        return (
+            resolved,
+            fresh_spend_cache.redis_cache,
+            fresh_config_cache.redis_cache,
+        )
+
+
+def test_init_cache_non_redis_backend_builds_usage_redis_from_environment():
+    """A semantic (non-Redis-KV) response cache must not disable the proxy's
+    coordination Redis: when REDIS_* env vars provide a connection,
+    _init_cache builds a standalone usage cache so cross-pod rate limits,
+    spend tracking, and the pod lock manager stay Redis-backed."""
+    usage_cache, spend_redis, config_redis = _run_init_cache_with_backend(
+        cache_backend=object(),
+        redis_env_kwargs={"host": "coordination-redis", "port": "6379"},
+    )
+
+    assert isinstance(usage_cache, _EnvBuiltRedisCache)
+    assert usage_cache.init_kwargs["host"] == "coordination-redis"
+    assert spend_redis is usage_cache
+    assert config_redis is usage_cache
+
+
+def test_init_cache_non_redis_backend_without_redis_env_stays_in_memory():
+    """Without any REDIS_* connection info, a non-Redis response cache must
+    leave the coordination Redis unset instead of building a broken client."""
+    usage_cache, spend_redis, config_redis = _run_init_cache_with_backend(
+        cache_backend=object(),
+        redis_env_kwargs={},
+    )
+
+    assert usage_cache is None
+    assert spend_redis is None
+    assert config_redis is None
+
+
+def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
+    """When the response cache itself is a plain Redis KV cache, it must be
+    reused as the coordination Redis; the REDIS_* environment fallback must
+    not construct a second client."""
+    redis_backend = _EnvBuiltRedisCache(host="cache-params-host")
+    usage_cache, spend_redis, _ = _run_init_cache_with_backend(
+        cache_backend=redis_backend,
+        redis_env_kwargs={"host": "env-host"},
+    )
+
+    assert usage_cache is redis_backend
+    assert usage_cache.init_kwargs["host"] == "cache-params-host"
+    assert spend_redis is redis_backend
+
+
+class _EnvBuiltClusterCache(RedisClusterCache):
+    """RedisClusterCache stand-in that records constructor kwargs and never
+    opens a network connection."""
+
+    def __init__(self, **kwargs):
+        self.init_kwargs = kwargs
+
+
+def _run_init_coordination_redis(config, env=None):
+    """Run ProxyConfig._init_coordination_redis against a stubbed module state,
+    returning (redis_usage_cache, spend_counter redis, config-cache redis)."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        mock.patch.dict(os.environ, env or {}, clear=False),
+    ):
+        built = proxy_server_module.ProxyConfig()._init_coordination_redis(config=config)
+        return (
+            built,
+            fresh_spend_cache.redis_cache,
+            fresh_config_cache.redis_cache,
+        )
+
+
+def test_init_coordination_redis_explicit_block_builds_standalone_client():
+    """general_settings.coordination_redis must build the coordination Redis
+    even when no response cache is configured at all, and attach it to the
+    spend counter and config caches."""
+    usage_cache, spend_redis, config_redis = _run_init_coordination_redis(
+        config={"general_settings": {"coordination_redis": {"host": "coord-host", "port": 6380}}},
+    )
+
+    assert isinstance(usage_cache, _EnvBuiltRedisCache)
+    assert usage_cache.init_kwargs["host"] == "coord-host"
+    assert usage_cache.init_kwargs["port"] == 6380
+    assert spend_redis is usage_cache
+    assert config_redis is usage_cache
+
+
+def test_init_coordination_redis_resolves_os_environ_references():
+    """os.environ/ values inside the coordination_redis block must be resolved
+    the same way cache_params values are."""
+    usage_cache, _, _ = _run_init_coordination_redis(
+        config={"general_settings": {"coordination_redis": {"host": "os.environ/COORD_REDIS_HOST"}}},
+        env={"COORD_REDIS_HOST": "resolved-host"},
+    )
+
+    assert usage_cache.init_kwargs["host"] == "resolved-host"
+
+
+def test_init_coordination_redis_startup_nodes_builds_cluster_client():
+    """A coordination_redis block with startup_nodes must construct a cluster
+    client, so cluster-aware consumers (v3 rate limiter) take the cluster path."""
+    usage_cache, _, _ = _run_init_coordination_redis(
+        config={
+            "general_settings": {
+                "coordination_redis": {"startup_nodes": [{"host": "node-1", "port": 7000}]}
+            }
+        },
+    )
+
+    assert isinstance(usage_cache, _EnvBuiltClusterCache)
+    assert usage_cache.init_kwargs["startup_nodes"] == [{"host": "node-1", "port": 7000}]
+
+
+def test_init_coordination_redis_without_connection_target_raises():
+    """A coordination_redis block with no host, url, startup_nodes, or
+    sentinel_nodes is a config error and must fail startup loudly instead of
+    silently running without coordination."""
+    with pytest.raises(ValueError, match="connection target"):
+        _run_init_coordination_redis(
+            config={"general_settings": {"coordination_redis": {"ssl": True}}},
+        )
+
+
+def test_init_coordination_redis_non_mapping_block_raises():
+    """A scalar coordination_redis value is a config error."""
+    with pytest.raises(ValueError, match="mapping"):
+        _run_init_coordination_redis(
+            config={"general_settings": {"coordination_redis": "redis://host:6379"}},
+        )
+
+
+def test_init_coordination_redis_absent_leaves_usage_cache_unset():
+    """Without the block, nothing changes: the coordination Redis stays unset
+    for the downstream borrow / env fallback logic to decide."""
+    usage_cache, spend_redis, _ = _run_init_coordination_redis(
+        config={"general_settings": {}},
+    )
+
+    assert usage_cache is None
+    assert spend_redis is None
+
+
+def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
+    """When both an explicit coordination_redis block and a plain-Redis
+    response cache are configured, the explicit block must win; the cache
+    backend must not overwrite it."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+    cache_backend = _EnvBuiltRedisCache(host="cache-backend-host")
+    mock_litellm_cache = MagicMock()
+    mock_litellm_cache.cache = cache_backend
+
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "llm_router", None),
+        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        patch("litellm.Cache", return_value=mock_litellm_cache),
+    ):
+        litellm.cache = None
+        proxy_config = proxy_server_module.ProxyConfig()
+        built = proxy_config._init_coordination_redis(
+            config={"general_settings": {"coordination_redis": {"host": "explicit-coord-host"}}}
+        )
+        assert built is not None
+        proxy_server_module.redis_usage_cache = built
+        usage_cache = proxy_config._init_cache(cache_params={"type": "redis"})
+
+        assert isinstance(usage_cache, _EnvBuiltRedisCache)
+        assert usage_cache is not cache_backend
+        assert usage_cache.init_kwargs["host"] == "explicit-coord-host"
+        assert fresh_spend_cache.redis_cache is usage_cache
+
+
+def test_env_fallback_builds_cluster_client_from_cluster_nodes_env():
+    """A deployment whose only Redis env is REDIS_CLUSTER_NODES must still get
+    a coordination Redis from the env fallback, and it must be a cluster
+    client so cluster-aware consumers take the cluster path."""
+    nodes = '[{"host": "cnode-1", "port": 7000}]'
+    with (
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+        mock.patch.dict(os.environ, {"REDIS_CLUSTER_NODES": nodes}, clear=False),
+    ):
+        result = proxy_server_module._build_redis_usage_cache_from_environment()
+
+    assert isinstance(result, _EnvBuiltClusterCache)
+    assert result.init_kwargs["startup_nodes"] == [{"host": "cnode-1", "port": 7000}]
+
+
+def test_env_fallback_builds_client_from_sentinel_nodes_env():
+    """A sentinel-only environment (REDIS_SENTINEL_NODES, no host or url) must
+    also produce a coordination Redis from the env fallback."""
+    with (
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+        mock.patch.dict(os.environ, {"REDIS_SENTINEL_NODES": '[["s1", 26379]]'}, clear=False),
+    ):
+        result = proxy_server_module._build_redis_usage_cache_from_environment()
+
+    assert isinstance(result, _EnvBuiltRedisCache)
+
+
+@pytest.mark.asyncio
+async def test_startup_applies_coordination_redis_saved_in_database():
+    """A coordination_redis block saved from the admin UI lives only in the
+    database, so startup must read it and build the coordination Redis from it.
+    Without this the save endpoint's "restart to apply" promise is false and the
+    proxy silently coordinates in per-pod memory."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        patch.object(
+            proxy_server_module,
+            "get_persisted_coordination_redis_settings",
+            AsyncMock(return_value={"host": "db-host", "port": 6381}),
+        ),
+    ):
+        result = await proxy_server_module.ProxyStartupEvent._init_coordination_redis_from_db(
+            litellm_settings={},
+            llm_router=None,
+        )
+
+    assert isinstance(result, _EnvBuiltRedisCache)
+    assert result.init_kwargs["host"] == "db-host"
+    assert fresh_spend_cache.redis_cache is result
+    assert fresh_config_cache.redis_cache is result
+
+
+@pytest.mark.asyncio
+async def test_startup_ignores_database_coordination_redis_without_connection_target():
+    """A persisted block with no host/url/cluster/sentinel must be ignored rather
+    than crashing startup or building a client that cannot connect."""
+    with (
+        patch.object(proxy_server_module, "spend_counter_cache", DualCache()),
+        patch.object(proxy_server_module, "litellm_config_cache", types.SimpleNamespace(redis_cache=None)),
+        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        patch.object(
+            proxy_server_module,
+            "get_persisted_coordination_redis_settings",
+            AsyncMock(return_value={"ssl": True}),
+        ),
+    ):
+        result = await proxy_server_module.ProxyStartupEvent._init_coordination_redis_from_db(
+            litellm_settings={},
+            llm_router=None,
+        )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_startup_survives_database_read_failure_for_coordination_redis():
+    """A config-row read failure must not block proxy startup."""
+    with (
+        patch.object(
+            proxy_server_module,
+            "get_persisted_coordination_redis_settings",
+            AsyncMock(side_effect=RuntimeError("db unreachable")),
+        ),
+    ):
+        result = await proxy_server_module.ProxyStartupEvent._init_coordination_redis_from_db(
+            litellm_settings={},
+            llm_router=None,
+        )
+
+    assert result is None

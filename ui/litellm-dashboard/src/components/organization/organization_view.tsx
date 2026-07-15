@@ -1,6 +1,7 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -220,7 +221,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       render: (_: unknown, record: Member) => {
         const orgMember =
           record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <Typography.Text>${formatNumberWithCommas(orgMember?.spend ?? 0, 4)}</Typography.Text>;
+        return <MoneyCell value={orgMember?.spend} decimals={4} />;
       },
     },
     {
@@ -498,7 +499,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       <Input.TextArea rows={4} />
                     </Form.Item>
 
-                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
                       <div className="flex justify-end items-center gap-2">
                         <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
                           Cancel

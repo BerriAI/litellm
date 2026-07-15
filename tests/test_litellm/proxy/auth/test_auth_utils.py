@@ -19,6 +19,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
@@ -2104,6 +2105,21 @@ class TestObservabilityCallbackBans:
             )
         assert field in str(exc.value)
 
+    def test_observability_field_in_litellm_params_metadata_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "litellm_params": {
+                        "metadata": {"turn_off_message_logging": False}
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert "turn_off_message_logging" in str(exc.value)
+
     @pytest.mark.parametrize(
         "metadata_key",
         ["metadata", "litellm_metadata"],
@@ -2378,3 +2394,17 @@ class TestIsRequestBodySafeBlocksModelList:
             )
             is True
         )
+
+
+class TestGetKeyTagRateLimits:
+    """Tests for get_key_tag_rpm_limit."""
+
+    def test_reads_tag_rpm_limit_from_metadata(self):
+        key = UserAPIKeyAuth(
+            api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}}
+        )
+        assert get_key_tag_rpm_limit(key) == {"cell-1": 5}
+
+    def test_returns_none_when_unset(self):
+        key = UserAPIKeyAuth(api_key="sk-123")
+        assert get_key_tag_rpm_limit(key) is None

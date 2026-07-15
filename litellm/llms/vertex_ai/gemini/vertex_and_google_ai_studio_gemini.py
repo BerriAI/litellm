@@ -998,6 +998,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_modalities.append("IMAGE")
             elif modality == "audio":
                 response_modalities.append("AUDIO")
+            elif modality == "video":
+                response_modalities.append("VIDEO")
             else:
                 response_modalities.append("MODALITY_UNSPECIFIED")
         return response_modalities
@@ -2315,17 +2317,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Store thoughtSignatures in provider_specific_fields
             if thought_signatures is not None:
-                if "provider_specific_fields" not in chat_completion_message:
-                    chat_completion_message["provider_specific_fields"] = {}
-                chat_completion_message["provider_specific_fields"]["thought_signatures"] = thought_signatures  # type: ignore
+                thought_signature_fields = chat_completion_message.get("provider_specific_fields") or {}
+                thought_signature_fields["thought_signatures"] = thought_signatures
+                chat_completion_message["provider_specific_fields"] = thought_signature_fields
 
             # Store server-side tool invocations in provider_specific_fields
             if server_side_tool_invocations is not None:
-                if "provider_specific_fields" not in chat_completion_message:
-                    chat_completion_message["provider_specific_fields"] = {}
-                chat_completion_message["provider_specific_fields"]["server_side_tool_invocations"] = (
-                    server_side_tool_invocations  # type: ignore
-                )
+                tool_invocation_fields = chat_completion_message.get("provider_specific_fields") or {}
+                tool_invocation_fields["server_side_tool_invocations"] = server_side_tool_invocations
+                chat_completion_message["provider_specific_fields"] = tool_invocation_fields
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
