@@ -16,15 +16,15 @@ cover "OpenAI plus the big three clouds":
                                            carries only the open-weight
                                            gpt-oss MaaS models
 
-Live GPT cells are opt-in via `COMPAT_GPT_CELLS=1`. The external PR
-gate and the daily cron VM must be provisioned with the GPT-route
-credentials (`OPENAI_API_KEY`, `AZURE_OPENAI_API_BASE` +
-`AZURE_OPENAI_API_KEY`, and Bedrock Mantle model access) before these
-cells can pass, so until the flag is set each live cell skips and its
-matrix cell stays `not_tested` — landing this suite change cannot flip
-the existing gate red. The `vertex_ai_gpt` column ignores the flag:
-its cells report a static `not_applicable` and never touch the
-network.
+Live GPT cells are opt-in via `COMPAT_GPT_CELLS=1`. The cron VM that
+runs the scheduled suite and publishes the matrix must be provisioned
+with the GPT-route credentials (`OPENAI_API_KEY` with available
+quota, `AZURE_OPENAI_API_BASE` + `AZURE_OPENAI_API_KEY` with gpt-5.6
+deployments, and Bedrock Mantle model access) before these cells can
+pass, so until the flag is set each live cell skips and its matrix
+cell publishes as `not_tested` instead of a credential-shaped red.
+The `vertex_ai_gpt` column ignores the flag: its cells report a
+static `not_applicable` and never touch the network.
 """
 
 from __future__ import annotations
