@@ -253,6 +253,55 @@ class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
 
+def _completion_matches_refusal_patterns(response: ModelResponse) -> bool:
+    """Return True if a successful (non-content_filter) completion is a model-level
+    refusal that should be treated like a content-policy violation, so the router's
+    content_policy_fallbacks can route it to an alternate deployment.
+
+    OFF by default: only active when LITELLM_REFUSAL_FALLBACK_PATTERNS is set to a
+    JSON array of case-insensitive regex patterns, e.g.
+    `["i'?m sorry.*cannot assist", "i cannot help with"]`. A JSON array (not a
+    comma-separated string) is used so a pattern may itself contain commas — natural
+    refusals ("I'm sorry, but ...") and quantifiers ({1,3}) both use commas. This
+    lets a benign prompt that a model *declines* (HTTP 200, finish_reason=stop) fail
+    over to a different provider, which a content-filter finish_reason cannot express.
+    Empty/unset env => inert (vanilla behavior). A malformed regex is skipped, never
+    raised, so it can't turn a successful completion into a request failure.
+    """
+    import json
+    import os
+
+    raw = os.environ.get("LITELLM_REFUSAL_FALLBACK_PATTERNS", "").strip()
+    if not raw:
+        return False
+
+    # StreamingChoices has no `.message`; getattr keeps this total for either choice
+    # type without a type: ignore.
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    content = getattr(getattr(choices[0], "message", None), "content", None)
+    if not content or not isinstance(content, str):
+        return False
+
+    try:
+        patterns = json.loads(raw)
+    except (ValueError, TypeError):
+        patterns = [raw]
+    if not isinstance(patterns, list):
+        patterns = [raw]
+
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not pattern.strip():
+            continue
+        try:
+            if re.search(pattern, content, re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 class Router:
     model_names: set = set()
     cache_responses: Optional[bool] = False
@@ -7095,7 +7144,10 @@ class Router:
         Else, original response is returned.
         """
         if response.choices and len(response.choices) > 0:
-            if response.choices[0].finish_reason != "content_filter":
+            if (
+                response.choices[0].finish_reason != "content_filter"
+                and not _completion_matches_refusal_patterns(response)
+            ):
                 return False
 
         content_policy_fallbacks = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
