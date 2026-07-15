@@ -3,16 +3,18 @@ import signal
 import subprocess
 import sys
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.proxy.db.query_engine_reaper import (
+    REAPER_THREAD_NAME,
     _read_comm_and_ppid,
     list_orphaned_engine_pids,
     reap_orphaned_engines,
     start_query_engine_reaper,
     terminate_and_reap,
+    terminate_and_reap_all,
 )
 
 
@@ -101,19 +103,45 @@ class TestReapOrphanedEngines:
         _write_stat(tmp_path, 138, "query-engine-de", 1)
         _write_stat(tmp_path, 285, "query-engine-de", 260)
 
-        with patch("litellm.proxy.db.query_engine_reaper.terminate_and_reap") as mock_terminate:
+        with patch("litellm.proxy.db.query_engine_reaper.terminate_and_reap_all") as mock_terminate:
             acted_on = reap_orphaned_engines(1, proc_root=str(tmp_path))
 
         assert sorted(acted_on) == [137, 138]
-        assert sorted(call.args[0] for call in mock_terminate.call_args_list) == [137, 138]
+        assert sorted(mock_terminate.call_args.args[0]) == [137, 138]
 
     def test_no_orphans_no_kills(self, tmp_path):
         _write_stat(tmp_path, 285, "query-engine-de", 260)
 
-        with patch("litellm.proxy.db.query_engine_reaper.terminate_and_reap") as mock_terminate:
+        with patch("litellm.proxy.db.query_engine_reaper.terminate_and_reap_all") as mock_terminate:
             assert reap_orphaned_engines(1, proc_root=str(tmp_path)) == ()
 
         mock_terminate.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and waitpid")
+class TestTerminateAndReapAll:
+    def test_batch_shares_one_grace_period(self):
+        children = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+                ]
+            )
+            for _ in range(3)
+        ]
+        time.sleep(0.5)
+
+        start = time.monotonic()
+        terminate_and_reap_all(tuple(child.pid for child in children), grace_seconds=1.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 3.0
+        for child in children:
+            with pytest.raises((ChildProcessError, OSError)):
+                os.waitpid(child.pid, os.WNOHANG)
+            child.returncode = -signal.SIGKILL
 
 
 class TestStartQueryEngineReaper:
@@ -135,3 +163,19 @@ class TestStartQueryEngineReaper:
         assert mock_thread_cls.call_args.kwargs["args"] == (os.getpid(),)
         mock_thread_cls.return_value.start.assert_called_once()
         assert thread is mock_thread_cls.return_value
+
+    def test_second_call_returns_existing_thread(self):
+        existing = MagicMock()
+        existing.name = REAPER_THREAD_NAME
+        with (
+            patch("litellm.proxy.db.query_engine_reaper.sys.platform", "linux"),
+            patch(
+                "litellm.proxy.db.query_engine_reaper.threading.enumerate",
+                return_value=[existing],
+            ),
+            patch("litellm.proxy.db.query_engine_reaper.threading.Thread") as mock_thread_cls,
+        ):
+            thread = start_query_engine_reaper()
+
+        assert thread is existing
+        mock_thread_cls.assert_not_called()

@@ -26,7 +26,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Optional, cast
+from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -45,7 +45,9 @@ def set_child_subreaper() -> bool:
         return False
     try:
         libc = ctypes.CDLL(None, use_errno=True)
-        result = cast(int, libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0))
+        result: int = libc.prctl(  # pyright: ignore[reportAny]  # ctypes types foreign calls as Any; default restype is c_int
+            PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0
+        )
         return result == 0
     except (OSError, AttributeError):
         return False
@@ -108,36 +110,61 @@ def _send_signal(pid: int, signum: int) -> None:
         pass
 
 
+def _await_reaped(pids: tuple[int, ...], timeout_seconds: float) -> tuple[int, ...]:
+    """Poll until every PID is reaped or the shared deadline passes.
+    Returns the PIDs still alive at the deadline."""
+    deadline = time.monotonic() + timeout_seconds
+    remaining = pids
+    while remaining and time.monotonic() < deadline:
+        remaining = tuple(pid for pid in remaining if not _try_reap(pid))
+        if remaining:
+            time.sleep(0.2)
+    return remaining
+
+
 def terminate_and_reap(pid: int, grace_seconds: float = SIGTERM_GRACE_SECONDS) -> None:
     """SIGTERM the orphaned engine, escalate to SIGKILL after the grace
     period, and reap it so it does not linger as a zombie."""
-    verbose_proxy_logger.warning(
-        "Reaping orphaned prisma query-engine PID %s (its worker process exited without cleanup).",
-        pid,
-    )
-    _send_signal(pid, signal.SIGTERM)
-    deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
-        if _try_reap(pid):
-            return
-        time.sleep(0.2)
-    verbose_proxy_logger.warning(
-        "Orphaned prisma query-engine PID %s did not exit within %.1fs of SIGTERM; sending SIGKILL.",
-        pid,
-        grace_seconds,
-    )
-    _send_signal(pid, signal.SIGKILL)
-    for _ in range(50):
-        if _try_reap(pid):
-            return
-        time.sleep(0.1)
+    terminate_and_reap_all((pid,), grace_seconds=grace_seconds)
+
+
+def terminate_and_reap_all(
+    pids: tuple[int, ...],
+    grace_seconds: float = SIGTERM_GRACE_SECONDS,
+) -> None:
+    """Terminate a batch of orphaned engines concurrently: SIGTERM all of
+    them, share one grace period, SIGKILL the stragglers, and reap. The
+    shared deadline keeps cleanup time bounded when several workers die
+    at once instead of paying the grace period once per orphan."""
+    for pid in pids:
+        verbose_proxy_logger.warning(
+            "Reaping orphaned prisma query-engine PID %s (its worker process exited without cleanup).",
+            pid,
+        )
+        _send_signal(pid, signal.SIGTERM)
+    survivors = _await_reaped(pids, grace_seconds)
+    if not survivors:
+        return
+    for pid in survivors:
+        verbose_proxy_logger.warning(
+            "Orphaned prisma query-engine PID %s did not exit within %.1fs of SIGTERM; sending SIGKILL.",
+            pid,
+            grace_seconds,
+        )
+        _send_signal(pid, signal.SIGKILL)
+    unkillable = _await_reaped(survivors, 5.0)
+    for pid in unkillable:
+        verbose_proxy_logger.error(
+            "Orphaned prisma query-engine PID %s survived SIGKILL; will retry on the next scan.",
+            pid,
+        )
 
 
 def reap_orphaned_engines(parent_pid: int, proc_root: str = "/proc") -> tuple[int, ...]:
     """One scan-and-reap pass. Returns the PIDs it acted on."""
     orphaned_pids = list_orphaned_engine_pids(parent_pid, proc_root=proc_root)
-    for pid in orphaned_pids:
-        terminate_and_reap(pid)
+    if orphaned_pids:
+        terminate_and_reap_all(orphaned_pids)
     return orphaned_pids
 
 
@@ -150,22 +177,32 @@ def _reaper_loop(parent_pid: int) -> None:
         time.sleep(REAPER_SCAN_INTERVAL_SECONDS)
 
 
+REAPER_THREAD_NAME = "litellm-orphan-query-engine-reaper"
+
+
 def start_query_engine_reaper() -> Optional[threading.Thread]:
     """Start the reaper daemon thread in the supervisor process.
 
     Must only be called from a process that never hosts the proxy app
     itself (uvicorn with ``workers > 1``, the gunicorn arbiter): with a
     single in-process uvicorn worker the query engine is a legitimate
-    direct child and must not be touched.
+    direct child and must not be touched. Idempotent: a reaper already
+    running in this process is returned instead of starting a second one.
     """
     if not sys.platform.startswith("linux"):
         return None
+    existing = next(
+        (thread for thread in threading.enumerate() if thread.name == REAPER_THREAD_NAME),
+        None,
+    )
+    if existing is not None:
+        return existing
     set_child_subreaper()
     reaper_thread = threading.Thread(
         target=_reaper_loop,
         args=(os.getpid(),),
         daemon=True,
-        name="litellm-orphan-query-engine-reaper",
+        name=REAPER_THREAD_NAME,
     )
     reaper_thread.start()
     verbose_proxy_logger.info(
