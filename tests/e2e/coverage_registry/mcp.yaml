@@ -135,6 +135,46 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.call_tool.api_key.injects_upstream_credential
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [injects_upstream_credential]
+  source: "outbound_credentials/adapter.py:81"
+  rationale: Stored shared-key credential must reach the upstream as X-API-Key and the caller's virtual key must not; most common upstream-auth config
+- id: mcp.list_tools.api_key.aggregates_servers
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [aggregates_servers]
+  source: "server.py:1921 + auth/user_api_key_auth_mcp.py:722"
+  rationale: The aggregate /mcp namespace with x-mcp-servers scoping is how production MCP hosts (Claude Code, Cursor) mount the gateway
+- id: mcp.call_tool.api_key.routes_to_target_server
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [routes_to_target_server]
+  source: "server.py:2625"
+  rationale: An aggregate-session call must dispatch to the server that owns the prefixed tool, never a sibling
+- id: mcp.list_tools.api_key.filters_allowed_tools
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [filters_allowed_tools]
+  source: "server.py:1352 filter_tools_by_allowed_tools"
+  rationale: Server-level allowed_tools is the admin's tool-governance surface; a filter regression exposes tools the admin excluded
+- id: mcp.call_tool.api_key.blocks_tool_outside_allowed_tools
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [blocks_tool_outside_allowed_tools]
+  source: "mcp_server_manager.py:3454 check_allowed_or_banned_tools"
+  rationale: Filtering the listing alone is cosmetic; the call path must reject excluded tools or governance is bypassable by name
 - id: mcp.list_tools.oauth.completes_authorization_code_flow
   module: mcp
   tier: P0

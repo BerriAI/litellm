@@ -3,11 +3,14 @@
 Management routes (/v1/mcp/server CRUD) go through the shared Gateway
 transport. The MCP protocol itself (initialize, tools/list, tools/call over
 streamable HTTP) goes through the official mcp SDK, the same client library
-production MCP hosts use, aimed at the gateway's per-server URL namespace
-{PROXY}/{alias}/mcp.
+production MCP hosts use, aimed at either of the gateway's two URL namespaces:
+the per-server {PROXY}/{alias}/mcp, or the aggregate {PROXY}/mcp where one
+session spans every server the key may use and the `x-mcp-servers` header
+narrows it to named aliases.
 
 Every protocol method takes the request headers as a plain dict, built inside
-the test body, so the exact wire format is visible where it is asserted. The gateway accepts the LiteLLM
+the test body (including `x-mcp-servers` for aggregate scoping), so the exact
+wire format is visible where it is asserted. The gateway accepts the LiteLLM
 virtual key as either `x-litellm-api-key: Bearer sk-...` or
 `Authorization: Bearer sk-...` (both Bearer-prefixed on the MCP routes,
 matching the docs).
@@ -62,6 +65,9 @@ class McpToolText:
     is_error: bool
 
 
+CallToolOutcome = McpToolText | McpDenied
+
+
 class StubToolStats(BaseModel):
     """JSON the stub's `stats` tool returns for one marker (see stub/stub_server.py)."""
 
@@ -77,6 +83,10 @@ class StubRecordedHeaders(RootModel[dict[str, str]]):
 
 def _mcp_url(alias: str) -> str:
     return f"{PROXY_BASE_URL}/{alias}/mcp"
+
+
+def _aggregate_url() -> str:
+    return f"{PROXY_BASE_URL}/mcp"
 
 
 def _first_text(result: CallToolResult) -> str:
@@ -311,6 +321,47 @@ class McpClient:
         """One tools/call over its own fresh MCP session, so concurrent callers
         behave like independent clients."""
         return asyncio.run(_call_tool(_mcp_url(alias), headers, tool, arguments))
+
+    def call_tool_once(
+        self, alias: str, headers: dict[str, str], tool: str, arguments: ToolArguments
+    ) -> CallToolOutcome:
+        """A tools/call whose rejection is an outcome, not a crash: the gateway
+        surfaces permission denials through the protocol stream, which the SDK
+        raises client-side; denial tests assert on the McpDenied value."""
+        try:
+            return self.call_tool(alias, headers, tool, arguments)
+        except Exception as exc:  # noqa: BLE001 - the SDK raises ExceptionGroup-wrapped transport errors; modelled as a value
+            return McpDenied(status_code=_http_status(exc), message=str(exc))
+
+    def aggregate_list_tools_once(self, headers: dict[str, str]) -> ListToolsOutcome:
+        """tools/list over one aggregate {PROXY}/mcp session; the caller builds
+        the `x-mcp-servers` header when it wants to narrow the session."""
+        try:
+            return McpToolNames(names=asyncio.run(_list_tool_names(_aggregate_url(), headers)))
+        except Exception as exc:  # noqa: BLE001 - the SDK raises ExceptionGroup-wrapped transport errors; modelled as a value
+            return McpDenied(status_code=_http_status(exc), message=str(exc))
+
+    def poll_aggregate_tool_names(self, headers: dict[str, str], *, until_listed: str) -> tuple[str, ...]:
+        """Aggregate tools/list to the shared deadline, until `until_listed`
+        appears (the settle signal that the last-created record has propagated
+        to the gateway); returns that full listing."""
+        deadline = time.monotonic() + self.gateway.poll_timeout
+        outcome: ListToolsOutcome = McpDenied(status_code=None, message="never attempted")
+        while time.monotonic() < deadline:
+            outcome = self.aggregate_list_tools_once(headers)
+            match outcome:
+                case McpToolNames(names=names) if until_listed in names:
+                    return names
+                case _:
+                    time.sleep(self.gateway.poll_interval)
+        pytest.fail(
+            f"aggregate MCP listing never included {until_listed!r} "
+            f"within {self.gateway.poll_timeout}s; last outcome: {outcome}"
+        )
+
+    def aggregate_call_tool(self, headers: dict[str, str], tool: str, arguments: ToolArguments) -> McpToolText:
+        """One tools/call over its own fresh aggregate {PROXY}/mcp session."""
+        return asyncio.run(_call_tool(_aggregate_url(), headers, tool, arguments))
 
     def poll_oauth_tool_names(
         self, alias: str, headers: dict[str, str], storage: InMemoryTokenStorage
