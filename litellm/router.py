@@ -2903,7 +2903,6 @@ class Router:
         """
         litellm_params = deployment["litellm_params"].copy()
         litellm_params.pop("order", None)
-        litellm_params.pop("geo_routing_orders", None)
         return litellm_params
 
     def _handle_clientside_credential(
@@ -10376,17 +10375,8 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order = (request_kwargs or {}).pop("_target_order", None)
-        _safe_request_kwargs = request_kwargs or {}
-        _request_metadata = (
-            _safe_request_kwargs.get(
-                self._get_metadata_variable_name_from_kwargs(_safe_request_kwargs)
-            )
-        ) or {}
-        _geo_bucket = _request_metadata.get("geo_bucket", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
-            cast(List[Dict], healthy_deployments),
-            target_order=_target_order,
-            geo_bucket=_geo_bucket,
+            cast(List[Dict], healthy_deployments), target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
@@ -10862,17 +10852,8 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order = (request_kwargs or {}).pop("_target_order", None)
-        _safe_request_kwargs = request_kwargs or {}
-        _request_metadata = (
-            _safe_request_kwargs.get(
-                self._get_metadata_variable_name_from_kwargs(_safe_request_kwargs)
-            )
-        ) or {}
-        _geo_bucket = _request_metadata.get("geo_bucket", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
-            healthy_deployments,
-            target_order=_target_order,
-            geo_bucket=_geo_bucket,
+            healthy_deployments, target_order=_target_order
         )
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in

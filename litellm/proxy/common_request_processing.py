@@ -898,10 +898,6 @@ class ProxyBaseLLMRequestProcessing:
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
 
-            # neutral, synchronous route-id proof — mirrors New API's x-geo-route-resolved
-            if gb := (request_data.get("metadata") or {}).get("geo_bucket"):
-                headers["x-geo-route-resolved"] = gb
-
         try:
             return {key: str(value) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
