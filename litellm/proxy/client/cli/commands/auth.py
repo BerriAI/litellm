@@ -277,6 +277,21 @@ def prompt_team_selection_fallback(
             return None
 
 
+def _polling_error_message(response: requests.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, str) and detail:
+        return f"Polling error: HTTP {response.status_code}: {detail}"
+    return f"Polling error: HTTP {response.status_code}"
+
+
+def _is_permanent_polling_error(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code != 429
+
+
 # Polling-based authentication - no local server needed
 def _poll_for_ready_data(
     url: str,
@@ -308,8 +323,11 @@ def _poll_for_ready_data(
                         click.echo(pending_message)
                 elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
+            elif _is_permanent_polling_error(response.status_code):
+                click.echo(_polling_error_message(response))
+                return None
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
-                click.echo(f"Polling error: HTTP {response.status_code}")
+                click.echo(_polling_error_message(response))
         except requests.RequestException as e:
             if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")

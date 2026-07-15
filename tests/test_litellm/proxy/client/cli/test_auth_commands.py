@@ -40,6 +40,55 @@ def _mock_cli_sso_start_response(
     return mock_response
 
 
+class TestPollingErrorSurfacing:
+    def test_client_error_prints_server_detail_and_stops_polling(self, capsys):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "detail": "Your litellm CLI is out of date and uses a login flow this proxy no longer supports."
+        }
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            result = _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
+
+        assert result is None
+        assert mock_get.call_count == 1
+        assert (
+            "Polling error: HTTP 400: Your litellm CLI is out of date and uses a login flow "
+            "this proxy no longer supports." in capsys.readouterr().out
+        )
+
+    def test_server_error_without_json_body_retries_until_timeout(self, capsys):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.json.side_effect = ValueError("no json")
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            result = _poll_for_ready_data("http://test/sso/cli/poll/cli-abc", total_timeout=6, poll_interval=2)
+
+        assert result is None
+        assert mock_get.call_count == 3
+        assert "Polling error: HTTP 500" in capsys.readouterr().out
+
+    def test_rate_limit_is_retried_not_aborted(self, capsys):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            result = _poll_for_ready_data("http://test/sso/cli/poll/cli-abc", total_timeout=4, poll_interval=2)
+
+        assert result is None
+        assert mock_get.call_count == 2
+        assert "Polling error: HTTP 429: Too many CLI login attempts. Try again later." in capsys.readouterr().out
+
+
 class TestTokenUtilities:
     """Test token file utility functions"""
 
