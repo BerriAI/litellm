@@ -493,6 +493,21 @@ Cursor is not supported: it has no equivalent file-based config to hot-patch thi
 
 `lite autoroute` lets you try LiteLLM's complexity-based auto-routing -- picking a cheaper or more expensive model depending on how complex a prompt looks -- against models your key already has access to on your real, running proxy, without editing that proxy's `config.yaml` and without any real request ever bypassing it. It builds a second, throwaway proxy locally that forwards every request back to your real proxy, and points Claude Code at that local proxy for the duration of the session.
 
+#### Install the CLI
+
+If you don't already have the `lite` command, install it with a single curl command -- no existing Python tooling required, `uv` is bootstrapped automatically if missing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install-cli.sh | sh
+```
+
+This installs only `litellm[cli]`, the thin client (`lite`), not the full proxy server. To try an unreleased branch or commit instead of the latest PyPI release, set `LITELLM_CLI_REF`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/scripts/install-cli.sh | \
+  LITELLM_CLI_REF=<branch-or-commit> sh
+```
+
 #### List Your Accessible Model Groups
 
 ```bash
