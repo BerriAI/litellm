@@ -2,7 +2,7 @@
 
 The systemd service `litellm-compat-matrix.service` loads provider
 credentials (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`,
-`AZURE_FOUNDRY_API_KEY`) and the agent-shin GitHub token
+`AZURE_AI_API_KEY`) and the agent-shin GitHub token
 (`AGENT_SHIN_GITHUB_TOKEN`) into `run_daily.sh`'s environment from
 `/etc/litellm-compat-matrix.env`. Running the npm-installed `claude`
 binary directly there would hand that full env to package code, so a
@@ -50,7 +50,7 @@ def test_version_probe_env_i_excludes_provider_secrets() -> None:
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "VERTEXAI_CREDENTIALS",
-        "AZURE_FOUNDRY_API_KEY",
+        "AZURE_AI_API_KEY",
         "GITHUB_TOKEN",
         "AGENT_SHIN_GITHUB_TOKEN",
     ):

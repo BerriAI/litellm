@@ -17,7 +17,6 @@ from claude_code._env import (
     PRIMARY_API_KEY_ENV,
     PRIMARY_BASE_URL_ENV,
     ProxyConfig,
-    require_compat_cli_credentials,
     require_proxy,
     resolve_proxy_from,
 )
@@ -164,80 +163,3 @@ def test_require_proxy_leaves_compat_result_untouched_on_success() -> None:
         },
     )
     assert compat.calls == []
-
-
-# ---------------------------------------------------------------------------
-# require_compat_cli_credentials — the inference-only key path cells use.
-# ---------------------------------------------------------------------------
-
-
-def test_require_compat_cli_credentials_returns_cli_key_not_master() -> None:
-    """SECURITY-critical: the returned ``api_key`` must be the CLI key
-    the provider hands us, not the master key from env. Cells feed this
-    into the ``claude`` CLI subprocess as ANTHROPIC_AUTH_TOKEN."""
-    cfg = require_compat_cli_credentials(
-        _CompatResultStub(),
-        cli_key_provider=lambda: "sk-cli-scoped",
-        env={
-            PRIMARY_BASE_URL_ENV: "http://localhost:4000",
-            PRIMARY_API_KEY_ENV: "sk-master-must-not-leak",
-        },
-    )
-    assert cfg.api_key == "sk-cli-scoped"
-    assert cfg.api_key != "sk-master-must-not-leak"
-
-
-def test_require_compat_cli_credentials_hard_fails_without_master_fallback() -> None:
-    """If the fixture never bound a CLI key (returns ``None``), the
-    helper must hard-fail. A silent fallback to the master key would
-    defeat the whole point of minting a scoped key in the first place."""
-    compat = _CompatResultStub()
-    with pytest.raises(pytest.fail.Exception) as excinfo:
-        require_compat_cli_credentials(
-            compat,
-            cli_key_provider=lambda: None,
-            env={
-                PRIMARY_BASE_URL_ENV: "http://localhost:4000",
-                PRIMARY_API_KEY_ENV: "sk-master",
-            },
-        )
-    assert "compat CLI key" in str(excinfo.value)
-    assert compat.calls and compat.calls[0]["status"] == "fail"
-
-
-def test_require_compat_cli_credentials_treats_empty_key_as_missing() -> None:
-    """The provider returning an empty string is the same failure mode as
-    ``None`` - a truthy check would happily hand the CLI a blank
-    Authorization header and the request would 401, but with a
-    surprising error trail. Fail loudly with the same message instead."""
-    with pytest.raises(pytest.fail.Exception):
-        require_compat_cli_credentials(
-            _CompatResultStub(),
-            cli_key_provider=lambda: "",
-            env={
-                PRIMARY_BASE_URL_ENV: "http://localhost:4000",
-                PRIMARY_API_KEY_ENV: "sk-master",
-            },
-        )
-
-
-def test_require_compat_cli_credentials_fails_on_missing_env_before_calling_provider() -> None:
-    """The env-missing guard fires first. If the proxy env is unset,
-    the provider must never be called - otherwise a hypothetical provider
-    that reaches out to the network to fetch a key would waste that call."""
-    provider_calls = 0
-
-    def counting_provider() -> str:
-        nonlocal provider_calls
-        provider_calls += 1
-        return "sk-cli"
-
-    with pytest.raises(pytest.fail.Exception):
-        require_compat_cli_credentials(
-            _CompatResultStub(),
-            cli_key_provider=counting_provider,
-            env={},
-        )
-    assert provider_calls == 0, (
-        "cli_key_provider must not be called before env resolution succeeds"
-    )

@@ -31,22 +31,13 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 
-from claude_code._env import CliKeyProvider, require_compat_cli_credentials
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     DriverResult,
     failure_diagnostic,
     run_claude_models_parallel,
 )
-
-
-def _default_cli_key_provider() -> str | None:
-    """Bind at call time so the fixture had a chance to populate its
-    module-level slot before we read it; a top-level ``from ... import``
-    would snapshot ``None`` at import time."""
-    from claude_code.conftest import _compat_cli_key_provider
-
-    return _compat_cli_key_provider()
 
 
 ClaudeRunner = Callable[..., Mapping[str, DriverResult | ClaudeCLIError]]
@@ -91,7 +82,6 @@ def run_basic_messaging_cell(
     verify_streaming: bool = False,
     env: Mapping[str, str] | None = None,
     runner: ClaudeRunner = run_claude_models_parallel,
-    cli_key_provider: CliKeyProvider = _default_cli_key_provider,
 ) -> None:
     """Run the shared `basic_messaging_*` × <provider> cell body.
 
@@ -112,9 +102,7 @@ def run_basic_messaging_cell(
     streamed reply to a single ``assistant`` event in
     ``--print --output-format stream-json`` mode).
     """
-    base_url, api_key = require_compat_cli_credentials(
-        compat_result, cli_key_provider=cli_key_provider, env=env
-    )
+    base_url, api_key = require_proxy(compat_result, env=env)
 
     extra_args: Sequence[str] = (
         ("--include-partial-messages",) if verify_streaming else ()

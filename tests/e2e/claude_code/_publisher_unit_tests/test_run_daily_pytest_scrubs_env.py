@@ -2,7 +2,7 @@
 
 The systemd service `litellm-compat-matrix.service` loads provider
 credentials (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`,
-`AZURE_FOUNDRY_API_KEY`, `VERTEXAI_*`) and the agent-shin GitHub token
+`AZURE_AI_API_KEY`, `VERTEXAI_*`) and the agent-shin GitHub token
 (`AGENT_SHIN_GITHUB_TOKEN`) into `run_daily.sh`'s environment from
 `/etc/litellm-compat-matrix.env`. Pytest only needs to talk to the
 loopback proxy at `127.0.0.1:${PROXY_PORT}` and has no legitimate reason
@@ -64,8 +64,8 @@ def test_pytest_invocation_env_i_excludes_provider_secrets() -> None:
         "VERTEXAI_CREDENTIALS",
         "VERTEXAI_PROJECT",
         "VERTEXAI_LOCATION",
-        "AZURE_FOUNDRY_API_KEY",
-        "AZURE_FOUNDRY_API_BASE",
+        "AZURE_AI_API_KEY",
+        "AZURE_AI_API_BASE",
         "GITHUB_TOKEN",
         "AGENT_SHIN_GITHUB_TOKEN",
     ):

@@ -161,14 +161,14 @@ def test_availability_adds_bedrock_when_aws_ambient_creds_set() -> None:
 
 
 def test_availability_gates_azure_on_both_foundry_creds() -> None:
-    """Azure needs both AZURE_FOUNDRY_API_BASE and
-    AZURE_FOUNDRY_API_KEY — half-set env must NOT register the azure
+    """Azure needs both AZURE_AI_API_BASE and
+    AZURE_AI_API_KEY — half-set env must NOT register the azure
     deployments (they would 401 at call time)."""
     subset = deployments_for_available_providers(
         {
             "ANTHROPIC_API_KEY": "sk-test",
-            "AZURE_FOUNDRY_API_BASE": "https://foo.openai.azure.com",
-            # AZURE_FOUNDRY_API_KEY intentionally missing
+            "AZURE_AI_API_BASE": "https://foo.openai.azure.com",
+            # AZURE_AI_API_KEY intentionally missing
         }
     )
     names = {d.model_name for d in subset}
@@ -179,8 +179,8 @@ def test_availability_selects_azure_when_both_foundry_creds_set() -> None:
     subset = deployments_for_available_providers(
         {
             "ANTHROPIC_API_KEY": "sk-test",
-            "AZURE_FOUNDRY_API_BASE": "https://foo.openai.azure.com",
-            "AZURE_FOUNDRY_API_KEY": "azure-key",
+            "AZURE_AI_API_BASE": "https://foo.openai.azure.com",
+            "AZURE_AI_API_KEY": "azure-key",
         }
     )
     names = {d.model_name for d in subset}

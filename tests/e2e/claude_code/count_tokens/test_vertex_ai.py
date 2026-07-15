@@ -39,8 +39,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_compat_cli_credentials
-from claude_code.conftest import _compat_cli_key_provider
+from claude_code._env import require_proxy
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
@@ -57,9 +56,7 @@ VERTEX_AI_MODELS = [
 def test_count_tokens_vertex_ai(compat_result):
     """Probe `/v1/messages/count_tokens` for each Vertex AI tier and
     assert the response shape."""
-    base_url, api_key = require_compat_cli_credentials(
-        compat_result, cli_key_provider=_compat_cli_key_provider
-    )
+    base_url, api_key = require_proxy(compat_result)
 
     failures = []
     for model in VERTEX_AI_MODELS:

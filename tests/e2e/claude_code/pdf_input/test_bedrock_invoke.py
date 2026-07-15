@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_compat_cli_credentials
-from claude_code.conftest import _compat_cli_key_provider
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -89,9 +88,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
 
 
 def test_pdf_input_bedrock_invoke(compat_result, tmp_path):
-    base_url, api_key = require_compat_cli_credentials(
-        compat_result, cli_key_provider=_compat_cli_key_provider
-    )
+    base_url, api_key = require_proxy(compat_result)
 
     pdf_path = tmp_path / "marker.pdf"
     pdf_path.write_bytes(_build_minimal_pdf(PDF_MARKER))

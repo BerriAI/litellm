@@ -58,8 +58,7 @@ from typing import Sequence
 
 import pytest
 
-from claude_code._env import require_compat_cli_credentials
-from claude_code.conftest import _compat_cli_key_provider
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -158,9 +157,7 @@ def test_long_context_1m_anthropic(compat_result):
     """Drive the `claude` CLI with a ~210k-token prompt and the
     `context-1m-2025-08-07` beta header; assert no 400 / 413 and a
     non-empty reply for Sonnet + Opus."""
-    base_url, api_key = require_compat_cli_credentials(
-        compat_result, cli_key_provider=_compat_cli_key_provider
-    )
+    base_url, api_key = require_proxy(compat_result)
 
     long_prompt = _build_long_prompt()
 

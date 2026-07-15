@@ -79,18 +79,18 @@ model_list:
   - model_name: claude-haiku-4-5-azure
     litellm_params:
       model: azure_ai/claude-haiku-4-5
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
   - model_name: claude-sonnet-4-6-azure
     litellm_params:
       model: azure_ai/claude-sonnet-4-6
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
   - model_name: claude-opus-4-7-azure
     litellm_params:
       model: azure_ai/claude-opus-4-7
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
 
 general_settings:
   # Claude Code sends provider-specific headers (e.g. anthropic-beta) we

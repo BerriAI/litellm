@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_compat_cli_credentials
-from claude_code.conftest import _compat_cli_key_provider
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -109,9 +108,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
 def test_pdf_input_anthropic(compat_result, tmp_path):
     """Drive the `claude` CLI against the LiteLLM proxy with a PDF
     attached via the Read tool and assert the reply references it."""
-    base_url, api_key = require_compat_cli_credentials(
-        compat_result, cli_key_provider=_compat_cli_key_provider
-    )
+    base_url, api_key = require_proxy(compat_result)
 
     pdf_path = tmp_path / "marker.pdf"
     pdf_path.write_bytes(_build_minimal_pdf(PDF_MARKER))

@@ -168,7 +168,7 @@ log "resolved litellm: ${LITELLM_VERSION}"
 # environment. Running the npm-installed `claude` binary directly here
 # would hand that full env to package code -- a compromised
 # @anthropic-ai/claude-code release could read ANTHROPIC_API_KEY /
-# AWS_BEARER_TOKEN_BEDROCK / AZURE_FOUNDRY_API_KEY /
+# AWS_BEARER_TOKEN_BEDROCK / AZURE_AI_API_KEY /
 # AGENT_SHIN_GITHUB_TOKEN from os.environ and exfiltrate them before
 # the proxy or test harness ever starts. Probe under `env -i` with the
 # same minimal allowlist the PR-gate uses (the matrix run itself goes
@@ -371,7 +371,7 @@ log "running pytest"
 set +e
 # Pytest only needs to talk to the loopback proxy at 127.0.0.1:${PROXY_PORT}
 # — it has no legitimate reason to see ANTHROPIC_API_KEY /
-# AWS_BEARER_TOKEN_BEDROCK / VERTEXAI_* / AZURE_FOUNDRY_* /
+# AWS_BEARER_TOKEN_BEDROCK / VERTEXAI_* / AZURE_AI_* /
 # AGENT_SHIN_GITHUB_TOKEN / GITHUB_TOKEN in its own env. The systemd
 # unit's EnvironmentFile injects all of those into this script for the
 # proxy to consume, and pytest inherits them by default. Wrap the
