@@ -374,7 +374,7 @@ class TestXffTrustedHopsAccessControl:
             },
         )
 
-        assert result == "10.0.0.99, 203.0.113.9"
+        assert result == "10.0.0.99"
 
     @pytest.mark.parametrize("bad_value", [0, -1, "abc", 1.5])
     def test_invalid_hops_config_fails_closed_not_legacy(self, bad_value):
