@@ -1251,6 +1251,25 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
         assert info["max_input_tokens"] == 272000
 
+    @pytest.mark.parametrize(
+        "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
+        [
+            ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
+            ("openai.gpt-5.6-terra", 2.75e-06, 3.4375e-06, 2.75e-07, 1.65e-05),
+            ("openai.gpt-5.6-luna", 1.1e-06, 1.375e-06, 1.1e-07, 6.6e-06),
+        ],
+    )
+    def test_gpt_5_6_pricing_and_mode(
+        self, local_cost_map, model, input_cost, cache_creation_cost, cache_read_cost, output_cost
+    ):
+        info = litellm.get_model_info(f"bedrock_mantle/{model}")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(input_cost)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
+        assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
+        assert info["output_cost_per_token"] == pytest.approx(output_cost)
+        assert info["max_input_tokens"] == 272000
+
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
