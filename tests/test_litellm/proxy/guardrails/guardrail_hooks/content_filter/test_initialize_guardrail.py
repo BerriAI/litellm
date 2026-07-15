@@ -44,9 +44,7 @@ def _make_litellm_params(**overrides):
 @pytest.fixture(autouse=True)
 def _quiet_callback_register():
     """initialize_guardrail registers a callback on success — keep test side-effect-free."""
-    with patch.object(
-        litellm.logging_callback_manager, "add_litellm_callback", lambda _: None
-    ):
+    with patch.object(litellm.logging_callback_manager, "add_litellm_callback", lambda _: None):
         yield
 
 
@@ -72,10 +70,5 @@ def test_initialize_guardrail_defaults_when_redaction_tags_missing():
 
     filter_obj = initialize_guardrail(litellm_params=params, guardrail=guardrail)
 
-    assert (
-        filter_obj.keyword_redaction_tag == ContentFilterGuardrail.KEYWORD_REDACTION_STR
-    )
-    assert (
-        filter_obj.pattern_redaction_format
-        == ContentFilterGuardrail.PATTERN_REDACTION_FORMAT
-    )
+    assert filter_obj.keyword_redaction_tag == ContentFilterGuardrail.KEYWORD_REDACTION_STR
+    assert filter_obj.pattern_redaction_format == ContentFilterGuardrail.PATTERN_REDACTION_FORMAT

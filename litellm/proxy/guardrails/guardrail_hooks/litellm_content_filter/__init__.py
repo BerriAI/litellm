@@ -47,13 +47,9 @@ def initialize_guardrail(
         competitor_intent_config=getattr(litellm_params, "competitor_intent_config", None),
         end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
         on_violation=getattr(litellm_params, "on_violation", None),
-        realtime_violation_message=getattr(
-            litellm_params, "realtime_violation_message", None
-        ),
+        realtime_violation_message=getattr(litellm_params, "realtime_violation_message", None),
         keyword_redaction_tag=getattr(litellm_params, "keyword_redaction_tag", None),
-        pattern_redaction_format=getattr(
-            litellm_params, "pattern_redaction_format", None
-        ),
+        pattern_redaction_format=getattr(litellm_params, "pattern_redaction_format", None),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)
