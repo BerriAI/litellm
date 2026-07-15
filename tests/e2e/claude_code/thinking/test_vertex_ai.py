@@ -54,6 +54,7 @@ def _has_thinking_block(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@pytest.mark.covers("llm.messages.vertex.thinking.nonstream.works")
 def test_thinking_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and assert a `thinking` content block was emitted."""

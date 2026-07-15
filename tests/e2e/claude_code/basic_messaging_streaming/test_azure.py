@@ -19,6 +19,7 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 AZURE_MODELS = [
@@ -28,6 +29,7 @@ AZURE_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
 def test_basic_messaging_streaming_azure(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).

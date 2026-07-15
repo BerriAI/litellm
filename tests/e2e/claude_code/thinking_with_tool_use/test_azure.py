@@ -69,6 +69,7 @@ def _has_block_type(
     return False
 
 
+@pytest.mark.covers("llm.messages.azure_foundry.thinking_with_tool_use.nonstream.works")
 def test_thinking_with_tool_use_azure(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

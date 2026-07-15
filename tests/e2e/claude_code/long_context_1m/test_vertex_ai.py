@@ -153,6 +153,7 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
     return preamble + "".join(pad_lines) + closing
 
 
+@pytest.mark.covers("llm.messages.vertex.long_context_1m.nonstream.works")
 def test_long_context_1m_vertex_ai(compat_result):
     """Drive the `claude` CLI (Vertex AI) with a ~210k-token prompt and the
     `context-1m-2025-08-07` beta header; assert no 400 / 413 and a

@@ -82,6 +82,7 @@ def _build_stdin_input() -> str:
     return json.dumps(user_event) + "\n"
 
 
+@pytest.mark.covers("llm.messages.vertex.vision.nonstream.works")
 def test_vision_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached via stream-json input and assert a non-empty reply."""

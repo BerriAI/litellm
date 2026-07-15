@@ -61,6 +61,7 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@pytest.mark.covers("llm.messages.vertex.tool_use.nonstream.works")
 def test_tool_use_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     tool call was emitted on the wire."""

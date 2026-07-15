@@ -63,6 +63,7 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
+@pytest.mark.covers("llm.messages.anthropic.prompt_cache_1h.nonstream.works")
 def test_prompt_caching_1h_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with the 1h
     TTL opt-in env var set, and assert the upstream usage block

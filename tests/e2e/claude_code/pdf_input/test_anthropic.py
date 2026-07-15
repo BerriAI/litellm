@@ -105,6 +105,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
     return bytes(out)
 
 
+@pytest.mark.covers("llm.messages.anthropic.pdf_input.nonstream.works")
 def test_pdf_input_anthropic(compat_result, tmp_path):
     """Drive the `claude` CLI against the LiteLLM proxy with a PDF
     attached via the Read tool and assert the reply references it."""

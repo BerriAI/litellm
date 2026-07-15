@@ -84,6 +84,7 @@ def _has_web_search_tool_use(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@pytest.mark.covers("llm.messages.vertex.web_search.nonstream.works")
 def test_web_search_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream emitted a `tool_use` block calling `WebSearch`, proving

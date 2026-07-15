@@ -87,6 +87,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
     return bytes(out)
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.pdf_input.nonstream.works")
 def test_pdf_input_bedrock_invoke(compat_result, tmp_path):
     base_url, api_key = require_proxy(compat_result)
 

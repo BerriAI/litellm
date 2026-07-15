@@ -150,6 +150,7 @@ def _validate_against_schema(
     return None
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.structured_output.nonstream.works")
 def test_structured_outputs_bedrock_invoke(compat_result):
     """Drive `claude --json-schema ...` against the LiteLLM proxy and
     assert the trailing `result` event contains a schema-conforming

@@ -62,6 +62,7 @@ def _has_thinking_block(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@pytest.mark.covers("llm.messages.azure_foundry.thinking.nonstream.works")
 def test_thinking_azure(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and assert a `thinking` content block was emitted."""

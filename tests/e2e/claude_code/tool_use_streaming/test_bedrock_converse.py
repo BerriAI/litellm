@@ -88,6 +88,7 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     )
 
 
+@pytest.mark.covers("llm.messages.bedrock_converse.tool_use.stream.works")
 def test_tool_use_streaming_bedrock_converse(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

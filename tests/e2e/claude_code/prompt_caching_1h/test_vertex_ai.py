@@ -47,6 +47,7 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
+@pytest.mark.covers("llm.messages.vertex.prompt_cache_1h.nonstream.works")
 def test_prompt_caching_1h_vertex_ai(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

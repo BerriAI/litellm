@@ -88,6 +88,7 @@ def _has_block_type(
     return False
 
 
+@pytest.mark.covers("llm.messages.anthropic.thinking_with_tool_use.nonstream.works")
 def test_thinking_with_tool_use_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and tool use, and assert both `thinking` and `tool_use`

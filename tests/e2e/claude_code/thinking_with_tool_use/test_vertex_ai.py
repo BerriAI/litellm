@@ -74,6 +74,7 @@ def _has_block_type(
     return False
 
 
+@pytest.mark.covers("llm.messages.vertex.thinking_with_tool_use.nonstream.works")
 def test_thinking_with_tool_use_vertex_ai(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

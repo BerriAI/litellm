@@ -76,6 +76,7 @@ def _has_block_type(
     return False
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.thinking_with_tool_use.nonstream.works")
 def test_thinking_with_tool_use_bedrock_invoke(compat_result):
     base_url, api_key = require_proxy(compat_result)
 
