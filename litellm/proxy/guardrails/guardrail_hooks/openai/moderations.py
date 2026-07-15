@@ -6,7 +6,6 @@ OpenAI Moderation Guardrail Integration for LiteLLM
 from typing import (
     TYPE_CHECKING,
     Dict,
-    List,
     Literal,
     Optional,
     Type,
@@ -65,9 +64,17 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        # Initialize parent CustomGuardrail
+        supported_event_hooks = [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
 
@@ -346,11 +353,3 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         )
 
         return OpenAIModerationGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-        ]

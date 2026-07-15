@@ -34,16 +34,15 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
         }),
     );
 
-    // The logout handler populates the logout target only after the proxy UI
-    // settings fetch (/sso/get/ui_settings) resolves. Clicking Logout before that lands
+    // navbar.tsx populates the logout target only after the proxy UI settings
+    // fetch (/sso/get/ui_settings) resolves. Clicking Logout before that lands
     // runs `window.location.href = ""` — a same-origin reload, not a redirect —
     // so gate the click on the settings response, not just on first paint.
     const settingsLoaded = page.waitForResponse((r) => r.url().includes("/sso/get/ui_settings") && r.ok(), {
       timeout: 30_000,
     });
     await page.goto("/ui");
-    // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
-    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
     await settingsLoaded;
 
     // Pre-condition: we start authenticated. The admin storage state carries a
@@ -51,10 +50,10 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
     const tokensBefore = (await page.context().cookies()).filter((c) => c.name === "token");
     expect(tokensBefore.length, "should start logged in with a token cookie").toBeGreaterThan(0);
 
-    // Open the sidebar account menu and click Logout by role rather than by
-    // internal CSS classes, which are not a stable API.
+    // Open the navbar account dropdown (trigger=click) and click Logout by role
+    // rather than internal Ant Design CSS classes, which are not a stable API.
     await page.getByRole("button", { name: /^Account menu/ }).click();
-    const logout = page.getByRole("button", { name: "Logout" });
+    const logout = page.getByRole("menuitem", { name: "Logout" });
     await expect(logout).toBeVisible({ timeout: 5_000 });
 
     // handleLogout clears cookies/local storage, then assigns window.location.href.

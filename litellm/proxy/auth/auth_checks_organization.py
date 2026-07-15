@@ -173,17 +173,12 @@ def _user_is_org_admin(
 
 
 TEAM_ORG_CONTEXT_ROUTES = frozenset({"/team/update"})
-# The RESTful update route carries the team id in the path. Match on the route
-# template so the sibling /team/<verb> routes (which share the single-segment
-# shape) are not mistaken for it and don't trigger a team lookup.
-PATCH_TEAM_ROUTE_TEMPLATE = "/team/{team_id}"
 
 
 async def add_team_org_context_to_request_body(
     route: str,
     request_body: dict,
     fetch_team_org_id: Callable[[str], Awaitable[Optional[str]]],
-    route_template: Optional[str] = None,
 ) -> dict:
     """
     Return a copy of request_body with organization_id resolved from the target
@@ -193,20 +188,12 @@ async def add_team_org_context_to_request_body(
     the client having to send it. Returns request_body unchanged when it does
     not apply, so callers that already pass organization_id and non-team routes
     are untouched.
-
-    The team_id is taken from the body for TEAM_ORG_CONTEXT_ROUTES, or from the
-    last path segment when ``route_template`` is the ``/team/{team_id}`` route.
     """
+    if route not in TEAM_ORG_CONTEXT_ROUTES:
+        return request_body
     if request_body.get("organization_id"):
         return request_body
-
-    if route in TEAM_ORG_CONTEXT_ROUTES:
-        team_id: Optional[str] = request_body.get("team_id")
-    elif route_template == PATCH_TEAM_ROUTE_TEMPLATE:
-        team_id = route.rsplit("/", 1)[-1]
-    else:
-        return request_body
-
+    team_id = request_body.get("team_id")
     if not isinstance(team_id, str) or not team_id:
         return request_body
     org_id = await fetch_team_org_id(team_id)

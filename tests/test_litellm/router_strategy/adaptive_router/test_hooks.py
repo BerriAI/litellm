@@ -16,9 +16,10 @@ from litellm.router_strategy.adaptive_router.hooks import (
 from litellm.router_strategy.adaptive_router.signals import Turn
 
 
-def _make_hook() -> AdaptiveRouterPostCallHook:
+def _make_hook(claim: bool = True) -> AdaptiveRouterPostCallHook:
     fake_router = MagicMock()
     fake_router.record_turn = AsyncMock()
+    fake_router.claim_or_check_owner = MagicMock(return_value=claim)
     return AdaptiveRouterPostCallHook(adaptive_router=fake_router)
 
 
@@ -150,24 +151,7 @@ async def test_hook_skips_when_below_signal_gate():
     kwargs = _kwargs(messages=short)
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
     hook.adaptive_router.record_turn.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_hook_tracks_short_conversation_with_explicit_session_id():
-    hook = _make_hook()
-    kwargs = _kwargs(
-        messages=[{"role": "user", "content": "hi"}],
-        extra_litellm_params={"litellm_session_id": "explicit-short"},
-    )
-    await hook.async_log_success_event(
-        kwargs,
-        _resp_with_content("hello"),
-        0.0,
-        1.0,
-    )
-    assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == (
-        "explicit-short"
-    )
+    hook.adaptive_router.claim_or_check_owner.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -184,19 +168,22 @@ async def test_hook_skips_when_chosen_model_missing_from_metadata():
     kwargs = _kwargs(chosen=None)
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
     hook.adaptive_router.record_turn.assert_not_awaited()
+    hook.adaptive_router.claim_or_check_owner.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_hook_records_when_model_changes():
-    hook = _make_hook()
+async def test_hook_skips_when_owner_cache_mismatch():
+    """A different model owns this conversation -> no attribution."""
+    hook = _make_hook(claim=False)
     kwargs = _kwargs(chosen="fast")
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
-    hook.adaptive_router.record_turn.assert_awaited_once()
+    hook.adaptive_router.claim_or_check_owner.assert_called_once()
+    hook.adaptive_router.record_turn.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_hook_records_turn():
-    hook = _make_hook()
+async def test_hook_records_turn_when_owner_claims():
+    hook = _make_hook(claim=True)
     kwargs = _kwargs(chosen="smart", messages=_long_messages("ask"))
     await hook.async_log_success_event(
         kwargs, _resp_with_content("answer here"), 0.0, 1.0
@@ -218,6 +205,8 @@ async def test_hook_uses_explicit_session_id_when_provided():
         extra_litellm_params={"litellm_session_id": "explicit-sess"},
     )
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
+    args, _ = hook.adaptive_router.claim_or_check_owner.call_args
+    assert args[0] == "explicit-sess"
     assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == (
         "explicit-sess"
     )

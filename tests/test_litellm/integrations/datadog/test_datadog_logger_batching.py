@@ -1,4 +1,3 @@
-import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -7,20 +6,16 @@ from httpx import Request, Response
 
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
-from litellm.types.integrations.datadog import (
-    DD_MAX_BATCH_SIZE,
-    DD_MAX_PAYLOAD_SIZE_BYTES,
-    DatadogPayload,
-)
+from litellm.types.integrations.datadog import DD_MAX_BATCH_SIZE, DatadogPayload
 
 
-def _payloads(n, message=None):
+def _payloads(n):
     return [
         DatadogPayload(
             ddsource="litellm",
             ddtags="env:test",
             hostname="host",
-            message=f"{message}{i}" if message else f'{{"event": {i}}}',
+            message=f'{{"event": {i}}}',
             service="svc",
             status="info",
         )
@@ -179,87 +174,6 @@ async def test_413_returned_response_also_splits(datadog_env):
     await logger.async_send_batch()
 
     assert sorted(delivered) == [f'{{"event": {i}}}' for i in range(4)]
-    assert logger.log_queue == []
-
-
-def _make_recording_send(sent_batches, delivered):
-    async def _send(data):
-        sent_batches.append(list(data))
-        delivered.extend(data)
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
-
-    return _send
-
-
-@pytest.mark.asyncio
-async def test_oversized_payload_splits_before_any_send(datadog_env):
-    """Regression for LIT-4325: a batch above Datadog's uncompressed payload limit is
-    split proactively, so the intake never has to reject it with a 413."""
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-    with patch("asyncio.create_task"):
-        logger = DataDogLogger()
-
-    events = _payloads(3, message="x" * 3_000_000)
-    logger.log_queue = list(events)
-    sent_batches: list = []
-    delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
-
-    await logger.async_send_batch()
-
-    assert delivered == events
-    assert len(sent_batches) == 3
-    assert all(
-        len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES
-        for batch in sent_batches
-    )
-    assert logger.log_queue == []
-
-
-@pytest.mark.asyncio
-async def test_batch_over_max_event_count_splits_before_any_send(datadog_env):
-    """Datadog caps a payload at 1000 events; a queue that grew past that (e.g. after
-    re-queues) must be sent in count-compliant chunks."""
-    with patch("asyncio.create_task"):
-        logger = DataDogLogger()
-
-    events = _payloads(DD_MAX_BATCH_SIZE + 1)
-    logger.log_queue = list(events)
-    sent_batches: list = []
-    delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
-
-    await logger.async_send_batch()
-
-    assert delivered == events
-    assert all(len(batch) <= DD_MAX_BATCH_SIZE for batch in sent_batches)
-    assert logger.log_queue == []
-
-
-@pytest.mark.asyncio
-async def test_single_event_above_payload_cap_is_still_sent(datadog_env):
-    """A lone event over the byte cap cannot be split further; it must be sent once
-    (Datadog decides), never looped on."""
-    with patch("asyncio.create_task"):
-        logger = DataDogLogger()
-
-    logger.log_queue = _payloads(1, message="x" * (DD_MAX_PAYLOAD_SIZE_BYTES + 1))
-    sent_batches: list = []
-    delivered: list = []
-    send = AsyncMock(side_effect=_make_recording_send(sent_batches, delivered))
-    logger.async_send_compressed_data = send
-
-    await asyncio.wait_for(logger.async_send_batch(), timeout=10)
-
-    assert send.await_count == 1
-    assert len(delivered) == 1
     assert logger.log_queue == []
 
 

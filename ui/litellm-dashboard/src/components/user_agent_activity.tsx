@@ -1,7 +1,19 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Grid, Metric, Subtitle, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import {
+  Card,
+  Title,
+  Text,
+  Grid,
+  BarChart,
+  Metric,
+  Subtitle,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
+} from "@tremor/react";
 import { Select, Tooltip } from "antd";
-import { BarChart } from "@/components/shared/charts";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";

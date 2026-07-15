@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pytest
@@ -50,7 +49,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow
+from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
 
 pytestmark = pytest.mark.e2e
 
@@ -143,12 +142,10 @@ def quietly(action: Callable[[], object]) -> Callable[[], None]:
     return run
 
 
-def assert_file_object(file: FileObject, *, provider: str) -> None:
+def assert_file_object(file: FileObject) -> None:
     assert file.object == "file", f"file.object={file.object!r}"
     assert file.purpose == "batch", f"file.purpose={file.purpose!r}"
-    assert file.bytes is not None, f"file.bytes={file.bytes!r}"
-    if provider != "bedrock":
-        assert file.bytes > 0, f"file.bytes={file.bytes!r}"
+    assert file.bytes is not None and file.bytes > 0, f"file.bytes={file.bytes!r}"
     assert file.status, "file.status missing"
     assert (
         file.created_at is not None and file.created_at > 0
@@ -182,7 +179,7 @@ def test_batch_lifecycle(
     resources.defer(
         quietly(lambda: client.delete_file(file.id, key=key, provider=provider))
     )
-    assert_file_object(file, provider=cap.provider)
+    assert_file_object(file)
     assert matches_id_shape(
         FILE_ID_SHAPE[cap.scenario], file.id
     ), f"{cap.id}: file id {file.id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
@@ -237,31 +234,10 @@ def test_batch_lifecycle(
         )
 
     if cap.can_list:
-        list_result = client.list_batches(key=key, provider=provider)
-        managed_filter_unsupported = False
-        match list_result:
-            case UnknownApiError(body=body) if (
-                "Filtering by 'provider' is not supported when using managed batches" in body
-            ):
-                managed_filter_unsupported = True
-                listed = unwrap(client.list_batches(key=key, provider=None))
-            case _:
-                listed = unwrap(list_result)
+        listed = unwrap(client.list_batches(key=key, provider=provider))
         if listed.object is not None:
             assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)
-        if (
-            match is None
-            and managed_filter_unsupported
-            and cap.scenario == "provider_fallback"
-        ):
-            # provider_fallback keeps the provider's raw batch id (not re-encoded
-            # into a managed/proxy id). When the gateway rejects provider-scoped
-            # list, the only available list is the unfiltered managed view, which
-            # does not index raw provider ids. Membership cannot be asserted here;
-            # create + retrieve (and raw_id_matches_provider above) already pin
-            # routing for this scenario.
-            return
         assert match is not None, "created batch absent from list"
         assert match.object == "batch"
 
@@ -313,7 +289,7 @@ def test_file_upload_and_delete_outputs(
             key=key,
         )
     )
-    assert_file_object(file, provider="openai")
+    assert_file_object(file)
 
     deleted = unwrap(client.delete_file(file.id, key=key))
     assert deleted.id, "delete response has no id"
@@ -350,10 +326,6 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     the file-read path fires while the batch itself is not blocked.
     ``resources.key()`` cannot set limits, so the key is minted on the gateway
     directly and its delete deferred.
-
-    Snapshots read /spend/logs/v2 over a bounded window around the test instead
-    of the unpaginated /spend/logs whole-table read, which grows with the
-    environment and OOMed the e2e runner on stage.
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
     key = client.gateway.generate_key(
@@ -361,13 +333,8 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     )
     resources.defer(lambda: client.gateway.delete_key(key))
 
-    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
-    window_end = window_start + timedelta(hours=2)
     before = frozenset(
-        row.request_id
-        for row in unattributed_rows(
-            client.gateway.spend_logs_window(start=window_start, end=window_end)
-        )
+        row.request_id for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
     )
 
     file = unwrap(
@@ -389,9 +356,7 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
 
     new_orphans = [
         row
-        for row in unattributed_rows(
-            client.gateway.spend_logs_window(start=window_start, end=window_end)
-        )
+        for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
         if row.request_id not in before
     ]
     assert not new_orphans, (

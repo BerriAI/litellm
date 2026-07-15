@@ -19,7 +19,7 @@ import os
 import time
 import traceback
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
@@ -50,7 +50,6 @@ from litellm.types.integrations.base_health_check import IntegrationHealthCheckS
 from litellm.types.integrations.datadog import (
     DD_ERRORS,
     DD_MAX_BATCH_SIZE,
-    DD_MAX_PAYLOAD_SIZE_BYTES,
     DataDogStatus,
     DatadogInitParams,
     DatadogPayload,
@@ -385,10 +384,8 @@ class DataDogLogger(
 
     async def _send_with_413_split(self, batch: List) -> List:
         """
-        Send a batch, halving any sub-batch that exceeds Datadog's intake limits before
-        sending, and halving again on a 413 (payload too large) response, since Datadog
-        enforces a 5MB uncompressed limit per request. The proactive split avoids paying
-        a serialize + gzip + round trip for a payload the intake is guaranteed to reject.
+        Send a batch, halving any sub-batch that 413s (payload too large) and retrying the
+        halves, since Datadog enforces a 5MB uncompressed limit per request.
 
         A 413 surfaces as a raised MaskedHTTPStatusError (httpx raise_for_status), not a
         returned response, so both paths are handled. A lone event that still 413s is
@@ -400,11 +397,6 @@ class DataDogLogger(
         while pending:
             chunk = pending.pop()
             if not chunk:
-                continue
-            if len(chunk) > 1 and self._exceeds_intake_limits(chunk):
-                mid = len(chunk) // 2
-                pending.append(chunk[mid:])
-                pending.append(chunk[:mid])
                 continue
             try:
                 response = await self.async_send_compressed_data(chunk)
@@ -443,21 +435,6 @@ class DataDogLogger(
     @staticmethod
     def _undelivered(chunk: List, pending: List[List]) -> List:
         return chunk + [event for remaining in reversed(pending) for event in remaining]
-
-    @staticmethod
-    def _exceeds_intake_limits(chunk: Sequence[DatadogPayload]) -> bool:
-        """
-        True when a chunk would breach Datadog's log intake limits: more than
-        DD_MAX_BATCH_SIZE events per payload, or a serialized size above
-        DD_MAX_PAYLOAD_SIZE_BYTES (held under Datadog's 5MB uncompressed cap so
-        the batch is split before the intake rejects it with a 413).
-        """
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-        if len(chunk) > DD_MAX_BATCH_SIZE:
-            return True
-        payload_size_bytes = len(safe_dumps(chunk).encode("utf-8"))
-        return payload_size_bytes > DD_MAX_PAYLOAD_SIZE_BYTES
 
     async def flush_queue(self):
         if self.flush_lock is None:

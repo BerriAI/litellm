@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createApiClient, ApiError, deriveErrorMessage } from "./client";
+import { createApiClient, ApiError } from "./client";
 
 const okResponse = (data: unknown): Response =>
   ({ ok: true, status: 200, text: async () => JSON.stringify(data) }) as unknown as Response;
@@ -99,24 +99,5 @@ describe("createApiClient", () => {
     } finally {
       globalThis.fetch = original;
     }
-  });
-});
-
-describe("deriveErrorMessage", () => {
-  it("extracts error.message from a ProxyException body, the shape the proxy emits for a pre-call hook HTTPException", () => {
-    const actionable =
-      "MCP semantic tool filtering could not run: embedding model 'text-embedding-3-small' exceeded its context window while embedding the user query. The request was blocked instead of silently passing all tools through. Switch to an embedding model with a larger context window, or disable semantic tool filtering.";
-    const wireBody = {
-      error: { message: actionable, type: "None", param: "None", code: "400" },
-    };
-    expect(deriveErrorMessage(wireBody)).toBe(actionable);
-  });
-
-  it("returns error directly when it is a plain string", () => {
-    expect(deriveErrorMessage({ error: "flat error text" })).toBe("flat error text");
-  });
-
-  it("falls back to a string detail field", () => {
-    expect(deriveErrorMessage({ detail: "detail text" })).toBe("detail text");
   });
 });

@@ -16,8 +16,6 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
       const [value, setValue] = React.useState(initial);
       return [value, setValue, { cancel: vi.fn(), flush: vi.fn() }];
     },
-    useDebouncedCallback: (fn: (...args: unknown[]) => void) => fn,
-    useDebouncer: (fn: (...args: unknown[]) => void) => ({ maybeExecute: fn, cancel: vi.fn(), flush: vi.fn() }),
   };
 });
 
@@ -65,7 +63,7 @@ const mockKey: KeyResponse = {
   key_alias: "Test Key Alias",
   spend: 5.5,
   max_budget: 100,
-  expires: "2999-12-31T23:59:59Z",
+  expires: "2024-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo", "gpt-4"],
   aliases: {},
   config: {},
@@ -156,8 +154,6 @@ const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra
     ...extra,
   }) as any;
 
-const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-
 beforeEach(() => {
   vi.clearAllMocks();
 
@@ -174,21 +170,6 @@ it("should render VirtualKeysTable component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
-it("left-anchors the create-key CTA below the title, between the header and the table toolbar", () => {
-  renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
-
-  const heading = screen.getByRole("heading", { name: "Virtual Keys" });
-  const ctas = screen.getAllByRole("button", { name: "Create New Key" });
-  expect(ctas).toHaveLength(1);
-  const cta = ctas[0];
-  const search = screen.getByPlaceholderText(/Search by key alias/);
-
-  // The CTA follows the title row...
-  expect(heading.compareDocumentPosition(cta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // ...and precedes the table's search toolbar, so it sits in its own row above the table.
-  expect(cta.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-});
-
 it("should display key information correctly", async () => {
   renderWithProviders(<VirtualKeysTable />);
 
@@ -196,7 +177,6 @@ it("should display key information correctly", async () => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
     expect(screen.getByText("Test Team")).toBeInTheDocument();
     expect(screen.getByText("$5.5000")).toBeInTheDocument();
-    expect(screen.getByText("of $100")).toBeInTheDocument();
   });
 });
 
@@ -208,49 +188,14 @@ it("should display user email correctly", async () => {
   });
 });
 
-it("shows the user alias over the email in the visible cell when both exist", async () => {
-  mockUseKeys.mockReturnValue(
-    keysResult([{ ...mockKey, user: { user_id: "user-1", user_email: "user@example.com", user_alias: "The User" } }]),
-  );
-
-  renderWithProviders(<VirtualKeysTable />);
-
-  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
-  expect(within(row).getByText("The User")).toBeInTheDocument();
-  expect(within(row).queryByText("user@example.com")).not.toBeInTheDocument();
-});
-
-it("shows created_by_user alias over email in the Created By column when it is enabled", async () => {
-  mockUseKeys.mockReturnValue(
-    keysResult([
-      {
-        ...mockKey,
-        created_by: "some-uuid",
-        created_by_user: { user_id: "some-uuid", user_email: "creator@example.com", user_alias: "The Creator" },
-      },
-    ]),
-  );
-  const user = userEvent.setup();
-  renderWithProviders(<VirtualKeysTable />);
-
-  // Created By is hidden by default; turn it on via the Columns menu.
-  await user.click(screen.getByRole("button", { name: "Columns" }));
-  await user.click(await screen.findByText("Created By"));
-  await user.keyboard("{Escape}");
-
-  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
-  expect(within(row).getByText("The Creator")).toBeInTheDocument();
-  expect(within(row).queryByText("creator@example.com")).not.toBeInTheDocument();
-});
-
-it("should show a loading state on the initial load and hide the data", () => {
+it("should show loading message only on initial load (isPending)", () => {
   mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isPending: true, isFetching: true }));
 
   renderWithProviders(<VirtualKeysTable />);
 
-  expect(screen.getByText("Loading keys...")).toBeInTheDocument();
-  expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+  expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
+  expect(screen.queryByText("Test Team")).not.toBeInTheDocument();
 });
 
 it("should show 'No keys found' message when the key list is empty", () => {
@@ -261,98 +206,61 @@ it("should show 'No keys found' message when the key list is empty", () => {
   expect(screen.getByText("No keys found")).toBeInTheDocument();
 });
 
-it("collapses models beyond the visible limit into a '+N more' badge", () => {
+it("should handle models with more than 3 entries to trigger expansion UI", () => {
   mockUseKeys.mockReturnValue(
     keysResult([{ ...mockKey, models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"] }]),
   );
 
   renderWithProviders(<VirtualKeysTable />);
 
-  expect(screen.getByText("+2 more")).toBeInTheDocument();
+  expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
-it("should render the redesigned table headers", () => {
+it("should render table headers correctly", () => {
   renderWithProviders(<VirtualKeysTable />);
 
-  expect(screen.getByText("Key")).toBeInTheDocument();
+  expect(screen.getByText("Key ID")).toBeInTheDocument();
+  expect(screen.getByText("Key Alias")).toBeInTheDocument();
   expect(screen.getByText("Team")).toBeInTheDocument();
   expect(screen.getByText("Models")).toBeInTheDocument();
-  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" })).toBeInTheDocument();
-  expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toBeInTheDocument();
+  expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
 });
 
-it("sorts by the backend key_alias field (not the column label) when the Key header is clicked", async () => {
+it("should handle column resizing hover events", () => {
   renderWithProviders(<VirtualKeysTable />);
 
-  const keyHeader = screen.getByText("Key").closest("button") as HTMLElement;
-  fireEvent.click(keyHeader);
+  const headerCell = document.querySelector("[data-header-id]") as HTMLElement;
+  expect(headerCell).toBeInTheDocument();
 
-  await waitFor(() => {
-    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "key_alias" }));
-  });
+  const resizer = headerCell?.querySelector(".resizer") as HTMLElement;
+  expect(resizer).toBeInTheDocument();
+  expect(resizer.style.opacity).toBe("0");
+
+  fireEvent.mouseEnter(headerCell);
+  expect(resizer.style.opacity).toBe("0.5");
+
+  fireEvent.mouseLeave(headerCell);
+  expect(resizer.style.opacity).toBe("0");
 });
 
-it("sorts by the backend max_budget field when 'Budget descending' is chosen from the Spend / Budget menu", async () => {
-  const user = userEvent.setup();
-  renderWithProviders(<VirtualKeysTable />);
-
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
-
-  await waitFor(() => {
-    expect(mockUseKeys).toHaveBeenLastCalledWith(
-      1,
-      50,
-      expect.objectContaining({ sortBy: "max_budget", sortOrder: "desc" }),
-    );
-  });
-});
-
-it("emphasizes the active field in the Spend / Budget header so the sorted column reads without opening the menu", async () => {
-  const user = userEvent.setup();
-  renderWithProviders(<VirtualKeysTable />);
-
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
-
-  await waitFor(() => {
-    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" }).className).toContain(
-      "font-semibold",
-    );
-  });
-  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" }).className).toContain(
-    "text-muted-foreground",
-  );
-});
-
-it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {
-  const user = userEvent.setup();
-  renderWithProviders(<VirtualKeysTable />);
-
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Spend ascending"));
-
-  await waitFor(() => {
-    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "spend", sortOrder: "asc" }));
-  });
-});
-
-it("should open KeyInfoView when clicking the key cell", async () => {
+it("should open KeyInfoView when clicking on a key ID button", async () => {
   renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
   });
 
-  expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
+  expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
 
-  fireEvent.click(screen.getByText("Test Key Alias"));
+  const keyIdButton = screen.getByText("sk-1234567890abcdef");
+  fireEvent.click(keyIdButton);
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+    expect(screen.getByText("Created At")).toBeInTheDocument();
   });
 
-  expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
 });
 
 it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {
@@ -374,6 +282,44 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
   });
 });
 
+it("should display created_by_user email in 'Created By' column when available", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid-1234",
+        created_by_user: { user_id: "some-uuid-1234", user_email: "creator@example.com", user_alias: null },
+      },
+    ]),
+  );
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("creator@example.com")).toBeInTheDocument();
+  });
+});
+
+it("should display created_by_user alias over email when both are available", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid-1234",
+        created_by_user: { user_id: "some-uuid-1234", user_email: "creator@example.com", user_alias: "The Creator" },
+      },
+    ]),
+  );
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  // Scope to the key's row so we assert the visible cell value: the hover popover that
+  // also holds the email is portaled out of the row, not the displayed "Created By" text.
+  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+  expect(within(row).getByText("The Creator")).toBeInTheDocument();
+  expect(within(row).queryByText("creator@example.com")).not.toBeInTheDocument();
+});
+
 it("should render table without crashing when models is null", async () => {
   mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, models: null as unknown as string[] }]));
 
@@ -381,7 +327,6 @@ it("should render table without crashing when models is null", async () => {
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-    expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
   });
 });
 
@@ -396,14 +341,13 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 });
 
 describe("server-side filtering – the LIT-4080 regression guard", () => {
-  it("threads an applied User ID filter into the useKeys query so any refetch keeps it", async () => {
+  it("threads an active User ID filter into the useKeys query so any refetch keeps it", async () => {
     renderWithProviders(<VirtualKeysTable />);
 
-    openFilters();
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
-    const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
+    const userIdInput = await screen.findByPlaceholderText("Enter User ID...");
     fireEvent.change(userIdInput, { target: { value: "user-42" } });
-    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
@@ -417,19 +361,18 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
     expect(lastCall[2] ?? {}).toMatchObject({ userID: undefined, teamID: undefined, keyHash: undefined });
   });
 
-  it("drops the filter from the useKeys query when it is cleared", async () => {
+  it("drops the filter from the useKeys query when Reset Filters is clicked", async () => {
     renderWithProviders(<VirtualKeysTable />);
 
-    openFilters();
-    const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const userIdInput = await screen.findByPlaceholderText("Enter User ID...");
     fireEvent.change(userIdInput, { target: { value: "user-42" } });
-    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
     });
 
-    fireEvent.click(screen.getByTestId("datatable-clear-filters"));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Filters" }));
 
     await waitFor(() => {
       const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
@@ -445,8 +388,8 @@ describe("pagination display – total count comes from useKeys", () => {
     renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 509");
-      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 11");
+      expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 11")).toBeInTheDocument();
     });
   });
 
@@ -456,44 +399,57 @@ describe("pagination display – total count comes from useKeys", () => {
     renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-1 of 1");
-      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
+      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
     });
   });
 });
 
-describe("refresh button", () => {
-  it("renders an enabled refresh control in the normal state", () => {
+describe("refetch button", () => {
+  it("should show Fetch button in normal state", () => {
     renderWithProviders(<VirtualKeysTable />);
 
-    const refresh = screen.getByTestId("datatable-refresh");
-    expect(refresh).toBeInTheDocument();
-    expect(refresh).not.toBeDisabled();
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).toBeInTheDocument();
+    expect(fetchButton).not.toBeDisabled();
+    expect(screen.getByText("Fetch")).toBeInTheDocument();
   });
 
-  it("disables the refresh control while a fetch is in flight but keeps data visible", () => {
+  it("should show Fetching state and keep table data visible during refetch", () => {
     mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { isFetching: true }));
 
     renderWithProviders(<VirtualKeysTable />);
 
-    expect(screen.getByTestId("datatable-refresh")).toBeDisabled();
+    expect(screen.getByText("Fetching")).toBeInTheDocument();
+    expect(screen.getByTitle("Fetch data")).toBeDisabled();
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    expect(screen.queryByText("🚅 Loading keys...")).not.toBeInTheDocument();
   });
 
-  it("calls refetch when the refresh control is clicked", () => {
+  it("should call refetch when Fetch button is clicked", () => {
     const mockRefetch = vi.fn();
     mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { refetch: mockRefetch }));
 
     renderWithProviders(<VirtualKeysTable />);
 
-    fireEvent.click(screen.getByTestId("datatable-refresh"));
+    fireEvent.click(screen.getByTitle("Fetch data"));
 
     expect(mockRefetch).toHaveBeenCalledTimes(1);
   });
+
+  it("should show Fetch button enabled on error so user can retry", () => {
+    mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isError: true }));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    const fetchButton = screen.getByTitle("Fetch data");
+    expect(fetchButton).not.toBeDisabled();
+    expect(screen.getByText("Fetch")).toBeInTheDocument();
+  });
 });
 
-describe("Status column reflects blocked / expiry / scim metadata", () => {
-  it("renders Active for a non-blocked, unexpired key", async () => {
+describe("Status column reflects key.blocked / scim_blocked metadata", () => {
+  it("should render Active for a non-blocked key", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: false, metadata: {} }]));
 
     renderWithProviders(<VirtualKeysTable />);
@@ -503,19 +459,7 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
     });
   });
 
-  it("renders Expired when the expiry date has passed", async () => {
-    mockUseKeys.mockReturnValue(
-      keysResult([{ ...mockKey, blocked: false, metadata: {}, expires: "2020-01-01T00:00:00Z" }]),
-    );
-
-    renderWithProviders(<VirtualKeysTable />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Expired");
-    });
-  });
-
-  it("renders Blocked when key.blocked is true", async () => {
+  it("should render Blocked when key.blocked is true", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: {} }]));
 
     renderWithProviders(<VirtualKeysTable />);
@@ -526,7 +470,7 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
     expect(screen.queryByText(/Blocked by SCIM/i)).not.toBeInTheDocument();
   });
 
-  it("marks a SCIM-blocked key with the SCIM tooltip reason", async () => {
+  it("should mark a SCIM-blocked key with the SCIM tooltip reason", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }]));
 
     renderWithProviders(<VirtualKeysTable />);

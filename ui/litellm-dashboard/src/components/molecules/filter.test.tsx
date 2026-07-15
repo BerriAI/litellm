@@ -547,44 +547,6 @@ describe("FilterComponent", () => {
     });
   });
 
-  it("cancels a pending debounced search when the component unmounts mid-type", async () => {
-    const user = userEvent.setup({ delay: null });
-    const mockSearchFn = vi.fn().mockResolvedValue([{ label: "Result", value: "result" }]);
-
-    const options: FilterOption[] = [
-      {
-        name: "model",
-        label: "Model",
-        isSearchable: true,
-        searchFn: mockSearchFn,
-      },
-    ];
-
-    const { unmount } = renderWithProviders(
-      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Filters" }));
-
-    await waitFor(() => {
-      expect(mockSearchFn).toHaveBeenCalledWith("");
-    });
-
-    vi.clearAllMocks();
-
-    const modelLabel = screen.getByText("Model");
-    const modelSelect = within(modelLabel.closest("div")!).getByRole("combobox");
-    await user.click(modelSelect);
-    await user.type(modelSelect, "test");
-
-    expect(mockSearchFn).not.toHaveBeenCalled();
-
-    unmount();
-
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(mockSearchFn).not.toHaveBeenCalled();
-  });
-
   it("should reset all filter values when reset button is clicked", async () => {
     const user = userEvent.setup({ delay: null });
     renderWithProviders(

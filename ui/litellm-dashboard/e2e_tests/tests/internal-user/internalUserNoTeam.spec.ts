@@ -16,8 +16,7 @@ test.describe("Internal User with no team memberships", () => {
     await page.getByPlaceholder("Enter your username").fill("noteam@test.local");
     await page.getByPlaceholder("Enter your password").fill("test");
     await page.getByRole("button", { name: "Login", exact: true }).click();
-    // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
-    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
     await dismissFeedbackPopup(page);
 
     // Open the Create Key modal.

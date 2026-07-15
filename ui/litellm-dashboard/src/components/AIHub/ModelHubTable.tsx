@@ -382,7 +382,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   }
 
   return (
-    <div className="mx-4 h-[75vh]">
+    <div className="w-full mx-4 h-[75vh]">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           {/* Header with Title, Description and URL */}

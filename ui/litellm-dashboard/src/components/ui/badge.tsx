@@ -1,8 +1,5 @@
-"use client";
-
 import * as React from "react";
 import { type VariantProps } from "cva";
-import { useRender } from "@base-ui/react/use-render";
 
 import { cn, cva } from "@/lib/cva.config";
 
@@ -24,24 +21,18 @@ const badgeVariants = cva({
   },
 });
 
-type BadgeProps = React.ComponentPropsWithoutRef<"span"> &
-  VariantProps<typeof badgeVariants> & {
-    render?: useRender.RenderProp;
-  };
-
-const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(
-  ({ className, variant = "default", render, ...props }, ref) =>
-    useRender({
-      render: render ?? <span />,
-      ref,
-      props: {
-        "data-slot": "badge",
-        "data-variant": variant,
-        className: cn(badgeVariants({ variant }), className),
-        ...props,
-      },
-    }),
-);
+const Badge = React.forwardRef<
+  HTMLSpanElement,
+  React.ComponentPropsWithoutRef<"span"> & VariantProps<typeof badgeVariants>
+>(({ className, variant = "default", ...props }, ref) => (
+  <span
+    ref={ref}
+    data-slot="badge"
+    data-variant={variant}
+    className={cn(badgeVariants({ variant }), className)}
+    {...props}
+  />
+));
 Badge.displayName = "Badge";
 
 export { Badge, badgeVariants };

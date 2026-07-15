@@ -1,9 +1,9 @@
-import { AreaChart, BarChart, CustomLegend, CustomTooltip } from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
-import { Card, Grid, Text, Title } from "@tremor/react";
+import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
 import { Collapse } from "antd";
 import React from "react";
+import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";

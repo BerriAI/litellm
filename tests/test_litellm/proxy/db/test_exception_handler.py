@@ -286,46 +286,6 @@ def test_is_database_service_unavailable_error_excludes_non_infra(error):
     )
 
 
-def _wrapped_like_get_user_object(original):
-    """Reproduce get_user_object's exception contract (litellm/proxy/auth/auth_checks.py): it catches
-    every DB failure in a broad ``except`` and re-raises a bare ``ValueError``, so the original error
-    survives only as ``__context__``. Building it by raising inside an ``except`` sets ``__context__``
-    exactly as production does."""
-    try:
-        raise original
-    except BaseException:
-        try:
-            raise ValueError("User doesn't exist in db. Got error - x")
-        except ValueError as wrapped:
-            return wrapped
-
-
-def test_is_database_service_unavailable_error_in_chain_sees_through_wrapping():
-    """The chain-aware classifier must see a real outage that a caller wrapped in a different type.
-    get_user_object turns a connection error into a bare ValueError whose type check reads as non-infra,
-    so the single-exception check returns False and only the chain walk recovers the outage. A missing
-    user (whose wrapped cause is a plain Exception) must stay non-infra on both."""
-    outage = _wrapped_like_get_user_object(ConnectionError("can't reach database server"))
-    missing_user = _wrapped_like_get_user_object(Exception())
-
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(outage) is False
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(outage) is True
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(missing_user) is False
-    # parity: a raw outage with no wrapper is still an outage, and a plain ValueError is not
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(ConnectionError("boom")) is True
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(ValueError("nope")) is False
-
-
-def test_is_database_service_unavailable_error_in_chain_terminates_on_a_cause_cycle():
-    """The walk must terminate on a pathological __cause__ cycle rather than hang. Neither link is an
-    outage, so the bounded walk returns False instead of looping forever."""
-    first = ValueError("first")
-    second = ValueError("second")
-    first.__cause__ = second
-    second.__cause__ = first
-    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(first) is False
-
-
 def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     """asyncpg connection/interface errors map to service-unavailable. asyncpg
     is not a hard dependency, so inject a stand-in module to exercise the

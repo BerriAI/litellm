@@ -1,6 +1,6 @@
 "use client";
 
-import PoliciesPanel from "./_components";
+import PoliciesPanel from "@/components/policies";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Policies() {

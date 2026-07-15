@@ -36,7 +36,6 @@ IGNORE_FUNCTIONS = [
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
-    "_walk_payload",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER).
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
@@ -53,8 +52,6 @@ IGNORE_FUNCTIONS = [
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
     "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
-    "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
-    "_filter_mcp_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the MCP call at the cap.
 ]
 
 

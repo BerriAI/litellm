@@ -269,9 +269,18 @@ class PillarGuardrail(CustomGuardrail):
                 )
                 self.timeout = self.DEFAULT_TIMEOUT
 
+        # Define supported event hooks
+        supported_event_hooks = [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]
+
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
 
@@ -821,13 +830,3 @@ class PillarGuardrail(CustomGuardrail):
         )
 
         return PillarGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-        ]

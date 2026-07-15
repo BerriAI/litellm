@@ -42,7 +42,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_env_vars_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
+from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
@@ -468,10 +468,7 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     Handle the key type.
     """
     key_type = data.key_type
-    if key_type is None:
-        data_json.pop("key_type", None)
-        return data_json
-    data_json["key_type"] = key_type.value
+    data_json.pop("key_type", None)
     if key_type == LiteLLMKeyType.LLM_API:
         data_json["allowed_routes"] = ["llm_api_routes"]
     elif key_type == LiteLLMKeyType.MANAGEMENT:
@@ -3569,7 +3566,6 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
-    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
@@ -3710,7 +3706,6 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
-            "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
@@ -3777,10 +3772,7 @@ async def generate_key_helper_fn(
                 return user_data
 
             ## CREATE KEY
-            verbose_proxy_logger.debug(
-                "prisma_client: Creating Key= %s",
-                {**key_data, "token": hash_token(token=token)},
-            )
+            verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
@@ -5149,9 +5141,6 @@ async def get_member_team_ids(
     return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
-VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
-
-
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -5191,10 +5180,6 @@ async def list_keys(
         False,
         description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
-    expires: str | None = Query(
-        None,
-        description="Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration.",
-    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -5228,12 +5213,6 @@ async def list_keys(
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Invalid status value. Currently only 'deleted' is supported."},
-            )
-
-        if isinstance(expires, str) and expires not in VALID_EXPIRES_FILTER_VALUES:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Invalid expires value. Supported: 'active', 'expired'."},
             )
 
         complete_user_info = await validate_key_list_check(
@@ -5316,7 +5295,6 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
-            expires_filter=expires if isinstance(expires, str) else None,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5524,12 +5502,6 @@ def _validate_sort_params(sort_by: Optional[str], sort_order: str) -> Optional[D
     return order_by
 
 
-def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, Any]:
-    if expires_filter == "expired":
-        return {"AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]}
-    return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
-
-
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5544,7 +5516,6 @@ def _build_key_filter_conditions(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
-    expires_filter: str | None = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5652,8 +5623,6 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
-    if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
-        where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5683,7 +5652,6 @@ async def _list_key_helper(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
-    expires_filter: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5721,7 +5689,6 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
-        expires_filter=expires_filter,
     )
 
     # Calculate skip for pagination

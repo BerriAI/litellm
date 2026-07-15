@@ -13,7 +13,6 @@ interface MCPSemanticFilterTestPanelProps {
   onTest: () => void;
   filterEnabled: boolean;
   testResult: TestResult | null;
-  testError: string | null;
   curlCommand: string;
 }
 
@@ -27,7 +26,6 @@ export default function MCPSemanticFilterTestPanel({
   onTest,
   filterEnabled,
   testResult,
-  testError,
   curlCommand,
 }: MCPSemanticFilterTestPanelProps) {
   return (
@@ -81,16 +79,6 @@ export default function MCPSemanticFilterTestPanel({
                     message="Semantic filtering is disabled"
                     description="Enable semantic filtering and save settings to test the filter."
                     showIcon
-                  />
-                )}
-
-                {testError && (
-                  <Alert
-                    type="error"
-                    message="Semantic filtering did not run"
-                    description={testError}
-                    showIcon
-                    style={{ marginBottom: 16 }}
                   />
                 )}
 

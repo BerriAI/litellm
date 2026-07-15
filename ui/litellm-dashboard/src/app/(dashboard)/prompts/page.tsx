@@ -1,6 +1,6 @@
 "use client";
 
-import PromptsPanel from "./_components";
+import PromptsPanel from "./components";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 

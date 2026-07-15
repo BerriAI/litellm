@@ -36,7 +36,7 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 
 from fastapi import HTTPException
 
@@ -121,9 +121,18 @@ class CustomCodeGuardrail(CustomGuardrail):
         self._compile_lock = threading.Lock()
         self._compile_error: Optional[str] = None
 
+        supported_event_hooks = [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.logging_only,
+        ]
+
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
+            supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
 
@@ -134,17 +143,6 @@ class CustomCodeGuardrail(CustomGuardrail):
     def get_config_model() -> Optional[Type[GuardrailConfigModel]]:
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-            GuardrailEventHooks.logging_only,
-        ]
 
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -102,35 +101,6 @@ async def test_insert_data_user_organization_fk_raises_400(
     raised = excinfo.value
     assert "Foreign Key Constraint failed" in raised.detail["error"]
     assert raised.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_insert_data_debug_log_hashes_token(
-    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Regression for LIT-4356: the raw virtual key must never reach a logger,
-    even for short/nonstandard key formats that bypass the regex-based
-    SecretRedactionFilter."""
-    token = "sk-short-secret"
-    expected_hash = hashlib.sha256(token.encode()).hexdigest()
-    prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=SimpleNamespace(token=expected_hash))
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-        await prisma_client.insert_data(data={"token": token, "key_alias": "redaction-repro"}, table_name="key")
-    log_text = "\n".join(record.getMessage() for record in caplog.records)
-    assert token not in log_text
-    assert expected_hash in log_text
-
-
-@pytest.mark.asyncio
-async def test_insert_data_debug_log_tolerates_none_token(
-    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A None token must not crash the redacting debug log added for LIT-4356."""
-    prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=SimpleNamespace(user_id="u1"))
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-        result = await prisma_client.insert_data(data={"user_id": "u1", "token": None}, table_name="user")
-    assert result.user_id == "u1"
-    assert any("insert_data" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

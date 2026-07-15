@@ -62,86 +62,6 @@ def test_openai_gpt_5_6_model_info(model):
     assert provider == "openai"
 
 
-AZURE_GLOBAL_MODELS = (
-    "azure/gpt-5.6",
-    "azure/gpt-5.6-sol",
-    "azure/gpt-5.6-terra",
-    "azure/gpt-5.6-luna",
-)
-
-AZURE_REGIONAL_MODELS = tuple(
-    f"azure/{region}/{tier}"
-    for region in ("us", "eu")
-    for tier in ("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
-)
-
-
-def _tier_key(azure_model):
-    return azure_model.split("/")[-1]
-
-
-def _load_main():
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        return json.load(f)
-
-
-@pytest.mark.parametrize("model", AZURE_GLOBAL_MODELS)
-def test_azure_gpt_5_6_global_model_info(model):
-    model_cost = _load_main()
-    info = model_cost.get(model)
-    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "azure"
-    assert info["mode"] == "chat"
-
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
-    assert info["input_cost_per_token"] == input_cost
-    assert info["output_cost_per_token"] == output_cost
-    assert info["cache_read_input_token_cost"] == cache_read_cost
-
-    assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
-    assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
-    assert info["input_cost_per_token_priority"] == pytest.approx(input_cost * 2)
-    assert info["output_cost_per_token_priority"] == pytest.approx(output_cost * 2)
-    assert info["input_cost_per_token_above_272k_tokens_priority"] == pytest.approx(input_cost * 4)
-    assert info["output_cost_per_token_above_272k_tokens_priority"] == pytest.approx(output_cost * 3)
-
-    assert info["max_input_tokens"] == 1050000
-    assert info["max_output_tokens"] == 128000
-    assert info["supports_reasoning"] is True
-
-    routed_model, provider, _, _ = get_llm_provider(model=model)
-    assert provider == "azure"
-
-
-@pytest.mark.parametrize("model", AZURE_REGIONAL_MODELS)
-def test_azure_gpt_5_6_regional_model_info(model):
-    model_cost = _load_main()
-    info = model_cost.get(model)
-    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "azure"
-    assert info["mode"] == "chat"
-
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
-
-    assert info["input_cost_per_token"] == pytest.approx(input_cost * 1.1)
-    assert info["output_cost_per_token"] == pytest.approx(output_cost * 1.1)
-    assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost * 1.1)
-    assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2.2)
-    assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.65)
-    assert info["input_cost_per_token_priority"] == pytest.approx(input_cost * 2.75)
-    assert info["output_cost_per_token_priority"] == pytest.approx(output_cost * 2.75)
-
-    assert info["max_input_tokens"] == 1050000
-    assert info["max_output_tokens"] == 128000
-    assert info["supports_reasoning"] is True
-
-    _, provider, _, _ = get_llm_provider(model=model)
-    assert provider == "azure"
-
-
 def test_gpt_5_6_backup_matches_main():
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     repo_root = Path(__file__).parents[2]
@@ -153,7 +73,7 @@ def test_gpt_5_6_backup_matches_main():
     with open(backup_path) as f:
         backup_cost = json.load(f)
 
-    for model in GPT_5_6_MODELS + AZURE_GLOBAL_MODELS + AZURE_REGIONAL_MODELS:
+    for model in GPT_5_6_MODELS:
         assert backup_cost.get(model) == main_cost.get(model), (
             f"{model} differs between main and backup model cost maps"
         )

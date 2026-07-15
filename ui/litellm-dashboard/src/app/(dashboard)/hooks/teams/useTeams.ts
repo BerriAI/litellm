@@ -84,24 +84,6 @@ export const teamListCall = async (
   }
 };
 
-export const teamsTableKeys = createQueryKeys("teamsTable");
-
-export const useTeamsTable = (
-  page: number,
-  pageSize: number,
-  options: TeamListCallOptions = {},
-): UseQueryResult<TeamsResponse> => {
-  const { accessToken } = useAuthorized();
-
-  return useQuery<TeamsResponse>({
-    queryKey: teamsTableKeys.list({ page, limit: pageSize, ...options }),
-    queryFn: async () => await teamListCall(accessToken!, page, pageSize, options),
-    enabled: Boolean(accessToken),
-    staleTime: 30000,
-    placeholderData: keepPreviousData,
-  });
-};
-
 const teamKeys = createQueryKeys("teams");
 export const useTeams = (): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();

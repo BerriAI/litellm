@@ -1644,63 +1644,11 @@ class TestXecGuardLoggingHook:
             )
             assert out_kwargs is kwargs
             assert out_result is result
-        info_list = kwargs["standard_logging_object"]["guardrail_information"]
-        assert isinstance(info_list, list), "guardrail_information must be a list"
-        assert len(info_list) == 1
-        info = info_list[0]
+        info = kwargs["standard_logging_object"]["guardrail_information"]
         assert info["guardrail_mode"] == "logging_only"
-        assert info["guardrail_name"] == "test-xecguard"
+        assert info["guardrail_name"] == "xecguard"
         assert info["guardrail_status"] == "success"
         assert info["guardrail_response"]["trace_id"] == "lg-1"
-
-    @pytest.mark.asyncio
-    async def test_async_logging_hook_appends_to_existing_guardrail_info(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        resp = _make_response({"decision": "SAFE", "trace_id": "lg-4"})
-        prior_entry = {"guardrail_name": "other-guardrail"}
-        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
-            kwargs = {
-                **mock_request_data,
-                "standard_logging_object": {"guardrail_information": [prior_entry]},
-            }
-            await xecguard_guardrail.async_logging_hook(
-                kwargs=kwargs,
-                result=_build_model_response("some answer"),
-                call_type="acompletion",
-            )
-        info_list = kwargs["standard_logging_object"]["guardrail_information"]
-        assert len(info_list) == 2
-        assert info_list[0] is prior_entry
-        assert info_list[1]["guardrail_name"] == "test-xecguard"
-        assert info_list[1]["guardrail_response"]["trace_id"] == "lg-4"
-
-    @pytest.mark.asyncio
-    async def test_async_logging_hook_sanitizes_scan_result(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        resp = _make_response(
-            {
-                "decision": "SAFE",
-                "trace_id": "lg-5",
-                "secret_fields": {"authorization": "Bearer xgs_raw"},
-                "detections": [{"match": "raw matched span", "policy": "pii"}],
-                "api_key": "xgs_super_secret_value",
-            }
-        )
-        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
-            kwargs = {**mock_request_data, "standard_logging_object": {}}
-            await xecguard_guardrail.async_logging_hook(
-                kwargs=kwargs,
-                result=_build_model_response("some answer"),
-                call_type="acompletion",
-            )
-        info = kwargs["standard_logging_object"]["guardrail_information"][0]
-        guardrail_response = info["guardrail_response"]
-        assert "secret_fields" not in guardrail_response
-        assert guardrail_response["detections"][0]["match"] == "[REDACTED]"
-        assert guardrail_response["api_key"] != "xgs_super_secret_value"
-        assert guardrail_response["trace_id"] == "lg-5"
 
     @pytest.mark.asyncio
     async def test_async_logging_hook_without_response_records_info(
@@ -1732,9 +1680,7 @@ class TestXecGuardLoggingHook:
                 result=_build_model_response("x"),
                 call_type="acompletion",
             )
-        info_list = kwargs["standard_logging_object"]["guardrail_information"]
-        assert isinstance(info_list, list), "guardrail_information must be a list"
-        info = info_list[0]
+        info = kwargs["standard_logging_object"]["guardrail_information"]
         assert info["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio

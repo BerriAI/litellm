@@ -12,7 +12,6 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 
 from e2e_http import (
     NoBody,
@@ -51,8 +50,6 @@ from models import (
     OcrResponse,
     SpendLogRow,
     SpendLogs,
-    SpendLogsPage,
-    SpendLogsPageParams,
     SpendLogsParams,
 )
 from e2e_config import (
@@ -257,28 +254,6 @@ class Gateway:
                 return logs.root
             case _:
                 return []
-
-    def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
-        def fetch(page: int) -> SpendLogsPage:
-            return unwrap(
-                self.transport.get(
-                    "/spend/logs/v2",
-                    headers=self.transport.master,
-                    params=SpendLogsPageParams(
-                        start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
-                        end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
-                        page=page,
-                        page_size=100,
-                    ),
-                    response_type=SpendLogsPage,
-                )
-            )
-
-        first = fetch(1)
-        return [
-            *first.data,
-            *(row for page in range(2, first.total_pages + 1) for row in fetch(page).data),
-        ]
 
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None

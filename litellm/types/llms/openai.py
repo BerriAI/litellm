@@ -1185,7 +1185,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: Optional[int] = None
+    reasoning_tokens: int = 0
 
     text_tokens: Optional[int] = None
 
@@ -1720,7 +1720,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[Union[str, Dict[str, Any]]] = None
+    param: Optional[str] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):

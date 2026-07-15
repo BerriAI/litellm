@@ -30,7 +30,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
-    GuardrailEventHooks,
     GuardrailItem,
     LakeraCategoryThresholds,
     Role,
@@ -47,13 +46,6 @@ INPUT_POSITIONING_MAP = {
 
 
 class lakeraAI_Moderation(CustomGuardrail):
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-        ]
-
     def __init__(
         self,
         moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
@@ -62,7 +54,6 @@ class lakeraAI_Moderation(CustomGuardrail):
         api_key: Optional[str] = None,
         **kwargs,
     ):
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check

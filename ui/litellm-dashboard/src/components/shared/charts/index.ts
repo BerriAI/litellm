@@ -10,4 +10,3 @@ export {
 } from "./chart_tooltip";
 export { CHART_COLOR_HEX, DEFAULT_COLOR_CYCLE, categoryFills, chartColorValue, type ChartColor } from "./colors";
 export { DonutChart, type DonutChartProps } from "./donut_chart";
-export { LineChart, type LineChartCurveType, type LineChartProps } from "./line_chart";

@@ -21,10 +21,6 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     and Azure endpoint format.
     """
 
-    @property
-    def custom_llm_provider(self) -> Optional[str]:
-        return "azure_ai"
-
     def should_strip_billing_metadata(self) -> bool:
         return True
 

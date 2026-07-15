@@ -19,7 +19,7 @@ Same thing for bug fixes. The tests should make it so that this specific bug can
 
 End-to-end tests belong in `tests/e2e/` and must follow the harness conventions documented in that directory's `CLAUDE.md`
 
-When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose for internal contributors; external / OSS contributions target the current daily OSS branch instead, named `litellm_oss_daily_YYYY_MM_DD` (a fresh one is cut each weekday, so use the most recent)
+When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
 When writing a PR body, treat the comments and imperative instructions inside @.github/pull_request_template.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/pull_request_template.md from disk before writing a PR body to make sure you see every comment rule
 
@@ -38,8 +38,6 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
 Python max line length is 120, not 88
-
-On a fresh worktree or clone, run `make bootstrap` before anything else. It provisions everything tests, `make pre-commit`, and a local proxy need
 
 Run tests before you commit. Also, run `make pre-commit` right before each commit, which generates types (as needed) and formats/lints your code. Any errors found must be fixed. It only runs when there are staged frontend and/or backend changes and calculates violations, generates types, etc. based on the worktree, so stage what you need or stash/delete unwanted files in litellm/ or ui/ (where backend and frontend lint run, respectively) before running it. If it fails because dashboard api types are stale, it already regenerated them for you. You just need to stage the schema.d.ts, re-run `make pre-commit` to confirm it passes, and commit
 

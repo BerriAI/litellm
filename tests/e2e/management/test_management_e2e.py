@@ -111,7 +111,7 @@ class TestKeyRoutes:
         key = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242, rpm_limit=424243),
+            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242),
         )
 
         info = client.gateway.key_info(key)
@@ -121,9 +121,6 @@ class TestKeyRoutes:
         )
         assert info.tpm_limit == 424242, (
             f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
-        )
-        assert info.rpm_limit == 424243, (
-            f"/key/info reports rpm_limit {info.rpm_limit}, configured 424243"
         )
 
         _poll_chat_ok(client, key, "gemini-2.5-flash")

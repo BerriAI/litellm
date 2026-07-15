@@ -1,6 +1,6 @@
 "use client";
 
-import AgentsPanel from "./_components/AgentsPanel";
+import AgentsPanel from "@/components/agents";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 

@@ -3,8 +3,6 @@
 import React, { useState } from "react";
 import { Modal, Input, Switch } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { fetchClient } from "@/lib/http/api";
-import { ApiError } from "@/lib/http/client";
 import {
   KeyOutlined,
   LockOutlined,
@@ -16,22 +14,21 @@ import {
 } from "@ant-design/icons";
 import { MCPServer } from "./types";
 
-const byokSaveErrorMessage = (e: unknown): string => {
-  if (e instanceof ApiError) {
-    const detail = (e.body as { detail?: { error?: string } } | null)?.detail?.error;
-    if (detail) return detail;
-  }
-  return e instanceof Error && e.message ? e.message : "Failed to connect";
-};
-
 interface ByokCredentialModalProps {
   server: MCPServer;
   open: boolean;
   onClose: () => void;
   onSuccess: (serverId: string) => void;
+  accessToken: string;
 }
 
-export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server, open, onClose, onSuccess }) => {
+export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
+  server,
+  open,
+  onClose,
+  onSuccess,
+  accessToken,
+}) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [apiKey, setApiKey] = useState("");
   const [saveKey, setSaveKey] = useState(true);
@@ -55,15 +52,23 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
     }
     setLoading(true);
     try {
-      await fetchClient.POST("/v1/mcp/server/{server_id}/user-credential", {
-        params: { path: { server_id: server.server_id } },
-        body: { credential: apiKey.trim(), save: saveKey },
+      const response = await fetch(`/v1/mcp/server/${server.server_id}/user-credential`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ credential: apiKey.trim(), save: saveKey }),
       });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err?.detail?.error || "Failed to save credential");
+      }
       MessageManager.success(`Connected to ${serverDisplayName}`);
       onSuccess(server.server_id);
       handleClose();
-    } catch (e) {
-      MessageManager.error(byokSaveErrorMessage(e));
+    } catch (e: any) {
+      MessageManager.error(e.message || "Failed to connect");
     } finally {
       setLoading(false);
     }

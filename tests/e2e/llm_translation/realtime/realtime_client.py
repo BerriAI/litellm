@@ -14,7 +14,7 @@ import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict
@@ -28,7 +28,7 @@ from models import LiteLLMParamsBody
 _M = TypeVar("_M", bound=BaseModel)
 
 
-def ws_base_url() -> str:
+def _ws_base_url() -> str:
     for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
         if PROXY_BASE_URL.startswith(scheme):
             return ws_scheme + PROXY_BASE_URL[len(scheme) :]
@@ -36,7 +36,7 @@ def ws_base_url() -> str:
 
 
 def realtime_ws_url(model: str) -> str:
-    return f"{ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
+    return f"{_ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +217,7 @@ class OutputItemDone(BaseModel):
 
 class ResponsePayload(BaseModel):
     model_config = ConfigDict(extra="allow")
-    usage: dict[str, object] | None = None
+    usage: dict[str, Any] | None = None
     output: list[OutputItem] | None = None
 
 

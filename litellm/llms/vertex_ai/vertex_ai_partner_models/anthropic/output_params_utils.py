@@ -26,7 +26,7 @@ def _model_accepts_output_config_effort(model: str) -> bool:
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    return AnthropicConfig._model_supports_effort_param(model, "vertex_ai")
+    return AnthropicConfig._model_supports_effort_param(model)
 
 
 def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:

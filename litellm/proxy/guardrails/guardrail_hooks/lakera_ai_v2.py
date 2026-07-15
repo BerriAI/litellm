@@ -29,14 +29,6 @@ from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
 
 
 class LakeraAIGuardrail(CustomGuardrail):
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-        ]
-
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -76,7 +68,6 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.metadata: Optional[Dict] = metadata
         self.dev_info: Optional[bool] = dev_info
         self.on_flagged = on_flagged or "block"
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
     async def call_v2_guard(

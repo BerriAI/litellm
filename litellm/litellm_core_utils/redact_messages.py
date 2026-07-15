@@ -38,43 +38,8 @@ def redact_message_input_output_from_custom_logger(
     litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
 ):
     if hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True:
-        return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
+        return perform_redaction(litellm_logging_obj.model_call_details, result)
     return result
-
-
-def redact_streaming_responses_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
-    """
-    Returns a copy of model_call_details whose streaming response entries are redacted deepcopies
-    when the custom logger has opted out of message logging. The shared model_call_details is left
-    untouched so other callbacks still receive the unredacted response.
-    """
-    if not (hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True):
-        return model_call_details
-    redacted_entries = {
-        streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
-        for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
-        if model_call_details.get(streaming_key) is not None
-    }
-    if not redacted_entries:
-        return model_call_details
-    return {**model_call_details, **redacted_entries}
-
-
-def _redacted_streaming_response_copy(streaming_response):
-    redacted_response = copy.deepcopy(streaming_response)
-    _redact_streaming_response(redacted_response)
-    return redacted_response
-
-
-def _redact_streaming_response(streaming_response):
-    if hasattr(streaming_response, "choices"):
-        for choice in streaming_response.choices:
-            _redact_choice_content(choice)
-        redact_vertex_ai_metadata_from_logged_object(streaming_response)
-    elif hasattr(streaming_response, "output"):
-        _redact_responses_api_output(streaming_response.output)
-        if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
-            streaming_response.reasoning = None
 
 
 def _redact_choice_content(choice):
@@ -185,13 +150,9 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
             _redact_choice_content(choice)
 
 
-def perform_redaction(model_call_details: dict, result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict, result):
     """
     Performs the actual redaction on the logging object and result.
-
-    redact_streaming_responses=False skips the in-place redaction of the shared streaming
-    response entries; per-callback redaction hands each opted-out callback its own redacted
-    copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
     model_call_details["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
@@ -201,9 +162,17 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
-    if redact_streaming_responses and model_call_details.get("stream", False) is True:
-        for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-            _redact_streaming_response(model_call_details.get(_streaming_key))
+    if model_call_details.get("stream", False) is True and "complete_streaming_response" in model_call_details:
+        _streaming_response = model_call_details["complete_streaming_response"]
+        if hasattr(_streaming_response, "choices"):
+            for choice in _streaming_response.choices:
+                _redact_choice_content(choice)
+            redact_vertex_ai_metadata_from_logged_object(_streaming_response)
+        elif hasattr(_streaming_response, "output"):
+            _redact_responses_api_output(_streaming_response.output)
+            # Redact reasoning field in ResponsesAPIResponse
+            if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
+                _streaming_response.reasoning = None
 
     # Redact result
     if result is not None:

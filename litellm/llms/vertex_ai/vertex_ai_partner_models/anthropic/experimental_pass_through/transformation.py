@@ -17,10 +17,6 @@ from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
-    @property
-    def custom_llm_provider(self) -> Optional[str]:
-        return "vertex_ai"
-
     def should_strip_billing_metadata(self) -> bool:
         return True
 

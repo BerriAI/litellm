@@ -8,7 +8,7 @@ import enum
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -71,7 +71,14 @@ class NomaV2Guardrail(CustomGuardrail):
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
             raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        if "supported_event_hooks" not in kwargs:
+            kwargs["supported_event_hooks"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.during_mcp_call,
+            ]
 
         super().__init__(**kwargs)
 
@@ -82,16 +89,6 @@ class NomaV2Guardrail(CustomGuardrail):
         )
 
         return NomaV2GuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-        ]
 
     def _get_authorization_header(self) -> str:
         if not self.api_key:

@@ -52,7 +52,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
             **kwargs: Additional arguments passed to CustomGuardrail
         """
         # Set supported event hooks - this guardrail only works on post_call
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        if "supported_event_hooks" not in kwargs:
+            kwargs["supported_event_hooks"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+            ]
 
         super().__init__(**kwargs)
 
@@ -174,13 +178,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
         return ToolPermissionGuardrailConfigModel
-
-    @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
 
     def _matches_regex(self, pattern: Optional[re.Pattern], value: Optional[str]) -> bool:
         if pattern is None:

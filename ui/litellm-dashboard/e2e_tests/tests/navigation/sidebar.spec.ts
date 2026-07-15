@@ -42,9 +42,7 @@ for (const { role, storage } of roles) {
           throw new Error(`No page mapping found for menu label: ${buttonLabel}`);
         }
 
-        // Sidebar items are links inside the `complementary` landmark; scoping
-        // there avoids the top-bar breadcrumb, which also links the page name.
-        const tab = page.getByRole("complementary").getByRole("link", { name: buttonLabel });
+        const tab = page.getByRole("menuitem", { name: buttonLabel });
         await expect(tab).toBeVisible();
 
         await tab.click();

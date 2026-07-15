@@ -124,10 +124,7 @@ export default function ModelInfoView({
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
-  const isAutoRouter =
-    modelData?.litellm_params?.auto_router_config != null ||
-    modelData?.litellm_params?.complexity_router_config != null ||
-    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
+  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&

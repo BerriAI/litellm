@@ -29,14 +29,12 @@ export const runSemanticFilterTest = async ({
   testQuery,
   setIsTesting,
   setTestResult,
-  setTestError,
 }: {
   accessToken: string;
   testModel: string;
   testQuery: string;
   setIsTesting: (value: boolean) => void;
   setTestResult: (result: TestResult | null) => void;
-  setTestError: (error: string | null) => void;
 }) => {
   if (!testQuery || !testModel || !accessToken) {
     NotificationManager.error("Please enter a query and select a model");
@@ -45,7 +43,6 @@ export const runSemanticFilterTest = async ({
 
   setIsTesting(true);
   setTestResult(null);
-  setTestError(null);
 
   try {
     const { headers } = await testMCPSemanticFilter(accessToken, testModel, testQuery);
@@ -60,8 +57,6 @@ export const runSemanticFilterTest = async ({
     NotificationManager.success("Semantic filter test completed successfully");
   } catch (error) {
     console.error("Test failed:", error);
-    const message = error instanceof Error && error.message ? error.message : "Failed to test semantic filter";
-    setTestError(message);
     NotificationManager.error("Failed to test semantic filter");
   } finally {
     setIsTesting(false);

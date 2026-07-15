@@ -76,13 +76,10 @@ so fall back to "default" (or an explicit override) to avoid a cyclic dependency
 {{- end }}
 
 {{/*
-Get redis service name.
-The bundled Redis subchart only serves sentinel in "replication" architecture
-(it rejects standalone + sentinel outright), and in that mode the sentinel
-Service is named "<release>-redis", not "<release>-redis-master".
+Get redis service name
 */}}
 {{- define "litellm.redis.serviceName" -}}
-{{- if .Values.redis.sentinel.enabled -}}
+{{- if and (eq .Values.redis.architecture "standalone") .Values.redis.sentinel.enabled -}}
 {{- printf "%s-%s" .Release.Name (default "redis" .Values.redis.nameOverride | trunc 63 | trimSuffix "-") -}}
 {{- else -}}
 {{- printf "%s-%s-master" .Release.Name (default "redis" .Values.redis.nameOverride | trunc 63 | trimSuffix "-") -}}

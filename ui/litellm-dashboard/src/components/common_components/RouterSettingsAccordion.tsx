@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
@@ -35,8 +34,6 @@ interface RouterSettingsAccordionProps {
 export interface RouterSettingsAccordionRef {
   getValue: () => RouterSettingsAccordionValue;
 }
-
-const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData }, ref) => {
@@ -307,26 +304,21 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       };
     };
 
-    const debouncedPropagate = useDebouncedCallback(
-      () => {
-        if (!onChange) {
-          return;
-        }
-        isInternalUpdateRef.current = true;
-        const finalRouterSettings = buildRouterSettings();
-        onChange({
-          router_settings: finalRouterSettings,
-        });
-      },
-      { wait: PROPAGATE_WAIT_MS },
-    );
-
     // Update parent when form values change (with debounce to avoid infinite loops)
     useEffect(() => {
       if (!onChange) {
         return;
       }
-      debouncedPropagate();
+
+      const timeoutId = setTimeout(() => {
+        isInternalUpdateRef.current = true;
+        const finalRouterSettings = buildRouterSettings();
+        onChange({
+          router_settings: finalRouterSettings,
+        });
+      }, 100);
+
+      return () => clearTimeout(timeoutId);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [formValue, fallbacks]);
 

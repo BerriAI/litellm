@@ -1,4 +1,5 @@
 import {
+  BarChart,
   Card,
   Col,
   DateRangePickerValue,
@@ -6,6 +7,7 @@ import {
   Icon,
   MultiSelect,
   MultiSelectItem,
+  Subtitle,
   Tab,
   TabGroup,
   TabList,
@@ -16,8 +18,6 @@ import {
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
-import { BarChart } from "@/components/shared/charts";
-import { Card as ChartCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { RefreshIcon } from "@heroicons/react/outline";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
@@ -25,7 +25,6 @@ import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/n
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
-import CoordinationRedisSettings from "./coordination_redis_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -62,13 +61,13 @@ interface cacheDataItem {
   // Add other properties as needed
 }
 
-type uiData = {
+interface uiData {
   name: string;
   "LLM API requests": number;
   "Cache hit": number;
   "Cached Completion Tokens": number;
   "Generated Completion Tokens": number;
-};
+}
 
 interface CacheHealthResponse {
   status?: string;
@@ -265,7 +264,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Tab>Cache Analytics</Tab>
           <Tab>Cache Health</Tab>
           <Tab>Cache Settings</Tab>
-          <Tab>Coordination Redis</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -350,41 +348,29 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </Card>
             </div>
 
-            <ChartCard className="mt-4">
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">Cache Hits vs API Requests</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <BarChart
-                  data={filteredData}
-                  stack={true}
-                  index="name"
-                  valueFormatter={valueFormatterNumbers}
-                  categories={["LLM API requests", "Cache hit"]}
-                  colors={["sky", "teal"]}
-                  yAxisWidth={48}
-                />
-              </CardContent>
-            </ChartCard>
+            <Subtitle className="mt-4">Cache Hits vs API Requests</Subtitle>
+            <BarChart
+              title="Cache Hits vs API Requests"
+              data={filteredData}
+              stack={true}
+              index="name"
+              valueFormatter={valueFormatterNumbers}
+              categories={["LLM API requests", "Cache hit"]}
+              colors={["sky", "teal"]}
+              yAxisWidth={48}
+            />
 
-            <ChartCard className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">
-                  Cached Completion Tokens vs Generated Completion Tokens
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <BarChart
-                  data={filteredData}
-                  stack={true}
-                  index="name"
-                  valueFormatter={valueFormatterNumbers}
-                  categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-                  colors={["sky", "teal"]}
-                  yAxisWidth={48}
-                />
-              </CardContent>
-            </ChartCard>
+            <Subtitle className="mt-4">Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
+            <BarChart
+              className="mt-6"
+              data={filteredData}
+              stack={true}
+              index="name"
+              valueFormatter={valueFormatterNumbers}
+              categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
+              colors={["sky", "teal"]}
+              yAxisWidth={48}
+            />
           </Card>
         </TabPanel>
         <TabPanel>
@@ -396,9 +382,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </TabPanel>
         <TabPanel>
           <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-        </TabPanel>
-        <TabPanel>
-          <CoordinationRedisSettings />
         </TabPanel>
       </TabPanels>
     </TabGroup>

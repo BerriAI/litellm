@@ -1,23 +1,17 @@
 """Unit coverage for the Gateway model-management surface (create_model /
-delete_model) and the bounded spend read-back (spend_logs_window).
+delete_model).
 
 The batches conftest and several llm_translation tests register deployments at
 runtime through gateway.create_model; when that method went missing, every batch
 test errored at fixture setup (AttributeError) before a single request reached
 the proxy. This pins the surface with a typed fake Transport so a rename or
 signature drift fails here instead of in a live stage run.
-
-spend_logs_window exists because the unpaginated /spend/logs whole-table read
-grew past the e2e runner's memory limit on stage and OOMKilled every run; these
-tests pin its /spend/logs/v2 pagination and that SpendLogsParams can no longer
-express the unfiltered read.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from batches.batch_client import BatchClient
 from e2e_gateway import Gateway
@@ -36,9 +30,6 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListResponse,
-    SpendLogsPage,
-    SpendLogsPageParams,
-    SpendLogsParams,
 )
 
 
@@ -55,8 +46,6 @@ class _RecordingTransport:
     servable_after_gets: int = 0
     models_error: UnknownApiError | None = None
     model_gets: int = 0
-    spend_total: int = 0
-    spend_gets: list[SpendLogsPageParams] = field(default_factory=list)
     _created: list[str] = field(default_factory=list)
 
     def post[R: BaseModel](
@@ -101,22 +90,6 @@ class _RecordingTransport:
             visible = self._created if self.model_gets > self.servable_after_gets else []
             return Success(
                 data=response_type.model_validate({"data": [{"id": name} for name in visible]})
-            )
-        if path == "/spend/logs/v2" and response_type is SpendLogsPage:
-            assert isinstance(params, SpendLogsPageParams)
-            self.spend_gets.append(params)
-            offset = (params.page - 1) * params.page_size
-            count = min(params.page_size, max(self.spend_total - offset, 0))
-            return Success(
-                data=response_type.model_validate(
-                    {
-                        "data": [{"request_id": f"req-{offset + i}"} for i in range(count)],
-                        "total": self.spend_total,
-                        "page": params.page,
-                        "page_size": params.page_size,
-                        "total_pages": (self.spend_total + params.page_size - 1) // params.page_size,
-                    }
-                )
             )
         raise AssertionError(f"unexpected get: {path}")
 
@@ -229,45 +202,3 @@ def test_gateway_delete_model_posts_the_model_id() -> None:
     assert path == "/model/delete"
     assert isinstance(body, ModelDeleteBody)
     assert body.id == "registered-id"
-
-
-WINDOW_START = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
-WINDOW_END = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
-
-
-def test_gateway_spend_logs_window_pages_through_every_row_in_the_window() -> None:
-    transport = _RecordingTransport(spend_total=250)
-    gateway = Gateway(transport=transport)
-
-    rows = gateway.spend_logs_window(start=WINDOW_START, end=WINDOW_END)
-
-    assert len(rows) == 250
-    assert len({row.request_id for row in rows}) == 250
-    assert [params.page for params in transport.spend_gets] == [1, 2, 3]
-    assert all(params.start_date == "2026-07-14 12:00:00" for params in transport.spend_gets)
-    assert all(params.end_date == "2026-07-14 14:00:00" for params in transport.spend_gets)
-
-
-def test_gateway_spend_logs_window_stops_at_an_exact_page_boundary() -> None:
-    transport = _RecordingTransport(spend_total=200)
-    gateway = Gateway(transport=transport)
-
-    rows = gateway.spend_logs_window(start=WINDOW_START, end=WINDOW_END)
-
-    assert len(rows) == 200
-    assert [params.page for params in transport.spend_gets] == [1, 2]
-
-
-def test_gateway_spend_logs_window_returns_empty_for_an_empty_window() -> None:
-    transport = _RecordingTransport(spend_total=0)
-    gateway = Gateway(transport=transport)
-
-    rows = gateway.spend_logs_window(start=WINDOW_START, end=WINDOW_END)
-
-    assert rows == []
-    assert [params.page for params in transport.spend_gets] == [1]
-
-
-def test_spend_logs_params_rejects_the_unfiltered_whole_table_read() -> None:
-    with pytest.raises(ValidationError, match="spend_logs_window"):
-        SpendLogsParams()

@@ -1,6 +1,6 @@
 "use client";
 
-import TagManagement from "./_components";
+import TagManagement from "@/components/tag_management";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function TagManagementPage() {

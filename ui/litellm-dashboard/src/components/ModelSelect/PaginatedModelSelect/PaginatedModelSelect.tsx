@@ -1,5 +1,4 @@
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { Select, Space, Typography } from "antd";
@@ -18,6 +17,7 @@ export interface PaginatedModelSelectProps {
 }
 
 const SCROLL_THRESHOLD = 0.8;
+const DEBOUNCE_MS = 300;
 
 export const PaginatedModelSelect = ({
   value,
@@ -30,7 +30,7 @@ export const PaginatedModelSelect = ({
 }: PaginatedModelSelectProps) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
-    wait: DEBOUNCE_WAIT_MS,
+    wait: DEBOUNCE_MS,
   });
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteModelInfo(

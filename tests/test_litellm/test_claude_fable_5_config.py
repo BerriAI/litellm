@@ -204,7 +204,7 @@ def test_adaptive_thinking_detected_for_fable_5(local_model_cost_map, model):
     maps to ``thinking.type='adaptive'`` + ``output_config.effort``."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
 
 
 @pytest.mark.parametrize(

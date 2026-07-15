@@ -136,7 +136,7 @@ def _get_spend_logs_metadata(
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
     )
-    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
+    clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -866,51 +866,6 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
             # carrier, leave intact and resume after the key match.
             pos = v_start
     return "".join(out)
-
-
-def _sanitize_guardrail_information_for_spend_logs(
-    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]],
-) -> Optional[List[StandardLoggingGuardrailInformation]]:
-    """
-    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
-    (``guardrail_request``, ``guardrail_response``, ``match_details``,
-    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
-
-    Guardrail hooks may echo the LLM request payload back into
-    ``guardrail_response``, and two first-party hooks
-    (``block_code_execution``, ``litellm_content_filter``) inline user-prompt
-    substrings into ``match_details`` / ``classification`` too, so the flag
-    must cover all four fields. Every other typed field on the entry (name,
-    provider, mode, status, timings, action, violation_categories, risk_score,
-    masked_entity_count, ...) is preserved so guardrail dashboards keep
-    working.
-
-    ``guardrail_information`` is typed ``Optional[List[...]]`` but at least
-    one writer (``xecguard``) assigns a bare dict, so normalize to a list
-    here to match OTEL's defensive read pattern; otherwise iteration would
-    yield the dict's keys and crash the whole spend-log write.
-    """
-    if guardrail_information is None or _should_store_prompts_and_responses_in_spend_logs():
-        return guardrail_information
-    entries = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
-    return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
-
-
-_PROMPT_CARRYING_GUARDRAIL_FIELDS = (
-    "guardrail_request",
-    "guardrail_response",
-    "match_details",
-    "classification",
-)
-
-
-def _redact_prompt_fields_in_guardrail_entry(
-    entry: StandardLoggingGuardrailInformation,
-) -> StandardLoggingGuardrailInformation:
-    return {
-        **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
-    }
 
 
 def _sanitize_error_information_for_spend_logs(

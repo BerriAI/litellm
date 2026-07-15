@@ -92,10 +92,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.get_litellm_params import (
-    AWS_CREDENTIAL_KWARGS_KEYS,
-    OPTIONAL_KWARGS_KEYS,
-)
+from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -5325,7 +5322,7 @@ def completion(  # type: ignore
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
-            **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
+            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,

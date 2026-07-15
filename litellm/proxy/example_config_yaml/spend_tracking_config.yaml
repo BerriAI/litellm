@@ -7,6 +7,9 @@ model_list:
 
 general_settings:
   use_redis_transaction_buffer: true
-  coordination_redis:
-    host: os.environ/REDIS_HOST
-    port: os.environ/REDIS_PORT
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: []

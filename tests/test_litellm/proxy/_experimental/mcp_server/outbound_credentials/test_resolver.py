@@ -150,29 +150,6 @@ async def test_authorization_code_isolates_by_subject():
 
 
 @pytest.mark.asyncio
-async def test_authorization_code_isolates_by_server_id_even_when_servers_share_a_url():
-    """A token stored for one server must be invisible to a different server_id pointing at the
-    same upstream URL: credentials bind to the server entry they were authorized for, so a
-    recreated or duplicated server starts unauthorized instead of inheriting the old grant. Guards
-    against any future token lookup keyed on the resource URL instead of (user_id, server_id) --
-    both the egress resolve and the has_user_token discovery check must agree."""
-    shared_url = "https://upstream.example.com"
-    store = _FakeTokenStore({("alice", "server-a"): OAuthToken(access_token="at-alice")})
-    provider = UpstreamCredentialProvider(oauth_token_store=store)
-    subject = Subject(tenant_id="", subject_id="alice")
-    spec_a = ServerSpec(server_id="server-a", resource=shared_url, config=AuthorizationCodeConfig())
-    spec_b = ServerSpec(server_id="server-b", resource=shared_url, config=AuthorizationCodeConfig())
-
-    granted = await provider.resolve_credentials(subject, spec_a)
-    fresh = await provider.resolve_credentials(subject, spec_b)
-
-    assert isinstance(granted, Ok) and _emitted(granted.ok)["Authorization"] == "Bearer at-alice"
-    assert isinstance(fresh, Error) and fresh.error.tag == "unauthorized"
-    assert await provider.has_user_token(subject, spec_a) is True
-    assert await provider.has_user_token(subject, spec_b) is False
-
-
-@pytest.mark.asyncio
 async def test_has_user_token_reflects_the_stored_token():
     present = UpstreamCredentialProvider(
         oauth_token_store=_FakeTokenStore({("alice", "s"): OAuthToken(access_token="at")})
