@@ -682,11 +682,13 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
 # filtering the full `all_litellm_params` (api_key/num_retries/...) would break
 # the call, and knobs like stream_chunk_size are read downstream (converse
 # streaming) so they are not internal. See #30301.
-MCP_INTERNAL_REQUEST_KEYS: set = {
-    "skip_mcp_handler",
-    "mcp_handler_context",
-    "_skip_mcp_handler",
-}
+MCP_INTERNAL_REQUEST_KEYS: Final = frozenset(
+    (
+        "skip_mcp_handler",
+        "mcp_handler_context",
+        "_skip_mcp_handler",
+    )
+)
 
 
 def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
@@ -707,9 +709,7 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
     if not isinstance(data, dict):
         return data
 
-    internal_params = set(MCP_INTERNAL_REQUEST_KEYS)
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
+    internal_params: Final = MCP_INTERNAL_REQUEST_KEYS | frozenset(additional_internal_params or ())
 
     return {k: v for k, v in data.items() if k not in internal_params}
 

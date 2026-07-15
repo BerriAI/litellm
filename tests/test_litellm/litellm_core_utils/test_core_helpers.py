@@ -7,16 +7,12 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
-<<<<<<< HEAD
-    LITELLM_INTERNAL_PARAMS,
+    MCP_INTERNAL_REQUEST_KEYS,
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
-=======
-    MCP_INTERNAL_REQUEST_KEYS,
->>>>>>> 8957cc20e7 (rename constant to MCP_INTERNAL_REQUEST_KEYS per review (avoid all_litellm_params name echo))
     filter_internal_params,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
