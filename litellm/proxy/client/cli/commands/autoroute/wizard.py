@@ -22,7 +22,7 @@ from .config import (
     parse_discovered_models,
     validate_config,
 )
-from .process import CONFIG_PATH
+from .process import CONFIG_PATH, secure_create
 
 
 def _is_interactive() -> bool:
@@ -113,9 +113,8 @@ def run_configure_wizard(ctx: click.Context) -> Path:
 
     model_list = build_generated_model_list(config)
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
+    with secure_create(CONFIG_PATH) as f:
         yaml.safe_dump({"model_list": model_list}, f, sort_keys=False)
-    CONFIG_PATH.chmod(0o600)
 
     click.echo(f"\nWrote {CONFIG_PATH}")
     for tier, models in tiers.items():

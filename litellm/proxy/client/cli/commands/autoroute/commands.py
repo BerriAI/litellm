@@ -23,6 +23,7 @@ from .process import (
     launch_proxy,
     poll_liveliness,
     read_pid_record,
+    secure_create,
     stream_log,
     terminate,
     write_pid_record,
@@ -52,9 +53,8 @@ def _mint_and_embed_master_key() -> str:
         "master_key": master_key,
     }
     updated: dict[str, JsonValue] = {**generated, "general_settings": updated_settings}
-    with open(CONFIG_PATH, "w") as f:
+    with secure_create(CONFIG_PATH) as f:
         yaml.safe_dump(updated, f, sort_keys=False)
-    CONFIG_PATH.chmod(0o600)
     return master_key
 
 
@@ -103,7 +103,7 @@ def up() -> None:
     )
     merged = merge_claude_settings_static_token(original_settings, base_url, master_key)
     CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CLAUDE_SETTINGS_PATH, "w") as f:
+    with secure_create(CLAUDE_SETTINGS_PATH) as f:
         json.dump(merged, f, indent=2)
 
     click.echo(f"litellm: ephemeral auto-router proxy up at {base_url} (pid {process.pid})")

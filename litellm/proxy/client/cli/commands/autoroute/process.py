@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO, Iterator
 
 import click
 import requests
@@ -18,6 +19,28 @@ AUTOROUTE_DIR = Path.home() / ".litellm" / "autorouter"
 CONFIG_PATH = AUTOROUTE_DIR / "config.yaml"
 LOG_PATH = AUTOROUTE_DIR / "proxy.log"
 PID_RECORD_PATH = AUTOROUTE_DIR / "proxy.pid.json"
+
+
+@contextlib.contextmanager
+def secure_create(path: Path) -> Iterator[IO[str]]:
+    """Open path for writing with mode 0600 fixed up before any content is written.
+
+    A plain `open(path, "w")` creates a *new* file at the umask-derived default (commonly 0644)
+    and leaves it world- or group-readable until a later `chmod` call catches up -- a real window
+    in which a file holding a credential (a proxy master key, a Claude Code auth token) is readable
+    by another local account. Passing the mode to `os.open` closes that window for a brand-new
+    file, but `O_CREAT`'s mode argument is only applied on creation: if the file already exists
+    (the common case for `~/.claude/settings.json`, which normally predates `lite autoroute up`)
+    its old, broader permissions carry over untouched. `os.fchmod` right after opening -- before a
+    single byte of the new content is written -- covers both cases.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    f: IO[str] = os.fdopen(fd, "w")
+    try:
+        yield f
+    finally:
+        f.close()
 
 
 class ProcessLaunchError(Exception):
@@ -151,6 +174,7 @@ __all__ = [
     "launch_proxy",
     "poll_liveliness",
     "read_pid_record",
+    "secure_create",
     "stream_log",
     "terminate",
     "write_pid_record",

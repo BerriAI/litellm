@@ -1,4 +1,5 @@
 import json
+import stat
 from typing import Optional
 
 import yaml
@@ -90,6 +91,7 @@ class TestUpCommand:
         def fake_wait(self, timeout=None):
             captured["settings"] = json.loads(claude_settings_path.read_text())
             captured["backup_existed"] = backup_path.exists()
+            captured["settings_mode"] = stat.S_IMODE(claude_settings_path.stat().st_mode)
             return True
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
@@ -102,6 +104,7 @@ class TestUpCommand:
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:54321"
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
         assert "apiKeyHelper" not in captured["settings"]
+        assert captured["settings_mode"] == 0o600
 
         assert terminate_calls == [99999]
         assert not pid_record_path.exists()
@@ -110,6 +113,7 @@ class TestUpCommand:
 
         written_config = yaml.safe_load(config_path.read_text())
         assert written_config["general_settings"]["master_key"] == "fixed-master-key"
+        assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 
     def test_surfaces_clean_error_and_cleans_up_when_health_check_fails(self, monkeypatch, tmp_path):
         config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
