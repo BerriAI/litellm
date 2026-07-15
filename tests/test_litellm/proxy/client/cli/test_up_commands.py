@@ -1,5 +1,6 @@
 import json
 import shutil
+import stat
 import sys
 from unittest.mock import patch
 
@@ -128,6 +129,21 @@ class TestBackupRoundTrip:
     def test_read_backup_missing_file_returns_none(self, monkeypatch, tmp_path):
         _patch_paths(monkeypatch, tmp_path)
         assert read_backup() is None
+
+    def test_write_backup_restricts_permissions_for_a_new_file(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        write_backup(BackupRecord(existed=True, content={"a": 1}))
+        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
+
+    def test_write_backup_restricts_permissions_of_a_preexisting_permissive_file(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("{}")
+        backup_path.chmod(0o644)
+
+        write_backup(BackupRecord(existed=True, content={"a": 1}))
+
+        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
 
     def test_backup_file_always_removed_after_restore(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)

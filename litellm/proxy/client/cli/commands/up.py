@@ -1,4 +1,5 @@
 import atexit
+import contextlib
 import json
 import os
 import shlex
@@ -9,7 +10,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Mapping
+from typing import IO, Iterator, Mapping
 
 import click
 from pydantic import JsonValue, TypeAdapter
@@ -71,12 +72,32 @@ def merge_claude_settings(
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
+@contextlib.contextmanager
+def secure_create(path: Path) -> Iterator[IO[str]]:
+    """Open path for writing with mode 0600 fixed up before any content is written.
+
+    A plain `open(path, "w")` creates a *new* file at the umask-derived default (commonly 0644)
+    and leaves it world- or group-readable until a later `chmod` call catches up -- a real window
+    in which a file holding a credential is readable by another local account. Passing the mode to
+    `os.open` closes that window for a brand-new file, but `O_CREAT`'s mode argument is only
+    applied on creation: if the file already exists its old, broader permissions carry over
+    untouched. `os.fchmod` right after opening -- before a single byte of the new content is
+    written -- covers both cases.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    f: IO[str] = os.fdopen(fd, "w")
+    try:
+        yield f
+    finally:
+        f.close()
+
+
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
     path = backup_path if backup_path is not None else BACKUP_PATH
     path.parent.mkdir(exist_ok=True)
-    with open(path, "w") as f:
+    with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
-    os.chmod(path, 0o600)
 
 
 def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
