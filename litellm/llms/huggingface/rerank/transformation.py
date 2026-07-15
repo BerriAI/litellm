@@ -111,8 +111,6 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                     optional_rerank_params["return_text"] = v
                 elif k == "top_n" and v is not None:
                     optional_rerank_params["top_n"] = v
-                elif k == "documents" and v is not None:
-                    optional_rerank_params["texts"] = v
                 elif k == "query" and v is not None:
                     optional_rerank_params["query"] = v
 

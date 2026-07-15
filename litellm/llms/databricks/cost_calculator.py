@@ -31,8 +31,6 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         base_model = "databricks-meta-llama-3-1-405b-instruct"
     elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith("mixtral-8x7b-instruct-v0.1"):
         base_model = "databricks-mixtral-8x7b-instruct"
-    elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith("mixtral-8x7b-instruct-v0.1"):
-        base_model = "databricks-mixtral-8x7b-instruct"
     elif model.startswith("databricks/bge-large-en") or model.startswith("bge-large-en"):
         base_model = "databricks-bge-large-en"
     elif model.startswith("databricks/gte-large-en") or model.startswith("gte-large-en"):

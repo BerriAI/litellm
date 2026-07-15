@@ -6026,11 +6026,6 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
-        elif custom_llm_provider == "baseten":
-            if "BASETEN_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("BASETEN_API_KEY")
         elif custom_llm_provider == "xai":
             if "XAI_API_KEY" in os.environ:
                 keys_in_environment = True
