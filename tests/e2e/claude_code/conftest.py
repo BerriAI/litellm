@@ -573,7 +573,7 @@ def pytest_sessionfinish(session, exitstatus):
 from claude_code._env import resolve_proxy  # noqa: E402
 from claude_code._compat_models import (  # noqa: E402
     CompatDeployment,
-    deployments_for_available_providers,
+    load_all_deployments,
 )
 
 
@@ -598,14 +598,22 @@ def _register_deployment(gateway, deployment: CompatDeployment) -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def _compat_models_registered() -> Any:
-    """Register every compat deployment whose credentials are set, then
+    """Register every compat deployment against the running proxy, then
     tear them all down on session exit.
 
     Skips silently if the proxy env is not configured (no
     ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
-    stay hermetic. Any deployment that fails to register aborts the
-    session (that is a real config bug we want surfaced before any
-    cell burns time hitting a 400)."""
+    stay hermetic.
+
+    Design note: we always attempt to register all 15 deployments,
+    regardless of what credentials are exported in the test-runner's
+    shell. The credentials live in the proxy container's environment
+    (via docker-compose ``env_file``), not the shell running pytest -
+    so gating on shell env would filter out deployments the proxy can
+    actually serve. Per-deployment ``/model/new`` failures are printed
+    but do not abort the session: the cells that need that specific
+    deployment will 400 with "Invalid model name" and fail loudly,
+    which is the right signal (missing cred on the proxy side)."""
     if resolve_proxy() is None:
         yield
         return
@@ -613,22 +621,26 @@ def _compat_models_registered() -> Any:
     from requests import RequestException
 
     gateway = _build_control_gateway()
-    deployments = deployments_for_available_providers(os.environ)
-    if not deployments:
-        yield
-        return
-
     registered_ids: list[str] = []
+    failures: list[tuple[str, str]] = []
     try:
-        for deployment in deployments:
+        for deployment in load_all_deployments():
             try:
                 model_id = _register_deployment(gateway, deployment)
+                registered_ids.append(model_id)
             except (AssertionError, RequestException) as exc:
-                raise RuntimeError(
-                    f"failed to register compat deployment "
-                    f"{deployment.model_name!r}: {exc}"
-                ) from exc
-            registered_ids.append(model_id)
+                failures.append((deployment.model_name, str(exc)))
+        if failures:
+            summary = "\n".join(
+                f"  - {name}: {reason}" for name, reason in failures
+            )
+            print(
+                f"[compat fixture] {len(failures)} of "
+                f"{len(failures) + len(registered_ids)} deployments "
+                f"failed to register (proxy likely missing that provider's "
+                f"credentials); cells that target them will fail loudly:\n"
+                f"{summary}"
+            )
         yield
     finally:
         for model_id in registered_ids:
