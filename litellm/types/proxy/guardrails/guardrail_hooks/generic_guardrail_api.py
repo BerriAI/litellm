@@ -84,6 +84,24 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    streaming_transform_mode: Optional[Literal["block_only", "incremental_diff"]] = Field(
+        default=None,
+        description=(
+            "Controls whether text modifications returned by the guardrail (action="
+            "GUARDRAIL_INTERVENED with modified texts) reach the client on the streaming "
+            "path. 'block_only' (default) preserves the historical behavior: the raw "
+            "upstream chunks are streamed and only a BLOCK terminates the stream; text "
+            "rewrites are dropped. 'incremental_diff' withholds the raw chunks and instead "
+            "emits the guardrailed text as new deltas computed by diffing the mutated "
+            "accumulated text against what has already been sent, enabling PII masking, "
+            "pseudonym reversal, redaction and similar rewrites over HTTP. Only supported "
+            "for the OpenAI chat completions streaming path (string delta.content) and "
+            "ignored when streaming_end_of_stream_only is True except for a single "
+            "post-stream synthetic chunk. Defaults to 'block_only' in "
+            "GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
@@ -126,6 +144,20 @@ class GenericGuardrailAPIRequest(BaseModel):
     model: Optional[str] = None  # the model being used for the LLM call
 
 
+def coerce_stream_holdback_value(value: Any) -> int:
+    """Coerce a single ``stream_holdback_chars`` entry to a non-negative int.
+
+    A guardrail returning a null, non-numeric, or negative holdback element must
+    not abort the streaming round, so malformed values degrade to 0 (no holdback)
+    rather than raising. Shared by response parsing (``from_dict``) and the
+    handler that applies holdback to in-process guardrail return values.
+    """
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
@@ -134,6 +166,7 @@ class GenericGuardrailAPIResponse:
     tools: Optional[List[GuardrailToolParam]]
     action: str
     blocked_reason: Optional[str]
+    stream_holdback_chars: Optional[List[int]]
 
     def __init__(
         self,
@@ -142,19 +175,29 @@ class GenericGuardrailAPIResponse:
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
         tools: Optional[List[GuardrailToolParam]] = None,
+        stream_holdback_chars: Optional[List[int]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        # Number of trailing chars, indexed the same as ``texts``, that the
+        # framework must withhold from streaming emission until the next
+        # processing round (word-boundary safety for text transformations).
+        self.stream_holdback_chars = stream_holdback_chars
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
+        raw_holdback = data.get("stream_holdback_chars")
+        stream_holdback_chars = (
+            [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
+        )
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
             texts=data.get("texts"),
             images=data.get("images"),
             tools=data.get("tools"),
+            stream_holdback_chars=stream_holdback_chars,
         )

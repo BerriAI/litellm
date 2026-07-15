@@ -515,6 +515,22 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
+    def uses_apply_guardrail_interface(self) -> bool:
+        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    def _deployment_pre_call_target(self) -> "CustomLogger":
+        if not self.uses_apply_guardrail_interface():
+            return self
+        try:
+            from litellm.proxy.utils import unified_guardrail
+        except ImportError as e:
+            raise ImportError(
+                f"Guardrail {self.guardrail_name or type(self).__name__} implements apply_guardrail, which needs "
+                "the litellm proxy dependencies to run at the deployment level. "
+                "Install them with: pip install 'litellm[proxy]'"
+            ) from e
+        return unified_guardrail
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -533,7 +549,10 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            result = await self.async_pre_call_hook(
+            target = self._deployment_pre_call_target()
+            if target is not self:
+                kwargs["guardrail_to_apply"] = self
+            result = await target.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id=kwargs.get("user_api_key_user_id"),
                     team_id=kwargs.get("user_api_key_team_id"),
@@ -543,7 +562,7 @@ class CustomGuardrail(CustomLogger):
                 ),
                 cache=dc,
                 data=kwargs,
-                call_type=call_type.value or "acompletion",  # type: ignore
+                call_type="completion" if call_type == CallTypes.completion else "acompletion",
             )
 
             if result is not None and isinstance(result, dict):

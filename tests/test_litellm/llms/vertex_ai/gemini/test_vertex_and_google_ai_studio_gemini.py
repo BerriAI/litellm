@@ -880,6 +880,12 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     )
 
 
+def test_map_response_modalities_video():
+    """The video modality maps to VIDEO instead of MODALITY_UNSPECIFIED, which Gemini rejects."""
+    v = VertexGeminiConfig()
+    assert v.map_response_modalities(["text", "video"]) == ["TEXT", "VIDEO"]
+
+
 def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     """Ensure _calculate_usage accumulates repeated modality entries."""
     v = VertexGeminiConfig()

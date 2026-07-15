@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AgentCardDiscovery from "./agent_card_discovery";
@@ -241,6 +241,54 @@ describe("AgentCardDiscovery", () => {
     expect(selection.selected_card.skills[0].id).toBe("search");
     expect(selection.selected_card.name).toBe("DB Agent");
     expect(selection.selected_card.capabilities.streaming).toBe(false);
+  });
+
+  it("does not fire discovery before the debounce wait and fires once with the last URL", async () => {
+    mockDiscover.mockResolvedValue({
+      url: "https://last.example.com",
+      agent_card: sampleCard,
+    });
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
+    const input = screen.getByPlaceholderText("https://upstream-agent.example.com");
+
+    act(() => {
+      fireEvent.change(input, { target: { value: "https://first.example.com" } });
+    });
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(mockDiscover).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.change(input, { target: { value: "https://last.example.com" } });
+    });
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(mockDiscover).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mockDiscover).toHaveBeenCalledTimes(1);
+    expect(mockDiscover).toHaveBeenCalledWith("tok", "https://last.example.com", undefined);
+  });
+
+  it("fires no discovery when unmounted mid-wait", () => {
+    const { unmount } = renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
+    const input = screen.getByPlaceholderText("https://upstream-agent.example.com");
+
+    act(() => {
+      fireEvent.change(input, { target: { value: "https://first.example.com" } });
+    });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(mockDiscover).not.toHaveBeenCalled();
   });
 
   it("blocks discover when no access token is provided", async () => {

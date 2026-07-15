@@ -361,6 +361,20 @@ class ComplexityRouterConfig(BaseModel):
         description="Minimum cosine similarity for a semantic keyword match",
     )
 
+    # Session affinity: pin the first turn's routed model for the rest of the session
+    session_affinity: bool = Field(
+        default=False,
+        description=(
+            "When True and a session_id is resolvable on the request, pin the model chosen on the "
+            "session's first turn and reuse it for every later turn, skipping re-classification."
+        ),
+    )
+    session_affinity_ttl_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="TTL for the session affinity pin; refreshed on every cache hit",
+    )
+
     model_config = ConfigDict(extra="allow")  # Allow additional fields
 
     @field_validator("tiers", mode="before")

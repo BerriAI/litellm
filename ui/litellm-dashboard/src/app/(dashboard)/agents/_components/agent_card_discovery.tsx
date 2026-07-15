@@ -11,6 +11,7 @@ import {
   SearchOutlined,
 } from "@ant-design/icons";
 
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DiscoveredAgentCard, discoverAgentCardCall } from "@/components/networking";
 import {
   ALLOWED_CAPABILITY_KEYS,
@@ -21,6 +22,8 @@ import {
 
 const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;
+
+const DISCOVERY_DEBOUNCE_WAIT_MS = 400;
 
 export interface DiscoveredAgentCardSelection {
   /** Full upstream card the proxy fetched, unmodified. */
@@ -171,6 +174,14 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey]);
 
+  const debouncedDiscover = useDebouncedCallback(
+    () => {
+      if (!accessToken || !effectiveUrl.trim()) return;
+      void handleDiscover();
+    },
+    { wait: DISCOVERY_DEBOUNCE_WAIT_MS },
+  );
+
   // Auto-discover when the URL (or parent plan) becomes available. Debounce
   // is applied uniformly so rapid changes from a watched parent form (e.g.
   // typing into a LangGraph api_base / assistant_id field) don't fire one
@@ -186,11 +197,8 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      void handleDiscover();
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [accessToken, effectiveUrl, handleDiscover]);
+    debouncedDiscover();
+  }, [accessToken, effectiveUrl, handleDiscover, debouncedDiscover]);
 
   const toggleSkill = (id: string, checked: boolean) => {
     setSelectedSkillIds((prev) => {
