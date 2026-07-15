@@ -56,6 +56,19 @@ class TestUpCommand:
         assert result.exit_code != 0
         assert "lite autoroute configure" in result.output
 
+    def test_surfaces_clean_error_on_empty_config_file(self, monkeypatch, tmp_path):
+        """A `configure` killed between secure_create's O_TRUNC and the write completing leaves an
+        empty config.yaml on disk -- yaml.safe_load(empty) returns None, and validating None as the
+        generated-config model raises a raw pydantic.ValidationError if uncaught."""
+        config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text("")
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "lite autoroute configure" in result.output
+
     def test_refuses_when_pid_record_exists_and_process_still_running(self, monkeypatch, tmp_path):
         config_path, _log_path, _settings_path, _backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
