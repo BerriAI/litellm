@@ -141,8 +141,12 @@ class HealthTracker:
         entry.last_failure = time.monotonic()
 
         if entry.failures >= self._max_failures:
+            if old_status != Status.DEAD:
+                # Only set cooldown on the initial transition to DEAD.
+                # Resetting it on every retry of an already-dead backend
+                # would prevent recovery under continuous traffic (livelock).
+                entry.cooldown_until = time.monotonic() + self._cooldown_seconds
             entry.status = Status.DEAD
-            entry.cooldown_until = time.monotonic() + self._cooldown_seconds
         elif entry.failures >= 2:
             entry.status = Status.DEGRADED
 
@@ -374,6 +378,11 @@ def get_anthropic_router() -> AnthropicRouter | None:
     now = time.monotonic()
     if _state.instance is not None and now - _state.last_config_check < _CONFIG_CHECK_INTERVAL:
         return _state.instance
+    # Also rate-limit when router is known-disabled (default for all deployments).
+    # Without this, every passthrough request deepcopies the entire proxy config
+    # even when multi-backend routing is not in use.
+    if _state.key_present is False and now - _state.last_config_check < _CONFIG_CHECK_INTERVAL:
+        return None
     _state.last_config_check = now
 
     # --- Load current config (best-effort) ---

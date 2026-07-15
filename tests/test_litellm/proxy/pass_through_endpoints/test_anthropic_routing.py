@@ -87,6 +87,37 @@ class TestHealthTracker:
         assert health.is_healthy("backend-1") is True
         assert health.status("backend-1") == Status.DEGRADED
 
+    def test_dead_cooldown_not_reset_on_retry(self):
+        """record_failure on an already-DEAD backend must NOT extend cooldown.
+
+        Under continuous traffic, dead backends are tried as last resort.
+        If each retry resets the cooldown timer, the backend can never
+        recover (livelock).  The cooldown is set once on the initial
+        transition to DEAD and must not be extended by subsequent failures.
+        """
+        health = HealthTracker(cooldown_seconds=30, max_failures=3)
+
+        # Transition to DEAD — cooldown is set once.
+        for _ in range(3):
+            health.record_failure("backend-1")
+        assert health.status("backend-1") == Status.DEAD
+
+        # Capture the cooldown timestamp after the initial transition.
+        first_cooldown = health._entries["backend-1"].cooldown_until
+        assert first_cooldown > 0
+
+        # Advance time a bit, then record another failure while DEAD.
+        import time as _time
+        _time.sleep(0.01)
+
+        health.record_failure("backend-1")
+        assert health.status("backend-1") == Status.DEAD
+
+        # Cooldown must NOT have changed — the backend recovers at the
+        # originally-scheduled time, not after the last retry.
+        second_cooldown = health._entries["backend-1"].cooldown_until
+        assert second_cooldown == first_cooldown
+
     def test_multiple_backends_tracked_independently(self):
         self.health.record_failure("backend-a")
         self.health.record_failure("backend-a")
