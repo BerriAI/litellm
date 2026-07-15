@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import (
@@ -248,11 +247,13 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         completion_tokens = token_usage.get("output_tokens", 0)
 
         ## SET FINISH REASON
+        # Imported locally to avoid a module-level cyclic import between
+        # core_helpers and this transformation module (flagged by CodeQL).
+        from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
         cohere_finish_reason = cohere_v2_chat_response.get("finish_reason")
         if cohere_finish_reason:
-            model_response.choices[0].finish_reason = map_finish_reason(
-                cohere_finish_reason
-            )
+            model_response.choices[0].finish_reason = map_finish_reason(cohere_finish_reason)
 
         model_response.created = int(time.time())
         model_response.model = model
