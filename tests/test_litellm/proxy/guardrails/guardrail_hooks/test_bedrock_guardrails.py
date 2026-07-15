@@ -3684,3 +3684,57 @@ def test_locate_message_texts_slice_returns_none_on_tool_result_count_mismatch()
     )
 
     assert result is None
+
+
+def test_select_messages_for_apply_guardrail_does_not_skip_tool_result_only_message():
+    """veria-ai review (PR #33092): _select_messages_for_apply_guardrail used
+    _count_message_texts -- which only recognizes a top-level "text" key -- to
+    decide whether the latest user message has scannable content. A message
+    whose *only* content is a tool_result block passed
+    _count_message_texts(...) == 0, so the whole INPUT scan was skipped via
+    skip_scan=True: a complete guardrail bypass under
+    experimental_use_latest_role_message_only, since Bedrock's ApplyGuardrail
+    API is never even called (worse than a masking-misalignment bug -- BLOCKED
+    detection doesn't happen either). Must use the tool-result-aware
+    extractor (get_content_items_for_message) instead."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+    tool_result_only_message = _string_tool_result_message()
+
+    selection = guardrail._select_messages_for_apply_guardrail(
+        texts=[],
+        inputs={"texts": [], "structured_messages": [tool_result_only_message]},
+        request_data={},
+        input_type="request",
+    )
+
+    assert selection.skip_scan is False
+    assert selection.filtered_messages == [tool_result_only_message]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_tool_result_only_message_under_latest_role_only():
+    """End-to-end companion to the unit test above: apply_guardrail must
+    actually call Bedrock's ApplyGuardrail API with the tool_result-only
+    message's content, not silently skip_scan and let it through unscanned."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+    tool_result_only_message = _string_tool_result_message()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "structured_messages": [tool_result_only_message]},
+            request_data={"messages": [tool_result_only_message]},
+            input_type="request",
+        )
+
+    mock_api.assert_called_once()
+    assert mock_api.call_args.kwargs["messages"] == [tool_result_only_message]

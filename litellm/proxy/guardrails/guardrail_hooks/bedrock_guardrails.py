@@ -532,7 +532,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
 
         selected_message = structured_messages[latest_user_index]
-        if self._count_message_texts(selected_message) == 0:
+        # _count_message_texts only recognizes a top-level "text" key and does not know
+        # about tool_result-nested text, so a message whose only content is a tool_result
+        # block would otherwise look empty here and skip_scan, bypassing the guardrail
+        # entirely. get_content_items_for_message is the tool-result-aware extractor.
+        if not self.get_content_items_for_message(message=selected_message):
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: latest user message has no text content, skipping INPUT scan"
             )
