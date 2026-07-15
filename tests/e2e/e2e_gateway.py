@@ -8,11 +8,12 @@ Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
 
 from __future__ import annotations
 
+import hashlib
 import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from e2e_http import (
     NoBody,
@@ -50,10 +51,8 @@ from models import (
     OcrBody,
     OcrResponse,
     SpendLogRow,
-    SpendLogs,
     SpendLogsPage,
     SpendLogsPageParams,
-    SpendLogsParams,
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
@@ -245,20 +244,29 @@ class Gateway:
 
     # ---- spend read-back ------------------------------------------------
 
-    def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
-        result = self.transport.get(
-            "/spend/logs",
-            headers=self.transport.master,
-            params=params,
-            response_type=SpendLogs,
-        )
-        match result:
-            case Success(data=logs):
-                return logs.root
-            case _:
-                return []
+    @staticmethod
+    def hash_token(key: str) -> str:
+        """The hashed token as stored on a SpendLogs row: plain sha256 of the raw key.
 
-    def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
+        /spend/logs/v2 filters on this form, not the raw `sk-` value; passing the raw
+        key silently matches zero rows."""
+        return hashlib.sha256(key.encode()).hexdigest()
+
+    def spend_logs_window(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        api_key: str | None = None,
+        request_id: str | None = None,
+    ) -> list[SpendLogRow]:
+        """Every row in [start, end], optionally filtered, via paginated /spend/logs/v2.
+
+        v2 rather than /spend/logs on purpose: /spend/logs is unbounded, and on a
+        long-lived environment it answers with the whole table (a 58MB response has
+        OOM-killed the e2e runner). v2 requires an explicit window and pages at 100.
+        `api_key` takes the hashed token; use `hash_token` on a raw key first."""
+
         def fetch(page: int) -> SpendLogsPage:
             return unwrap(
                 self.transport.get(
@@ -269,6 +277,8 @@ class Gateway:
                         end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
                         page=page,
                         page_size=100,
+                        api_key=api_key,
+                        request_id=request_id,
                     ),
                     response_type=SpendLogsPage,
                 )
@@ -280,10 +290,24 @@ class Gateway:
             *(row for page in range(2, first.total_pages + 1) for row in fetch(page).data),
         ]
 
+    def _run_window(self) -> tuple[datetime, datetime]:
+        """A window wide enough to hold anything this run wrote. v2 requires explicit
+        dates, and the row's timestamp is UTC, so a window built from local "today"
+        would miss rows that landed on the next UTC day."""
+        now = datetime.now(timezone.utc)
+        return now - timedelta(days=1), now + timedelta(days=1)
+
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
-        return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
+        """Rows for `key` (raw `sk-` value), polled to the deadline. Reads /spend/logs/v2
+        under the hashed token; see spend_logs_window for why not /spend/logs."""
+        start, end = self._run_window()
+        return self._poll(
+            lambda: self.spend_logs_window(start=start, end=end, api_key=self.hash_token(key)),
+            min_rows,
+            predicate,
+        )
 
     def poll_logs_for_request_id(
         self,
@@ -292,8 +316,9 @@ class Gateway:
         min_rows: int = 1,
         predicate: RowsPredicate | None = None,
     ) -> list[SpendLogRow]:
+        start, end = self._run_window()
         return self._poll(
-            lambda: self.spend_logs(SpendLogsParams(request_id=request_id)),
+            lambda: self.spend_logs_window(start=start, end=end, request_id=request_id),
             min_rows,
             predicate,
         )

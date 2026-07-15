@@ -18,12 +18,13 @@ fails the test; a pricing or token-count drift does not.
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from e2e_http import Result, Success
 from lifecycle import ResourceManager
-from models import ChatResponse, SpendLogs, SpendLogsParams
+from models import ChatResponse, LiteLLMParamsBody, SpendLogsPage, SpendLogsPageParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -432,22 +433,39 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
 def test_failure_call_writes_failure_status_row(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager
 ) -> None:
-    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
-    if is_ok(result):
-        pytest.skip("call unexpectedly succeeded; could not induce a failure row")
+    """A call the provider rejects writes a failure-status spend row at zero cost.
+
+    The failure is induced deterministically: a throwaway deployment credentialed with
+    an invalid provider key, so the call is a guaranteed 401 from the provider. The
+    previous trigger sent an empty prompt and hoped gemini would reject it; gemini
+    accepts it, so the test skipped on every run and this cell asserted nothing while
+    still counting as covered. Both skips are gone on purpose - a failure row that
+    stops being written is a real spend-tracking regression (an un-logged failure is a
+    hole in the audit trail), not an environment quirk to shrug at."""
+    model_name = f"e2e-badkey-{unique_marker()}"
+    model_id = client.gateway.create_model(
+        model_name,
+        LiteLLMParamsBody(model="openai/gpt-5.5", api_key="sk-e2e-deliberately-invalid"),
+    )
+    resources.defer(lambda: client.gateway.delete_model(model_id))
+    key = resources.key(models=[model_name])
+
+    result = client.chat(key, model_name, "trigger a provider failure", max_tokens=8)
+    assert not is_ok(
+        result
+    ), f"a deployment with an invalid provider key must fail, got success: {result}"
 
     rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
+        key, predicate=lambda rs: any(r.status == "failure" for r in rs)
     )
-    failure_rows = [r for r in rows if r.status == "failure"]
-    if not failure_rows:
-        pytest.skip(
-            "no failure-status row was logged for the rejected call; "
-            "failure logging is environment-specific"
-        )
-    assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
+    row = _require_row(
+        rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
+    )
+    assert (
+        row.spend or 0
+    ) == 0.0, f"a failed call must not be charged: {_summarize(rows)}"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")
@@ -464,11 +482,15 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
 def test_spend_logs_endpoint_returns_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
-    """The /spend/logs read endpoint returns a 200 carrying the key's spend, never a
-    5xx. Regression for intermittent 500s (DB query / serialization errors under load)
-    on this endpoint: every poll asserts a success response, not just a truthy row
-    list, so a 500 fails loudly instead of being swallowed as 'no rows yet'; the
-    call's nonzero spend must surface before the deadline."""
+    """The spend read endpoint returns a 200 carrying the key's spend, never a 5xx.
+    Regression for intermittent 500s (DB query / serialization errors under load): each
+    poll asserts a success response, not just a truthy row list, so a 500 fails loudly
+    instead of being swallowed as 'no rows yet'.
+
+    Reads /spend/logs/v2, not /spend/logs: the latter is unbounded and on a long-lived
+    environment answers with the whole spend table, which has OOM-killed the runner.
+    v2 takes an explicit window and pages, and it filters on the hashed token rather
+    than the raw sk- key (the raw value silently matches nothing)."""
     unwrap(
         client.chat(
             scoped_key, "gemini-2.5-flash", f"spend logs {unique_marker()}", max_tokens=16
@@ -476,21 +498,31 @@ def test_spend_logs_endpoint_returns_spend(
     )
 
     gateway = client.gateway
+    now = datetime.now(timezone.utc)
+    fmt = "%Y-%m-%d %H:%M:%S"
     deadline = time.monotonic() + gateway.poll_timeout
     while True:
         result = gateway.transport.get(
-            "/spend/logs",
+            "/spend/logs/v2",
             headers=gateway.transport.master,
-            params=SpendLogsParams(api_key=scoped_key),
-            response_type=SpendLogs,
+            params=SpendLogsPageParams(
+                start_date=(now - timedelta(days=1)).strftime(fmt),
+                end_date=(now + timedelta(days=1)).strftime(fmt),
+                page=1,
+                page_size=100,
+                api_key=gateway.hash_token(scoped_key),
+            ),
+            response_type=SpendLogsPage,
         )
-        assert isinstance(result, Success), f"/spend/logs did not return 200 OK: {result}"
-        rows = result.data.root
+        assert isinstance(
+            result, Success
+        ), f"/spend/logs/v2 did not return 200 OK: {result}"
+        rows = result.data.data
         if sum((r.spend or 0) for r in rows) > 0:
             return
         if time.monotonic() >= deadline:
             pytest.fail(
-                f"/spend/logs never surfaced the key's spend before the deadline; "
+                f"/spend/logs/v2 never surfaced the key's spend before the deadline; "
                 f"saw {_summarize(rows)}"
             )
         time.sleep(gateway.poll_interval)

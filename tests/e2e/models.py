@@ -269,13 +269,18 @@ class SpendLogsParams(BaseModel):
 
 class SpendLogsPageParams(BaseModel):
     """Query for /spend/logs/v2, which requires an explicit date window and
-    serves pages of at most 100 rows."""
+    serves pages of at most 100 rows.
+
+    `api_key` filters on the hashed token exactly as stored on the row, not the raw
+    `sk-` value: passing the raw key matches nothing and returns an empty page rather
+    than erroring. Use Gateway.hash_token to convert."""
 
     start_date: str
     end_date: str
     page: int
     page_size: int
     api_key: str | None = None
+    request_id: str | None = None
 
 
 class SpendLogsPage(BaseModel):
