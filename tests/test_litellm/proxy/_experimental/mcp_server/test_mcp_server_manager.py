@@ -7042,6 +7042,49 @@ class TestMCPToolsListAuthSurfacing:
         assert [t.name for t in result] == ["good-do_thing"]
 
 
+class TestFetchToolsTimeoutDoesNotBlockOnCleanup:
+    """Regression for #33374: the tool-listing deadline must return promptly
+    even when the MCP SDK's session/transport teardown is slow. The listing
+    runs in its own task and, on timeout, that task is cancelled and its
+    cleanup detached from the request path rather than awaited."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_at_deadline_without_awaiting_cleanup(self, monkeypatch):
+        import time
+
+        from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
+
+        cleanup_started = asyncio.Event()
+        cleanup_finished = asyncio.Event()
+
+        class HangingClient:
+            async def list_tools(self, raise_on_error: bool = False):
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    cleanup_started.set()
+                    await asyncio.sleep(0.5)
+                    cleanup_finished.set()
+                    raise
+                return []
+
+        monkeypatch.setattr(mgr_mod, "MCP_TOOL_LISTING_TIMEOUT", 0.05)
+        manager = MCPServerManager()
+
+        start = time.monotonic()
+        result = await manager._fetch_tools_with_timeout(HangingClient(), "slow-server")
+        elapsed = time.monotonic() - start
+
+        assert result == []
+        assert elapsed < 0.4, "listing must return at the deadline, not after upstream cleanup"
+        assert not cleanup_finished.is_set(), "caller must not block on the slow teardown"
+
+        # The cancelled listing keeps unwinding detached from the request path;
+        # it eventually runs (and finishes) its slow teardown in the background.
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=2)
+        assert cleanup_started.is_set()
+
+
 def test_should_strip_caller_authorization_for_token_exchange():
     """OBO: the inbound bearer is the subject token (exchanged), never forwarded upstream raw."""
     server = MCPServer(

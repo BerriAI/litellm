@@ -17,7 +17,6 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
-import anyio
 import httpx
 from fastapi import HTTPException
 from httpx import HTTPStatusError
@@ -506,6 +505,25 @@ def _extract_upstream_auth_failure(
             stack.append(current.__context__)
 
     return None
+
+
+def _detach_task(task: "asyncio.Future[Any]") -> None:
+    """Cancel a still-running task and consume its outcome in the background.
+
+    Awaiting the task from the request path would block on the MCP SDK's
+    session/transport teardown, which can hang far past the intended deadline
+    against an unresponsive upstream. Cancelling and retrieving the eventual
+    result via a done callback lets that cleanup finish detached from the
+    caller without emitting an "exception was never retrieved" warning.
+    """
+    task.cancel()
+
+    def _consume(finished: "asyncio.Future[Any]") -> None:
+        if finished.cancelled():
+            return
+        finished.exception()
+
+    task.add_done_callback(_consume)
 
 
 def _warn_on_server_name_fields(
@@ -3353,8 +3371,14 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
-        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
-        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+        The listing runs in its own task so the deadline returns promptly even
+        when the MCP SDK's session/transport teardown is slow: on timeout the
+        task is cancelled and its cleanup detached from the request path rather
+        than awaited, which could otherwise take far longer than
+        MCP_TOOL_LISTING_TIMEOUT against an unresponsive upstream. Running the
+        operation in a dedicated task also keeps cancellation inside the SDK's
+        own anyio TaskGroup instead of firing it into this coroutine's scope,
+        avoiding the asyncio.wait_for conflict from GitHub issue #20715.
 
         An upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
         instead of being swallowed to an empty tool list, regardless of the
@@ -3374,14 +3398,16 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-        try:
-            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=True)
-                verbose_logger.debug(f"Tools from {server_name}: {tools}")
-                return tools
-        except TimeoutError:
+        listing_task = asyncio.ensure_future(client.list_tools(raise_on_error=True))
+        done, _pending = await asyncio.wait({listing_task}, timeout=MCP_TOOL_LISTING_TIMEOUT)
+        if listing_task not in done:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
+            _detach_task(listing_task)
             return []
+        try:
+            tools = listing_task.result()
+            verbose_logger.debug(f"Tools from {server_name}: {tools}")
+            return tools
         except asyncio.CancelledError:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
             return []

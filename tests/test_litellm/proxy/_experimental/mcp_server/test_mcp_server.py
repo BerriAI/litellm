@@ -5121,6 +5121,168 @@ class TestGatewayCreateInitializationOptions:
         assert getattr(opts, "instructions", None) is None
 
 
+class TestGatewayInstructionsPrefetchGating:
+    """Regression for #33374: the upstream initialize-instructions prefetch must
+    only run for the `initialize` request, never for `tools/list` (or any other
+    method), so a slow upstream server does not add its initialize latency to
+    every listing. Instructions already cached from a prior probe still merge."""
+
+    def _server(self) -> MCPServer:
+        return MCPServer(
+            server_id="slow-1",
+            name="slow",
+            alias="slow",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+    @pytest.mark.asyncio
+    async def test_scope_skips_prefetch_when_not_initialize(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        srv = self._server()
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["slow-1"] = "cached hi"
+        try:
+            with (
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=[srv],
+                ),
+                patch.object(
+                    global_mcp_server_manager,
+                    "_ensure_upstream_initialize_instructions_cached",
+                    new_callable=AsyncMock,
+                ) as prefetch,
+            ):
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=None,
+                    mcp_servers=["slow"],
+                    client_ip=None,
+                    prefetch_upstream_instructions=False,
+                ):
+                    assert server.create_initialization_options().instructions == "cached hi"
+            prefetch.assert_not_awaited()
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("slow-1", None)
+
+    @pytest.mark.asyncio
+    async def test_scope_prefetches_when_initialize(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        srv = self._server()
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[srv],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ) as prefetch,
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["slow"],
+                client_ip=None,
+                prefetch_upstream_instructions=True,
+            ):
+                pass
+        prefetch.assert_awaited_once()
+
+    async def _run_streamable(self, body: bytes):
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            global_mcp_server_manager,
+            handle_streamable_http_mcp,
+        )
+
+        srv = self._server()
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer sk-test")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(UserAPIKeyAuth(api_key="sk-test"), None, None, None, None, None),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+                new_callable=AsyncMock,
+            ),
+            patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[srv],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ) as prefetch,
+            patch.object(mcp_server.session_manager_stateful, "handle_request", new_callable=AsyncMock),
+            patch.object(mcp_server.session_manager_stateful, "_server_instances", {}),
+            patch.object(mcp_server.session_manager_stateless, "handle_request", new_callable=AsyncMock),
+            patch.object(mcp_server.session_manager_stateless, "_server_instances", {}),
+        ):
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+        return prefetch
+
+    @pytest.mark.asyncio
+    async def test_streamable_tools_list_does_not_prefetch(self):
+        import json as _json
+
+        try:
+            body = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+            prefetch = await self._run_streamable(body)
+        except ImportError:
+            pytest.skip("MCP server not available")
+        prefetch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_streamable_initialize_prefetches(self):
+        import json as _json
+
+        try:
+            body = _json.dumps(
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+            ).encode()
+            prefetch = await self._run_streamable(body)
+        except ImportError:
+            pytest.skip("MCP server not available")
+        prefetch.assert_awaited()
+
+
 @pytest.mark.asyncio
 async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     """
