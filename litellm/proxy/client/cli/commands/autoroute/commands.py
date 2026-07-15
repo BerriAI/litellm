@@ -119,6 +119,11 @@ def up() -> None:
         clear_pid_record()
         restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
         click.echo("\nStopped ephemeral proxy and restored Claude Code settings.")
+        click.echo(
+            f"Restart any Claude Code session still open from this session, or another local account could "
+            f"bind the now-free port {port} and receive its requests. Do not use `lite autoroute up` on a "
+            f"shared or multi-tenant host."
+        )
 
     def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()

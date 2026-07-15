@@ -546,6 +546,8 @@ lite autoroute down   # only needed if `up` was killed uncleanly instead of Ctrl
 
 Adaptive mode's learned state does not persist across `lite autoroute up` sessions -- there is no local database, so every session starts adaptive selection cold. A Claude Code session already running before `up` started, or still running when it stops, keeps whatever settings it loaded at its own startup; like `lite up`, this is a one-time file patch and restore, not a live traffic interceptor. Only Claude Code is supported, for the same reason as `lite up`: no other supported agent (for example Cursor) has an equivalent hot-patchable config file.
 
+A session that outlives `up` (or is still running the moment you stop it) keeps sending requests, master key included, to that now-freed loopback port until you restart it. Once the ephemeral proxy process exits, nothing stops another local account on the same machine from binding that same port and receiving those requests instead -- unlike `lite up`'s `apiKeyHelper`, which is re-resolved per request, `autoroute`'s master key is a static value, so whoever receives them gets a live-looking token along with the prompt content. Restart any Claude Code session before you consider the machine clean, run `lite autoroute down` promptly rather than leaving a stopped session's settings patched, and do not run `lite autoroute up` on a shared or multi-tenant host.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:
