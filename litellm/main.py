@@ -1006,13 +1006,16 @@ def responses_api_bridge_check(
     # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
+    is_gpt_5_4_plus = OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
     if (
         custom_llm_provider in ("openai", "azure")
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and reasoning_effort is not None
-        and (reasoning_summary is not None or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools))
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or (is_gpt_5_4_plus and tools)
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
