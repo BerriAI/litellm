@@ -39,6 +39,13 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
 
 
+class KeyObjectPermission(BaseModel):
+    """object_permission on /key/generate: the MCP servers (by server_id) a key
+    may list and call. A key without one only reaches allow_all_keys servers."""
+
+    mcp_servers: list[str] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -57,6 +64,7 @@ class KeyGenerateBody(BaseModel):
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: KeyObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
