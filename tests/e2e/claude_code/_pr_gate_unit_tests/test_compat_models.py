@@ -188,6 +188,41 @@ def test_availability_selects_azure_when_both_foundry_creds_set() -> None:
         assert f"claude-{tier}-azure" in names
 
 
+def test_deployments_for_available_providers_reads_yaml_once() -> None:
+    """The availability check and the returned deployment list must
+    both come from the same parsed view of the file. An earlier shape
+    parsed the yaml twice (once for the raw params, once for the built
+    deployments) which opened a window where a config swap between
+    those reads could produce a mismatched result. A counting reader
+    injected via DI pins the invariant — no filesystem, no patching."""
+    fake_yaml = """
+model_list:
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+"""
+    call_count = 0
+
+    def counting_reader(_path: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        return fake_yaml
+
+    result = deployments_for_available_providers(
+        {"ANTHROPIC_API_KEY": "sk-test"},
+        config_path=Path("in-memory"),
+        reader=counting_reader,
+    )
+
+    assert call_count == 1, (
+        f"deployments_for_available_providers read the config yaml "
+        f"{call_count} times; must be exactly 1 to avoid a mid-setup "
+        f"config-swap inconsistency window"
+    )
+    assert [d.model_name for d in result] == ["claude-haiku-4-5"]
+
+
 def test_availability_gates_vertex_on_ambient_gcp_creds() -> None:
     """Vertex needs the yaml refs AND one of the ambient GCP env vars
     (ADC location) — an env that only sets the ``VERTEXAI_*`` project/

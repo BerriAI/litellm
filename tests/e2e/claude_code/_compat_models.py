@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import yaml
 
@@ -116,49 +116,84 @@ def _normalize_params(raw: Mapping[str, object]) -> dict[str, object]:
     return {_YAML_TO_PYDANTIC_ALIASES.get(k, k): v for k, v in raw.items()}
 
 
-def load_all_deployments(config_path: Path = CONFIG_PATH) -> tuple[CompatDeployment, ...]:
-    """Parse every ``model_list`` entry from the yaml, in file order."""
-    doc = yaml.safe_load(config_path.read_text())
+@dataclass(frozen=True, slots=True)
+class _ConfigEntry:
+    """One ``model_list`` row from the yaml, kept alongside its
+    already-built ``CompatDeployment`` so ``_is_available`` can consult
+    the *raw* yaml params (which still carry the ``os.environ/FOO``
+    strings verbatim) without a second file read or a second pydantic
+    round-trip. Pydantic's ``model_dump`` would also work, but yaml-
+    shape is closer to what a future config change would look like and
+    keeps this layer honest about the source of truth."""
+
+    raw_params: Mapping[str, object]
+    deployment: CompatDeployment
+
+
+ConfigReader = Callable[[Path], str]
+
+
+def _default_reader(path: Path) -> str:
+    return path.read_text()
+
+
+def _parse_entries(
+    config_path: Path, reader: ConfigReader = _default_reader
+) -> tuple[_ConfigEntry, ...]:
+    """Single I/O point: read the yaml once, return both the raw params
+    and the built deployment for every ``model_list`` row. ``reader``
+    is injected so tests can count file reads without patching Path."""
+    doc = yaml.safe_load(reader(config_path))
     model_list = doc.get("model_list") or []
     return tuple(
-        CompatDeployment(
-            model_name=entry["model_name"],
-            litellm_params=LiteLLMParamsBody(
-                **_normalize_params(entry["litellm_params"])
+        _ConfigEntry(
+            raw_params=entry["litellm_params"],
+            deployment=CompatDeployment(
+                model_name=entry["model_name"],
+                litellm_params=LiteLLMParamsBody(
+                    **_normalize_params(entry["litellm_params"])
+                ),
             ),
         )
         for entry in model_list
     )
 
 
-def _raw_params_by_name(
-    config_path: Path,
-) -> dict[str, Mapping[str, object]]:
-    """Return the *raw* (yaml-shape) params for each deployment so the
-    availability check sees the exact ``os.environ/FOO`` references the
-    yaml declared (pydantic strips unknown fields, which would hide
-    references the ``_is_available`` check needs to see)."""
-    doc = yaml.safe_load(config_path.read_text())
-    return {entry["model_name"]: entry["litellm_params"] for entry in doc.get("model_list") or []}
+def load_all_deployments(
+    config_path: Path = CONFIG_PATH,
+    reader: ConfigReader = _default_reader,
+) -> tuple[CompatDeployment, ...]:
+    """Every deployment in the yaml, in file order. Reads once."""
+    return tuple(e.deployment for e in _parse_entries(config_path, reader))
 
 
 def deployments_for_available_providers(
     env: Mapping[str, str],
     *,
     config_path: Path = CONFIG_PATH,
+    reader: ConfigReader = _default_reader,
 ) -> tuple[CompatDeployment, ...]:
-    """Subset of ``load_all_deployments`` the current env can serve."""
-    raw = _raw_params_by_name(config_path)
+    """Subset of ``load_all_deployments`` the current env can serve.
+
+    Parses the yaml once and reuses the same ``(raw_params, deployment)``
+    pairs for both the availability check and the returned list, so
+    there is no window where a config swap mid-setup could give the
+    availability decision a different view of the file than the
+    deployment list carries."""
     return tuple(
-        d
-        for d in load_all_deployments(config_path)
-        if _is_available(raw[d.model_name], env)
+        e.deployment
+        for e in _parse_entries(config_path, reader)
+        if _is_available(e.raw_params, env)
     )
 
 
 def all_expected_model_names(
-    *, config_path: Path = CONFIG_PATH
+    *,
+    config_path: Path = CONFIG_PATH,
+    reader: ConfigReader = _default_reader,
 ) -> frozenset[str]:
     """Every virtual name the compat matrix declares — the ground truth
     the cells are supposed to probe. Used by the drift-check test."""
-    return frozenset(d.model_name for d in load_all_deployments(config_path))
+    return frozenset(
+        e.deployment.model_name for e in _parse_entries(config_path, reader)
+    )
