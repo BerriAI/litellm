@@ -387,6 +387,77 @@ class TestPassthroughOAuth:
         assert "authorization" not in updated_headers
 
 
+FAKE_CUSTOM_BASE_KEY = "custom-gateway-token-for-testing-123"
+CUSTOM_ANTHROPIC_BASE = "https://api.cloudflare.com/client/v4/accounts/acct/ai"
+
+
+class TestPassthroughBearerForCustomBase:
+    """Tests that the /v1/messages passthrough honors use_bearer_for_custom_base."""
+
+    def test_passthrough_custom_base_uses_bearer(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"use_bearer_for_custom_base": True},
+            api_key=FAKE_CUSTOM_BASE_KEY,
+            api_base=CUSTOM_ANTHROPIC_BASE,
+        )
+
+        assert updated_headers["authorization"] == f"Bearer {FAKE_CUSTOM_BASE_KEY}"
+        assert "x-api-key" not in updated_headers
+
+    def test_passthrough_custom_base_via_litellm_params(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={
+                "api_base": CUSTOM_ANTHROPIC_BASE,
+                "use_bearer_for_custom_base": True,
+            },
+            api_key=FAKE_CUSTOM_BASE_KEY,
+            api_base=None,
+        )
+
+        assert updated_headers["authorization"] == f"Bearer {FAKE_CUSTOM_BASE_KEY}"
+        assert "x-api-key" not in updated_headers
+
+    def test_passthrough_custom_base_without_flag_uses_x_api_key(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_CUSTOM_BASE_KEY,
+            api_base=CUSTOM_ANTHROPIC_BASE,
+        )
+
+        assert updated_headers["x-api-key"] == FAKE_CUSTOM_BASE_KEY
+        assert "authorization" not in updated_headers
+
+
 class TestIsAnthropicOAuthKey:
     """Tests for is_anthropic_oauth_key helper function."""
 
