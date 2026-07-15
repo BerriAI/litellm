@@ -41,7 +41,7 @@ Documentation = "https://docs.litellm.ai"
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
 proxy = [
-    "gunicorn>=23.0.0,<24.0",
+    "gunicorn>=26.0.0,<27.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0",
     "uvloop>=0.21.0,<1.0; sys_platform != 'win32'",
