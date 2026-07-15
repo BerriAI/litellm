@@ -844,10 +844,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
-
-        A failure raised while iterating the upstream stream is surfaced as an
-        Anthropic ``error`` event so the SSE stream stays well-formed instead of
-        the connection being torn down.
         """
         try:
             async for chunk in self:
@@ -856,7 +852,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
                     yield payload.encode()
                 else:
-                    # For non-dict chunks, forward the original value unchanged
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
             verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
