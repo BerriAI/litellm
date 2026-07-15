@@ -76,6 +76,31 @@ tests:
       - notExists:
           path: spec.maxUnavailable
 
+  - it: an explicit maxUnavailable 0 is honored instead of the fallback
+    template: backend/poddisruptionbudget.yaml
+    set:
+      backend.pdb.enabled: true
+      backend.pdb.maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 0
+      - notExists:
+          path: spec.minAvailable
+
+  - it: an explicit minAvailable 0 is honored and beats a set maxUnavailable
+    template: gateway/poddisruptionbudget.yaml
+    set:
+      gateway.pdb.enabled: true
+      gateway.pdb.minAvailable: 0
+      gateway.pdb.maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 0
+      - notExists:
+          path: spec.maxUnavailable
+
   - it: enabled PDB with neither knob set falls back to maxUnavailable 1
     template: ui/poddisruptionbudget.yaml
     set:

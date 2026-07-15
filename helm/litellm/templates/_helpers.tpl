@@ -256,10 +256,18 @@ Renders nothing unless both the component and its `pdb.enabled` are on.
 Only one of minAvailable / maxUnavailable should be set; if both are,
 minAvailable wins. If neither is set, falls back to `maxUnavailable: 1` so
 an enabled-but-unconfigured PDB still permits node drains.
+
+"Set" means non-nil and non-empty-string, so an explicit 0 (e.g.
+`maxUnavailable: 0` to forbid all voluntary disruptions) is honored rather
+than silently replaced by the fallback.
 */}}
 {{- define "litellm.pdb" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
+{{- $min := $component.pdb.minAvailable -}}
+{{- $max := $component.pdb.maxUnavailable -}}
+{{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
+{{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
 {{- if and $component.enabled $component.pdb $component.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -272,10 +280,10 @@ spec:
   selector:
     matchLabels:
       {{- .selectorLabels | nindent 6 }}
-  {{- if $component.pdb.minAvailable }}
-  minAvailable: {{ $component.pdb.minAvailable }}
-  {{- else if $component.pdb.maxUnavailable }}
-  maxUnavailable: {{ $component.pdb.maxUnavailable }}
+  {{- if $minSet }}
+  minAvailable: {{ $min }}
+  {{- else if $maxSet }}
+  maxUnavailable: {{ $max }}
   {{- else }}
   maxUnavailable: 1
   {{- end }}
