@@ -1196,7 +1196,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
         elif event_type == "response.function_call_arguments.delta":
             content_part: Optional[str] = parsed_chunk.get("delta", None)
-            if content_part:
+            if isinstance(content_part, str):
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 return ModelResponseStream(
                     choices=[

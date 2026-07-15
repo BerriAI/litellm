@@ -257,3 +257,24 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
+
+
+def test_translate_responses_chunk_accepts_empty_function_argument_delta():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_test",
+            "output_index": 0,
+            "delta": "",
+            "sequence_number": 3,
+        }
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None
+    assert tool_calls[0].function is not None
+    assert tool_calls[0].function.arguments == ""
