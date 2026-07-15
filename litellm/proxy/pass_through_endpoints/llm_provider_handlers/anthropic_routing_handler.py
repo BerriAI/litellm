@@ -329,10 +329,12 @@ class _RouterState:
     key_present: bool | None = None
     config_fingerprint: str = ""
     next_retry: float = 0.0
+    last_config_check: float = 0.0
 
 
 _state = _RouterState()
 _RETRY_COOLDOWN: float = 5.0  # seconds between retries when init fails
+_CONFIG_CHECK_INTERVAL: float = 5.0  # seconds between expensive deepcopy checks
 
 
 def _config_fingerprint(config_dict: dict[str, Any]) -> str:
@@ -368,6 +370,12 @@ def get_anthropic_router() -> AnthropicRouter | None:
     fingerprint of the ``anthropic_router`` section, so ``/config/reload``
     and Admin-UI updates take effect without a restart.
     """
+    # --- Rate-limited config check: skip expensive deepcopy on every request ---
+    now = time.monotonic()
+    if _state.instance is not None and now - _state.last_config_check < _CONFIG_CHECK_INTERVAL:
+        return _state.instance
+    _state.last_config_check = now
+
     # --- Load current config (best-effort) ---
     config_dict: dict[str, Any] = {}
     config_available: bool = False
