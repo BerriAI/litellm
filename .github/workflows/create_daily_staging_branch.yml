@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   create-staging-branch:
-    if: github.repository == 'rayward-external/litellm'
+    # Upstream's release-branch factory: do NOT run it on this fork. We deploy by
+    # pinned SHA and never cut litellm OSS releases, so these dated snapshots have
+    # no consumer here and just pile up (3/day). Keep upstream's own fork guard.
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -52,7 +55,8 @@ jobs:
           fi
 
   create-internal-dev-branch:
-    if: github.repository == 'rayward-external/litellm'
+    # See above: upstream-only. Not run on this fork.
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     permissions:
       contents: write

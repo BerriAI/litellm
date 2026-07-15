@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   create-oss-agent-shin-branch:
-    if: github.repository == 'rayward-external/litellm'
+    # Upstream's release-branch factory: do NOT run it on this fork. We deploy by
+    # pinned SHA and never cut litellm OSS releases, so these dated snapshots have
+    # no consumer here and just pile up. Keep upstream's own fork guard.
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     permissions:
       contents: write
