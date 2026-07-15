@@ -3479,3 +3479,36 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_completion_cost_bills_interactions_api_response():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-2.5-flash", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/abc123",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 175,
+            "total_input_tokens": 100,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 50,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 50}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 25,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        100 * model_info["input_cost_per_token"]
+        + 50 * model_info["output_cost_per_token"]
+        + 25 * reasoning_rate
+    )
+    assert cost == pytest.approx(expected)
+    assert cost > 0
