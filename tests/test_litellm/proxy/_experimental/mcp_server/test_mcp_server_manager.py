@@ -357,6 +357,55 @@ class TestMCPServerManager:
         assert server.needs_user_oauth_token is True
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_discovered_token_url_on_authorization_endpoint_mismatch(self):
+        """The config loader always runs discovery and or-merges per field, so a yaml server with a
+        manual authorization_url has the same config-time mix-up exposure as a DB row: a discovered
+        token_url from a document advertising a different authorize endpoint must not be combined
+        with the pinned one. Scopes still backfill."""
+        manager = MCPServerManager()
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://attacker.example.com/authorize",
+            token_url="https://attacker.example.com/token",
+            scopes=["read"],
+        )
+        config = self._oauth2_config(
+            oauth2_flow="authorization_code",
+            authorization_url="https://idp.example.com/authorize",
+            token_url=None,
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.authorization_url == "https://idp.example.com/authorize"
+        assert server.token_url is None
+        assert server.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_fills_token_url_when_metadata_corroborates_manual_authorization_url(self):
+        """Corroborated metadata keeps the self-heal on the config path: when the discovered
+        document advertises the same authorize endpoint the admin pinned, its token_url fills the
+        blank field."""
+        manager = MCPServerManager()
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            scopes=["read"],
+        )
+        config = self._oauth2_config(
+            oauth2_flow="authorization_code",
+            authorization_url="https://idp.example.com/authorize/",
+            token_url=None,
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_url == "https://idp.example.com/token"
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_non_oauth2_needs_no_flow(self):
         manager = MCPServerManager()
         config = {
@@ -1056,7 +1105,9 @@ class TestMCPServerManager:
     async def test_build_from_table_discovers_scopes_when_authorization_url_is_manual(self):
         """An admin-typed authorization_url must not switch off discovery for the fields left
         blank: without the scopes_supported backfill the authorize redirect goes out scope-less
-        and IdPs like Google hard-fail it with 400 "Missing required parameter: scope"."""
+        and IdPs like Google hard-fail it with 400 "Missing required parameter: scope". Scope
+        backfill works even when the advertised authorization_endpoint differs from the manual
+        value, because scopes only steer the redirect to the trusted authorize endpoint."""
         manager = MCPServerManager()
         row = LiteLLM_MCPServerTable(
             server_id="manual-auth-url-1",
@@ -1081,8 +1132,89 @@ class TestMCPServerManager:
 
         mock_discovery.assert_awaited_once()
         assert built.authorization_url == "https://idp.example.com/manual-authorize"
-        assert built.token_url == "https://idp.example.com/token"
+        assert built.token_url is None
         assert built.scopes == ["calendar.read", "calendar.write"]
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_fills_endpoints_when_metadata_corroborates_manual_authorization_url(self):
+        """A discovered token_url is only trusted next to a manual authorization_url when the same
+        metadata document advertises that authorize endpoint, and the comparison must tolerate
+        formatting-only differences (host case, trailing slash, query params like ?prompt=consent)
+        so hand-copied URLs still self-heal."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="manual-auth-url-2",
+            alias="manual_auth_url_match",
+            description="manual authorization_url matching discovery, blank token_url",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://IDP.example.com/authorize/?prompt=consent",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=["read"],
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.authorization_url == "https://IDP.example.com/authorize/?prompt=consent"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.registration_url == "https://idp.example.com/register"
+        assert built.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "advertised_authorization_url",
+        ["https://attacker.example.com/authorize", None],
+    )
+    async def test_build_from_table_rejects_discovered_token_url_on_authorization_endpoint_mismatch(
+        self, advertised_authorization_url
+    ):
+        """Resource-rooted discovery lets a compromised upstream advertise its own authorization
+        server. With a manual authorization_url pinned, accepting that document's token_url would
+        send the authorization code, stored client secret, and PKCE verifier to the attacker's
+        token endpoint (config-time RFC 9700 mix-up), and the persist hook would make the hostile
+        endpoint durable. Both the in-memory merge and the persisted metadata must drop the
+        uncorroborated token_url and registration_url."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="manual-auth-url-3",
+            alias="manual_auth_url_mismatch",
+            description="manual authorization_url, hostile discovery document",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url=advertised_authorization_url,
+            token_url="https://attacker.example.com/token",
+            registration_url="https://attacker.example.com/register",
+            scopes=["read"],
+        )
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)),
+            patch.object(manager, "_persist_discovered_oauth_endpoints", new=AsyncMock()) as mock_persist,
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url is None
+        assert built.registration_url is None
+        assert built.scopes == ["read"]
+        persisted_metadata = mock_persist.await_args.kwargs["metadata"]
+        assert persisted_metadata.token_url is None
+        assert persisted_metadata.registration_url is None
+        assert persisted_metadata.scopes == ["read"]
 
     @pytest.mark.asyncio
     async def test_build_from_table_skips_discovery_when_all_upstream_oauth_fields_present(self):
@@ -2310,6 +2442,10 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_overrides_discovery_metadata(self):
+        """Config values win per field. The discovered token_url/registration_url do NOT fill the
+        blanks here: the document advertises a different authorization_endpoint than the manually
+        configured one, so combining its endpoints with the pinned authorize URL would be the
+        config-time mix-up the discovery gate exists to prevent."""
         manager = MCPServerManager()
 
         discovered_metadata = MCPOAuthMetadata(
@@ -2343,8 +2479,8 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.scopes == ["config"]  # config overrides discovery
         assert server.authorization_url == "https://config.example.com/auth"
-        assert server.token_url == "https://discovered.example.com/token"
-        assert server.registration_url == "https://discovered.example.com/register"
+        assert server.token_url is None
+        assert server.registration_url is None
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_filters_blank_scopes(self):

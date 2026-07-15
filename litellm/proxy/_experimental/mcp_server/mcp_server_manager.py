@@ -213,6 +213,57 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
         new_server.scopes = previous_server.scopes
 
 
+def _normalized_authorize_endpoint(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
+
+
+def _gate_discovered_endpoints_against_manual_authorization_url(
+    metadata: MCPOAuthMetadata | None,
+    manual_authorization_url: str | None,
+    server_identifier: str,
+    is_dcr_bridge: bool,
+) -> MCPOAuthMetadata | None:
+    """Refuse discovered token/registration endpoints the pinned authorize endpoint cannot vouch for.
+
+    Discovery is rooted at the MCP resource (RFC 9728), so a compromised upstream can advertise an
+    attacker-run authorization server. When the admin manually configured ``authorization_url``,
+    filling a blank ``token_url`` from that advertisement recreates the RFC 9700 mix-up attack at
+    configuration time: users sign in at the trusted authorize endpoint while the gateway redeems
+    the code, with the stored client secret and PKCE verifier, at the attacker's token endpoint.
+    Endpoints from one metadata document are only trustworthy together, so the discovered
+    ``token_url`` and ``registration_url`` are accepted only when that same document's
+    ``authorization_endpoint`` matches the pinned value (scheme+host+path; query and trailing slash
+    are not identity). Scope discovery stays ungated: scopes steer the redirect to the trusted
+    authorize endpoint and carry no credentials.
+    """
+    if metadata is None or not manual_authorization_url:
+        return metadata
+    if not metadata.token_url and not metadata.registration_url:
+        return metadata
+    if metadata.authorization_url and _normalized_authorize_endpoint(
+        manual_authorization_url
+    ) == _normalized_authorize_endpoint(metadata.authorization_url):
+        return metadata
+    bridge_note = (
+        " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
+        " short-circuit registration arm."
+        if is_dcr_bridge and metadata.registration_url
+        else ""
+    )
+    verbose_logger.warning(
+        "MCP OAuth discovery for server %s advertised authorization_endpoint %s, which does not match the "
+        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url so "
+        "authorization codes and client credentials only go to endpoints vouched for by the configured "
+        "authorization server. Configure Token URL manually if the mismatch is intentional.%s",
+        server_identifier,
+        _normalized_authorize_endpoint(metadata.authorization_url) if metadata.authorization_url else "<absent>",
+        _normalized_authorize_endpoint(manual_authorization_url),
+        bridge_note,
+    )
+    return metadata.model_copy(update={"token_url": None, "registration_url": None})
+
+
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
     """Drop a cached entry after the user stores or clears their env var values
     so the next request reads the fresh value instead of a stale one."""
@@ -1041,20 +1092,31 @@ class MCPServerManager:
             else:
                 mcp_oauth_metadata = None
 
+            gated_oauth_metadata = (
+                _gate_discovered_endpoints_against_manual_authorization_url(
+                    mcp_oauth_metadata,
+                    server_config.get("authorization_url"),
+                    server_name or server_id,
+                    bool(server_config.get("dcr_bridge")),
+                )
+                if auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+                else mcp_oauth_metadata
+            )
+
             # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
             # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
             # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
             resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
-                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+                gated_oauth_metadata.scopes if gated_oauth_metadata else None
             )
             resolved_authorization_url = server_config.get("authorization_url") or (
-                mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
+                gated_oauth_metadata.authorization_url if gated_oauth_metadata else None
             )
             resolved_token_url = server_config.get("token_url") or (
-                mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
+                gated_oauth_metadata.token_url if gated_oauth_metadata else None
             )
             resolved_registration_url = server_config.get("registration_url") or (
-                mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
+                gated_oauth_metadata.registration_url if gated_oauth_metadata else None
             )
 
             config_oauth2_flow = server_config.get("oauth2_flow", None)
@@ -1472,8 +1534,18 @@ class MCPServerManager:
                 mcp_server.server_id,
                 server_url,
             )
+        gated_oauth_metadata = (
+            _gate_discovered_endpoints_against_manual_authorization_url(
+                mcp_oauth_metadata,
+                mcp_server.authorization_url,
+                mcp_server.server_id,
+                bool(getattr(mcp_server, "dcr_bridge", None)),
+            )
+            if auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+            else mcp_oauth_metadata
+        )
 
-        resolved_scopes = scopes or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+        resolved_scopes = scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
 
         new_server = MCPServer(
             server_id=mcp_server.server_id,
@@ -1493,9 +1565,9 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
-            authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
-            token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-            registration_url=mcp_server.registration_url or getattr(mcp_oauth_metadata, "registration_url", None),
+            authorization_url=mcp_server.authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
+            token_url=mcp_server.token_url or getattr(gated_oauth_metadata, "token_url", None),
+            registration_url=mcp_server.registration_url or getattr(gated_oauth_metadata, "registration_url", None),
             token_endpoint_auth_method=(
                 credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
             ),
@@ -1555,7 +1627,7 @@ class MCPServerManager:
                 existing_authorization_url=mcp_server.authorization_url,
                 existing_token_url=mcp_server.token_url,
                 existing_scopes=scopes,
-                metadata=mcp_oauth_metadata,
+                metadata=gated_oauth_metadata,
             )
         return new_server
 
