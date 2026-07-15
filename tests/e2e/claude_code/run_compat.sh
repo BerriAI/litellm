@@ -72,6 +72,7 @@ echo "[run_compat] summary:  ${summary_path}"
 # what we want — every test in a file shares a single ThreadPoolExecutor
 # fanout, and we don't gain anything by splitting it across workers.
 start=$(date +%s)
+set +e
 COMPAT_RESULTS_PATH="${results_path}" \
 COMPAT_RATE_LIMIT_SUMMARY_PATH="${summary_path}" \
 PATH="$HOME/.local/bin:$PATH" \
@@ -88,6 +89,7 @@ uv run pytest \
     "$@"
 
 exit_code=$?
+set -e
 end=$(date +%s)
 echo "[run_compat] wall time: $((end - start))s"
 

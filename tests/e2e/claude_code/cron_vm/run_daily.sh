@@ -16,13 +16,13 @@
 #      compatibility-matrix.json.
 #   6. `gh repo clone` litellm-docs, write the JSON to a deterministic
 #      branch (`compat-matrix/<litellm>-<claude>-<UTC-date>`), commit,
-#      `git push --force-with-lease`, and `gh pr create`.
+#      `git push --force`, and `gh pr create`.
 #
 # Same-day reruns land on the same branch so they update the existing PR
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, claude, npm.
+# Required commands on $PATH: git, uv, gh, jq, curl, claude.
 # Required state: ~/litellm/litellm checked out (this file lives in it),
 # $WORKTREE is created on first run, gh is already authenticated.
 #
