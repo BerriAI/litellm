@@ -1125,6 +1125,47 @@ async def test_combined_prefix_reflects_in_s3_object_key():
     assert "myteam/apikey/" in key, f"Expected both prefixes in key: {key}"
 
 
+def test_s3_object_key_sanitizes_slashes_in_file_name():
+    """Response ids containing slashes (e.g. bedrock batch job ARNs) must not
+    create nested S3 folders; only path/prefix/date slashes are separators."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 2, 11, 0, 35, 18, 391582)
+    file_name = "time-00-35-18-391582_arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/gl18r6skk9yy"
+
+    key = get_s3_object_key(
+        s3_path="LiteLLMAPPLogs",
+        prefix="myteam/",
+        start_time=start_time,
+        s3_file_name=file_name,
+    )
+
+    assert key == (
+        "LiteLLMAPPLogs/myteam/2026-02-11/"
+        "time-00-35-18-391582_arn:aws:bedrock:us-east-1:123456789012:model-invocation-job_gl18r6skk9yy.json"
+    )
+
+
+def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
+    """End-to-end through the s3_v2 element builder: an ARN response id must
+    yield a flat file directly under the date segment."""
+    logger = S3Logger(s3_use_team_prefix=False, s3_use_key_prefix=False)
+    payload = StandardLoggingPayload(
+        id="arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/gl18r6skk9yy",
+        metadata={},
+        messages=[],
+    )
+
+    start_time = datetime(2026, 2, 11, 0, 35, 18, 391582)
+    result = logger.create_s3_batch_logging_element(start_time, payload)
+
+    assert result is not None
+    date_segment = "2026-02-11/"
+    file_segment = result.s3_object_key.split(date_segment, 1)[1]
+    assert "/" not in file_segment, f"Expected flat file under date segment, got: {result.s3_object_key}"
+    assert file_segment.endswith("model-invocation-job_gl18r6skk9yy.json")
+
+
 # --------------------------------------------------------------
 # params_source / s3_callback_params_override (audit-log decoupling)
 # --------------------------------------------------------------

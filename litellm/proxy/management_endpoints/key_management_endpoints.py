@@ -42,7 +42,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_env_vars_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
@@ -468,7 +468,10 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     Handle the key type.
     """
     key_type = data.key_type
-    data_json.pop("key_type", None)
+    if key_type is None:
+        data_json.pop("key_type", None)
+        return data_json
+    data_json["key_type"] = key_type.value
     if key_type == LiteLLMKeyType.LLM_API:
         data_json["allowed_routes"] = ["llm_api_routes"]
     elif key_type == LiteLLMKeyType.MANAGEMENT:
@@ -3566,6 +3569,7 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
@@ -3706,6 +3710,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
@@ -3772,7 +3777,10 @@ async def generate_key_helper_fn(
                 return user_data
 
             ## CREATE KEY
-            verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
+            verbose_proxy_logger.debug(
+                "prisma_client: Creating Key= %s",
+                {**key_data, "token": hash_token(token=token)},
+            )
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)

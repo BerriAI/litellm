@@ -209,6 +209,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
+    input_cost_per_video_token: Optional[float]  # for gemini omni models with video input
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -234,6 +235,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_video_token: Optional[float]  # for gemini omni models with video output
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -3046,6 +3048,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
+    output_cost_per_video_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -3055,6 +3058,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
     input_cost_per_image_token: Optional[float] = None
+    input_cost_per_video_token: Optional[float] = None
     input_cost_per_token_above_272k_tokens: Optional[float] = None
     input_cost_per_token_above_512k_tokens: Optional[float] = None
     output_cost_per_token_above_272k_tokens: Optional[float] = None
@@ -3210,6 +3214,16 @@ all_litellm_params = (
         "_litellm_tpm_reserved_model",
         "_litellm_tpm_reserved_scopes",
         "_litellm_tpm_reservation_released",
+        "auto_router_config_path",
+        "auto_router_config",
+        "auto_router_default_model",
+        "auto_router_embedding_model",
+        "complexity_router_config",
+        "complexity_router_default_model",
+        "adaptive_router_config",
+        "adaptive_router_default_model",
+        "quality_router_config",
+        "quality_router_default_model",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

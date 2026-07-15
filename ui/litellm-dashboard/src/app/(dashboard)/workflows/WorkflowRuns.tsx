@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button, Collapse, Drawer, Empty, Spin, Tooltip, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
-import { proxyBaseUrl } from "@/components/networking";
+import { getGlobalLitellmHeaderName, proxyBaseUrl } from "@/components/networking";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -507,7 +507,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
     setLoadingRuns(true);
     try {
       const res = await fetch(`${proxyBaseUrl ?? ""}/v1/workflows/runs?limit=100`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -531,10 +531,10 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         const base = proxyBaseUrl ?? "";
         const [evRes, msgRes] = await Promise.all([
           fetch(`${base}/v1/workflows/runs/${run.run_id}/events`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
+            headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` },
           }),
           fetch(`${base}/v1/workflows/runs/${run.run_id}/messages`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
+            headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` },
           }),
         ]);
         const evData = evRes.ok ? await evRes.json() : { events: [] };
