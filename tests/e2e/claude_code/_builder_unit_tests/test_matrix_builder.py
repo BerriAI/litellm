@@ -389,7 +389,23 @@ def test_build_matrix_6x5_grid_matches_published_sample():
         for feature in full_manifest["features"]
         if feature["id"] in v0_feature_ids
     ]
-    manifest = {**full_manifest, "features": v0_features}
+    # The provider list is sliced to the five v0 columns for the same
+    # reason as the rows: the sample is a frozen 6x5 baseline, and the
+    # GPT-5.6 columns added 2026-07 (whose vertex_ai_gpt cells are
+    # not_applicable by design) are exercised by their own layout tests
+    # in `test_v0_layout.py` rather than by this golden file.
+    v0_provider_ids = [
+        "anthropic",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "vertex_ai",
+        "azure",
+    ]
+    manifest = {
+        **full_manifest,
+        "features": v0_features,
+        "providers": v0_provider_ids,
+    }
 
     feature_ids = [feature["id"] for feature in manifest["features"]]
     providers = manifest["providers"]

@@ -60,6 +60,21 @@ def _bash_cells() -> Iterable[Path]:
             yield path
 
 
+def _is_exempt_stub(text: str) -> bool:
+    """Return True for cells that never drive the `claude` CLI and
+    never pass `--allowed-tools`.
+
+    Such a cell (e.g. the static `not_applicable` stubs in the
+    `vertex_ai_gpt` column) cannot grant Bash — or any tool — to a
+    model-controlled response, so the allow-rule pins below don't
+    apply to it. Both conditions are required: a file that references
+    `--allowed-tools` without a visible `run_claude` entrypoint is NOT
+    exempt and must still carry the pinned shape, so a cell can't dodge
+    the scan by hiding its driver behind an indirection.
+    """
+    return "run_claude" not in text and "--allowed-tools" not in text
+
+
 def _has_bare_bash_token(text: str) -> bool:
     """Return True if `text` contains a `"Bash"` token outside the
     `"Bash(echo pong)"` allow rule.
@@ -80,6 +95,8 @@ def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
     """The cell must pass `Bash(echo pong)` as the allow rule, not the
     unrestricted `Bash` value that was originally flagged."""
     text = cell.read_text()
+    if _is_exempt_stub(text):
+        return
     assert '"Bash(echo pong)"' in text, (
         f"{cell.relative_to(REPO_ROOT)} must restrict `--allowed-tools` to "
         f'`Bash(echo pong)` (exact-match pattern). Unrestricted `"Bash"` '
@@ -138,6 +155,8 @@ def test_bash_cell_uses_dontask_permission_mode(cell: Path) -> None:
     opposed to defaulting to "ask", which in headless mode would
     succeed without ever surfacing the security issue)."""
     text = cell.read_text()
+    if _is_exempt_stub(text):
+        return
     assert '"--permission-mode"' in text and '"dontAsk"' in text, (
         f"{cell.relative_to(REPO_ROOT)} must pass `--permission-mode dontAsk` "
         f"alongside the `Bash(echo pong)` allow rule. Without dontAsk, "
@@ -145,3 +164,28 @@ def test_bash_cell_uses_dontask_permission_mode(cell: Path) -> None:
         f"mode behavior, which in `--print` (headless) mode is non-"
         f"interactive — defeating the explicit-allow contract."
     )
+
+
+def test_is_exempt_stub_accepts_not_applicable_stub():
+    """A static not_applicable stub (no CLI driver, no tool grants) is
+    outside the Bash pin's threat model and must be exempt — this is
+    the shape of the `vertex_ai_gpt` cells."""
+    text = 'compat_result.set({"status": "not_applicable", "reason": REASON})'
+    assert _is_exempt_stub(text)
+
+
+def test_is_exempt_stub_rejects_cli_driving_cell():
+    """Any cell that drives the CLI stays subject to the pins, whether
+    or not it currently grants tools."""
+    text = (
+        "run_claude_models_parallel(models=MODELS, "
+        'extra_args=["--allowed-tools", "Bash(echo pong)"])'
+    )
+    assert not _is_exempt_stub(text)
+
+
+def test_is_exempt_stub_rejects_allowed_tools_without_visible_driver():
+    """A cell that passes `--allowed-tools` while hiding its driver
+    behind an indirection must not slip out of the pinned shape."""
+    text = 'helper(extra_args=["--allowed-tools", "Bash"])'
+    assert not _is_exempt_stub(text)

@@ -38,8 +38,11 @@ from claude_code.rate_limiter import (
     DEFAULT_RATE,
     PROVIDER_ANTHROPIC,
     PROVIDER_AZURE,
+    PROVIDER_AZURE_OPENAI,
     PROVIDER_BEDROCK_CONVERSE,
     PROVIDER_BEDROCK_INVOKE,
+    PROVIDER_BEDROCK_MANTLE,
+    PROVIDER_OPENAI,
     PROVIDER_VERTEX_AI,
     ProviderConfig,
     RateLimiter,
@@ -67,6 +70,9 @@ from claude_code.rate_limiter import (
         ("claude-opus-4-7-vertex", PROVIDER_VERTEX_AI),
         ("claude-haiku-4-5-bedrock-converse", PROVIDER_BEDROCK_CONVERSE),
         ("claude-haiku-4-5-bedrock-invoke", PROVIDER_BEDROCK_INVOKE),
+        ("gpt-5-6-sol-openai", PROVIDER_OPENAI),
+        ("gpt-5-6-terra-azure-openai", PROVIDER_AZURE_OPENAI),
+        ("gpt-5-6-luna-bedrock-mantle", PROVIDER_BEDROCK_MANTLE),
     ],
 )
 def test_infer_provider_maps_alias_suffix_to_column(model, expected):
@@ -75,6 +81,23 @@ def test_infer_provider_maps_alias_suffix_to_column(model, expected):
 
 def test_infer_provider_bedrock_converse_beats_bedrock_invoke_lookup_order():
     """Both bedrock suffixes contain `bedrock`; the more-specific suffix wins."""
+    assert infer_provider("claude-foo-bedrock-converse") == PROVIDER_BEDROCK_CONVERSE
+    assert infer_provider("claude-foo-bedrock-invoke") == PROVIDER_BEDROCK_INVOKE
+
+
+def test_infer_provider_azure_openai_beats_openai_and_azure_lookup_order():
+    """`-azure-openai` also ends with `-openai`; the more-specific
+    suffix must win so Azure OpenAI traffic doesn't drain the OpenAI
+    bucket (and never falls through to the Claude `-azure` column)."""
+    assert infer_provider("gpt-5-6-sol-azure-openai") == PROVIDER_AZURE_OPENAI
+    assert infer_provider("gpt-5-6-sol-openai") == PROVIDER_OPENAI
+    assert infer_provider("claude-opus-4-7-azure") == PROVIDER_AZURE
+
+
+def test_infer_provider_bedrock_mantle_beats_other_bedrock_suffixes():
+    """All three bedrock suffixes contain `bedrock`; each alias must
+    land in its own bucket."""
+    assert infer_provider("gpt-5-6-terra-bedrock-mantle") == PROVIDER_BEDROCK_MANTLE
     assert infer_provider("claude-foo-bedrock-converse") == PROVIDER_BEDROCK_CONVERSE
     assert infer_provider("claude-foo-bedrock-invoke") == PROVIDER_BEDROCK_INVOKE
 
@@ -112,6 +135,20 @@ def test_load_config_reads_per_provider_rate():
     assert cfg[PROVIDER_ANTHROPIC].rate_per_sec == 10.0
     assert cfg[PROVIDER_AZURE].rate_per_sec == 0.5
     assert cfg[PROVIDER_VERTEX_AI].rate_per_sec == DEFAULT_RATE
+
+
+def test_load_config_reads_gpt_provider_rates():
+    cfg = load_config(
+        env={
+            "LITELLM_COMPAT_RATE_OPENAI": "2",
+            "LITELLM_COMPAT_RATE_AZURE_OPENAI": "3",
+            "LITELLM_COMPAT_RATE_BEDROCK_MANTLE": "4",
+        }
+    )
+    assert cfg[PROVIDER_OPENAI].rate_per_sec == 2.0
+    assert cfg[PROVIDER_AZURE_OPENAI].rate_per_sec == 3.0
+    assert cfg[PROVIDER_BEDROCK_MANTLE].rate_per_sec == 4.0
+    assert cfg[PROVIDER_ANTHROPIC].rate_per_sec == DEFAULT_RATE
 
 
 def test_load_config_zero_rate_disables_provider():
