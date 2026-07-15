@@ -548,3 +548,95 @@ def pytest_sessionfinish(session, exitstatus):
     )
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     _print_rate_limit_summary(summary)
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped compat model registration.
+#
+# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-6``
+# and ``claude-sonnet-4-6-bedrock-invoke``. On stage those live in the
+# gateway's model_list at deploy time; locally the docker-config.yaml
+# under tests/e2e/ only declares one of them, so every non-haiku cell
+# 400s with ``Invalid model name``. The fixture here reconciles the two:
+# it reads ``test_config.yaml`` (the ground-truth compat matrix config)
+# and POSTs ``/model/new`` for the subset whose provider credentials are
+# actually set in the current environment, then tears them all down at
+# session end.
+#
+# Kept below the rest of the conftest so the compat-artifact hooks stay
+# grouped up top. The fixture is opt-in via autouse=True on the session
+# scope, so a cell that hits the proxy sees the deployment ready without
+# any per-cell wiring, and pure unit tests that never reach the proxy
+# pay only one skipped-liveness check.
+# ---------------------------------------------------------------------------
+
+from claude_code._env import resolve_proxy  # noqa: E402
+from claude_code._compat_models import (  # noqa: E402
+    CompatDeployment,
+    deployments_for_available_providers,
+)
+
+
+def _build_control_gateway():
+    """Local import of the shared harness so the pure-unit-test tree
+    under ``_driver_unit_tests/`` etc. never has to pull it in. The
+    control plane transport is what /model/new lives on; SplitTransport
+    routes it correctly for both monolithic and split deployments."""
+    from e2e_gateway import build_gateway
+
+    return build_gateway()
+
+
+def _register_deployment(gateway, deployment: CompatDeployment) -> str:
+    """Register one deployment and return its proxy-assigned model_id
+    once it is servable on the data plane."""
+    return gateway.create_model(
+        deployment.model_name,
+        deployment.litellm_params,
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _compat_models_registered() -> Any:
+    """Register every compat deployment whose credentials are set, then
+    tear them all down on session exit.
+
+    Skips silently if the proxy env is not configured (no
+    ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
+    stay hermetic. Any deployment that fails to register aborts the
+    session (that is a real config bug we want surfaced before any
+    cell burns time hitting a 400).
+    """
+    if resolve_proxy() is None:
+        yield
+        return
+
+    from requests import RequestException
+
+    gateway = _build_control_gateway()
+    deployments = deployments_for_available_providers(os.environ)
+    if not deployments:
+        yield
+        return
+
+    registered_ids: list[str] = []
+    try:
+        for deployment in deployments:
+            try:
+                model_id = _register_deployment(gateway, deployment)
+            except (AssertionError, RequestException) as exc:
+                raise RuntimeError(
+                    f"failed to register compat deployment "
+                    f"{deployment.model_name!r}: {exc}"
+                ) from exc
+            registered_ids.append(model_id)
+        yield
+    finally:
+        for model_id in registered_ids:
+            try:
+                gateway.delete_model(model_id)
+            except (AssertionError, RequestException):
+                # Best-effort — teardown surfaces via warnings inside
+                # ``delete_model`` already; swallowing here so one flaky
+                # delete does not mask real test failures.
+                pass
