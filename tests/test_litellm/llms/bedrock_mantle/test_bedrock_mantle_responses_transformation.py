@@ -397,6 +397,20 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
+    @pytest.mark.parametrize(
+        "model",
+        ["openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"],
+    )
+    def test_registry_returns_config_for_gpt_5_6_family(self, local_cost_map, model):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model,
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
+
     def test_registry_returns_native_config_for_gpt_oss(self, local_cost_map):
         # Core regression: gpt-oss-120b supports the native Responses API (AWS
         # model card), so it must get a BedrockMantleResponsesAPIConfig on the
