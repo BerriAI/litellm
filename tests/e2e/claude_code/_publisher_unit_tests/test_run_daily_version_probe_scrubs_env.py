@@ -10,7 +10,7 @@ compromised `@anthropic-ai/claude-code` release could read those
 secrets out of `os.environ` before the proxy or test harness ever
 starts. The version probe must be wrapped in `env -i` with a minimal
 PATH/HOME/USER/TERM/LANG/LC_ALL/TMPDIR allowlist — matching the
-PR-gate's resolver/npm-install/pytest scrubs.
+resolver/npm-install/pytest scrubs in the same script.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ RUN_DAILY = REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "run_daily
 
 def _version_probe_block() -> str:
     body = RUN_DAILY.read_text()
-    start = body.index("CLAUDE_CODE_VERSION=")
-    end = body.index('[[ -n "${CLAUDE_CODE_VERSION}" ]]', start)
+    start = body.index("PROBED_CLAUDE_VERSION=")
+    end = body.index('[[ -n "${PROBED_CLAUDE_VERSION}" ]]', start)
     return body[start:end]
 
 

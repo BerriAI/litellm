@@ -1,23 +1,24 @@
 """Claude Code PR-Gate Version Resolver.
 
-Resolves the `@anthropic-ai/claude-code` npm version that the PR-gate CI
-job installs. Selects the newest version (by publish timestamp) whose
-publish timestamp is at least 3 days old. The 3-day window is a security
-review buffer — see PRD #26476, "Version resolvers".
+Resolves the `@anthropic-ai/claude-code` npm version that the daily
+compatibility-matrix runner installs. Selects the newest version (by
+publish timestamp) whose publish timestamp is at least 3 days old. The
+3-day window is a security review buffer — see PRD #26476, "Version
+resolvers".
 
 Two surfaces:
 
 - ``resolve_pr_gate_version(...)`` — the importable function. Accepts
   pre-fetched npm metadata (for unit tests) or a custom ``fetcher``
   callable. The default fetcher hits the public npm registry.
-- ``python -m claude_code.pr_gate_version_resolver`` — prints the
-  resolved version string to stdout, suitable for piping into a shell
-  ``$(...)`` substitution inside the CircleCI job.
+- ``python3 pr_gate_version_resolver.py`` — prints the resolved version
+  string to stdout, suitable for piping into a shell ``$(...)``
+  substitution.
 
-The CLI form is what CircleCI runs at job start; engineers reading the
-job log can see the selected version on a single line above the
-``npm install -g`` step (acceptance criterion: "the selected Claude
-Code version is logged in the CI output").
+The CLI form is what ``cron_vm/run_daily.sh`` runs at the start of each
+daily run; engineers reading the run log can see the selected version
+on a single line above the ``npm install`` step (acceptance criterion:
+"the selected Claude Code version is logged in the CI output").
 """
 
 from __future__ import annotations
