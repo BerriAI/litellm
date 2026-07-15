@@ -152,13 +152,16 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         A pod-local in-memory value can lag the shared total, so `async_get_cache`
         (which returns an in-memory hit before consulting Redis) must not be used
-        here. Local memory is only read as a fallback when Redis is not configured.
-        `redis_cache.async_get_cache` already handles its own connection errors and
-        returns None, so no additional error handling is needed.
+        here. Redis is read first; the pod-local value is only used as a fallback
+        when Redis is not configured or returns nothing (for example during a Redis
+        outage, since `redis_cache.async_get_cache` swallows connection errors and
+        returns None), which preserves per-pod enforcement instead of failing open.
         """
         redis_cache = self.dual_cache.redis_cache
         if redis_cache is not None:
-            return await redis_cache.async_get_cache(key=cache_key)
+            redis_spend = await redis_cache.async_get_cache(key=cache_key)
+            if redis_spend is not None:
+                return redis_spend
         return await self.dual_cache.async_get_cache(key=cache_key, local_only=True)
 
     async def _get_end_user_spend_for_model(

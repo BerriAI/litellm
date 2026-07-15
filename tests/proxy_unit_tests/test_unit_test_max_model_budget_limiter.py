@@ -676,3 +676,37 @@ async def test_admission_falls_back_to_local_spend_when_redis_unavailable():
 
     with pytest.raises(litellm.BudgetExceededError):
         await limiter.is_key_within_model_budget(user_api_key, model)
+
+
+@pytest.mark.asyncio
+async def test_admission_falls_back_to_local_spend_when_redis_returns_nothing():
+    """
+    Redis is configured but unreachable (its get swallows the error and returns
+    None). The limiter must fall back to the pod-local spend and keep enforcing
+    per-pod, rather than failing open and admitting every request.
+    """
+    budget = 100.0
+    local_spend = 150.0
+
+    model = "gpt-4"
+    budget_duration = "1d"
+    token = "test-key"
+    cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{token}:{model}:{budget_duration}"
+
+    unreachable_redis = _SharedRedisCache(store={})
+
+    dual_cache = DualCache()
+    dual_cache.redis_cache = unreachable_redis
+    await dual_cache.async_set_cache(key=cache_key, value=local_spend, local_only=True)
+
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    user_api_key = UserAPIKeyAuth(
+        token=token,
+        key_alias="test-alias",
+        model_max_budget={model: {"budget_limit": budget, "time_period": budget_duration}},
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await limiter.is_key_within_model_budget(user_api_key, model)
+    assert exc_info.value.current_cost == local_spend
+    assert unreachable_redis.get_count >= 1
