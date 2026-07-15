@@ -94,11 +94,7 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
     response = _find_upstream_response(exc)
     if response is None or response.status_code not in (401, 403):
         return None
-    try:
-        challenge = response.headers.get("www-authenticate")
-    except Exception:
-        challenge = None
-    return response.status_code, challenge
+    return response.status_code, response.headers.get("www-authenticate")
 
 
 def raise_classified_list_failure(
