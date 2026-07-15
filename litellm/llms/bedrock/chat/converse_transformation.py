@@ -857,6 +857,9 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        accepts_thinking_param = self._model_accepts_anthropic_thinking_param(
+            model=model, base_model=BedrockModelInfo.get_base_model(model)
+        )
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -906,7 +909,12 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"disable_parallel_tool_use": disable_parallel}
                 }
-            if param == "thinking":
+            if param == "thinking" and not accepts_thinking_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively and rejects it.",
+                    model,
+                )
+            elif param == "thinking":
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -929,6 +937,11 @@ class AmazonConverseConfig(BaseConfig):
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
                     optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str) and not accepts_thinking_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it reasons natively and rejects it.",
+                    model,
+                )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
