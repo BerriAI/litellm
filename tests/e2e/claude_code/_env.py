@@ -110,17 +110,25 @@ def require_compat_cli_credentials(
     """Return the proxy base URL paired with the inference-only compat
     CLI key, or hard-fail the test.
 
+    Cells never skip. Two hard-fail paths:
+
+    - Proxy env unset → fail. A live cell with no proxy configured is
+      a config error the dev should see loudly.
+
+    - CLI key provider returned falsy (fixture didn't mint one, or
+      minted an empty string) → fail. This means the environment is
+      missing provider credentials the fixture needs to register the
+      compat deployments, or the fixture itself hit a bug. Either way
+      it's a real setup error, not a "you don't have the creds" skip.
+      The error names the concrete env var to set (``ANTHROPIC_API_KEY``
+      is the minimum to get the three Anthropic-tier deployments).
+
     Purpose: cells hand this credential to the ``claude`` CLI subprocess.
     Using the master key here would leak admin capabilities to the CLI
     (see ``require_proxy``). ``cli_key_provider`` is a zero-arg callable
-    that returns the fixture-minted session key, or ``None`` if the
-    fixture is not active (e.g. a pure unit run that imports a cell).
-    Injected so tests can bind an in-memory key without running the
-    fixture or reaching into any global state.
-
-    If the provider returns ``None`` we hard-fail rather than silently
-    falling back to the master key - the fallback would defeat the whole
-    point of the split."""
+    that returns the fixture-minted session key. Injected so tests can
+    bind an in-memory key without running the fixture or reaching into
+    any global state."""
     cfg = resolve_proxy(env)
     if cfg is None:
         _fail_missing_proxy_env(compat_result)
@@ -130,10 +138,14 @@ def require_compat_cli_credentials(
             {
                 "status": "fail",
                 "error": (
-                    "compat CLI key was not minted for this session; "
-                    "the claude_code compat fixture did not run (a "
-                    "prior fixture error, or the proxy env was unset "
-                    "when the session started)"
+                    "compat CLI key not available. The claude_code "
+                    "compat fixture either registered zero deployments "
+                    "(no provider credentials in env - export "
+                    "ANTHROPIC_API_KEY at minimum, plus AWS_ACCESS_KEY_ID"
+                    "/AZURE_FOUNDRY_API_KEY/VERTEXAI_PROJECT+"
+                    "GOOGLE_APPLICATION_CREDENTIALS for the other "
+                    "providers), or /key/generate did not round-trip "
+                    "cleanly against the proxy."
                 ),
             }
         )
