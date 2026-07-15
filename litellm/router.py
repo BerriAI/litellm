@@ -232,6 +232,24 @@ else:
     PreRoutingHookResponse = Any
 
 
+_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset({
+    "content-length",
+    "transfer-encoding",
+    "content-encoding",
+    "content-type",
+    "set-cookie",
+    "cookie",
+    "proxy-authenticate",
+    "proxy-authorization",
+})
+
+
+def _strip_http_framing_headers(exc: BaseException) -> None:
+    headers = getattr(exc, "headers", None)
+    if headers is not None and hasattr(headers, "items"):
+        setattr(exc, "headers", {k: v for k, v in headers.items() if k.lower() not in _HTTP_FRAMING_HEADERS})
+
+
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
@@ -2712,17 +2730,7 @@ class Router:
                     except Exception as fetch_err:
                         if model_name is not None:
                             self.success_calls[model_name] -= 1
-                        _headers = getattr(fetch_err, "headers", None)
-                        if _headers is not None and hasattr(_headers, "items"):
-                            _strip_headers = frozenset({
-                                "content-length", "transfer-encoding", "content-encoding", "content-type",
-                                "set-cookie", "cookie", "proxy-authenticate", "proxy-authorization",
-                            })
-                            setattr(
-                                fetch_err,
-                                "headers",
-                                {k: v for k, v in _headers.items() if k.lower() not in _strip_headers},
-                            )
+                        _strip_http_framing_headers(fetch_err)
                         raise fetch_err
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
