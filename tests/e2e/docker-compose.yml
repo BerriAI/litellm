@@ -66,9 +66,21 @@ configs:
             model: openai/text-embedding-3-small
             api_key: os.environ/OPENAI_API_KEY
 
-        - model_name: azure-gpt-5.4-mini
+        - model_name: azure-${E2E_AZURE_SOL_MODEL:-gpt-5.6-sol}
           litellm_params:
-            model: azure/gpt-5.4-mini
+            model: azure/${E2E_AZURE_SOL_MODEL:-gpt-5.6-sol}
+            api_base: os.environ/AZURE_API_BASE
+            api_key: os.environ/AZURE_API_KEY
+
+        - model_name: azure-${E2E_AZURE_TERRA_MODEL:-gpt-5.6-terra}
+          litellm_params:
+            model: azure/${E2E_AZURE_TERRA_MODEL:-gpt-5.6-terra}
+            api_base: os.environ/AZURE_API_BASE
+            api_key: os.environ/AZURE_API_KEY
+
+        - model_name: azure-${E2E_AZURE_LUNA_MODEL:-gpt-5.6-luna}
+          litellm_params:
+            model: azure/${E2E_AZURE_LUNA_MODEL:-gpt-5.6-luna}
             api_base: os.environ/AZURE_API_BASE
             api_key: os.environ/AZURE_API_KEY
 
