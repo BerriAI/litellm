@@ -3,6 +3,7 @@ from typing import Dict, FrozenSet, List, Literal, Tuple, Union
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 TIER_NAMES: Tuple[str, ...] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+AUTOROUTER_MODEL_NAME = "autorouter"
 
 
 class ConfigGenerationError(Exception):
@@ -184,14 +185,21 @@ def build_generated_model_list(config: AutorouteConfig) -> List[JsonValue]:
     if config.adaptive:
         complexity_router_config["adaptive"] = True
 
-    auto_router_deployment: Dict[str, JsonValue] = {
-        "model_name": "autorouter",
-        "litellm_params": {
-            "model": "auto_router/complexity_router",
-            "complexity_router_config": complexity_router_config,
-        },
+    auto_router_litellm_params: Dict[str, JsonValue] = {
+        "model": "auto_router/complexity_router",
+        "complexity_router_config": complexity_router_config,
     }
-    return [*proxy_deployments, auto_router_deployment]
+    # A bare "*" model_name looks like the obvious way to catch every request Claude Code
+    # might send regardless of which model it thinks it's using, but Router's auto-router
+    # registry is keyed by the literal requested model string (router.py:10711-10717), not
+    # resolved through pattern/wildcard matching first -- so a "*" entry here would only ever
+    # match a client that literally sends model="*", never an actual wildcard catch-all. Callers
+    # instead need to make Claude Code request this "autorouter" name directly (see
+    # ANTHROPIC_DEFAULT_*_MODEL in settings.py's merge_claude_settings_static_token).
+    return [
+        *proxy_deployments,
+        {"model_name": AUTOROUTER_MODEL_NAME, "litellm_params": auto_router_litellm_params},
+    ]
 
 
 def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> Dict[str, JsonValue]:
@@ -210,6 +218,7 @@ def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> Di
 
 __all__ = [
     "TIER_NAMES",
+    "AUTOROUTER_MODEL_NAME",
     "ConfigGenerationError",
     "DiscoveredModel",
     "parse_discovered_models",

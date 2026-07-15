@@ -91,13 +91,22 @@ class TestBuildGeneratedModelList:
     def test_every_proxy_deployment_points_back_at_customer_proxy(self):
         config = _base_config()
         model_list = build_generated_model_list(config)
-        proxy_entries = [m for m in model_list if m["model_name"] != "autorouter"]
+        proxy_entries = [m for m in model_list if m["model_name"] not in ("autorouter", "*")]
         names = {m["model_name"] for m in proxy_entries}
         assert names == {"gpt-4o-mini", "gpt-4o", "o1"}
         for entry in proxy_entries:
             assert entry["litellm_params"]["model"] == f"litellm_proxy/{entry['model_name']}"
             assert entry["litellm_params"]["api_base"] == config.base_url
             assert entry["litellm_params"]["api_key"] == config.api_key
+
+    def test_no_wildcard_deployment_is_generated(self):
+        # A bare "*" model_name looks like the obvious catch-all, but Router's auto-router
+        # registry is keyed by the literal requested model string with no wildcard resolution
+        # (litellm/router.py:10711-10717), so a "*" entry here would silently never match real
+        # traffic. Regression guard: don't reintroduce it.
+        config = _base_config()
+        model_list = build_generated_model_list(config)
+        assert not any(m["model_name"] == "*" for m in model_list)
 
     def test_complexity_router_config_reflects_llm_classifier(self):
         config = _base_config(classifier=LLMClassifier(model="gpt-4o", timeout_ms=1234))

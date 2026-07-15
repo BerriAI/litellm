@@ -1,10 +1,11 @@
+import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import click
 import yaml
-from rich.console import Console
-from rich.table import Table
+from InquirerPy import inquirer
+from InquirerPy.base.control import Choice
 
 from .... import Client
 from .config import (
@@ -25,52 +26,42 @@ from .config import (
 from .process import CONFIG_PATH
 
 
-def _render_model_table(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> None:
-    console = Console()
-    table = Table(title=f"Pick model(s) for {prompt_label}")
-    table.add_column("Index", style="cyan", no_wrap=True)
-    table.add_column("Model", style="magenta")
-    for i, model in enumerate(models):
-        table.add_row(str(i + 1), model.name)
-    console.print(table)
+def _is_interactive() -> bool:
+    return sys.stdin.isatty()
 
 
-def _parse_indices(choice: str, count: int) -> Optional[Tuple[int, ...]]:
-    raw_parts = [part.strip() for part in choice.split(",") if part.strip()]
-    if not raw_parts:
-        return None
-    indices: List[int] = []
-    for part in raw_parts:
-        try:
-            index = int(part) - 1
-        except ValueError:
-            return None
-        if not (0 <= index < count):
-            return None
-        indices.append(index)
-    return tuple(dict.fromkeys(indices))
+def _fuzzy_pick(models: Tuple[DiscoveredModel, ...], prompt_label: str, multiselect: bool) -> List[str]:
+    """Type-to-filter picker over a (possibly huge) model pool, using InquirerPy's fzf-style fuzzy prompt.
+
+    A plain numbered table + typed index does not scale past a handful of models -- proxies with
+    hundreds of model groups made that interaction unusable. This lets the user narrow the pool by
+    typing a substring instead of scrolling/counting.
+
+    Assumes the caller already checked interactivity (run_configure_wizard does, once, up front) --
+    checking here too would check the wrong thing under test, where InquirerPy is driven through its
+    own injected input/output rather than the real process stdin.
+    """
+    choices = [Choice(value=model.name, name=model.name) for model in models]
+    toggle_hint = "tab to toggle, " if multiselect else ""
+    while True:
+        result = inquirer.fuzzy(
+            message=f"{prompt_label}: type to filter, {toggle_hint}enter to confirm",
+            choices=choices,
+            multiselect=multiselect,
+            max_height="70%",
+        ).execute()
+        selected = result if multiselect else [result]
+        if selected:
+            return selected
+        click.echo("Select at least one model.")
 
 
 def _render_and_prompt_for_model(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> str:
-    _render_model_table(models, prompt_label)
-    while True:
-        choice = click.prompt(f"\nSelect a model for {prompt_label} by index", type=str).strip()
-        indices = _parse_indices(choice, len(models))
-        if indices is not None and len(indices) == 1:
-            return models[indices[0]].name
-        click.echo(f"Invalid selection. Please enter a single number between 1 and {len(models)}")
+    return _fuzzy_pick(models, prompt_label, multiselect=False)[0]
 
 
 def _render_and_prompt_for_models(models: Tuple[DiscoveredModel, ...], prompt_label: str) -> Tuple[str, ...]:
-    _render_model_table(models, prompt_label)
-    while True:
-        choice = click.prompt(
-            f"\nSelect model(s) for {prompt_label} by index (comma-separated for multiple)", type=str
-        ).strip()
-        indices = _parse_indices(choice, len(models))
-        if indices is not None:
-            return tuple(models[i].name for i in indices)
-        click.echo(f"Invalid selection. Please enter number(s) between 1 and {len(models)}, comma-separated")
+    return tuple(_fuzzy_pick(models, prompt_label, multiselect=True))
 
 
 def run_configure_wizard(ctx: click.Context) -> Path:
@@ -87,6 +78,9 @@ def run_configure_wizard(ctx: click.Context) -> Path:
 
     if not chat_pool:
         raise click.ClickException("Your key has no chat-capable models available on this proxy.")
+
+    if not _is_interactive():
+        raise click.ClickException("`lite autoroute configure` requires an interactive terminal.")
 
     click.echo("Assign model(s) to each complexity tier (from what your key can access):")
     tiers = {tier: _render_and_prompt_for_models(chat_pool, tier) for tier in TIER_NAMES}

@@ -48,7 +48,10 @@ def load_json_or_empty(path: Path) -> Dict[str, JsonValue]:
     if not path.exists():
         return {}
     with open(path, "r") as f:
-        return _SETTINGS_ADAPTER.validate_json(f.read())
+        content = f.read()
+    if not content.strip():
+        return {}
+    return _SETTINGS_ADAPTER.validate_json(content)
 
 
 def merge_claude_settings(

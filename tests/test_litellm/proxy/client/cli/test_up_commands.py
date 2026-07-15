@@ -12,6 +12,7 @@ from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
     down,
+    load_json_or_empty,
     merge_claude_settings,
     read_backup,
     resolve_api_key_helper,
@@ -64,6 +65,26 @@ class TestMergeClaudeSettings:
         settings = {"env": {"FOO": "bar"}}
         merge_claude_settings(settings, "http://localhost:4000", "helper")
         assert settings == {"env": {"FOO": "bar"}}
+
+
+class TestLoadJsonOrEmpty:
+    def test_returns_empty_dict_when_file_does_not_exist(self, tmp_path):
+        assert load_json_or_empty(tmp_path / "missing.json") == {}
+
+    def test_returns_empty_dict_when_file_is_empty(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text("")
+        assert load_json_or_empty(path) == {}
+
+    def test_returns_empty_dict_when_file_is_whitespace_only(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text("   \n")
+        assert load_json_or_empty(path) == {}
+
+    def test_parses_real_content(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"theme": "dark"}))
+        assert load_json_or_empty(path) == {"theme": "dark"}
 
 
 class TestBackupRoundTrip:
