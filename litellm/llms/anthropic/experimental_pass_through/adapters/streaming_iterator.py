@@ -16,11 +16,11 @@ from typing import (
     get_args,
 )
 
-import openai
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -40,7 +40,7 @@ _STREAMING_DELTA_TYPES = frozenset(get_args(StreamingContentBlockDeltaType))
 
 
 def _error_status_and_message(exc: Exception) -> tuple[int, str]:
-    if isinstance(exc, (BaseLLMException, openai.APIStatusError)):
+    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
         return exc.status_code, exc.message
     return 500, str(exc) or "Upstream stream ended before completion"
 
