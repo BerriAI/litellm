@@ -1635,6 +1635,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         masking_index += 1
                         verbose_proxy_logger.debug("Applied masking to choice text content")
 
+    @staticmethod
+    def _incremental_scan_cache() -> DualCache:
+        """Resolve the cache used to remember which segments a session already scanned.
+
+        Prefers the proxy's shared cache (``internal_usage_cache.dual_cache``), which is
+        backed by Redis when the deployment configures it, so incremental state is shared
+        across proxy instances. Falls back to a process-local ``DualCache`` singleton when
+        the proxy is not running (e.g. unit tests), where sharing does not apply.
+        """
+        from litellm.integrations.custom_guardrail import dc as fallback_cache
+
+        try:
+            from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging
+        except Exception:  # noqa: BLE001  # proxy not importable outside the server; use local fallback
+            return fallback_cache
+        if _proxy_logging is not None:
+            return _proxy_logging.internal_usage_cache.dual_cache
+        return fallback_cache
+
+    def _bedrock_response_has_masked_output(self, response: BedrockGuardrailResponse) -> bool:
+        """Return True if the guardrail rewrote (masked/anonymized) any scanned text.
+
+        Bedrock returns non-empty ``output``/``outputs`` text only when it changed the
+        content; an ``action == "NONE"`` response leaves both empty.
+        """
+        for field in ("output", "outputs"):
+            items = response.get(field) or []
+            if any(isinstance(item, dict) and item.get("text") for item in items):
+                return True
+        return False
+
     async def _apply_incremental_request_scan(
         self,
         texts: list[str],
@@ -1644,17 +1675,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Scan only the text segments not already seen earlier in this session.
 
         Returns ``None`` when incremental scanning is inactive (feature off, no
-        session id, masking enabled, or cache unavailable), telling the caller to
-        run the normal full scan. Otherwise scans only the new segments, skips the
-        Bedrock call entirely when nothing is new, and never writes masked content
-        back (incremental mode is for blocking/detection guardrails only).
+        session id, masking enabled, or cache unavailable) or when the guardrail
+        turns out to mask content, telling the caller to run the normal full scan.
+        Otherwise scans only the new segments and skips the Bedrock call entirely
+        when nothing is new. Incremental mode is for blocking/detection guardrails
+        only: if the guardrail returns masked output it cannot be applied to the
+        skipped context, so the scan falls back to the full path and no session
+        state is recorded.
         """
-        from litellm.integrations.custom_guardrail import dc as guardrail_dual_cache
+        cache = self._incremental_scan_cache()
 
         new_texts = await self.filter_new_texts_for_session(
             texts=texts,
             request_data=request_data,
-            cache=guardrail_dual_cache,
+            cache=cache,
         )
         if new_texts is None:
             return None
@@ -1663,17 +1697,25 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
             return inputs
 
-        await self.make_bedrock_api_request(
+        bedrock_response = await self.make_bedrock_api_request(
             source="INPUT",
             messages=[ChatCompletionUserMessage(role="user", content=text) for text in new_texts],
             request_data=request_data,
             logging_event_type=GuardrailEventHooks.pre_call,
         )
 
+        if self._bedrock_response_has_masked_output(bedrock_response):
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail %s: guardrail returned masked/anonymized content; "
+                "only_scan_new_messages cannot apply masking to skipped context, falling back to a full-context scan",
+                self.guardrail_name,
+            )
+            return None
+
         await self.mark_texts_scanned(
             texts=texts,
             request_data=request_data,
-            cache=guardrail_dual_cache,
+            cache=cache,
         )
         return inputs
 

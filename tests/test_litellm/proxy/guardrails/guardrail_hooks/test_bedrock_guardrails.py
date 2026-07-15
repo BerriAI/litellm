@@ -3360,6 +3360,46 @@ class TestBedrockOnlyScanNewMessages:
             assert [m["content"] for m in scanned] == ["q1", "a1", "q2"]
 
     @pytest.mark.asyncio
+    async def test_masking_guardrail_falls_back_and_does_not_persist(self):
+        """A guardrail that anonymizes content must not be short-circuited.
+
+        Regression: the incremental fast path used to ignore the guardrail response,
+        so masked/anonymized output was dropped, the raw text reached the model, and
+        the segment was marked scanned so it was never re-checked. Detecting masked
+        output must force a full-context scan (which applies the masking) and must not
+        persist session state, so an identical resend is scanned again.
+        """
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-mask"}
+        masked = {
+            "action": "GUARDRAIL_INTERVENED",
+            "output": [],
+            "outputs": [{"text": "my ssn is [REDACTED]"}],
+        }
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = masked
+
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count == 2
+            assert result["texts"] == ["my ssn is [REDACTED]"]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count >= 1
+            first_scanned = mock_api.call_args_list[0].kwargs.get("messages")
+            assert first_scanned is not None
+            assert [m["content"] for m in first_scanned] == ["my ssn is 123-45-6789"]
+
+    @pytest.mark.asyncio
     async def test_blocked_turn_is_rescanned_on_retry(self):
         guardrail = self._guardrail()
         session = {"litellm_session_id": "sess-bedrock-blocked"}
