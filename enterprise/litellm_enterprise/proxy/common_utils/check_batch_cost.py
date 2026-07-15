@@ -42,11 +42,15 @@ class CheckBatchCost:
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
 
-    async def _get_user_info(self, batch_id, user_id) -> dict:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> dict[str, object]:
         """
-        Look up user email and key alias by user_id for enriching the S3 callback metadata.
-        Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
+        Look up user email by user_id for enriching the S3 callback metadata.
+        Returns a dict with user_api_key_user_email (may be None). Returns an
+        empty dict when user_id is None (batches created by team/service-account
+        keys carry no user_id, and find_unique(where={"user_id": None}) raises).
         """
+        if not user_id:
+            return {}
         try:
             user_row = await self.prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}
@@ -55,62 +59,68 @@ class CheckBatchCost:
                 return {}
             return {
                 "user_api_key_user_email": getattr(user_row, "user_email", None),
-                "user_api_key_alias": getattr(user_row, "user_alias", None),
             }
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
-    @staticmethod
-    def _get_batch_attribution(job) -> dict:
-        """
-        Recover the attribution snapshot (user_api_key, team_id, request_tags) stored on the
-        managed object's file_object at batch-create time. Returns {} when none was captured.
-        """
-        import json
+    async def _get_key_alias(self, user_api_key: Optional[str]) -> Optional[str]:
+        """Resolve the creating virtual key's alias from its hashed token."""
+        if not user_api_key:
+            return None
+        try:
+            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": user_api_key}
+            )
+            return getattr(key_row, "key_alias", None) if key_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch cost attribution: {e}")
+            return None
 
-        file_object = getattr(job, "file_object", None)
-        if isinstance(file_object, str):
-            try:
-                file_object = json.loads(file_object)
-            except (ValueError, TypeError):
-                return {}
-        if not isinstance(file_object, dict):
-            return {}
-        metadata = file_object.get("metadata") or {}
-        attribution = metadata.get("litellm_batch_attribution") if isinstance(metadata, dict) else None
-        return attribution if isinstance(attribution, dict) else {}
+    async def _get_team_alias(self, team_id: Optional[str]) -> Optional[str]:
+        """Resolve a team's alias from its id."""
+        if not team_id:
+            return None
+        try:
+            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+            return getattr(team_row, "team_alias", None) if team_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
+            return None
 
-    async def _get_batch_spend_attribution(self, batch_id, job) -> tuple:
+    async def _build_creator_attribution_metadata(
+        self, job: "LiteLLM_ManagedObjectTable", batch_id: str
+    ) -> dict[str, object]:
         """
-        Build (spend_log_metadata, request_tags) for a batch-cost row with no per-batch DB
-        lookup. The authenticated key, its owning user/team, their aliases, and the request
-        tags were snapshotted onto the managed object's file_object at create time (read off
-        the already-resolved UserAPIKeyAuth in the passthrough, re-asserted after the client
-        metadata merge so a caller cannot spoof the batch owner), so nothing needs to be
-        re-queried here. Legacy batches created before the snapshot fall back to the stored
-        row (created_by / team_id), preserving the prior user-table enrichment.
+        Rebuild the spend-tracking metadata for the key/team/tags that created the
+        batch so the batch-cost spend log is attributed the same way a non-batch
+        request is. Falls back gracefully to whatever identity the managed object
+        row carries (older rows created before user_api_key/request_tags were
+        persisted only have created_by/team_id).
         """
-        attribution = self._get_batch_attribution(job)
-        if attribution:
-            fields = {
-                "user_api_key": attribution.get("user_api_key"),
-                "user_api_key_user_id": attribution.get("user_api_key_user_id"),
-                "user_api_key_team_id": attribution.get("user_api_key_team_id"),
-                "user_api_key_alias": attribution.get("user_api_key_alias"),
-                "user_api_key_team_alias": attribution.get("user_api_key_team_alias"),
-                "user_api_key_user_email": attribution.get("user_api_key_user_email"),
-            }
-            spend_metadata = {k: v for k, v in fields.items() if v is not None}
-            return spend_metadata, (attribution.get("request_tags") or [])
+        user_api_key = getattr(job, "user_api_key", None)
+        team_id = getattr(job, "team_id", None)
+        request_tags = getattr(job, "request_tags", None)
 
-        user_info = await self._get_user_info(batch_id, job.created_by)
-        spend_metadata = {
-            **user_info,
+        metadata: dict[str, object] = {
             "user_api_key_user_id": job.created_by,
-            "user_api_key_team_id": getattr(job, "team_id", None),
+            "user_api_key": user_api_key,
+            "user_api_key_team_id": team_id,
+            **(await self._get_user_info(batch_id, job.created_by)),
         }
-        return spend_metadata, []
+
+        key_alias = await self._get_key_alias(user_api_key)
+        if key_alias is not None:
+            metadata["user_api_key_alias"] = key_alias
+        team_alias = await self._get_team_alias(team_id)
+        if team_alias is not None:
+            metadata["user_api_key_team_alias"] = team_alias
+        if isinstance(request_tags, list) and request_tags:
+            metadata["tags"] = request_tags
+
+        return metadata
 
     async def _cleanup_stale_managed_objects(self) -> None:
         """
@@ -509,18 +519,17 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
-        spend_metadata, request_tags = await self._get_batch_spend_attribution(batch_id, job)
+        attribution_metadata = await self._build_creator_attribution_metadata(job, batch_id)
 
         logging_obj.update_environment_variables(
             litellm_params={
-                "litellm_metadata": {"tags": request_tags},
                 # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
                 "proxy_server_request": {
                     "headers": {
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": spend_metadata,
+                "metadata": attribution_metadata,
             },
             optional_params={},
         )

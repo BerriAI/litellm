@@ -524,72 +524,67 @@ def _in_memory_managed_files():
     return instance, store
 
 
-def _batch_with_attribution(attribution):
-    batch = _build_batch_response(batch_id="b", status="validating")
-    if attribution is not None:
-        batch.metadata = {"litellm_batch_attribution": attribution}
-    return batch
-
-
-def _stored_snapshot(store):
-    return json.loads(store["unified-b"]["file_object"])["metadata"][
-        "litellm_batch_attribution"
-    ]
-
-
 @pytest.mark.asyncio
-async def test_store_unified_object_id_snapshot_is_immutable_across_polls():
-    """Regression (spend redirect): once a batch row exists, a later store carrying a different
-    caller's attribution (e.g. a passthrough GET poll rebuilding the snapshot from the poller's
-    identity) must not overwrite the create-time snapshot, or spend re-attributes to the poller
+async def test_store_unified_object_id_attribution_columns_are_write_once():
+    """Regression (spend redirect): the attribution columns are written only by the upsert
+    create branch, so a later store for the same batch (e.g. a passthrough GET poll or the
+    post-call hook re-storing the caller-facing response) can neither reassign them to the
+    polling caller nor clear them
     """
     instance, store = _in_memory_managed_files()
-    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice")
-    poller = UserAPIKeyAuth(user_id="bob", team_id="team-bob")
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice", api_key="hash-alice")
+    poller = UserAPIKeyAuth(user_id="bob", team_id="team-bob", api_key="hash-bob")
 
     await instance.store_unified_object_id(
         unified_object_id="unified-b",
-        file_object=_batch_with_attribution({"user_api_key": "hash-alice"}),
+        file_object=_build_batch_response(batch_id="b", status="validating"),
         litellm_parent_otel_span=None,
         model_object_id="b",
         file_purpose="batch",
         user_api_key_dict=creator,
+        request_tags=["prod"],
     )
     await instance.store_unified_object_id(
         unified_object_id="unified-b",
-        file_object=_batch_with_attribution({"user_api_key": "hash-bob"}),
+        file_object=_build_batch_response(batch_id="b", status="completed"),
         litellm_parent_otel_span=None,
         model_object_id="b",
         file_purpose="batch",
         user_api_key_dict=poller,
+        request_tags=["poller-tag"],
     )
 
-    assert _stored_snapshot(store) == {"user_api_key": "hash-alice"}
+    row = store["unified-b"]
+    assert row["user_api_key"] == "hash-alice"
+    assert row["team_id"] == "team-alice"
+    assert row["created_by"] == "alice"
+    assert row["status"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_preserves_snapshot_on_snapshotless_restore():
-    """Regression (attribution erased): the post-call hook re-stores the caller-facing batch, whose
-    snapshot has been stripped to avoid leaking it; that re-store must not wipe the persisted snapshot
+async def test_store_unified_object_id_update_branch_never_carries_attribution():
+    """The upsert update branch must not list user_api_key/request_tags at all; identity
+    immutability rests on the DB never being asked to change those columns, not on any
+    read-then-write check
     """
     instance, store = _in_memory_managed_files()
-    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice")
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice", api_key="hash-alice")
 
     await instance.store_unified_object_id(
         unified_object_id="unified-b",
-        file_object=_batch_with_attribution({"user_api_key": "hash-alice"}),
+        file_object=_build_batch_response(batch_id="b", status="validating"),
         litellm_parent_otel_span=None,
         model_object_id="b",
         file_purpose="batch",
         user_api_key_dict=creator,
-    )
-    await instance.store_unified_object_id(
-        unified_object_id="unified-b",
-        file_object=_batch_with_attribution(None),
-        litellm_parent_otel_span=None,
-        model_object_id="b",
-        file_purpose="batch",
-        user_api_key_dict=creator,
+        request_tags=["prod"],
     )
 
-    assert _stored_snapshot(store) == {"user_api_key": "hash-alice"}
+    table = instance.prisma_client.db.litellm_managedobjecttable
+    upsert_data = table.upsert.call_args.kwargs["data"]
+    assert "user_api_key" in upsert_data["create"]
+    assert "request_tags" in upsert_data["create"]
+    assert "user_api_key" not in upsert_data["update"]
+    assert "request_tags" not in upsert_data["update"]
+    assert "created_by" not in upsert_data["update"]
+    assert "team_id" not in upsert_data["update"]

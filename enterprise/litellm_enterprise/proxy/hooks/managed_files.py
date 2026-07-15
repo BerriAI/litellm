@@ -34,9 +34,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
-    merge_preserved_batch_attribution,
     normalize_mime_type_for_provider,
-    read_stored_batch_attribution,
     strip_internal_batch_attribution,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
@@ -168,10 +166,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_object_id: str,
         file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Optional[List[str]] = None,
     ) -> None:
         verbose_logger.info(
             f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache"
         )
+        from prisma import Json
+
+        user_api_key = user_api_key_dict.api_key or None
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
@@ -184,30 +186,23 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
-        file_object_json = file_object.model_dump_json()
-        if file_purpose == "batch":
-            existing_row = await self.prisma_client.db.litellm_managedobjecttable.find_first(
-                where={"unified_object_id": unified_object_id}
-            )
-            file_object_json = merge_preserved_batch_attribution(
-                read_stored_batch_attribution(existing_row), file_object_json
-            )
-
         await self.prisma_client.db.litellm_managedobjecttable.upsert(
             where={"unified_object_id": unified_object_id},
             data={
                 "create": {
                     "unified_object_id": unified_object_id,
-                    "file_object": file_object_json,
+                    "file_object": file_object.model_dump_json(),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
                     "team_id": user_api_key_dict.team_id,
+                    "user_api_key": user_api_key,
+                    "request_tags": Json(request_tags) if request_tags else None,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
                 "update": {
-                    "file_object": file_object_json,
+                    "file_object": file_object.model_dump_json(),
                     "status": file_object.status,
                     "updated_by": user_api_key_dict.user_id,
                 },

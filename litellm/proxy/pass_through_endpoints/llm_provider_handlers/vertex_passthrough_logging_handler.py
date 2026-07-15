@@ -16,6 +16,9 @@ from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
 )
 from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_managed_object_utils import (
+    store_batch_managed_object,
+)
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -791,101 +794,13 @@ class VertexPassthroughLoggingHandler:
         Store batch managed object for cost tracking.
         This will be picked up by the check_batch_cost polling mechanism.
         """
-        try:
-            # Get the managed files hook from the logging object
-            # This is a bit of a hack, but we need access to the proxy logging system
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-            if managed_files_hook is not None and hasattr(managed_files_hook, "store_unified_object_id"):
-                # Create a mock user API key dict for the managed object storage
-                from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
-                _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
-
-                user_api_key_dict = UserAPIKeyAuth(
-                    user_id=_request_metadata.get("user_api_key_user_id") or "default-user",
-                    api_key="",
-                    team_id=_request_metadata.get("user_api_key_team_id"),
-                    team_alias=None,
-                    user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
-                    user_email=None,
-                    max_budget=None,
-                    spend=0.0,  # Set to 0.0 instead of None
-                    models=[],  # Set to empty list instead of None
-                    tpm_limit=None,
-                    rpm_limit=None,
-                    budget_duration=None,
-                    budget_reset_at=None,
-                    max_parallel_requests=None,
-                    allowed_model_region=None,
-                    metadata={},  # Set to empty dict instead of None
-                    key_alias=None,
-                    permissions={},  # Set to empty dict instead of None
-                    model_max_budget={},  # Set to empty dict instead of None
-                    model_spend={},  # Set to empty dict instead of None
-                )
-
-                # Snapshot the authenticated identity + request tags onto the managed
-                # object's file_object so CheckBatchCost can attribute the batch-cost spend
-                # log at poll time with no per-batch DB lookup. These identity fields are
-                # re-asserted from the authenticated key in the passthrough (after the
-                # client-metadata merge), so they are the key's own values and cannot be
-                # spoofed by the request body. The snapshot rides along in file_object jsonb.
-                # Request tags come from the request itself (metadata/header) when present,
-                # otherwise from the key's own tags, which auth exposes in-memory as
-                # user_api_key_auth_metadata (a tagged key does not put its tags in the
-                # top-level metadata "tags" on the passthrough path).
-                _litellm_metadata = (kwargs.get("litellm_params", {}) or {}).get("litellm_metadata", {}) or {}
-                _key_auth_metadata = _request_metadata.get("user_api_key_auth_metadata") or {}
-                _raw_tags = (
-                    _request_metadata.get("tags")
-                    or _litellm_metadata.get("tags")
-                    or (_key_auth_metadata.get("tags") if isinstance(_key_auth_metadata, dict) else None)
-                    or []
-                )
-                request_tags = [tag for tag in _raw_tags if isinstance(tag, str)] if isinstance(_raw_tags, list) else []
-                batch_attribution = {
-                    "user_api_key": _request_metadata.get("user_api_key"),
-                    "user_api_key_user_id": _request_metadata.get("user_api_key_user_id"),
-                    "user_api_key_team_id": _request_metadata.get("user_api_key_team_id"),
-                    "user_api_key_alias": _request_metadata.get("user_api_key_alias"),
-                    "user_api_key_team_alias": _request_metadata.get("user_api_key_team_alias"),
-                    "user_api_key_user_email": _request_metadata.get("user_api_key_user_email"),
-                    "request_tags": request_tags,
-                }
-                try:
-                    batch_object.metadata = {
-                        **(batch_object.metadata or {}),
-                        "litellm_batch_attribution": batch_attribution,
-                    }
-                except Exception as stash_err:
-                    verbose_proxy_logger.warning(f"CheckBatchCost: could not stash batch attribution: {stash_err}")
-
-                # Store the unified object for batch cost tracking
-                import asyncio
-
-                asyncio.create_task(
-                    managed_files_hook.store_unified_object_id(  # type: ignore
-                        unified_object_id=unified_object_id,
-                        file_object=batch_object,
-                        litellm_parent_otel_span=None,
-                        model_object_id=model_object_id,
-                        file_purpose="batch",
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                )
-
-                verbose_proxy_logger.info(
-                    f"Stored batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Managed files hook not available, cannot store batch object for cost tracking"
-                )
-
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
+        request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
+        store_batch_managed_object(
+            unified_object_id=unified_object_id,
+            batch_object=batch_object,
+            model_object_id=model_object_id,
+            request_metadata=request_metadata,
+        )
 
     @staticmethod
     def get_actual_model_id_from_router(model_name: str) -> str:
