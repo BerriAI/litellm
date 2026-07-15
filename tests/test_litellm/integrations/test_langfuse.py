@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from hashlib import sha256
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -234,6 +235,21 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "parent_span_id": "abcdef0123456789",
         }
         self.mock_langfuse_client.create_trace_id.assert_called_once_with(seed="external-trace-id")
+
+        parent_observation_id = "550E8400-E29B-41D4-A716-446655440000"
+        context = self.logger._create_langfuse_trace_context(
+            trace_id="a" * 32,
+            parent_observation_id=parent_observation_id,
+        )
+
+        assert context == {
+            "trace_id": "a" * 32,
+            "parent_span_id": sha256(
+                parent_observation_id.lower().replace("-", "").encode("utf-8")
+            )
+            .digest()[:8]
+            .hex(),
+        }
 
     def test_langfuse_usage_details_optional_fields(self):
         """Test that LangfuseUsageDetails fields are properly defined as Optional"""

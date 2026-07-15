@@ -3,6 +3,7 @@
 import os
 import traceback
 from datetime import datetime
+from hashlib import sha256
 from importlib.metadata import version as package_version
 from typing import (
     TYPE_CHECKING,
@@ -845,9 +846,16 @@ class LangFuseLogger:
             else self.Langfuse.create_trace_id(seed=trace_id)
         )
         normalized_parent_id = parent_observation_id.lower().replace("-", "") if parent_observation_id else ""
-        return (
-            {"trace_id": resolved_trace_id, "parent_span_id": normalized_parent_id}
+        resolved_parent_id = (
+            normalized_parent_id
             if self._is_valid_langfuse_id(normalized_parent_id, 16)
+            else sha256(normalized_parent_id.encode("utf-8")).digest()[:8].hex()
+            if normalized_parent_id
+            else None
+        )
+        return (
+            {"trace_id": resolved_trace_id, "parent_span_id": resolved_parent_id}
+            if resolved_parent_id
             else {"trace_id": resolved_trace_id}
         )
 
