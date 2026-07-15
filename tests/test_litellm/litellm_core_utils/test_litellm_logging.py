@@ -3787,12 +3787,12 @@ INTERACTIONS_USAGE_BLOCK = {
 }
 
 
-def _interactions_logging_obj(stream: bool):
+def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
     logging_obj = LitellmLogging(
         model="gemini-2.5-flash",
         messages=[],
         stream=stream,
-        call_type="acreate",
+        call_type=call_type,
         start_time=time.time(),
         litellm_call_id="interactions-call-id",
         function_id="interactions-fn-id",
@@ -3807,12 +3807,44 @@ def _interactions_logging_obj(stream: bool):
     return logging_obj
 
 
-def test_interactions_response_is_recognized_for_logging():
+@pytest.mark.parametrize("call_type", ["create", "acreate", "create_interaction", "acreate_interaction"])
+def test_interactions_response_is_recognized_for_logging(call_type):
     from litellm.types.interactions import InteractionsAPIResponse
 
-    logging_obj = _interactions_logging_obj(stream=False)
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
     response = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="completed")
     assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is True
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    ["aget", "get", "aget_interaction", "adelete_interaction", "acancel_interaction"],
+)
+def test_interactions_get_poll_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
 
 
 def test_non_streaming_interactions_success_sets_response_cost_and_usage():
