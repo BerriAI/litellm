@@ -73,6 +73,25 @@ masterKey:
   secretName: litellm-master-key-secret              # name of a Secret containing the master key
   secretKey: master-key
 
+# Optional: enterprise billable-request metering. When enabled, the gateway and
+# backend count successful requests to inference, MCP, and A2A endpoints and push
+# them to LiteLLM's collector over mutual TLS. Both components serve billable
+# routes: the backend keeps the named-server MCP transport. Requires an
+# enterprise license. The client certificate identifies the deployment, so it is
+# mounted read-only from an existing Secret and never passed through the env.
+billingMetrics:
+  enabled: false
+  endpoint: https://telemetry.litellm.ai              # collector to push the counter to
+  # An existing Secret holding the client certificate under tls.crt and its key
+  # under tls.key, usually created from the onboarding artifact. The default is
+  # the conventional name, so the common path is to create that Secret and set
+  # enabled: true. Override only if yours is named differently.
+  secretName: litellm-billing-metrics-mtls
+  # Only for private or test collectors whose server certificate is not on the
+  # public web PKI. The production collector needs no CA override.
+  caSecretName: ""                                    # existing Secret holding ca.crt
+  exportIntervalMs: ""                                # push cadence; the proxy defaults to 60000
+
 # External Postgres connection. 
 database:
   writer:
