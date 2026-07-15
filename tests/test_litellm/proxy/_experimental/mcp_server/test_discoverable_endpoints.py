@@ -7163,11 +7163,13 @@ def test_aggregate_wellknown_routes_serve_gateway_metadata():
     assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
 
 
-def test_as_aggregate_route_prefers_a_real_server_named_mcp():
-    """A server literally named ``mcp`` wins the single-segment
-    /.well-known/oauth-authorization-server/mcp route (it collides with the parameterized
-    /{server_name} route) and keeps its per-server discovery; the aggregate document is
-    served only when no such server exists."""
+def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
+    """The single-segment /.well-known/oauth-authorization-server/mcp is reserved for the
+    aggregate even when a server is literally named ``mcp``. The aggregate protected-resource
+    document advertises {base}/mcp as its authorization server, so the document served here
+    must carry issuer {base}/mcp for the RFC 8414 issuer check to pass. Letting the per-server
+    row win (issuer {base}) breaks that chain, so the aggregate wins and the mcp-named server
+    keeps its standard two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -7186,12 +7188,37 @@ def test_as_aggregate_route_prefers_a_real_server_named_mcp():
     try:
         asm = client.get("/.well-known/oauth-authorization-server/mcp")
         assert asm.status_code == 200
-        # the real server's own document (issuer is the bare origin, endpoint is /mcp/authorize),
-        # not the aggregate one (whose issuer would be {base}/mcp)
-        assert asm.json()["issuer"] == "http://testserver"
-        assert "/mcp/authorize" in asm.json()["authorization_endpoint"]
+        # the aggregate document, whose issuer matches what the aggregate PRM advertises
+        assert asm.json()["issuer"] == "http://testserver/mcp"
+
+        prm = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert prm.status_code == 200
+        assert prm.json()["authorization_servers"] == [asm.json()["issuer"]]
+
+        # the mcp-named server keeps its own document on the standard two-segment route
+        per_server = client.get("/.well-known/oauth-authorization-server/mcp/mcp")
+        assert per_server.status_code == 200
+        assert "/mcp/authorize" in per_server.json()["authorization_endpoint"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+def test_well_known_root_suffix_reflects_server_root_path():
+    """The single path segment both the discovery routes and the 401 challenges insert for RFC
+    8414/9728 path insertion: empty for a root-mounted proxy or an explicit ``/``, the configured
+    path otherwise. Sharing this one function is what keeps the advertised resource_metadata URL
+    equal to the route that serves it."""
+    import os
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import well_known_root_suffix
+
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/"}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}):
+        assert well_known_root_suffix() == "/litellm"
 
 
 @pytest.mark.asyncio

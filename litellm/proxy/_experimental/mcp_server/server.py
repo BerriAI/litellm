@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 )
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
+    well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPToolResultError,
@@ -3525,9 +3526,10 @@ if MCP_AVAILABLE:
         base_url = get_request_base_url(request)
         _path = scope.get("_original_path") or scope.get("path", "") or ""
 
+        suffix = well_known_root_suffix()
         if _path.startswith(f"/{server_name}/mcp"):
-            return f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
-        return f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
+            return f"{base_url}/.well-known/oauth-protected-resource{suffix}/{server_name}/mcp"
+        return f"{base_url}/.well-known/oauth-protected-resource{suffix}/mcp/{server_name}"
 
     def _get_passthrough_www_authenticate(
         scope: Scope,
