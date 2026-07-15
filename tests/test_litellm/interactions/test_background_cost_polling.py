@@ -525,6 +525,48 @@ async def test_poller_exits_early_on_fetch_error_once_settled_elsewhere():
 
 
 @pytest.mark.asyncio
+async def test_poll_task_closes_row_when_delete_settled_before_persist():
+    import litellm.interactions.background_cost_polling as bg
+
+    store = _InMemorySettlementStore()
+    logging_obj = _logging_obj()
+    context = _context(logging_obj)
+    placeholder = asyncio.create_task(asyncio.sleep(0))
+    bg._ACTIVE_POLLS[context.interaction_id] = bg._ActiveBackgroundPoll(task=placeholder, context=context)
+    delete_fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+    await maybe_settle_background_interaction_before_delete(
+        interaction_id=context.interaction_id,
+        fetch_interaction=delete_fetch,
+        store=store,
+    )
+    bg._ACTIVE_POLLS.pop(context.interaction_id, None)
+    await placeholder
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert store.rows == {}
+
+    poll_fetch, poll_calls = _fetch_sequence(_response("completed", with_usage=True))
+    await poll_and_log_background_interaction_cost(context, fetch_interaction=poll_fetch, store=store)
+
+    assert poll_calls == []
+    assert store.rows["interactions/bg-abc"]["status"] == "settled"
+    assert store.outcomes["interactions/bg-abc"] == "billed"
+
+
+@pytest.mark.asyncio
+async def test_persisted_model_keeps_provider_scoped_form_when_precall_overwrites_it():
+    store = _InMemorySettlementStore()
+    logging_obj = _logging_obj()
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini/gemini-2.5-flash")
+    logging_obj._pre_call(input="hi", api_key=None, model="gemini-2.5-flash")
+    fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+
+    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch, store=store)
+
+    assert logging_obj.model_call_details["model"] == "gemini-2.5-flash"
+    assert store.contexts["interactions/bg-abc"].model == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
 async def test_delete_registry_miss_delegates_to_store():
     store = _InMemorySettlementStore()
 

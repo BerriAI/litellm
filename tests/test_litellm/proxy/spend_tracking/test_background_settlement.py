@@ -12,6 +12,7 @@ from litellm.interactions.background_cost_polling import (
 )
 from litellm.proxy.spend_tracking.background_settlement import (
     PendingSettlementRow,
+    PrismaBackgroundSettlementStore,
     _parse_row,
     _resolve_settlement_credentials,
     rebuild_logging_for_settlement,
@@ -135,6 +136,12 @@ async def test_rebuilt_logging_bills_with_original_attribution_and_request_id():
     assert payload["spend"] > 0
 
 
+def test_rebuilt_logging_start_time_is_naive_for_duration_math():
+    logging_obj = rebuild_logging_for_settlement(_settlement_context())
+
+    assert logging_obj.start_time.tzinfo is None
+
+
 def test_rebuilt_logging_carries_reservation_for_reconcile():
     context = _settlement_context(reservation=_reservation())
     logging_obj = rebuild_logging_for_settlement(context)
@@ -243,6 +250,67 @@ async def test_delete_settlement_noop_when_claim_lost():
     await settle_row_before_delete(row=row, store=store, fetch=fetch)
 
     assert store.outcomes == {}
+
+
+class _RaisingRowStore:
+    def __init__(self) -> None:
+        self.outcomes: dict[str, SettlementOutcome] = {}
+
+    async def claim(self, interaction_id: str) -> bool:
+        raise RuntimeError("settlement db unavailable")
+
+    async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
+        raise RuntimeError("settlement db unavailable")
+
+    async def list_due(self, older_than: datetime, limit: int) -> tuple[PendingSettlementRow, ...]:
+        return ()
+
+
+@pytest.mark.asyncio
+async def test_delete_settlement_swallows_store_claim_errors_and_defers_to_sweep():
+    reservation = _reservation()
+    row = _row(context=_settlement_context(reservation=reservation))
+    store = _RaisingRowStore()
+    fetch, calls = _fetch_returning(_response("completed", with_usage=True))
+
+    await settle_row_before_delete(row=row, store=store, fetch=fetch)
+
+    assert len(calls) == 1
+    assert store.outcomes == {}
+    assert reservation.finalized is False
+
+
+class _RecordOutcomeRaisingStore:
+    async def claim(self, interaction_id: str) -> bool:
+        return True
+
+    async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
+        raise RuntimeError("settlement db unavailable")
+
+    async def list_due(self, older_than: datetime, limit: int) -> tuple[PendingSettlementRow, ...]:
+        return ()
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_failure_after_billing_does_not_propagate_or_release():
+    row = _row()
+    store = _RecordOutcomeRaisingStore()
+    fetch, _ = _fetch_returning(_response("completed", with_usage=True))
+
+    await settle_row_before_delete(row=row, store=store, fetch=fetch)
+
+
+class _BrokenPrismaClient:
+    @property
+    def db(self):
+        raise RuntimeError("database unreachable")
+
+
+@pytest.mark.asyncio
+async def test_settle_pending_before_delete_swallows_store_read_errors():
+    store = PrismaBackgroundSettlementStore(prisma_client=_BrokenPrismaClient())
+
+    await store.settle_pending_before_delete(INTERACTION_ID)
 
 
 class _FakeRouter:

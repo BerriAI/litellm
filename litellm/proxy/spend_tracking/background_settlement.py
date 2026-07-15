@@ -27,6 +27,7 @@ from litellm.interactions.background_cost_polling import (
     _TERMINAL_STATUSES,
     BackgroundSettlementContext,
     SettlementOutcome,
+    _release_open_budget_reservation,
 )
 from litellm.types.interactions import InteractionsAPIResponse
 
@@ -120,7 +121,7 @@ def rebuild_logging_for_settlement(context: BackgroundSettlementContext) -> "Lit
         messages=[{"role": "user", "content": f"<background_interaction_settlement/{context.interaction_id}>"}],
         stream=False,
         call_type=context.call_type,
-        start_time=datetime.now(timezone.utc),
+        start_time=datetime.now(),
         litellm_call_id=context.litellm_call_id,
         function_id=str(uuid.uuid4()),
         litellm_trace_id=context.litellm_trace_id,
@@ -155,6 +156,34 @@ async def _release_persisted_reservation(context: BackgroundSettlementContext) -
         )
 
 
+async def _claim_row_best_effort(store: SettlementRowStore, interaction_id: str) -> bool:
+    try:
+        return await store.claim(interaction_id)
+    except Exception:  # noqa: BLE001  # an unreachable store defers to the sweep instead of risking a double bill
+        verbose_proxy_logger.warning(
+            "Failed to claim settlement for background interaction %s; deferring to the settlement sweep",
+            interaction_id,
+            exc_info=True,
+        )
+        return False
+
+
+async def _record_row_outcome_best_effort(
+    store: SettlementRowStore,
+    interaction_id: str,
+    outcome: SettlementOutcome,
+) -> None:
+    try:
+        await store.record_outcome(interaction_id, outcome)
+    except Exception:  # noqa: BLE001  # the outcome column is observability, never worth failing settlement over
+        verbose_proxy_logger.warning(
+            "Failed to record settlement outcome %s for background interaction %s",
+            outcome,
+            interaction_id,
+            exc_info=True,
+        )
+
+
 async def settle_claimed_row(
     row: PendingSettlementRow,
     response: InteractionsAPIResponse,
@@ -163,20 +192,30 @@ async def settle_claimed_row(
     if response.status in _TERMINAL_STATUSES and response.usage is not None:
         try:
             logging_obj = rebuild_logging_for_settlement(row.context)
-            await logging_obj.async_log_background_interaction_completion(result=response)
-            await store.record_outcome(row.interaction_id, "billed")
+        except Exception:  # noqa: BLE001  # an unbuildable logging context settles by releasing the reservation
+            verbose_proxy_logger.exception(
+                "Could not rebuild a billable logging context for background interaction %s; "
+                "its spend may be under-tracked",
+                row.interaction_id,
+            )
+            await _release_persisted_reservation(row.context)
+            await _record_row_outcome_best_effort(store, row.interaction_id, "error")
             return
+        try:
+            await logging_obj.async_log_background_interaction_completion(result=response)
         except Exception:  # noqa: BLE001  # a billing failure after winning the claim must be surfaced, not retried
             verbose_proxy_logger.exception(
                 "Billing failed after claiming settlement for background interaction %s; "
                 "its spend may be under-tracked",
                 row.interaction_id,
             )
-            await _release_persisted_reservation(row.context)
-            await store.record_outcome(row.interaction_id, "error")
+            await _release_open_budget_reservation(logging_obj=logging_obj)
+            await _record_row_outcome_best_effort(store, row.interaction_id, "error")
             return
+        await _record_row_outcome_best_effort(store, row.interaction_id, "billed")
+        return
     await _release_persisted_reservation(row.context)
-    await store.record_outcome(row.interaction_id, "released")
+    await _record_row_outcome_best_effort(store, row.interaction_id, "released")
 
 
 async def settle_row_before_delete(
@@ -192,12 +231,12 @@ async def settle_row_before_delete(
             row.interaction_id,
             e,
         )
-        if not await store.claim(row.interaction_id):
+        if not await _claim_row_best_effort(store, row.interaction_id):
             return
         await _release_persisted_reservation(row.context)
-        await store.record_outcome(row.interaction_id, "released")
+        await _record_row_outcome_best_effort(store, row.interaction_id, "released")
         return
-    if not await store.claim(row.interaction_id):
+    if not await _claim_row_best_effort(store, row.interaction_id):
         return
     await settle_claimed_row(row=row, response=response, store=store)
 
@@ -211,7 +250,13 @@ async def sweep_pending_settlements(
     now = datetime.now(timezone.utc)
     rows = await store.list_due(older_than=now - timedelta(seconds=min_age_seconds), limit=limit)
     for row in rows:
-        await _sweep_row(row=row, store=store, fetch=fetch, now=now)
+        try:
+            await _sweep_row(row=row, store=store, fetch=fetch, now=now)
+        except Exception:  # noqa: BLE001  # one bad row must not stop the sweep from settling the rest
+            verbose_proxy_logger.exception(
+                "Settlement sweep failed for background interaction %s; leaving it for the next cycle",
+                row.interaction_id,
+            )
 
 
 async def _sweep_row(
@@ -221,7 +266,7 @@ async def _sweep_row(
     now: datetime,
 ) -> None:
     if row.timeout_at <= now:
-        if not await store.claim(row.interaction_id):
+        if not await _claim_row_best_effort(store, row.interaction_id):
             return
         verbose_proxy_logger.warning(
             "Abandoning settlement for background interaction %s past its %s timeout; its usage will not be tracked",
@@ -229,7 +274,7 @@ async def _sweep_row(
             row.timeout_at,
         )
         await _release_persisted_reservation(row.context)
-        await store.record_outcome(row.interaction_id, "abandoned")
+        await _record_row_outcome_best_effort(store, row.interaction_id, "abandoned")
         return
     try:
         response = await fetch(row.context)
@@ -242,7 +287,7 @@ async def _sweep_row(
         return
     if response.status not in _TERMINAL_STATUSES:
         return
-    if not await store.claim(row.interaction_id):
+    if not await _claim_row_best_effort(store, row.interaction_id):
         return
     await settle_claimed_row(row=row, response=response, store=store)
 
@@ -331,7 +376,16 @@ class PrismaBackgroundSettlementStore:
         return tuple(row for row in parsed if row is not None)
 
     async def settle_pending_before_delete(self, interaction_id: str) -> None:
-        row = await self.get_pending(interaction_id)
+        try:
+            row = await self.get_pending(interaction_id)
+        except Exception:  # noqa: BLE001  # a store failure must not fail the caller's delete; the sweep settles later
+            verbose_proxy_logger.warning(
+                "Could not read the pending settlement for background interaction %s before delete; "
+                "deferring to the settlement sweep",
+                interaction_id,
+                exc_info=True,
+            )
+            return
         if row is None:
             return
         await settle_row_before_delete(row=row, store=self, fetch=self.fetch)

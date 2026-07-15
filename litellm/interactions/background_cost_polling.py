@@ -152,10 +152,24 @@ def _poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[
 
 
 _SETTLED_KEY = "background_interaction_settled"
+_SETTLED_OUTCOME_KEY = "background_interaction_settled_outcome"
+_SETTLEMENT_OUTCOMES: tuple[SettlementOutcome, ...] = ("billed", "released", "abandoned", "error")
 
 
 def _is_settled(logging_obj: "LiteLLMLoggingObj") -> bool:
     return logging_obj.model_call_details.get(_SETTLED_KEY) is True
+
+
+def _stash_settlement_outcome(logging_obj: "LiteLLMLoggingObj", outcome: SettlementOutcome) -> None:
+    logging_obj.model_call_details[_SETTLED_OUTCOME_KEY] = outcome
+
+
+def _stashed_settlement_outcome(logging_obj: "LiteLLMLoggingObj") -> SettlementOutcome:
+    stashed = logging_obj.model_call_details.get(_SETTLED_OUTCOME_KEY)
+    for outcome in _SETTLEMENT_OUTCOMES:
+        if stashed == outcome:
+            return outcome
+    return "released"
 
 
 def _claim_settlement(logging_obj: "LiteLLMLoggingObj") -> bool:
@@ -198,7 +212,7 @@ def build_settlement_context(
     return BackgroundSettlementContext(
         interaction_id=context.interaction_id,
         custom_llm_provider=context.custom_llm_provider,
-        model=str(context.logging_obj.model_call_details.get("model") or context.logging_obj.model),
+        model=str(context.logging_obj.model or context.logging_obj.model_call_details.get("model")),
         model_group=model_group if isinstance(model_group, str) else None,
         litellm_call_id=str(context.logging_obj.litellm_call_id),
         litellm_trace_id=context.logging_obj.model_call_details.get("litellm_trace_id"),
@@ -258,9 +272,11 @@ async def _record_outcome_best_effort(
 async def _claim_across_gates(
     context: BackgroundInteractionPollContext,
     store: Optional[BackgroundSettlementStore],
+    intended_outcome: SettlementOutcome,
 ) -> bool:
     if not _claim_settlement(context.logging_obj):
         return False
+    _stash_settlement_outcome(context.logging_obj, intended_outcome)
     if store is not None and not await _claim_in_store(store, context.interaction_id):
         _finalize_reservation_locally(context.logging_obj)
         return False
@@ -287,6 +303,7 @@ async def _settle_claimed(
         )
         await _release_open_budget_reservation(logging_obj=context.logging_obj)
         outcome = "error"
+    _stash_settlement_outcome(context.logging_obj, outcome)
     if store is not None:
         await _record_outcome_best_effort(store, context.interaction_id, outcome)
 
@@ -312,6 +329,14 @@ async def poll_and_log_background_interaction_cost(
         if configured_store is not None and await _persist_pending_settlement(context, configured_store)
         else None
     )
+    if active_store is not None and _is_settled(context.logging_obj):
+        if await _claim_in_store(active_store, context.interaction_id):
+            await _record_outcome_best_effort(
+                active_store,
+                context.interaction_id,
+                _stashed_settlement_outcome(context.logging_obj),
+            )
+        return
     for interval in _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
@@ -335,11 +360,12 @@ async def poll_and_log_background_interaction_cost(
             continue
         if response.status not in _TERMINAL_STATUSES:
             continue
-        if not await _claim_across_gates(context, active_store):
+        intended_outcome: SettlementOutcome = "billed" if response.usage is not None else "released"
+        if not await _claim_across_gates(context, active_store, intended_outcome):
             return
         await _settle_claimed(context=context, response=response, store=active_store)
         return
-    if not await _claim_across_gates(context, active_store):
+    if not await _claim_across_gates(context, active_store, "abandoned"):
         return
     verbose_logger.warning(
         "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
@@ -445,15 +471,16 @@ async def maybe_settle_background_interaction_before_delete(
             interaction_id,
             e,
         )
-        if not await _claim_across_gates(context, active_store):
+        if not await _claim_across_gates(context, active_store, "released"):
             return
         await _release_open_budget_reservation(logging_obj=context.logging_obj)
         if active_store is not None:
             await _record_outcome_best_effort(active_store, interaction_id, "released")
         return
-    if not await _claim_across_gates(context, active_store):
+    terminal_with_usage = response.status in _TERMINAL_STATUSES and response.usage is not None
+    if not await _claim_across_gates(context, active_store, "billed" if terminal_with_usage else "released"):
         return
-    if response.status in _TERMINAL_STATUSES and response.usage is not None:
+    if terminal_with_usage:
         await _settle_claimed(context=context, response=response, store=active_store)
         return
     await _release_open_budget_reservation(logging_obj=context.logging_obj)

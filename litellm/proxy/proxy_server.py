@@ -7904,7 +7904,6 @@ class ProxyStartupEvent:
                 )
                 pass
 
-        ### BACKGROUND INTERACTION SETTLEMENT ###
         if BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
             from litellm.interactions.background_cost_polling import set_settlement_store
             from litellm.proxy.spend_tracking.background_settlement import (
