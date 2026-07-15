@@ -66,10 +66,10 @@ def test_redact_string_catches_secret_patterns():
 
 
 def test_redact_string_catches_minimum_length_virtual_key():
-    """Regression test for LIT-4355: keys at the enforced 20-char minimum
+    """Regression test for LIT-4355: keys at the enforced 16-char minimum
     (MINIMUM_CUSTOM_KEY_LENGTH) must be treated as key-shaped by the scrubber."""
-    minimum_length_key = "sk-abcdefghijklmnopq"
-    assert len(minimum_length_key) == 20
+    minimum_length_key = "sk-abcdefghijklm"
+    assert len(minimum_length_key) == 16
     result = redact_string("msg: " + minimum_length_key)
     assert minimum_length_key not in result
     assert "REDACTED" in result

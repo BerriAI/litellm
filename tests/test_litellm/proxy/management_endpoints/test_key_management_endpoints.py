@@ -1394,14 +1394,14 @@ async def test_get_new_token_rejects_short_new_key(monkeypatch):
         await get_new_token(data)
 
     assert exc_info.value.status_code == 400
-    assert "at least 20 characters" in str(exc_info.value.detail)
+    assert "at least 16 characters" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("short_key", ["sk-1234", "sk-abcdefghijklmnop"])
+@pytest.mark.parametrize("short_key", ["sk-1234", "sk-abcdefghijkl"])
 async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
     """Regression test for LIT-4355: /key/generate must reject custom keys shorter
-    than the minimum length (including the 19-char boundary); sk-1234 used to be
+    than the minimum length (including the 15-char boundary); sk-1234 used to be
     accepted and fully exposed via key_name."""
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
@@ -1421,7 +1421,7 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
         AsyncMock(return_value={}),
     )
 
-    assert len(short_key) < 20
+    assert len(short_key) < 16
 
     with pytest.raises(ProxyException) as exc_info:
         await generate_key_fn(
@@ -1432,12 +1432,12 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
         )
 
     assert exc_info.value.code == "400"
-    assert "at least 20 characters" in str(exc_info.value.message)
+    assert "at least 16 characters" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
 async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch):
-    """Custom keys at exactly the minimum length (20 chars) are still accepted."""
+    """Custom keys at exactly the minimum length (16 chars) are still accepted."""
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
         return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
@@ -1461,8 +1461,8 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
         AsyncMock(return_value={}),
     )
 
-    custom_key = "sk-abcdefghijklmnopq"
-    assert len(custom_key) == 20
+    custom_key = "sk-abcdefghijklm"
+    assert len(custom_key) == 16
 
     response = await generate_key_fn(
         data=GenerateKeyRequest(key=custom_key),
