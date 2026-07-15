@@ -84,7 +84,7 @@ async def _add_langfuse_trace_id_to_alert(
         #########################################################
         langfuse_object = litellm_logging_obj._get_callback_object(service_name="langfuse")
         if langfuse_object is not None:
-            base_url = langfuse_object.Langfuse.base_url
+            base_url = langfuse_object.langfuse_host
             return f"{base_url}/trace/{trace_id}"
 
     return None

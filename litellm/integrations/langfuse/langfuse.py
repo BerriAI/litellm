@@ -751,7 +751,7 @@ class LangFuseLogger:
                 generation_client.end(end_time=end_time_ns)
                 trace.end(end_time=end_time_ns)
 
-            return trace.trace_id, generation_client.id
+            return trace_context["trace_id"], generation_client.id
         except Exception:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None

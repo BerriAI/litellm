@@ -231,12 +231,16 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
         langfuse_client.flush()
         await asyncio.sleep(5)
 
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
+        trace_id = langfuse_client.create_trace_id(seed=_unique_trace_name)
+        observations = langfuse_client.api.observations.get_many(
+            trace_id=trace_id,
+            type="GENERATION",
+            parse_io_as_json=True,
+        )
 
-        print("trace_from_langfuse", trace)
+        print("observations_from_langfuse", observations)
 
-        _trace_data = trace.data
+        _trace_data = observations.data
 
         if (
             len(_trace_data) == 0
@@ -292,11 +296,16 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     langfuse_client.flush()
     await asyncio.sleep(20)
 
-    # get trace with _unique_trace_name
     print("lookiing up trace", _unique_trace_name)
-    trace = langfuse_client.get_trace(id=_unique_trace_name)
+    trace_id = langfuse_client.create_trace_id(seed=_unique_trace_name)
     generations = list(
-        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
+        reversed(
+            langfuse_client.api.observations.get_many(
+                trace_id=trace_id,
+                type="GENERATION",
+                parse_io_as_json=True,
+            ).data
+        )
     )
 
     print("generations for given trace=", generations)
@@ -338,11 +347,17 @@ async def test_langfuse_masked_input_output(langfuse_client):
         langfuse_client.flush()
         await asyncio.sleep(30)
 
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_trace(id=_unique_trace_name)
+        trace_id = langfuse_client.create_trace_id(seed=_unique_trace_name)
+        trace = langfuse_client.api.trace.get(trace_id)
         print("trace_from_langfuse", trace)
         generations = list(
-            reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
+            reversed(
+                langfuse_client.api.observations.get_many(
+                    trace_id=trace_id,
+                    type="GENERATION",
+                    parse_io_as_json=True,
+                ).data
+            )
         )
 
         assert expected_input in str(trace.input)
@@ -443,17 +458,24 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
+        resolved_trace_id = langfuse_client.create_trace_id(seed=trace_id)
         try:
-            trace = langfuse_client.get_trace(id=trace_id)
+            trace = langfuse_client.api.trace.get(resolved_trace_id)
         except Exception as e:
             if "not found within authorized project" in str(e):
                 print(f"Trace {trace_id} not found")
                 continue
-        assert trace.id == trace_id
+        assert trace.id == resolved_trace_id
         assert trace.session_id == session_id
         assert trace.metadata != trace_metadata
         generations = list(
-            reversed(langfuse_client.get_generations(trace_id=trace_id).data)
+            reversed(
+                langfuse_client.api.observations.get_many(
+                    trace_id=resolved_trace_id,
+                    type="GENERATION",
+                    parse_io_as_json=True,
+                ).data
+            )
         )
         assert len(generations) == len(generation_ids)
         assert (
@@ -470,7 +492,7 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
         print("trace_from_langfuse", trace)
         for generation_id, generation in zip(generation_ids, generations):
             assert generation.id == generation_id
-            assert generation.trace_id == trace_id
+            assert generation.trace_id == resolved_trace_id
             print(
                 "common keys in trace",
                 set(generation.metadata.keys()).intersection(
