@@ -284,24 +284,26 @@ def _restrict_discovery_to_corroborated_authorization_server(
     server_identifier: str,
     is_dcr_bridge: bool,
 ) -> MCPOAuthMetadata | None:
-    """Bound what freshly discovered metadata may backfill into a manually pinned config.
+    """Reject discovered token/registration endpoints a manually pinned authorize endpoint cannot
+    vouch for (the RFC 9700 authorization-server mix-up).
 
-    Discovery is rooted at the MCP resource, so provenance is a property of the whole metadata
-    document, not per field: a compromised upstream can advertise both an attacker ``token_endpoint``
-    (the RFC 9700 mix-up) and inflated ``scopes`` (tricking the user into granting a broader token
-    that then flows to the upstream). Both are closed by one rule. When ``authorization_url`` is
-    admin-pinned, the discovered ``token_url`` and ``registration_url`` are kept only if the document
-    corroborates the pin (its ``authorization_endpoint`` matches), and scopes are taken from the
-    authorization server's own ``scopes_supported`` (``authorization_server_scopes``, trusted tier)
-    rather than the resource-advertised ``scopes`` a compromised upstream controls. A document that
-    does not corroborate backfills nothing. With no pin there is no trust anchor to protect and the
-    authorize endpoint comes from the same chain as everything else, so discovery is returned as-is.
+    Discovery is rooted at the MCP resource, so a compromised upstream can advertise an attacker
+    ``token_endpoint``: with ``authorization_url`` admin-pinned but ``token_url`` blank, the merge
+    would pair the trusted authorize endpoint with that attacker token endpoint, and the gateway would
+    post the authorization code and client secret there. So the discovered ``token_url`` and
+    ``registration_url`` are kept only if the document corroborates the pin (its
+    ``authorization_endpoint`` matches). ``scopes`` are deliberately NOT gated here: per the MCP
+    authorization spec Scope Selection Strategy and RFC 9700 §2.3, the scopes a client requests are
+    resource-driven (the WWW-Authenticate challenge or the RFC 9728 protected-resource
+    ``scopes_supported``), and scope inflation by a compromised resource is bounded by the
+    authorization server and user consent (RFC 6749 §3.3), not by the client second-guessing the
+    request. With no pin there is no trust anchor to protect, so discovery is returned as-is.
     """
     if metadata is None or not (manual_authorization_url and manual_authorization_url.strip()):
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
-        return metadata.model_copy(update={"scopes": metadata.authorization_server_scopes})
-    if not metadata.token_url and not metadata.registration_url and not metadata.scopes:
+        return metadata
+    if not metadata.token_url and not metadata.registration_url:
         return metadata
     bridge_note = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -311,15 +313,15 @@ def _restrict_discovery_to_corroborated_authorization_server(
     )
     verbose_logger.warning(
         "MCP OAuth discovery for server %s advertised authorization_endpoint %s, which does not match the "
-        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url/scopes "
-        "so authorization codes, client credentials, and granted scopes only follow the configured "
-        "authorization server. Configure Token URL and Scopes manually if the mismatch is intentional.%s",
+        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url so "
+        "authorization codes and client credentials only follow the configured authorization server. "
+        "Configure Token URL manually if the mismatch is intentional.%s",
         server_identifier,
         _normalized_authorize_endpoint(metadata.authorization_url) if metadata.authorization_url else "<absent>",
         _normalized_authorize_endpoint(manual_authorization_url),
         bridge_note,
     )
-    return metadata.model_copy(update={"token_url": None, "registration_url": None, "scopes": None})
+    return metadata.model_copy(update={"token_url": None, "registration_url": None})
 
 
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
@@ -3394,7 +3396,6 @@ class MCPServerManager:
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
-                authorization_server_scopes=scopes,
             )
 
             if any(
