@@ -32,6 +32,7 @@ test.describe("Internal Viewer", () => {
       "Usage",
       "Logs",
       "Teams",
+      "Models + Endpoints",
       "API Reference",
       "AI Hub",
     ];
@@ -43,7 +44,7 @@ test.describe("Internal Viewer", () => {
     }
 
     // Items that must NOT be visible (admin-only surface)
-    const expectedHidden = ["Internal Users", "Organizations", "Models + Endpoints"];
+    const expectedHidden = ["Internal Users", "Organizations"];
     for (const label of expectedHidden) {
       await expect(
         nav.getByRole("link", { name: label, exact: true }),
@@ -68,6 +69,23 @@ test.describe("Internal Viewer", () => {
     await expect(page.getByRole("button", { name: "Regenerate Key" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Reset Spend/i })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Delete Key" })).toHaveCount(0);
+  });
+
+  test("Models page lists allowed models without management controls", async ({ page }) => {
+    await navigateToPage(page, Page.Models);
+
+    await expect(page.getByText("fake-openai-gpt-4", { exact: true }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("tab", { name: "Add Model" })).toHaveCount(0);
+    await expect(page.getByTitle("Model Settings")).toHaveCount(0);
+
+    const modelRow = page.locator("tr", { hasText: "fake-openai-gpt-4" }).first();
+    await modelRow.click();
+
+    await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("button", { name: /test connection/i })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /update api key/i })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /delete model/i })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /edit settings/i })).toHaveCount(0);
   });
 
   test("Team info page omits Members and Settings tabs for an Internal Viewer", async ({ page }) => {

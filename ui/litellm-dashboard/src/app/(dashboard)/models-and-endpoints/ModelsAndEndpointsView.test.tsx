@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelsAndEndpointsView from "./ModelsAndEndpointsView";
 
@@ -208,5 +208,40 @@ describe("ModelsAndEndpointsView", () => {
     const healthCheckProps = mockHealthCheckComponent.mock.calls[0][0];
     expect(healthCheckProps.all_models_on_proxy).toEqual(["deployment-id-1", "deployment-id-2"]);
     expect(healthCheckProps.all_models_on_proxy).not.toContain("gpt-4");
+  });
+
+  it("should hide Add Model from an Internal Viewer who is a team admin", async () => {
+    const internalViewerAuth = {
+      accessToken: "123",
+      token: "123",
+      userRole: "Internal Viewer",
+      userId: "viewer-123",
+    };
+    mockUseAuthorized.mockReturnValue(internalViewerAuth);
+    const teams = [
+      {
+        team_id: "team-1",
+        team_alias: "Team 1",
+        models: [],
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: null,
+        created_at: "2024-01-01",
+        keys: [],
+        members_with_roles: [{ user_id: "viewer-123", role: "admin" }],
+      },
+    ];
+
+    const queryClient = createQueryClient();
+    const { findByText } = render(
+      <QueryClientProvider client={queryClient}>
+        <ModelsAndEndpointsView premiumUser teams={teams} />
+      </QueryClientProvider>,
+    );
+
+    expect(await findByText("Your Models", {}, { timeout: 10000 })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
   });
 });

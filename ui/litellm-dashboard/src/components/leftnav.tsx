@@ -69,6 +69,7 @@ import {
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
+  rolesAllowedToViewModels,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
@@ -140,7 +141,7 @@ const menuGroups: MenuGroup[] = [
         page: "models",
         label: "Models + Endpoints",
         icon: <Network {...ICON} />,
-        roles: rolesAllowedToViewWriteScopedPages,
+        roles: rolesAllowedToViewModels,
       },
       {
         key: "agentic",

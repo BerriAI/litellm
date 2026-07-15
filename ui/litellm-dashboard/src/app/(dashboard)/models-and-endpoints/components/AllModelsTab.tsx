@@ -18,6 +18,7 @@ import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
+import { internalViewerRoles } from "@/utils/roles";
 type ModelViewMode = "all" | "current_team";
 
 const SEARCH_DEBOUNCE_WAIT_MS = 200;
@@ -44,6 +45,7 @@ const AllModelsTab = ({
   const { accessToken, userId, userRole, premiumUser } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const queryClient = useQueryClient();
+  const isInternalViewer = internalViewerRoles.includes(userRole);
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
@@ -429,12 +431,13 @@ const AllModelsTab = ({
                     </button>
                   </div>
 
-                  {/* Model Settings Button */}
-                  <Button
-                    icon={<SettingOutlined />}
-                    onClick={() => setIsModelSettingsModalVisible(true)}
-                    title="Model Settings"
-                  />
+                  {!isInternalViewer && (
+                    <Button
+                      icon={<SettingOutlined />}
+                      onClick={() => setIsModelSettingsModalVisible(true)}
+                      title="Model Settings"
+                    />
+                  )}
                 </div>
 
                 {/* Additional Filters */}
@@ -595,11 +598,13 @@ const AllModelsTab = ({
         onOk={handleDeleteModel}
         confirmLoading={deleteLoading}
       />
-      <ModelSettingsModal
-        isVisible={isModelSettingsModalVisible}
-        onCancel={() => setIsModelSettingsModalVisible(false)}
-        onSuccess={() => setIsModelSettingsModalVisible(false)}
-      />
+      {!isInternalViewer && (
+        <ModelSettingsModal
+          isVisible={isModelSettingsModalVisible}
+          onCancel={() => setIsModelSettingsModalVisible(false)}
+          onSuccess={() => setIsModelSettingsModalVisible(false)}
+        />
+      )}
     </TabPanel>
   );
 };

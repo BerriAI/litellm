@@ -365,6 +365,17 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should disable model mutations for an Internal Viewer who created the model", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal Viewer" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /test connection/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /update api key/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /delete model/i })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
+    });
+  });
+
   it("should display overview and raw JSON tabs", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {

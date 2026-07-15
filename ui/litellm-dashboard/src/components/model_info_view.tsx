@@ -45,6 +45,7 @@ import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { internalViewerRoles } from "@/utils/roles";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -121,8 +122,9 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel =
-    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
+  const isInternalViewer = userRole !== null && internalViewerRoles.includes(userRole);
+  const isAdminOrModelCreator = userRole === "Admin" || modelData?.model_info?.created_by === userID;
+  const canEditModel = !isInternalViewer && isAdminOrModelCreator && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter =
     modelData?.litellm_params?.auto_router_config != null ||
@@ -540,6 +542,7 @@ export default function ModelInfoView({
             icon={<RefreshIcon className="h-4 w-4" />}
             onClick={handleTestConnection}
             className="flex items-center gap-2"
+            disabled={isInternalViewer}
             data-testid="test-connection-button"
           >
             Test Connection
