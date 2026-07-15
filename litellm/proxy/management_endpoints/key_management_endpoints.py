@@ -4365,7 +4365,6 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
         await _check_custom_key_allowed(data.new_key)
-        new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4378,6 +4377,7 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": f"New key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."},
             )
+        new_token = data.new_key
     else:
         new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
     return new_token
