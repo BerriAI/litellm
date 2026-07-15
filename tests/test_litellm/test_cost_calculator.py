@@ -3514,6 +3514,42 @@ def test_completion_cost_bills_interactions_api_response():
     assert cost > 0
 
 
+def test_completion_cost_bills_interactions_google_search_per_query():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-3-flash-preview", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/search123",
+        model="gemini-3-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 680,
+            "total_input_tokens": 103,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 103}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 226,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 351,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    per_query_cost = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        103 * model_info["input_cost_per_token"]
+        + 226 * model_info["output_cost_per_token"]
+        + 351 * reasoning_rate
+        + 3 * per_query_cost
+    )
+    assert model_info.get("web_search_billing_unit") == "per_query"
+    assert cost == pytest.approx(expected)
+    assert cost > 3 * per_query_cost
+
+
 def test_completion_cost_bills_interactions_video_output_at_video_rate():
     from litellm.types.interactions import InteractionsAPIResponse
 
