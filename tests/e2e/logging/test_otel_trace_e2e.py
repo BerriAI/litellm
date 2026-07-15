@@ -273,19 +273,21 @@ class TestOtelTraceCompleteness:
     def test_chat_completions_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful STREAMED /chat/completions call must export ONE
-        complete OTEL trace, exactly like the non-streaming case: a single root
-        SERVER span with auth/db/cost children and the gen-AI CLIENT span
-        connected back to the root.
+        """A successful streamed `/chat/completions` request should export one
+        complete OTEL trace. The trace must contain a single root `SERVER`
+        span, with the auth, database, cost, and gen-AI `CLIENT` spans all
+        connected back to that root.
 
-        Streaming closes the gen-AI span from the stream-consumption path (the
-        span can only end once the last chunk has arrived and usage has been
-        aggregated), a lifecycle that historically produced duplicate or
-        orphaned spans. So beyond the shared completeness contract this test
-        also asserts the response actually streamed (event-stream content type,
-        at least one chunk), that exactly ONE gen-AI span exists for the call,
-        and that the span records litellm.request.streaming=true - a plain span
-        here would mean the stream flag was dropped before the model call.
+        Streaming has an additional lifecycle risk because the gen-AI span is
+        closed by the stream-consumption path after the final chunk has
+        arrived and usage has been aggregated. Historically, this has caused
+        duplicate or orphaned spans.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The gen-AI span contains `litellm.request.streaming=true`.
         """
         route = "/chat/completions"
         _assert_otel_destination_configured(client)
@@ -327,15 +329,21 @@ class TestOtelTraceCompleteness:
     def test_messages_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
-        """One successful STREAMED /v1/messages call must export ONE complete
-        OTEL trace: a single root SERVER span with auth/db/cost children and
-        the gen-AI CLIENT span connected back to the root.
+        """A successful streamed `/v1/messages` request should export one
+        complete OTEL trace. The trace must contain a single root `SERVER`
+        span, with the auth, database, cost, and gen-AI `CLIENT` spans all
+        connected back to that root.
 
-        Same streaming lifecycle risk as the chat surface (the gen-AI span
-        closes from the stream-consumption path), so the same stream-specific
-        assertions apply: the response actually streamed, exactly ONE gen-AI
-        span exists for the call, and the span records
-        litellm.request.streaming=true.
+        This endpoint has the same streaming lifecycle risk as
+        `/chat/completions`: the gen-AI span is closed by the
+        stream-consumption path after the final chunk has arrived and usage
+        has been aggregated.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The gen-AI span contains `litellm.request.streaming=true`.
         """
         route = "/v1/messages"
         _assert_otel_destination_configured(client)
