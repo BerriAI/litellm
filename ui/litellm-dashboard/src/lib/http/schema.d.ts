@@ -25706,6 +25706,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -25787,6 +25789,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -33536,6 +33540,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -33617,6 +33623,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */

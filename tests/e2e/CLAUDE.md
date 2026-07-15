@@ -77,13 +77,13 @@ llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
   endpoint   : chat_completions | messages | responses | embeddings | batches | files
                | rerank | images_generations | audio_speech | audio_transcriptions | moderations
                | realtime
-  route      : openai | azure_openai | anthropic | bedrock_converse | vertex | azure_foundry
-               | cohere | together_ai
+  route      : openai | azure_openai | anthropic | bedrock_converse | bedrock_invoke | vertex
+               | azure_foundry | cohere | together_ai
                (vocab varies per endpoint; messages is anthropic-format only)
   capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
-               | service_tier
+               | service_tier | mid_conversation_system
   streaming  : stream | nonstream   (omit where n/a)
-  assertion  : works | cost_logged
+  assertion  : works | cost_logged | cache_hit
   label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*
   e.g.  llm.chat_completions.bedrock_converse.tool_use.stream.works
         llm.messages.anthropic.prompt_cache_1h.nonstream.cache_hit
