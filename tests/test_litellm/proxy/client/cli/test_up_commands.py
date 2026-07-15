@@ -1,5 +1,6 @@
 import json
 import shutil
+import stat
 import sys
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
     down,
+    load_json_or_empty,
     merge_claude_settings,
     read_backup,
     resolve_api_key_helper,
@@ -66,6 +68,26 @@ class TestMergeClaudeSettings:
         assert settings == {"env": {"FOO": "bar"}}
 
 
+class TestLoadJsonOrEmpty:
+    def test_returns_empty_dict_when_file_does_not_exist(self, tmp_path):
+        assert load_json_or_empty(tmp_path / "missing.json") == {}
+
+    def test_returns_empty_dict_when_file_is_empty(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text("")
+        assert load_json_or_empty(path) == {}
+
+    def test_returns_empty_dict_when_file_is_whitespace_only(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text("   \n")
+        assert load_json_or_empty(path) == {}
+
+    def test_parses_real_content(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"theme": "dark"}))
+        assert load_json_or_empty(path) == {"theme": "dark"}
+
+
 class TestBackupRoundTrip:
     def test_restores_original_content_when_file_existed(self, monkeypatch, tmp_path):
         settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
@@ -107,6 +129,21 @@ class TestBackupRoundTrip:
     def test_read_backup_missing_file_returns_none(self, monkeypatch, tmp_path):
         _patch_paths(monkeypatch, tmp_path)
         assert read_backup() is None
+
+    def test_write_backup_restricts_permissions_for_a_new_file(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        write_backup(BackupRecord(existed=True, content={"a": 1}))
+        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
+
+    def test_write_backup_restricts_permissions_of_a_preexisting_permissive_file(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("{}")
+        backup_path.chmod(0o644)
+
+        write_backup(BackupRecord(existed=True, content={"a": 1}))
+
+        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
 
     def test_backup_file_always_removed_after_restore(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)

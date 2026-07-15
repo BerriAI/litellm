@@ -1,4 +1,5 @@
 import atexit
+import contextlib
 import json
 import os
 import shlex
@@ -9,7 +10,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Dict, Mapping, Optional
+from typing import IO, Iterator, Mapping
 
 import click
 from pydantic import JsonValue, TypeAdapter
@@ -37,23 +38,26 @@ class BackupRecord:
     """Snapshot of ~/.claude/settings.json taken right before `lite up` patches it."""
 
     existed: bool
-    content: Optional[Dict[str, JsonValue]]
+    content: dict[str, JsonValue] | None
 
 
-_SETTINGS_ADAPTER = TypeAdapter(Dict[str, JsonValue])
+_SETTINGS_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _BACKUP_RECORD_ADAPTER = TypeAdapter(BackupRecord)
 
 
-def load_json_or_empty(path: Path) -> Dict[str, JsonValue]:
+def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
     if not path.exists():
         return {}
     with open(path, "r") as f:
-        return _SETTINGS_ADAPTER.validate_json(f.read())
+        content = f.read()
+    if not content.strip():
+        return {}
+    return _SETTINGS_ADAPTER.validate_json(content)
 
 
 def merge_claude_settings(
     settings: Mapping[str, JsonValue], base_url: str, api_key_helper: str
-) -> Dict[str, JsonValue]:
+) -> dict[str, JsonValue]:
     """Return a new settings dict wired to route Claude Code through the proxy.
 
     Only env.ANTHROPIC_BASE_URL and the top-level apiKeyHelper are overridden; a
@@ -68,34 +72,58 @@ def merge_claude_settings(
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
-def write_backup(record: BackupRecord) -> None:
-    BACKUP_PATH.parent.mkdir(exist_ok=True)
-    with open(BACKUP_PATH, "w") as f:
+@contextlib.contextmanager
+def secure_create(path: Path) -> Iterator[IO[str]]:
+    """Open path for writing with mode 0600 fixed up before any content is written.
+
+    A plain `open(path, "w")` creates a *new* file at the umask-derived default (commonly 0644)
+    and leaves it world- or group-readable until a later `chmod` call catches up -- a real window
+    in which a file holding a credential is readable by another local account. Passing the mode to
+    `os.open` closes that window for a brand-new file, but `O_CREAT`'s mode argument is only
+    applied on creation: if the file already exists its old, broader permissions carry over
+    untouched. `os.fchmod` right after opening -- before a single byte of the new content is
+    written -- covers both cases.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    f: IO[str] = os.fdopen(fd, "w")
+    try:
+        yield f
+    finally:
+        f.close()
+
+
+def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
+    path = backup_path if backup_path is not None else BACKUP_PATH
+    path.parent.mkdir(exist_ok=True)
+    with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
-    os.chmod(BACKUP_PATH, 0o600)
 
 
-def read_backup() -> Optional[BackupRecord]:
-    if not BACKUP_PATH.exists():
+def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
+    path = backup_path if backup_path is not None else BACKUP_PATH
+    if not path.exists():
         return None
-    with open(BACKUP_PATH, "r") as f:
+    with open(path, "r") as f:
         return _BACKUP_RECORD_ADAPTER.validate_json(f.read())
 
 
-def restore_claude_settings() -> Optional[BackupRecord]:
-    """Restore ~/.claude/settings.json from the backup, then delete the backup.
+def restore_claude_settings(settings_path: Path | None = None, backup_path: Path | None = None) -> BackupRecord | None:
+    """Restore settings_path from the backup at backup_path, then delete the backup.
 
     Returns the restored record, or None if there was nothing to restore.
     """
-    record = read_backup()
+    resolved_settings_path = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
+    resolved_backup_path = backup_path if backup_path is not None else BACKUP_PATH
+    record = read_backup(resolved_backup_path)
     if record is None:
         return None
     if record.existed and record.content is not None:
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
+        with open(resolved_settings_path, "w") as f:
             json.dump(record.content, f, indent=2)
-    elif CLAUDE_SETTINGS_PATH.exists():
-        CLAUDE_SETTINGS_PATH.unlink()
-    BACKUP_PATH.unlink()
+    elif resolved_settings_path.exists():
+        resolved_settings_path.unlink()
+    resolved_backup_path.unlink()
     return record
 
 
@@ -190,7 +218,7 @@ def up(ctx: click.Context) -> None:
     stop_event = threading.Event()
     restored = threading.Lock()
 
-    def _handle_signal(_signum: int, _frame: Optional[FrameType]) -> None:
+    def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()
 
     def _restore_once() -> None:
@@ -216,16 +244,16 @@ def down() -> None:
 
 
 __all__ = [
-    "up",
-    "down",
+    "BACKUP_PATH",
+    "CLAUDE_SETTINGS_PATH",
     "BackupRecord",
+    "UpError",
+    "down",
     "load_json_or_empty",
     "merge_claude_settings",
-    "write_backup",
     "read_backup",
-    "restore_claude_settings",
     "resolve_api_key_helper",
-    "UpError",
-    "CLAUDE_SETTINGS_PATH",
-    "BACKUP_PATH",
+    "restore_claude_settings",
+    "up",
+    "write_backup",
 ]

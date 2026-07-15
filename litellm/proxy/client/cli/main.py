@@ -9,11 +9,13 @@ from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
 from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
+from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.credentials import credentials
 from .commands.encryption import encryption
 from .commands.http import http
 from .commands.keys import keys
+from .commands.model_groups import model_groups
 
 # local imports
 from .commands.models import models
@@ -135,6 +137,10 @@ for agent_command in agent_commands():
 # Add the up/down commands (route Claude Code through the local LiteLLM proxy)
 cli.add_command(up)
 cli.add_command(down)
+# Add the model-groups command group (discover models your key can access)
+cli.add_command(model_groups)
+# Add the autoroute command group (QA auto-routing against your real proxy)
+cli.add_command(autoroute_group, name="autoroute")
 
 
 if __name__ == "__main__":
