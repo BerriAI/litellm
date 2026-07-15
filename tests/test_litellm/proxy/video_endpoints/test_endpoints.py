@@ -367,6 +367,27 @@ async def test_status__header_provider_beats_decoded_id(harness):
     assert data["model"] == "azure-sora"
 
 
+@pytest.mark.asyncio
+async def test_status__reencodes_response_id_preserving_model_id(harness):
+    """Regression for #33423: the status transform re-encodes the video id with
+    model_id=None, so the id the client gets back decodes to an empty model_id.
+    Re-using that id on a later status/content call then cannot resolve the
+    deployment (or its per-model api_key) and dies with invalid_api_key. The
+    endpoint must re-stamp the response id with the model_id it decoded from the
+    incoming id so the returned id round-trips."""
+    stripped_id = encode_video_id_with_provider("video_orig123", "azure", "")
+    assert decode_video_id_with_provider(stripped_id)["model_id"] == ""
+    harness.base_process.return_value = _video_response(stripped_id, hidden_params={})
+
+    resp = await call_status(harness, AZURE_VIDEO_ID)
+
+    decoded = decode_video_id_with_provider(resp.id)
+    assert decoded["model_id"] == VIDEO_MODEL_ID
+    assert decoded["custom_llm_provider"] == "azure"
+    assert decoded["video_id"] == "video_orig123"
+    assert harness.resolve_model.side_effect(decoded["model_id"]) == "azure-sora"
+
+
 # =========================================================================== #
 #   GET /v1/videos/{video_id}/content  -  video_content                        #
 # =========================================================================== #

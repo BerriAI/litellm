@@ -279,7 +279,7 @@ async def video_status(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -296,6 +296,11 @@ async def video_status(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        return encode_video_id_in_response(
+            response=cast(object, response),
+            fallback_provider=custom_llm_provider,
+            fallback_model_id=model_id_from_decoded,
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
