@@ -437,6 +437,9 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
     create_object_audit_log,
 )
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_VALIDATOR_REGISTRY,
+)
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
@@ -744,6 +747,7 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_key_update = None
+    TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
     user_custom_sso = None
     user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
@@ -3406,6 +3410,7 @@ _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Dict[str, Tuple[str, ...]] = {
         "custom_auth",
         "custom_key_generate",
         "custom_key_update",
+        "custom_team_metadata_validate",
         "custom_sso",
         "custom_ui_sso_sign_in_handler",
     ),
@@ -4644,6 +4649,13 @@ class ProxyConfig:
             custom_key_update = general_settings.get("custom_key_update", None)
             if custom_key_update is not None:
                 user_custom_key_update = get_instance_fn(value=custom_key_update, config_file_path=config_file_path)
+
+            custom_team_metadata_validate = general_settings.get("custom_team_metadata_validate", None)
+            TEAM_METADATA_VALIDATOR_REGISTRY.set(
+                get_instance_fn(value=custom_team_metadata_validate, config_file_path=config_file_path)
+                if custom_team_metadata_validate is not None
+                else None
+            )
 
             custom_sso = general_settings.get("custom_sso", None)
             if custom_sso is not None:
