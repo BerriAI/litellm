@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    safe_cast_to_float,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -8802,16 +8803,18 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                if model_info.get("input_cost_per_token", None) is not None and (
+                input_cost_per_token = safe_cast_to_float(model_info.get("input_cost_per_token"))
+                if input_cost_per_token is not None and (
                     model_group_info.input_cost_per_token is None
-                    or (model_info["input_cost_per_token"] or 0.0) > (model_group_info.input_cost_per_token or 0.0)
+                    or input_cost_per_token > (safe_cast_to_float(model_group_info.input_cost_per_token) or 0.0)
                 ):
-                    model_group_info.input_cost_per_token = model_info["input_cost_per_token"]
-                if model_info.get("output_cost_per_token", None) is not None and (
+                    model_group_info.input_cost_per_token = input_cost_per_token
+                output_cost_per_token = safe_cast_to_float(model_info.get("output_cost_per_token"))
+                if output_cost_per_token is not None and (
                     model_group_info.output_cost_per_token is None
-                    or (model_info["output_cost_per_token"] or 0.0) > (model_group_info.output_cost_per_token or 0.0)
+                    or output_cost_per_token > (safe_cast_to_float(model_group_info.output_cost_per_token) or 0.0)
                 ):
-                    model_group_info.output_cost_per_token = model_info["output_cost_per_token"]
+                    model_group_info.output_cost_per_token = output_cost_per_token
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True  # type: ignore

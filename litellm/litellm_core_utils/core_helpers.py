@@ -36,6 +36,29 @@ def safe_divide_seconds(seconds: float, denominator: float, default: Optional[fl
     return float(seconds / denominator)
 
 
+def safe_cast_to_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    """
+    Cast a value to float, tolerating strings and non-numeric junk.
+
+    Cost fields round-tripped through the database (with store_model_in_db) can
+    come back as strings (e.g. "1e-05"), which breaks numeric comparisons. This
+    normalises them back to float.
+
+    Args:
+        value: The value to cast (float, int, str, or None)
+        default: Value to return when the input is None or not castable
+
+    Returns:
+        The value as a float, or default if it is None or cannot be cast
+    """
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def safe_divide(
     numerator: Union[int, float],
     denominator: Union[int, float],
