@@ -247,7 +247,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         if api_key:
             self.run_env_setup(api_key)
-        return self.headers
+        extra_headers = optional_params.get("extra_headers") or {}
+        return {**headers, **extra_headers, **self.headers}
 
     def get_complete_url(
         self,
