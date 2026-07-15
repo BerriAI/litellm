@@ -47,6 +47,22 @@
   assertions: [succeeds]
   source: "server.py:886"
   rationale: Bearer token forwarding for tool invocation
+- id: mcp.list_tools.api_key.rejects_unknown_key
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [rejects_unknown_key]
+  source: "auth/user_api_key_auth_mcp.py:141 process_mcp_request"
+  rationale: An unrecognized virtual key must be refused with 401 at session establishment, before any upstream traffic
+- id: mcp.list_tools.bearer.rejects_unknown_key
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: bearer
+  assertions: [rejects_unknown_key]
+  source: "auth/user_api_key_auth_mcp.py:141 process_mcp_request"
+  rationale: The Authorization header form must be refused identically to x-litellm-api-key; the two ingress styles share one contract
 - id: mcp.list_tools.oauth.succeeds
   module: mcp
   tier: P1
