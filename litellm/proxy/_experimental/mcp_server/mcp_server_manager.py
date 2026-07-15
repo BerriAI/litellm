@@ -186,6 +186,21 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
 )
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    """Collapse an absent, empty, or whitespace-only string to ``None``.
+
+    OAuth endpoint fields are consumed by truthiness-based merges (``row or discovered``) and by the
+    corroboration gate. A whitespace-only value is truthy to ``or`` but is not a usable endpoint, so
+    without this the merge would keep the blank value for redirects while the gate treats it as
+    unpinned and backfills the other fields, yielding a broken half-discovered config. Normalizing
+    the pinned fields once, at each build entry point, gives every downstream consumer a single
+    notion of "blank" so those code paths cannot disagree.
+    """
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
 def _normalized_authorize_endpoint(url: str) -> str:
     """Compare authorize endpoints on scheme, host, and path only. The default port is elided and
     the host is lowercased so ``https://IDP.example.com:443/authorize/`` and
@@ -1120,12 +1135,15 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
+            manual_authorization_url = _blank_to_none(server_config.get("authorization_url"))
+            manual_token_url = _blank_to_none(server_config.get("token_url"))
+            manual_registration_url = _blank_to_none(server_config.get("registration_url"))
             if server_url and (
                 auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
                 or self._obo_needs_endpoint_discovery(
                     auth_type,
                     server_config.get("token_exchange_endpoint"),
-                    server_config.get("token_url"),
+                    manual_token_url,
                 )
             ):
                 mcp_oauth_metadata = await self._descovery_metadata(
@@ -1138,7 +1156,7 @@ class MCPServerManager:
             gated_oauth_metadata = (
                 _restrict_discovery_to_corroborated_authorization_server(
                     mcp_oauth_metadata,
-                    server_config.get("authorization_url"),
+                    manual_authorization_url,
                     server_name or server_id,
                     bool(server_config.get("dcr_bridge")),
                 )
@@ -1152,13 +1170,11 @@ class MCPServerManager:
             resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
                 gated_oauth_metadata.scopes if gated_oauth_metadata else None
             )
-            resolved_authorization_url = server_config.get("authorization_url") or (
+            resolved_authorization_url = manual_authorization_url or (
                 gated_oauth_metadata.authorization_url if gated_oauth_metadata else None
             )
-            resolved_token_url = server_config.get("token_url") or (
-                gated_oauth_metadata.token_url if gated_oauth_metadata else None
-            )
-            resolved_registration_url = server_config.get("registration_url") or (
+            resolved_token_url = manual_token_url or (gated_oauth_metadata.token_url if gated_oauth_metadata else None)
+            resolved_registration_url = manual_registration_url or (
                 gated_oauth_metadata.registration_url if gated_oauth_metadata else None
             )
 
@@ -1552,14 +1568,17 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        has_all_upstream_oauth_fields = bool(mcp_server.authorization_url and mcp_server.token_url and scopes)
+        manual_authorization_url = _blank_to_none(mcp_server.authorization_url)
+        manual_token_url = _blank_to_none(mcp_server.token_url)
+        manual_registration_url = _blank_to_none(mcp_server.registration_url)
+        has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
         needs_discovery = bool(server_url) and (
             (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
                 mcp_server.token_exchange_endpoint
                 or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-                mcp_server.token_url,
+                manual_token_url,
             )
         )
         mcp_oauth_metadata = (
@@ -1580,7 +1599,7 @@ class MCPServerManager:
         gated_oauth_metadata = (
             _restrict_discovery_to_corroborated_authorization_server(
                 mcp_oauth_metadata,
-                mcp_server.authorization_url,
+                manual_authorization_url,
                 mcp_server.server_id,
                 bool(getattr(mcp_server, "dcr_bridge", None)),
             )
@@ -1608,9 +1627,9 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
-            authorization_url=mcp_server.authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
-            token_url=mcp_server.token_url or getattr(gated_oauth_metadata, "token_url", None),
-            registration_url=mcp_server.registration_url or getattr(gated_oauth_metadata, "registration_url", None),
+            authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
+            token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
+            registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),
             token_endpoint_auth_method=(
                 credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
             ),
@@ -1661,14 +1680,14 @@ class MCPServerManager:
             await self._persist_discovered_obo_token_url(
                 server_id=mcp_server.server_id,
                 auth_type=auth_type,
-                existing_token_url=mcp_server.token_url,
+                existing_token_url=manual_token_url,
                 discovered_token_url=new_server.token_url,
             )
             await self._persist_discovered_oauth_endpoints(
                 server_id=mcp_server.server_id,
                 auth_type=auth_type,
-                existing_authorization_url=mcp_server.authorization_url,
-                existing_token_url=mcp_server.token_url,
+                existing_authorization_url=manual_authorization_url,
+                existing_token_url=manual_token_url,
                 existing_scopes=scopes,
                 metadata=gated_oauth_metadata,
             )

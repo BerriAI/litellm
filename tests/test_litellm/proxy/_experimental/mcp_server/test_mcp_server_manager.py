@@ -409,11 +409,13 @@ class TestMCPServerManager:
         assert server.scopes == ["read"]
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_blank_authorization_url_is_not_a_pin(self):
-        """A blank (empty-string) authorization_url is not a trust anchor, so discovery backfills
-        the whole set — authorize endpoint, token_url, and its resource-preferred scopes — from the
-        same chain, exactly as if the field had been omitted. The corroboration gate must treat
-        empty-string as unpinned so it does not strand the token_url the merge still fills."""
+    @pytest.mark.parametrize("blank_authorization_url", ["", "   "])
+    async def test_load_servers_from_config_blank_authorization_url_is_not_a_pin(self, blank_authorization_url):
+        """A blank authorization_url — empty or whitespace-only — is not a trust anchor, so discovery
+        backfills the whole set (authorize endpoint, token_url, and its resource-preferred scopes)
+        from the same chain, exactly as if the field had been omitted. The merge and the corroboration
+        gate must agree that blank means unpinned; a whitespace value that the merge kept for redirects
+        while the gate treated as unpinned would strand a broken half-discovered config."""
         manager = MCPServerManager()
 
         metadata = MCPOAuthMetadata(
@@ -424,7 +426,7 @@ class TestMCPServerManager:
         )
         config = self._oauth2_config(
             oauth2_flow="authorization_code",
-            authorization_url="",
+            authorization_url=blank_authorization_url,
             token_url=None,
         )
         with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
@@ -1164,6 +1166,38 @@ class TestMCPServerManager:
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_whitespace_authorization_url_is_not_a_pin(self):
+        """A whitespace-only authorization_url on the row must not be kept for redirects while the
+        gate treats it as unpinned. It is normalized to unpinned everywhere, so the built server
+        takes the discovered authorize endpoint, token_url, and scopes as one consistent group
+        rather than serving the whitespace value with half-discovered fields."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="whitespace-auth-url",
+            alias="whitespace_auth_url",
+            description="whitespace authorization_url is not a pin",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="   ",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            scopes=["read"],
+            authorization_server_scopes=["read"],
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.scopes == ["read"]
 
     @pytest.mark.asyncio
     async def test_build_from_table_fills_endpoints_when_metadata_corroborates_manual_authorization_url(self):
