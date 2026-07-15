@@ -382,14 +382,20 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
-                thinking_blocks.append(
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(current_thinking_text_parts),
-                        signature=current_signature,
-                    )
+            if len(current_thinking_text_parts) > 0:
+                # Preserve the reasoning text even when no signature arrived (e.g. a
+                # stream truncated mid-thinking by max_tokens/cancellation, or a
+                # provider that emits thinking text without per-block signatures).
+                # `signature` is optional on ChatCompletionThinkingBlock, and the
+                # send-side prompt transforms already drop unsignable blocks before
+                # replaying them, so keeping the text here avoids losing it.
+                thinking_block = ChatCompletionThinkingBlock(
+                    type="thinking",
+                    thinking="".join(current_thinking_text_parts),
                 )
+                if current_signature:
+                    thinking_block["signature"] = current_signature
+                thinking_blocks.append(thinking_block)
             current_thinking_text_parts = []
             current_signature = None
 
