@@ -44,6 +44,17 @@ class DdLogEvent(BaseModel):
 _EVENT_BATCH: TypeAdapter[list[DdLogEvent]] = TypeAdapter(list[DdLogEvent])
 
 
+def _parse_batch(request: DdSinkRequest) -> list[DdLogEvent]:
+    """The intake accepts an array of events or a single event object."""
+    try:
+        return _EVENT_BATCH.validate_json(request.body)
+    except ValidationError:
+        try:
+            return [DdLogEvent.model_validate_json(request.body)]
+        except ValidationError:
+            pytest.fail(f"dd-sink recorded a non-log body on {request.path}: {request.body[:200]}")
+
+
 @dataclass(frozen=True, slots=True)
 class DdSinkReader:
     sink_url: str
@@ -70,17 +81,7 @@ class DdSinkReader:
         for request in self._recorded_requests():
             if "/api/v2/logs" not in request.path:
                 continue
-            try:
-                batch = _EVENT_BATCH.validate_json(request.body)
-            except ValidationError:
-                # the intake accepts a single event object as well as an array
-                try:
-                    batch = [DdLogEvent.model_validate_json(request.body)]
-                except ValidationError:
-                    pytest.fail(
-                        f"dd-sink recorded a non-log body on {request.path}: {request.body[:200]}"
-                    )
-            events.extend(event for event in batch if marker in event.message)
+            events.extend(event for event in _parse_batch(request) if marker in event.message)
         return events
 
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:

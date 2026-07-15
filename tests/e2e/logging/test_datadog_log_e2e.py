@@ -17,17 +17,14 @@ caller received).
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
-
 import pytest
 from pydantic import BaseModel, ConfigDict
 
 from datadog_sink import DdLogEvent, DdSinkReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody, StreamingResponse, require_successful_call
+from e2e_http import NoBody, StreamingResponse
 from lifecycle import ResourceManager
-from logging_client import LoggingClient
+from logging_client import LoggingClient, first_ok
 
 pytestmark = pytest.mark.e2e
 
@@ -59,20 +56,6 @@ def _assert_datadog_configured(client: LoggingClient) -> None:
         f"the proxy must report the {DD_LOGGER_NAME} callback active "
         f"(callbacks + DD_* env in the compose config); got: {result.body[:400]}"
     )
-
-
-def _first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
-    """First successful call on a fresh key, retrying propagation 401s to a
-    deadline. Mirrors test_otel_trace_e2e._first_ok; consolidate into the
-    suite client once #33304 merges."""
-    deadline = time.monotonic() + client.gateway.poll_timeout
-    while True:
-        outcome = send()
-        if outcome.ok:
-            return outcome
-        if outcome.status_code != 401 or time.monotonic() >= deadline:
-            require_successful_call(outcome)
-        time.sleep(client.gateway.poll_interval)
 
 
 def _assert_exactly_one_event(
@@ -138,7 +121,7 @@ class TestDataDogLogDelivery:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.chat_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16),
         )
@@ -166,7 +149,7 @@ class TestDataDogLogDelivery:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.messages_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16),
         )
@@ -193,7 +176,7 @@ class TestDataDogLogDelivery:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
         )

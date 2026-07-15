@@ -22,9 +22,14 @@ configs:
 
           def do_GET(self):
               self.send_response(200)
+              if self.path == "/health":
+                  self.send_header("Content-Type", "text/plain")
+                  self.end_headers()
+                  self.wfile.write(b"ok")
+                  return
               self.send_header("Content-Type", "application/json")
               self.end_headers()
-              self.wfile.write(b"ok" if self.path == "/health" else json.dumps({"requests": REQUESTS}).encode())
+              self.wfile.write(json.dumps({"requests": REQUESTS}).encode())
 
           def log_message(self, *args):
               pass
