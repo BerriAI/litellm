@@ -27,6 +27,7 @@ interface TagProps {
 
 const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
   const [tags, setTags] = useState<Tag[]>([]);
+  const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [editTag, setEditTag] = useState<boolean>(false);
@@ -43,6 +44,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     } catch (error) {
       console.error("Error fetching tags:", error);
       NotificationsManager.fromBackend("Error fetching tags: " + error);
+    } finally {
+      setIsLoadingTags(false);
     }
   };
 
@@ -163,6 +166,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             <Col numColSpan={1}>
               <TagTable
                 data={tags}
+                isLoading={isLoadingTags}
                 onEdit={(tag) => {
                   setSelectedTagId(tag.name);
                   setEditTag(true);
