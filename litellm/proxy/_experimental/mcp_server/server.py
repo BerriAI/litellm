@@ -702,10 +702,15 @@ if MCP_AVAILABLE:
                 from mcp.types import Tool
 
                 from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_mcp_tool_search_default_top_k,
                     get_virtual_tool_definitions,
                 )
+                from litellm.proxy.proxy_server import proxy_config
 
-                return [Tool(**d) for d in get_virtual_tool_definitions()]
+                default_top_k = get_mcp_tool_search_default_top_k(
+                    proxy_config.get_config_state().get("litellm_settings")
+                )
+                return [Tool(**definition) for definition in get_virtual_tool_definitions(default_top_k=default_top_k)]
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
@@ -812,6 +817,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
         oauth2_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
+        default_top_k: Optional[int] = None,
     ) -> Optional[CallToolResult]:
         """Handle the mcp_tool_search / mcp_tool_call virtual tools.
 
@@ -819,6 +825,7 @@ if MCP_AVAILABLE:
         the caller falls through to normal tool routing.
         """
         from litellm.proxy._experimental.mcp_server.tool_search import (
+            DEFAULT_MCP_TOOL_SEARCH_TOP_K,
             MCP_TOOL_CALL_TOOL_NAME,
             MCP_TOOL_SEARCH_TOOL_NAME,
             coerce_top_k,
@@ -848,7 +855,10 @@ if MCP_AVAILABLE:
         if name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
                 query=args.get("query", ""),
-                top_k=coerce_top_k(args.get("top_k", 5)),
+                top_k=coerce_top_k(
+                    args.get("top_k"),
+                    default=(default_top_k if default_top_k is not None else DEFAULT_MCP_TOOL_SEARCH_TOP_K),
+                ),
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,
@@ -892,6 +902,9 @@ if MCP_AVAILABLE:
         from mcp.types import CallToolResult
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            get_mcp_tool_search_default_top_k,
+        )
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
 
@@ -932,6 +945,9 @@ if MCP_AVAILABLE:
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
+                    default_top_k=get_mcp_tool_search_default_top_k(
+                        proxy_config.get_config_state().get("litellm_settings")
+                    ),
                 )
                 if virtual_tool_result is not None:
                     return virtual_tool_result
