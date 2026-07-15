@@ -11,13 +11,13 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `embeddings/` - the `/embeddings` endpoint across providers
 - `batches/` - the `/batches` endpoint (placeholder until the first test lands)
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
-- `budgets/` - budget definition, enforcement, and reset windows (key, team, tag, soft, multi-window)
-- `spend_tracking/` - spend logging and cost attribution on `/spend/*`
-- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials
+- `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
+- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
-- `router/` - routing and reliability behavior (rate limits, fallbacks, cooldowns)
+- `router/` - routing and reliability behavior (fallbacks, cooldowns)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
+- `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees, and does not use the shared transport harness
 
 ## Lay the pattern down in a class
 
@@ -57,31 +57,34 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 ## Typing
 
-The harness is fully typed and new code must not add `Any` or widen the basedpyright budgets. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
+The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
 ## Coverage registry
 
 The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
 
-Coverage is organized as module > feature > test. There are six modules: LLMs, MCPs, Management/UI, Reliability & Performance, Logging & Guardrails, and Other. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
+Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Quota Management`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `quota_management`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
 
 The metric is coverage: the share of registry rows that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered row rather than a silent absence
 
+Tests do not declare a dashboard module directly. They only declare the registry cell id with `@pytest.mark.covers("...")`; the registry row decides the module, tier, endpoint, and dashboard rollup. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
+
 ### Naming grammar per module
 
-LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix
+LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix. `chat_completions`, `messages`, and `responses` roll up to `Core LLMs`. Other LLM endpoints, including `batches` and `realtime`, roll up to `Non-Core LLMs`.
 
 ```
 llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
   endpoint   : chat_completions | messages | responses | embeddings | batches | files
                | rerank | images_generations | audio_speech | audio_transcriptions | moderations
-  route      : openai | azure_openai | anthropic | bedrock_invoke | bedrock_converse | vertex | azure_foundry
+               | realtime
+  route      : openai | azure_openai | anthropic | bedrock_converse | bedrock_invoke | vertex
+               | azure_foundry | cohere | together_ai
                (vocab varies per endpoint; messages is anthropic-format only)
-  capability : basic | tool_use | prompt_cache_5m | prompt_cache_1h | vision | thinking
-               | thinking_tool_use | pdf_input | web_search | structured_output | count_tokens
-               | tool_search | long_context_1m
+  capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
+               | service_tier | mid_conversation_system
   streaming  : stream | nonstream   (omit where n/a)
-  assertion  : works | cost_logged
+  assertion  : works | cost_logged | cache_hit
   label (not in id): model = haiku-4.5 | sonnet-4.6 | opus-4.7 | gpt-*
   e.g.  llm.chat_completions.bedrock_converse.tool_use.stream.works
         llm.messages.anthropic.prompt_cache_1h.nonstream.cache_hit
@@ -112,14 +115,35 @@ Reliability & Performance - behavior features (no route; endpoint is exercised_o
 
 ```
 reliability.<behavior>.<variant>.<assertion>
-  behavior  : fallback | retry | cooldown | timeout | ratelimit | routing | cache | circuit_breaker | perf
+  behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
               <dimension> latency | throughput   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]
-        reliability.ratelimit.rpm.blocks_over_limit                exercised_on=[chat_completions, messages]
+        reliability.cooldown.429.trips_then_recovers               exercised_on=[chat_completions, messages]
+```
+
+Quota Management - behavior features (entity- or config-driven caps and their accounting; endpoint is exercised_on)
+
+```
+quota_management.<behavior>.<variant>.<assertion>
+  behavior  : ratelimit | budget | spend_tracking
+  variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
+              <budget>         key | internal_user | end_user | organization | team_member | tag
+                               | model_max | soft | key_multi_window | team_multi_window
+                               | fallback | spend_counter
+              <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup
+                               | concurrent_burst | tags | end_user | per_model | failure
+                               | spend_calculate | pagination
+  assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
+              | blocks_then_resets | resets_windows_independently | alerts_without_blocking
+              | isolates_per_model | routes_to_fallback | reseed_matches_db | logs_cost | zero_cost
+              | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
+              | writes_failure_row | returns_cost | keeps_total
+  e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
+        quota_management.budget.key.blocks_over_limit              exercised_on=[chat_completions]
 ```
 
 Logging & Guardrails - behavior features (config-driven; endpoint is exercised_on)

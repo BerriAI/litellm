@@ -2367,6 +2367,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/coordination_redis/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Coordination Redis Settings
+         * @description Get the coordination Redis configuration and available settings.
+         *
+         *     Returns:
+         *     - values: current coordination Redis settings, with password/sentinel_password/url redacted
+         *     - fields: all configurable settings with their metadata (type, description, default, section)
+         *     - source: "coordination_redis" | "cache_backend" | "environment" | null
+         */
+        get: operations["get_coordination_redis_settings_coordination_redis_settings_get"];
+        put?: never;
+        /**
+         * Update Coordination Redis Settings
+         * @description Save coordination Redis settings under `general_settings.coordination_redis`.
+         *
+         *     Parameters:
+         *     - settings: dict - Redis connection params (host, port, username, password, url, ssl, startup_nodes, sentinel_nodes, sentinel_password, service_name). Values may be `os.environ/VAR` references, which are stored as written and resolved at startup
+         *
+         *     The settings are written to the `general_settings` row of LiteLLM_Config,
+         *     which startup merges over the yaml config; the proxy picks them up on its
+         *     next restart.
+         */
+        post: operations["update_coordination_redis_settings_coordination_redis_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/coordination_redis/settings/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Coordination Redis Connection
+         * @description Test a coordination Redis connection with the provided credentials.
+         *
+         *     Parameters:
+         *     - settings: dict - Redis connection params to test. Credential fields sent back as `***REDACTED***` fall back to the saved value
+         *
+         *     Builds a throwaway client (never touching global state) and pings it.
+         */
+        post: operations["check_coordination_redis_connection_coordination_redis_settings_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cost/estimate": {
         parameters: {
             query?: never;
@@ -6509,6 +6570,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
+         *     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
          *     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
          *     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -6896,6 +6958,7 @@ export interface paths {
          *     - rpm_limit: Optional[int] - Requests per minute limit
          *     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
+         *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
          *     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -13779,6 +13842,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Team
+         * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
+         *
+         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
+         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
+         *     deletes it, and any other value overwrites (recursing into nested objects).
+         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
+         *     a value overwrites). Returns the full updated team.
+         *
+         *     ```
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *         "metadata": {"cost_center": "1234", "deprecated_key": null}
+         *     }'
+         *     ```
+         */
+        patch: operations["patch_team_team__team_id__patch"];
+        trace?: never;
+    };
     "/team/{team_id}/callback": {
         parameters: {
             query?: never;
@@ -14623,6 +14718,7 @@ export interface paths {
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
+         *     - tag_rpm_limit: Optional[dict] - Per-request-tag rpm limit, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Enforced for keys only; values set on a user are stored but not enforced per user.
          *     - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *     - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - agent_id: Optional[str] - The agent id associated with the user.
@@ -14704,6 +14800,7 @@ export interface paths {
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *         - mcp_rpm_limit: Optional[dict] - Per-MCP-server rpm limit, keyed by MCP server name {"github": 100, "slack": 200}. Enforced for keys and teams only; values set on a user are stored but not enforced per user.
+         *         - tag_rpm_limit: Optional[dict] - Per-request-tag rpm limit, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Enforced for keys only; values set on a user are stored but not enforced per user.
          *         - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
          *         - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - agent_id: Optional[str] - The agent id associated with the user.
@@ -22349,6 +22446,8 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
+            coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
              * Custom Auth
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
@@ -22520,6 +22619,11 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Skip User Budget On Team Key
+             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
+             */
+            skip_user_budget_on_team_key?: boolean | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -22746,6 +22850,145 @@ export interface components {
              * @enum {string}
              */
             pattern_type: "prebuilt" | "regex";
+        };
+        /**
+         * CoordinationRedisNode
+         * @description A single startup node of a cluster-mode Redis used for proxy coordination.
+         */
+        CoordinationRedisNode: {
+            /**
+             * Host
+             * @description hostname of the cluster node
+             */
+            host: string;
+            /**
+             * Port
+             * @description port of the cluster node
+             */
+            port: number;
+        };
+        /**
+         * CoordinationRedisParams
+         * @description Connection params for the proxy's coordination Redis (cross-pod tpm/rpm rate
+         *     limits, spend tracking, pod lock manager, shared health checks), configured
+         *     independently of the response-cache backend in `litellm_settings.cache_params`.
+         */
+        CoordinationRedisParams: {
+            /**
+             * Host
+             * @description Redis hostname
+             */
+            host?: string | null;
+            /**
+             * Password
+             * @description Redis password
+             */
+            password?: string | null;
+            /**
+             * Port
+             * @description Redis port
+             */
+            port?: number | null;
+            /**
+             * Sentinel Nodes
+             * @description sentinel [host, port] pairs; when set a sentinel-managed client is used
+             */
+            sentinel_nodes?: (string | number)[][] | null;
+            /**
+             * Sentinel Password
+             * @description password for the sentinel nodes
+             */
+            sentinel_password?: string | null;
+            /**
+             * Service Name
+             * @description sentinel service name
+             */
+            service_name?: string | null;
+            /**
+             * Ssl
+             * @description connect over TLS
+             */
+            ssl?: boolean | null;
+            /**
+             * Startup Nodes
+             * @description cluster-mode startup nodes; when set a cluster client is used
+             */
+            startup_nodes?: components["schemas"]["CoordinationRedisNode"][] | null;
+            /**
+             * Url
+             * @description full Redis connection url, e.g. redis://:pass@host:6379
+             */
+            url?: string | null;
+            /**
+             * Username
+             * @description Redis username
+             */
+            username?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** CoordinationRedisSettingsField */
+        CoordinationRedisSettingsField: {
+            /** Field Default */
+            field_default?: unknown | null;
+            /** Field Description */
+            field_description: string;
+            /** Field Name */
+            field_name: string;
+            /** Field Type */
+            field_type: string;
+            /** Field Value */
+            field_value?: unknown | null;
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "connection" | "cluster" | "sentinel";
+            /** Ui Field Name */
+            ui_field_name: string;
+        };
+        /** CoordinationRedisSettingsRequest */
+        CoordinationRedisSettingsRequest: {
+            /**
+             * Settings
+             * @description Coordination Redis connection params
+             */
+            settings: {
+                [key: string]: unknown;
+            };
+        };
+        /** CoordinationRedisSettingsResponse */
+        CoordinationRedisSettingsResponse: {
+            /**
+             * Fields
+             * @description List of all configurable coordination Redis settings with metadata
+             */
+            fields: components["schemas"]["CoordinationRedisSettingsField"][];
+            /**
+             * Source
+             * @description Where the proxy's coordination Redis comes from; null when it has none
+             */
+            source: ("coordination_redis" | "cache_backend" | "environment") | null;
+            /**
+             * Values
+             * @description Current coordination Redis settings, with credentials redacted
+             */
+            values: {
+                [key: string]: unknown;
+            };
+        };
+        /** CoordinationRedisTestResponse */
+        CoordinationRedisTestResponse: {
+            /**
+             * Error
+             * @description Error message if the connection failed
+             */
+            error?: string | null;
+            /**
+             * Status
+             * @description Connection status: 'healthy' or 'unhealthy'
+             */
+            status: string;
         };
         /**
          * CostEstimateRequest
@@ -23705,6 +23948,10 @@ export interface components {
              * @default 0
              */
             spend: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -23784,6 +24031,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -23847,6 +24096,10 @@ export interface components {
              * @default 0
              */
             spend: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -24780,6 +25033,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -25451,6 +25706,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -25532,6 +25789,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -26168,6 +26427,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -27008,7 +27269,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -28032,6 +28293,10 @@ export interface components {
             spend: number | null;
             /** Sso User Id */
             sso_user_id?: string | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Teams */
@@ -28126,6 +28391,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -28186,6 +28453,10 @@ export interface components {
              * @default 0
              */
             spend: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -29817,6 +30088,10 @@ export interface components {
             soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -31762,6 +32037,10 @@ export interface components {
             rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
             /** Spend */
             spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -32218,6 +32497,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Spend */
             spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Tpm Limit */
@@ -32320,6 +32603,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Spend */
             spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Tpm Limit */
@@ -32540,6 +32827,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Refreshed At */
@@ -33251,6 +33540,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -33332,6 +33623,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -37161,6 +37454,97 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_coordination_redis_settings_coordination_redis_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoordinationRedisSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_coordination_redis_settings_coordination_redis_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoordinationRedisSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_coordination_redis_connection_coordination_redis_settings_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoordinationRedisSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoordinationRedisTestResponse"];
                 };
             };
             /** @description Validation Error */
@@ -42067,6 +42451,8 @@ export interface operations {
                 agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
+                /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
+                expires?: string | null;
             };
             header?: never;
             path?: never;
@@ -48597,6 +48983,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id (partial string match) */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
@@ -48703,6 +49091,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description request_id to get spend logs for specific request_id */
                 request_id?: string | null;
+                /** @description Filter spend logs by session_id (partial string match) */
+                session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
@@ -50132,6 +50522,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_team_team__team_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_TeamTable"];
                 };
             };
             /** @description Validation Error */

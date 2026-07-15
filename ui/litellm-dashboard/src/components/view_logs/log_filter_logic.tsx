@@ -1,5 +1,7 @@
 import moment from "moment";
 import { useEffect, useMemo, useState } from "react";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -16,20 +18,12 @@ export interface PaginatedResponse {
   total_is_capped?: boolean;
 }
 
-function useDebouncedValue<T>(value: T, delayMs: number): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-  return [debounced, setDebounced];
-}
-
 /** Spend log `model` column (LLM public model name or `search_tool_name` for /search). */
 export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
+  SESSION_ID: "Session ID",
   MODEL: "Model",
   /** Exact match on LiteLLM_SpendLogs.model — use for search tools and public model names. */
   PUBLIC_MODEL_OR_SEARCH_TOOL: "Public model / search tool",
@@ -49,6 +43,7 @@ const TEXT_FILTER_KEYS: readonly (keyof LogFilterState)[] = [
   FILTER_KEYS.KEY_HASH,
   FILTER_KEYS.ERROR_MESSAGE,
   FILTER_KEYS.REQUEST_ID,
+  FILTER_KEYS.SESSION_ID,
   FILTER_KEYS.USER_ID,
   FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
 ];
@@ -62,6 +57,7 @@ export const defaultFilters: LogFilterState = {
   [FILTER_KEYS.TEAM_ID]: "",
   [FILTER_KEYS.KEY_HASH]: "",
   [FILTER_KEYS.REQUEST_ID]: "",
+  [FILTER_KEYS.SESSION_ID]: "",
   [FILTER_KEYS.MODEL]: "",
   [FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "",
   [FILTER_KEYS.USER_ID]: "",
@@ -109,7 +105,11 @@ export function useLogFilterLogic({
   sortOrder?: "asc" | "desc";
   currentPage?: number;
 }) {
-  const [debouncedFilters, setDebouncedFilters] = useDebouncedValue(filters, 300);
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  const debouncer = useDebouncer(setDebouncedFilters, { wait: DEBOUNCE_WAIT_MS });
+  useEffect(() => {
+    debouncer.maybeExecute(filters);
+  }, [filters, debouncer]);
 
   // Live values for dropdown keys, debounced for text keys.
   const effectiveFilters = useMemo(() => {
@@ -160,6 +160,7 @@ export function useLogFilterLogic({
           api_key: effectiveFilters[FILTER_KEYS.KEY_HASH] || undefined,
           team_id: effectiveFilters[FILTER_KEYS.TEAM_ID] || undefined,
           request_id: effectiveFilters[FILTER_KEYS.REQUEST_ID] || undefined,
+          session_id: effectiveFilters[FILTER_KEYS.SESSION_ID] || undefined,
           user_id: effectiveFilters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
           end_user: effectiveFilters[FILTER_KEYS.END_USER] || undefined,
           status_filter: effectiveFilters[FILTER_KEYS.STATUS] || undefined,
