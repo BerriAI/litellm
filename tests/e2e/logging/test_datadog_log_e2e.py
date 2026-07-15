@@ -37,6 +37,7 @@ class _DdMessagePayload(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    litellm_call_id: str
     model_group: str
     total_tokens: int
     response_cost: float
@@ -70,15 +71,22 @@ def _assert_exactly_one_event(
     sourced from litellm, whose payload names the model group and call type,
     counts real tokens, and carries the same cost the response header reported.
 
-    allow_identical_duplicates tolerates byte-identical copies of the one
-    event (the /v1/messages double-log, LIT-4447) while still failing on a
-    second DIFFERING event; tighten to exactly one when LIT-4447 lands."""
+    allow_identical_duplicates tolerates duplicate deliveries of the ONE
+    logical event (the /v1/messages double-log, LIT-4447): every duplicate
+    must share the same litellm_call_id and identical substantive fields.
+    The duplicated payload is built twice and can mint a fresh synthetic
+    completion id per emission, so byte-identity is deliberately not the
+    criterion. A second DIFFERING event still fails; tighten to exactly one
+    when LIT-4447 lands."""
     assert events, "no DataDog log event for this call reached the intake within the deadline"
     if allow_identical_duplicates and len(events) > 1:
-        first = events[0].model_dump()
-        assert all(event.model_dump() == first for event in events[1:]), (
-            f"multiple DIFFERING DataDog events for one call: {events}"
-        )
+        payloads = [_DdMessagePayload.model_validate_json(event.message) for event in events]
+        first = payloads[0]
+        assert all(
+            (p.litellm_call_id, p.call_type, p.model_group, p.total_tokens, p.response_cost)
+            == (first.litellm_call_id, first.call_type, first.model_group, first.total_tokens, first.response_cost)
+            for p in payloads[1:]
+        ), f"multiple DIFFERING DataDog events for one call: {payloads}"
     else:
         assert len(events) == 1, (
             f"expected exactly ONE DataDog log event for the call, got {len(events)} - "
@@ -140,9 +148,10 @@ class TestDataDogLogDelivery:
         the x-litellm-response-cost header of the same response).
 
         Knowingly relaxed on this surface, tracked in LIT-4447: the messages
-        route currently double-logs, so byte-identical duplicates of the one
-        event are tolerated (a second DIFFERING event still fails). Tighten to
-        exactly one when LIT-4447 lands."""
+        route currently double-logs, so duplicate deliveries of the one
+        logical event (same litellm_call_id and substantive fields) are
+        tolerated; a second DIFFERING event still fails. Tighten to exactly
+        one when LIT-4447 lands."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-messages-{unique_marker()}", models=[CHEAP_ANTHROPIC_MODEL])
