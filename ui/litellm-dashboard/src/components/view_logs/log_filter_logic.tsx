@@ -1,5 +1,7 @@
 import moment from "moment";
 import { useEffect, useMemo, useState } from "react";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -14,15 +16,6 @@ export interface PaginatedResponse {
   page_size: number;
   total_pages: number;
   total_is_capped?: boolean;
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-  return [debounced, setDebounced];
 }
 
 /** Spend log `model` column (LLM public model name or `search_tool_name` for /search). */
@@ -112,7 +105,11 @@ export function useLogFilterLogic({
   sortOrder?: "asc" | "desc";
   currentPage?: number;
 }) {
-  const [debouncedFilters, setDebouncedFilters] = useDebouncedValue(filters, 300);
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  const debouncer = useDebouncer(setDebouncedFilters, { wait: DEBOUNCE_WAIT_MS });
+  useEffect(() => {
+    debouncer.maybeExecute(filters);
+  }, [filters, debouncer]);
 
   // Live values for dropdown keys, debounced for text keys.
   const effectiveFilters = useMemo(() => {

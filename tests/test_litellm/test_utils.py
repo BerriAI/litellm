@@ -615,6 +615,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "input_cost_per_video_token",
+        "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -732,6 +734,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
+                "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -807,6 +810,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -4710,3 +4714,30 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_models_do_not_support_reasoning(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert model in litellm.model_cost, (
+        f"{model} is missing from the local model cost map. "
+        "Add its entry to litellm/model_prices_and_context_window_backup.json."
+    )
+    assert litellm.supports_reasoning(model) is False, (
+        f"{model} incorrectly classified as reasoning-capable. "
+        "Add 'supports_reasoning: false' to its model_cost entry."
+    )

@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -2575,6 +2576,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
+                    )
+                    model_call_details = redact_streaming_responses_for_custom_logger(
+                        model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
                     if self.stream is True:
@@ -5208,9 +5212,14 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
-        usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
+        raw_usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=response_obj,
             combined_usage_object=cast(Optional[Usage], kwargs.get("combined_usage_object")),
+        )
+        usage_dict = (
+            {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
+            if isinstance(init_response_obj, ImageResponse) and init_response_obj.data
+            else raw_usage_dict
         )
 
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
