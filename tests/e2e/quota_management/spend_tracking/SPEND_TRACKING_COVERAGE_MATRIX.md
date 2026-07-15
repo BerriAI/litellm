@@ -30,7 +30,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Modality | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
 | Non-negative spend (all providers, uncached traffic) | `test_anthropic_claude3_transformation.py`, `llm_cost_calc/utils.py` | partial | yes (`test_no_provider_logs_negative_spend`) |
-| Negative cost from bedrock cache-token split (#25846) | `test_anthropic_claude3_transformation.py` (mock) | unsupported (live) | no - not reproducible on commercial bedrock; see note below. Mock is the right guard |
+| Negative cost from bedrock cache-token split (#25846) | `test_llm_cost_calc_utils.py::test_inconsistent_cache_usage_never_prices_negative`, `test_anthropic_claude3_transformation.py::test_bedrock_sse_wrapper_bills_cache_rate_when_only_message_start_has_breakdown` (both fail-before-fix proven) | unsupported (live) | no - not reproducible on commercial bedrock; see note below. Covered offline instead |
 | Chat (non-stream) | `test_cost_calculator.py`, `local_testing/test_completion_cost.py` | covered | yes (`test_chat_completion_writes_nonzero_spend_row`) |
 | Chat (streaming) | `test_streaming_interrupt_spend_tracking.py` | partial | yes (`test_streaming_chat_completion_tracks_spend`) |
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
@@ -99,7 +99,8 @@ cache read. Findings, so nobody re-runs this:
 The bug needs a deployment whose `message_delta` omits the cache breakdown (GovCloud, per the
 transformation docstring / LIT-2411). A live commercial call cannot produce that payload, so
 this cell is `unsupported` for live e2e (excluded from the denominator) rather than a gap to
-chase, and the mock-based unit test is the correct guard. Revisit only if GovCloud is in scope.
+chase. It is covered offline instead by the two tests named above, both proven fail-before-fix
+by removing the real fix. Revisit only if GovCloud is in scope.
 
 ## Design + timing
 
