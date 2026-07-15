@@ -100,9 +100,7 @@ class AmazonStabilityConfig:
         optional_params: dict,
     ) -> dict:
         inference_params = copy.deepcopy(optional_params)
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
+        inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 
         prompt = text.replace(os.linesep, " ")
         ## LOAD CONFIG

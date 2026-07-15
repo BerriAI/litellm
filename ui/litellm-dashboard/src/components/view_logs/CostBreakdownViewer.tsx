@@ -89,7 +89,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const totalCost = isCached ? 0 : costBreakdown?.total_cost ?? totalSpend;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         expandIconPosition="start"
         items={[

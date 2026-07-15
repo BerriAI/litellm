@@ -29,9 +29,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _hash_api_key_for_spend_log,
     _is_master_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
+    _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -1262,6 +1264,260 @@ def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
     assert result["guardrail_information"] is None
 
 
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_redacts_all_prompt_carrying_fields_when_flag_false(
+    mock_should_store,
+):
+    """
+    match_details and classification are declared as structured metadata but
+    in-tree writers (litellm_content_filter, block_code_execution) inline
+    raw prompt content into them, so they leak the same way
+    guardrail_request/guardrail_response do. Redaction must cover all four.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "hi"}]},
+            "guardrail_response": {"evaluated_input": "hi"},
+            "match_details": [{"type": "pattern", "snippet": "hi", "action_taken": "log"}],
+            "classification": {"intent": "x", "evidence": [{"match": "hi"}]},
+            "guardrail_action": "NONE",
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["match_details"] == REDACTED_BY_LITELM_STRING
+    assert entry["classification"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "demo-echo-guard"
+    assert entry["guardrail_status"] == "success"
+    assert entry["guardrail_action"] == "NONE"
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-4314 Issue A regression: with store_prompts_in_spend_logs=False,
+    guardrail_request and guardrail_response must be redacted before they
+    land in LiteLLM_SpendLogs.metadata, while every other field on the
+    entry is preserved bit-for-bit.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_provider": "custom",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "success",
+            "guardrail_request": {
+                "messages": [{"role": "user", "content": "Say hi in 3 words"}],
+            },
+            "guardrail_response": {
+                "evaluated_input": "Say hi in 3 words",
+                "verdict": "allow",
+            },
+            "start_time": 1_700_000_000.0,
+            "end_time": 1_700_000_000.5,
+            "duration": 0.5,
+            "guardrail_id": "gd-42",
+            "masked_entity_count": {"EMAIL": 1},
+            "violation_categories": ["prompt_injection"],
+            "risk_score": 3.5,
+            "guardrail_action": "NONE",
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "demo-echo-guard"
+    assert entry["guardrail_provider"] == "custom"
+    assert entry["guardrail_mode"] == "pre_call"
+    assert entry["guardrail_status"] == "success"
+    assert entry["start_time"] == 1_700_000_000.0
+    assert entry["end_time"] == 1_700_000_000.5
+    assert entry["duration"] == 0.5
+    assert entry["guardrail_id"] == "gd-42"
+    assert entry["masked_entity_count"] == {"EMAIL": 1}
+    assert entry["violation_categories"] == ["prompt_injection"]
+    assert entry["risk_score"] == 3.5
+    assert entry["guardrail_action"] == "NONE"
+
+    assert guardrail_info[0]["guardrail_request"] == {
+        "messages": [{"role": "user", "content": "Say hi in 3 words"}],
+    }
+    assert guardrail_info[0]["guardrail_response"] == {
+        "evaluated_input": "Say hi in 3 words",
+        "verdict": "allow",
+    }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_passthrough_when_flag_true(
+    mock_should_store,
+):
+    """
+    When store_prompts_in_spend_logs=True the sanitizer must be a no-op so
+    operators who explicitly opted in still see full guardrail payloads.
+    """
+    mock_should_store.return_value = True
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "hi"}]},
+            "guardrail_response": {"verdict": "allow"},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result == guardrail_info
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_none_passthrough(mock_should_store):
+    mock_should_store.return_value = False
+    assert _sanitize_guardrail_information_for_spend_logs(None) is None
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_normalizes_bare_dict_input(mock_should_store):
+    """
+    Regression: xecguard (xecguard.py:246) assigns a bare dict to
+    standard_logging_object["guardrail_information"] even though the typed
+    contract is Optional[List[...]]. Without defensive normalization here,
+    the for-loop would iterate the dict's string keys and _redact...
+    would TypeError on {**"guardrail_name"}, taking down the entire
+    spend-log write via update_database's broad except.
+    """
+    mock_should_store.return_value = False
+    bare_dict_entry = {
+        "guardrail_name": "xecguard",
+        "guardrail_status": "success",
+        "guardrail_response": {"decision": "SAFE", "raw_prompt": "hi"},
+        "start_time": 1.0,
+        "end_time": 2.0,
+        "duration": 1.0,
+    }
+
+    result = _sanitize_guardrail_information_for_spend_logs(bare_dict_entry)
+
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "xecguard"
+    assert entry["guardrail_status"] == "success"
+    assert entry["start_time"] == 1.0
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_drops_non_dict_items_in_list(mock_should_store):
+    """
+    A stray non-dict item in the list (e.g. from a buggy caller that
+    accidentally appends a string) should be silently skipped instead of
+    crashing the spend-log write.
+    """
+    mock_should_store.return_value = False
+    mixed_input = [
+        {"guardrail_name": "x", "guardrail_response": {"leak": "hi"}},
+        "not-a-dict",
+        None,
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(mixed_input)
+
+    assert result == [{"guardrail_name": "x", "guardrail_response": REDACTED_BY_LITELM_STRING}]
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_absent_prompt_fields(mock_should_store):
+    """
+    Entries that never carried guardrail_request or guardrail_response must
+    not gain those keys after sanitization; consumers keying on presence
+    (`"guardrail_request" in entry`) would otherwise flip from absent to
+    the sentinel string.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_status": "success",
+            "guardrail_response": {"verdict": "allow", "evaluated_input": "hi"},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert "guardrail_request" not in entry
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_name"] == "demo-echo-guard"
+    assert entry["guardrail_status"] == "success"
+
+
+@patch("litellm.proxy.proxy_server.master_key", "sk-master")
+@patch(
+    "litellm.proxy.proxy_server.general_settings",
+    {"store_prompts_in_spend_logs": False},
+)
+def test_get_logging_payload_redacts_guardrail_prompt_fields_when_flag_false():
+    """
+    End-to-end wire-in check: get_logging_payload -> _get_spend_logs_metadata
+    -> sanitizer. Without the wire-in at line 139, the raw guardrail_response
+    lands in payload["metadata"] verbatim.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "demo-echo-guard",
+            "guardrail_provider": "custom",
+            "guardrail_status": "success",
+            "guardrail_request": {"messages": [{"role": "user", "content": "secret"}]},
+            "guardrail_response": {"evaluated_input": "secret"},
+        }
+    ]
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {},
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    metadata_result = json.loads(payload["metadata"])
+    stored = metadata_result["guardrail_information"][0]
+    assert stored["guardrail_request"] == REDACTED_BY_LITELM_STRING
+    assert stored["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert stored["guardrail_name"] == "demo-echo-guard"
+    assert stored["guardrail_status"] == "success"
+
+
 def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
     """
     When a guardrail blocks a request before the LLM call, the standard_logging_object
@@ -1294,7 +1550,10 @@ def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
     }
 
     with patch("litellm.proxy.proxy_server.master_key", "sk-master"):
-        with patch("litellm.proxy.proxy_server.general_settings", {}):
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": True},
+        ):
             payload = get_logging_payload(
                 kwargs=kwargs,
                 response_obj={},
@@ -2120,3 +2379,195 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     )
 
     assert payload["total_tokens"] == 0
+
+
+def test_get_logging_payload_sets_litellm_call_id_for_correlation():
+    """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
+    trace id) in its metadata, distinct from request_id, which stays the
+    provider response id. Without this there is no way to correlate a DB row
+    with its trace for a successful call.
+    """
+    provider_response_id = "chatcmpl-e6e6f3e9-c392-404e-9a71-5361c79d8470"
+    trace_call_id = "c6a77556-19ce-4406-b287-53f5fb4b2b55"
+
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": provider_response_id,
+        "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+    metadata = json.loads(payload["metadata"])
+
+    assert payload["request_id"] == provider_response_id
+    assert metadata["litellm_call_id"] == trace_call_id
+    assert metadata["litellm_call_id"] != payload["request_id"]
+
+
+def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
+    """litellm_call_id may only be present in litellm_params; it must still land
+    in the spend log metadata so correlation works on that path too.
+    """
+    trace_call_id = "fallback-7a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "litellm_call_id": trace_call_id,
+            "metadata": {"user_api_key": "sk-test"},
+        },
+    }
+    response_obj = {
+        "id": "chatcmpl-abc123",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+
+
+def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
+    """When the provider returns no id, request_id falls back to the call id, so
+    request_id and the metadata call id hold the same value and correlation
+    still resolves.
+    """
+    trace_call_id = "noid-5b2e-4c7a-9d10-3f8a1c2b4e6d"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert payload["request_id"] == trace_call_id
+
+
+def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
+    """On a cache hit request_id is suffixed to stay unique, but the metadata
+    litellm_call_id stays the raw trace id so the row still points at its trace.
+    """
+    trace_call_id = "cache-9a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "cache_hit": True,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": "chatcmpl-cache-src",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert "_cache_hit" in payload["request_id"]
+    assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
+
+
+class TestHashApiKeyForSpendLog:
+    """Regression: plaintext API keys with Bearer prefix were stored in
+    SpendLogs for failed requests (LIT-4121)"""
+
+    def test_bearer_prefixed_sk_key_is_hashed(self):
+        raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("Bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bare_sk_key_is_hashed(self):
+        raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_bearer_lowercase_is_handled(self):
+        raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        result = _hash_api_key_for_spend_log(raw)
+        assert not result.startswith("bearer")
+        assert not result.startswith("sk-")
+        assert len(result) == 64
+
+    def test_already_hashed_key_unchanged(self):
+        hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
+        assert _hash_api_key_for_spend_log(hashed) == hashed
+
+    def test_bearer_prefixed_non_sk_key_strips_prefix(self):
+        raw = "Bearer some-other-token-format"
+        result = _hash_api_key_for_spend_log(raw)
+        assert result == "some-other-token-format"
+        assert not result.startswith("Bearer")
+
+    def test_bearer_and_bare_produce_same_hash(self):
+        bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
+        bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+        assert _hash_api_key_for_spend_log(bare) == _hash_api_key_for_spend_log(bearer)
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_hashes_bearer_prefixed_api_key():
+    """Regression for LIT-4121: failed-request spend logs stored plaintext
+    'Bearer sk-...' in both the api_key column and metadata.user_api_key"""
+    raw_key = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw_key,
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+                "status": "failure",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("model error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert not payload["api_key"].startswith("Bearer"), (
+        f"api_key column contains plaintext Bearer key: {payload['api_key']}"
+    )
+    assert not payload["api_key"].startswith("sk-"), (
+        f"api_key column contains unhashed key: {payload['api_key']}"
+    )
+
+    metadata_dict = json.loads(payload["metadata"])
+    assert not metadata_dict["user_api_key"].startswith("Bearer"), (
+        f"metadata user_api_key contains plaintext Bearer key: {metadata_dict['user_api_key']}"
+    )
+    assert not metadata_dict["user_api_key"].startswith("sk-"), (
+        f"metadata user_api_key contains unhashed key: {metadata_dict['user_api_key']}"
+    )

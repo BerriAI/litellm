@@ -145,9 +145,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_pre_api_call(self, model, messages, kwargs):
         pass
 
-    async def async_pre_request_hook(
-        self, model: str, messages: List, kwargs: Dict
-    ) -> Optional[Dict]:
+    async def async_pre_request_hook(self, model: str, messages: List, kwargs: Dict) -> Optional[Dict]:
         """
         Hook called before making the API request to allow modifying request parameters.
 
@@ -273,9 +271,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    async def async_pre_call_check(
-        self, deployment: dict, parent_otel_span: Optional[Span]
-    ) -> Optional[dict]:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Optional[Span]) -> Optional[dict]:
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
@@ -311,29 +307,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def log_success_fallback_event(
-        self, original_model_group: str, kwargs: dict, original_exception: Exception
-    ):
+    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
         pass
 
-    async def log_failure_fallback_event(
-        self, original_model_group: str, kwargs: dict, original_exception: Exception
-    ):
+    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
         pass
 
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
 
-    def translate_completion_input_params(
-        self, kwargs
-    ) -> Optional[ChatCompletionRequest]:
+    def translate_completion_input_params(self, kwargs) -> Optional[ChatCompletionRequest]:
         """
         Translates the input params, from the provider's native format to the litellm.completion() format.
         """
         pass
 
-    def translate_completion_output_params(
-        self, response: ModelResponse
-    ) -> Optional[BaseModel]:
+    def translate_completion_output_params(self, response: ModelResponse) -> Optional[BaseModel]:
         """
         Translates the output params, from the OpenAI format to the custom format.
         """
@@ -435,15 +423,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         pass
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -485,9 +469,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_input_event(
-        self, model, messages, kwargs, print_verbose, callback_func
-    ):
+    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -499,9 +481,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    def log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
-    ):
+    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -515,9 +495,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
-    async def async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
-    ):
+    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -834,15 +812,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def _truncate_text(self, text: str, max_length: int) -> str:
         """Truncate text if it exceeds max_length"""
         return (
-            text[:max_length]
-            + "...truncated by litellm, this logger does not support large content"
+            text[:max_length] + "...truncated by litellm, this logger does not support large content"
             if len(text) > max_length
             else text
         )
 
-    def _select_metadata_field(
-        self, request_kwargs: Optional[Dict] = None
-    ) -> Optional[str]:
+    def _select_metadata_field(self, request_kwargs: Optional[Dict] = None) -> Optional[str]:
         """
         Select the metadata field to use for logging
 
@@ -857,9 +832,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
 
-    def redact_standard_logging_payload_from_model_call_details(
-        self, model_call_details: Dict
-    ) -> Dict:
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: Dict) -> Dict:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
@@ -876,12 +849,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         from litellm import Choices, Message, ModelResponse
 
-        turn_off_message_logging: bool = getattr(
-            self, "turn_off_message_logging", False
-        )
-        excluded_fields: Optional[List[str]] = getattr(
-            litellm, "standard_logging_payload_excluded_fields", None
-        )
+        turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
+        excluded_fields: Optional[List[str]] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
 
         # Early return if no processing needed
         if turn_off_message_logging is False and not excluded_fields:
@@ -907,18 +876,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging:
             redacted_str = "redacted-by-litellm"
 
-            if (
-                "messages" not in (excluded_fields or [])
-                and standard_logging_object_copy.get("messages") is not None
-            ):
-                standard_logging_object_copy["messages"] = [
-                    Message(content=redacted_str).model_dump()
-                ]
+            if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
+                standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
-            if (
-                "response" not in (excluded_fields or [])
-                and standard_logging_object_copy.get("response") is not None
-            ):
+            if "response" not in (excluded_fields or []) and standard_logging_object_copy.get("response") is not None:
                 response = standard_logging_object_copy["response"]
                 # Check if this is a ResponsesAPIResponse (has "output" field)
                 if isinstance(response, dict) and "output" in response:
@@ -929,30 +890,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     # Redact content in output array
                     if isinstance(response_copy.get("output"), list):
                         for output_item in response_copy["output"]:
-                            if (
-                                isinstance(output_item, dict)
-                                and "content" in output_item
-                            ):
+                            if isinstance(output_item, dict) and "content" in output_item:
                                 if isinstance(output_item["content"], list):
                                     # Redact text in content items
                                     for content_item in output_item["content"]:
-                                        if (
-                                            isinstance(content_item, dict)
-                                            and "text" in content_item
-                                        ):
+                                        if isinstance(content_item, dict) and "text" in content_item:
                                             content_item["text"] = redacted_str
                     standard_logging_object_copy["response"] = response_copy
                 else:
                     # Standard ModelResponse format
-                    model_response = ModelResponse(
-                        choices=[Choices(message=Message(content=redacted_str))]
-                    )
+                    model_response = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
                     model_response_dict = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details_copy["standard_logging_object"] = (
-            standard_logging_object_copy
-        )
+        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
         return model_call_details_copy
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
@@ -978,9 +929,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, "increment_callback_logging_failure"):
-                    verbose_logger.debug(
-                        f"Incrementing callback failure metric for {callback_name}"
-                    )
+                    verbose_logger.debug(f"Incrementing callback failure metric for {callback_name}")
                     callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
                     return
 
@@ -992,9 +941,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.debug(
-                f"Error in handle_callback_failure for {callback_name}: {str(e)}"
-            )
+            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {str(e)}")
 
     async def _strip_base64_from_messages(
         self,
@@ -1013,14 +960,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(
-            f"[CustomLogger] Stripping base64 from {len(messages)} messages"
-        )
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
 
         if messages:
-            payload["messages"] = self._process_messages(
-                messages=messages, max_depth=max_depth
-            )
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
 
         total_items = 0
         for m in payload.get("messages", []) or []:
@@ -1029,9 +972,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 if isinstance(content, list):
                     total_items += len(content)
 
-        verbose_logger.debug(
-            f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
-        )
+        verbose_logger.debug(f"[CustomLogger] Completed base64 strip; retained {total_items} content items")
         return payload
 
     def _strip_base64_from_messages_sync(
@@ -1051,14 +992,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(
-            f"[CustomLogger] Stripping base64 from {len(messages)} messages"
-        )
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
 
         if messages:
-            payload["messages"] = self._process_messages(
-                messages=messages, max_depth=max_depth
-            )
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
 
         total_items = 0
         for m in payload.get("messages", []) or []:
@@ -1067,9 +1004,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 if isinstance(content, list):
                     total_items += len(content)
 
-        verbose_logger.debug(
-            f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
-        )
+        verbose_logger.debug(f"[CustomLogger] Completed base64 strip; retained {total_items} content items")
         return payload
 
     def _redact_base64(
@@ -1080,30 +1015,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
         if depth > max_depth:
-            verbose_logger.warning(
-                f"[CustomLogger] Max recursion depth {max_depth} reached while redacting base64"
-            )
+            verbose_logger.warning(f"[CustomLogger] Max recursion depth {max_depth} reached while redacting base64")
             return "[MAX_DEPTH_REACHED]"
 
         if isinstance(value, str):
             if _BASE64_INLINE_PATTERN.search(value):
-                verbose_logger.debug(
-                    f"[CustomLogger] Redacted inline base64 string: {value[:40]}..."
-                )
+                verbose_logger.debug(f"[CustomLogger] Redacted inline base64 string: {value[:40]}...")
                 return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
             return value
 
         if isinstance(value, list):
-            return [
-                self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth)
-                for v in value
-            ]
+            return [self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for v in value]
 
         if isinstance(value, dict):
-            return {
-                k: self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth)
-                for k, v in value.items()
-            }
+            return {k: self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for k, v in value.items()}
 
         return value
 
@@ -1130,14 +1055,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 cleaned: List[Any] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
-                        cleaned.append(
-                            self._redact_base64(value=c, max_depth=max_depth)
-                        )
+                        cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
                 msg["content"] = cleaned
             else:
-                msg["content"] = self._redact_base64(
-                    value=contents, max_depth=max_depth
-                )
+                msg["content"] = self._redact_base64(value=contents, max_depth=max_depth)
 
             for key, val in list(msg.items()):
                 if key != "content":

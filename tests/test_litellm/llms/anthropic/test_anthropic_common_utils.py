@@ -159,6 +159,59 @@ class TestGetAnthropicHeaders:
         assert "authorization" not in headers
         assert "anthropic-dangerous-direct-browser-access" not in headers
 
+    def test_custom_api_base_uses_bearer_header(self):
+        """Custom api_base and non-standard API key should produce Authorization: Bearer header when opted in."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key="my-custom-ollama-token",
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+            use_bearer_for_custom_base=True,
+        )
+
+        assert headers["authorization"] == "Bearer my-custom-ollama-token"
+        assert "x-api-key" not in headers
+
+    def test_custom_api_base_uses_bearer_header_already_starts_with_bearer(self):
+        """If the key already starts with Bearer and Bearer opt-in is enabled, use it directly."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key="Bearer my-custom-ollama-token",
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+            use_bearer_for_custom_base=True,
+        )
+
+        assert headers["authorization"] == "Bearer my-custom-ollama-token"
+        assert "x-api-key" not in headers
+
+    def test_custom_api_base_uses_x_api_key_when_standard_key(self):
+        """If the key is standard sk-ant- key, use x-api-key even with custom api_base."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key=FAKE_REGULAR_KEY,
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+            api_base="https://ollama.com/",
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
     def test_oauth_includes_standard_headers(self):
         """OAuth path should still include standard Anthropic headers."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -242,6 +295,46 @@ class TestValidateEnvironmentOAuth:
 
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
+
+    def test_custom_api_base_via_param(self):
+        """validate_environment uses Bearer when use_bearer_for_custom_base is set in litellm_params."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = {}
+
+        updated_headers = config.validate_environment(
+            headers=headers,
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"use_bearer_for_custom_base": True},
+            api_key="custom-api-key",
+            api_base="https://custom-gateway.com",
+        )
+
+        assert updated_headers["authorization"] == "Bearer custom-api-key"
+        assert "x-api-key" not in updated_headers
+
+    def test_custom_api_base_via_litellm_params(self):
+        """validate_environment uses Bearer when api_base and use_bearer_for_custom_base are in litellm_params."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = {}
+
+        updated_headers = config.validate_environment(
+            headers=headers,
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"api_base": "https://custom-gateway.com", "use_bearer_for_custom_base": True},
+            api_key="custom-api-key",
+            api_base=None,
+        )
+
+        assert updated_headers["authorization"] == "Bearer custom-api-key"
+        assert "x-api-key" not in updated_headers
         assert "anthropic-dangerous-direct-browser-access" not in updated_headers
 
 
@@ -679,7 +772,6 @@ class TestProxyOAuthHeaderForwarding:
         self,
     ):
         """OAuth Authorization header IS forwarded when x-litellm-api-key was used for proxy auth."""
-        from unittest.mock import patch
 
         from starlette.datastructures import Headers
 
@@ -1003,6 +1095,20 @@ class TestGetAuthHeader:
         ):
             result = AnthropicModelInfo.get_auth_header()
             assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+    def test_custom_api_base_get_auth_header_uses_bearer(self):
+        """Non-standard API key and custom api_base returns Bearer when use_bearer_for_custom_base=True."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True)
+        assert result == {"authorization": "Bearer my-custom-key"}
+
+    def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
+        """Standard sk-ant- key with custom api_base should still return x-api-key."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_REGULAR_KEY, api_base="https://custom-gateway.com")
+        assert result == {"x-api-key": FAKE_REGULAR_KEY}
 
 
 class TestGetApiBaseFallbackChain:
@@ -1465,12 +1571,14 @@ class TestClaudeOpus48AdaptiveThinking:
             "bedrock/eu.anthropic.claude-opus-4-8",
             "vertex_ai/claude-opus-4-8",
             "azure_ai/claude-opus-4-8",
+            "anthropic.claude-opus-4-8-20251201-v1:0",
+            "bedrock/invoke/global.anthropic.claude-opus-4-8-20251201-v1:0",
         ],
     )
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     def test_resolver_reads_flag_through_bedrock_invoke_prefix(
         self, local_model_cost_map
@@ -1484,9 +1592,132 @@ class TestClaudeOpus48AdaptiveThinking:
             AnthropicModelInfo._supports_model_capability(
                 "bedrock/invoke/us.anthropic.claude-opus-4-8",
                 "supports_adaptive_thinking",
+                "anthropic",
             )
             is True
         )
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-fable-5",
+            "anthropic.claude-fable-5",
+            "us.anthropic.claude-fable-5",
+            "bedrock/invoke/us.anthropic.claude-fable-5",
+            "vertex_ai/claude-fable-5",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-6",
+            "us.anthropic.claude-opus-4-7",
+            "bedrock/invoke/us.anthropic.claude-opus-4-7",
+            "bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0",
+            "global.anthropic.claude-sonnet-4-6-v1:0",
+            "bedrock/invoke/us.anthropic.claude-opus-4-6-v1:0",
+            "anthropic.claude-opus-4-6-v1",
+            "bedrock/us.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-sonnet-4-6",
+            "vertex_ai/claude-opus-4-6",
+            "azure_ai/claude-sonnet-4-6",
+            "claude-sonnet-4-6-20260219",
+            "us.anthropic.claude-sonnet-4-6-20251101-v1:0",
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-6-20251101-v1:0",
+            "claude-sonnet-4.6",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
+        self, local_model_cost_map, model
+    ):
+        """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
+        so detection holds purely from the cost map with no version-rule
+        fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
+        base entry through candidate normalization: provider/region prefixes, a
+        Bedrock ``-v1:0`` version suffix (stripped fully for 4.7/4.8 keys or to ``-v1``
+        for the 4.6 key), a dated release suffix (``-20260219``), a combined
+        ``-<date>-v1:0`` suffix (the real Bedrock id shape), and a dotted family
+        version (``4.6`` -> ``4-6``)."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "us.anthropic.claude-fable-preview",
+            "claude-fable-preview",
+        ],
+    )
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
+        self, local_model_cost_map, model
+    ):
+        """An alias absent from the map, not matched by any ``fallback_generalizations``
+        rule, and without any parseable family version stays non-adaptive. ``fable``
+        without a major version matches neither the core-family 4.6+ gate nor the
+        family-agnostic 5+ gate, so neither the cost map nor the declarative rule marks
+        it adaptive."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/invoke/us.anthropic.claude-opus-4-9",
+            "vertex_ai/claude-sonnet-5-0",
+            "us.anthropic.claude-opus-5-2",
+            "us.anthropic.claude-opus-6-1",
+            "claude-opus-5-0",
+            "claude-opus-4-10",
+            "claude-opus-4-8-some-future-suffix",
+            "claude-fable-5-preview",
+            "us.anthropic.claude-fable-5-preview",
+        ],
+    )
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
+        self, local_model_cost_map, model
+    ):
+        """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
+        still resolve to adaptive when the id carries claude-<family>- at version 4.6
+        or higher, bare 5+ majors included. The version gate is the declarative
+        ``claude-adaptive-thinking`` rule, so 5.x, 6.x and any later family are covered
+        with no code change."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-0",
+            "us.anthropic.claude-opus-4-0",
+            "bedrock/invoke/us.anthropic.claude-opus-4-5",
+            "us.anthropic.claude-opus-4-20250514",
+        ],
+    )
+    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(
+        self, local_model_cost_map, model
+    ):
+        """Unmapped Claude names below 4.6 stay non-adaptive through the declarative path.
+        The eight-digit dated Opus 4.0 id (``...-4-20250514``) is the date-safety case: the
+        version rule caps the minor at two digits, so the date is not misread as a >= 4.6
+        minor. The anchored pricing rule still resolves these for cost, just without the
+        adaptive flag."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -1495,4 +1726,97 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+
+
+class TestDefaultSuffixAdaptiveThinking:
+    """@default-suffixed Vertex AI model names (e.g. vertex_ai/claude-opus-4-8@default)
+    must resolve as adaptive thinking. Before the fix, _model_map_lookup_candidates
+    never stripped the @default suffix, so the lookup fell through to the bare
+    model name without @default, which may or may not have the flag, and for
+    provider-prefixed forms the lookup always missed (issue #31760)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "vertex_ai/claude-opus-4-8@default",
+            "vertex_ai/claude-sonnet-4-6@default",
+            "vertex_ai/claude-opus-4-7@default",
+            "vertex_ai/claude-opus-4-6@default",
+            "vertex_ai/claude-fable-5@default",
+        ],
+    )
+    def test_default_suffix_models_are_adaptive_thinking(
+        self, local_model_cost_map, model: str
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
+            f"{model} not classified as adaptive thinking. "
+            "Check _model_map_lookup_candidates strips @default suffix."
+        )
+
+    @pytest.mark.parametrize(
+        "model,expected_bare",
+        [
+            ("vertex_ai/claude-opus-4-8@default", "claude-opus-4-8"),
+            ("vertex_ai/claude-sonnet-4-6@default", "claude-sonnet-4-6"),
+        ],
+    )
+    def test_lookup_candidates_include_bare_name(
+        self, model: str, expected_bare: str
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+        assert expected_bare in candidates, (
+            f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
+        )
+
+
+class TestCapabilityProbeUsesCallerProvider:
+    """``_supports_model_capability`` must probe under the caller's real provider
+    namespace instead of a pinned ``"anthropic"``. With the pin, the exact Bedrock
+    cost-map entry for ``global.anthropic.claude-opus-4-8`` was rejected by the
+    provider match and the anthropic-scoped fallback rule answered instead, so
+    flipping ``supports_adaptive_thinking`` on the exact entry changed nothing and
+    the documented "exact entry beats rule" precedence was silently violated."""
+
+    BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
+
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is True
+        )
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is False
+        )
+
+    def test_native_anthropic_probe_still_reads_anthropic_entry(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
+            is True
+        )

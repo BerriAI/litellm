@@ -116,9 +116,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class CiscoAIDefenseGuardrailConfigModel(
-    GuardrailConfigModel[CiscoAIDefenseGuardrailConfigModelOptionalParams]
-):
+class CiscoAIDefenseGuardrailConfigModel(GuardrailConfigModel[CiscoAIDefenseGuardrailConfigModelOptionalParams]):
     """Configuration parameters for the Cisco AI Defense guardrail."""
 
     api_key: Optional[str] = Field(

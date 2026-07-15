@@ -30,9 +30,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
-    def get_auth_credentials(
-        self, litellm_params: Dict[str, Any]
-    ) -> VectorStoreFileAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Dict[str, Any]) -> VectorStoreFileAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -68,12 +66,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> Dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
@@ -99,9 +92,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
             or "https://api.openai.com/v1"
         )
         base_url = base_url.rstrip("/")
-        encoded_vector_store_id = encode_url_path_segment(
-            vector_store_id, field_name="vector_store_id"
-        )
+        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         return f"{base_url}/vector_stores/{encoded_vector_store_id}/files"
 
     def transform_create_vector_store_file_request(

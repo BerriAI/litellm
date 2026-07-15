@@ -59,50 +59,32 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                 model_info = first_deployment.get("model_info", {})
 
                 # Check base_model first (needed for Azure custom deployment names)
-                base_model = model_info.get("base_model") or litellm_params.get(
-                    "base_model"
-                )
+                base_model = model_info.get("base_model") or litellm_params.get("base_model")
                 if base_model:
-                    verbose_proxy_logger.debug(
-                        f"Resolved model '{model}' to base_model '{base_model}' from router"
-                    )
+                    verbose_proxy_logger.debug(f"Resolved model '{model}' to base_model '{base_model}' from router")
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(base_model),
-                        (
-                            str(custom_llm_provider)
-                            if custom_llm_provider is not None
-                            else None
-                        ),
+                        (str(custom_llm_provider) if custom_llm_provider is not None else None),
                     )
 
                 resolved_model = litellm_params.get("model")
 
                 if resolved_model:
-                    verbose_proxy_logger.debug(
-                        f"Resolved model '{model}' to '{resolved_model}' from router"
-                    )
+                    verbose_proxy_logger.debug(f"Resolved model '{model}' to '{resolved_model}' from router")
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(resolved_model),
-                        (
-                            str(custom_llm_provider)
-                            if custom_llm_provider is not None
-                            else None
-                        ),
+                        (str(custom_llm_provider) if custom_llm_provider is not None else None),
                     )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Could not resolve model '{model}' from router: {e}"
-            )
+            verbose_proxy_logger.debug(f"Could not resolve model '{model}' from router: {e}")
 
     # Return original model if not resolved
     return model, custom_llm_provider
 
 
-def _calculate_period_costs(
-    num_requests, cost_per_request, input_cost, output_cost, margin_cost
-):
+def _calculate_period_costs(num_requests, cost_per_request, input_cost, output_cost, margin_cost):
     """
     Calculate costs for a given number of requests.
 
@@ -192,9 +174,7 @@ async def update_cost_discount_config(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Validate that all providers are valid LiteLLM providers
@@ -214,9 +194,7 @@ async def update_cost_discount_config(
     # Validate discount values are between 0 and 1
     for provider, discount in cost_discount_config.items():
         if not isinstance(discount, (int, float)):
-            raise HTTPException(
-                status_code=400, detail=f"Discount for {provider} must be a number"
-            )
+            raise HTTPException(status_code=400, detail=f"Discount for {provider} must be a number")
         if not (0 <= discount <= 1):
             raise HTTPException(
                 status_code=400,
@@ -240,9 +218,7 @@ async def update_cost_discount_config(
         # Update in-memory litellm.cost_discount_config
         litellm.cost_discount_config = cost_discount_config
 
-        verbose_proxy_logger.info(
-            f"Updated cost_discount_config: {cost_discount_config}"
-        )
+        verbose_proxy_logger.info(f"Updated cost_discount_config: {cost_discount_config}")
 
         return {
             "message": "Cost discount configuration updated successfully",
@@ -336,9 +312,7 @@ async def update_cost_margin_config(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Validate that all providers are valid LiteLLM providers (except "global")
@@ -478,9 +452,7 @@ async def estimate_cost(
     # Resolve model name (handles router aliases like 'e-model-router' -> 'azure_ai/gpt-4')
     resolved_model, resolved_provider = _resolve_model_for_cost_lookup(request.model)
 
-    verbose_proxy_logger.debug(
-        f"Cost estimate: request.model='{request.model}' resolved to '{resolved_model}'"
-    )
+    verbose_proxy_logger.debug(f"Cost estimate: request.model='{request.model}' resolved to '{resolved_model}'")
 
     # Create a mock response with usage for completion_cost
     mock_response = ModelResponse(
@@ -523,9 +495,7 @@ async def estimate_cost(
 
     input_cost = cost_breakdown.get("input_cost", 0.0) if cost_breakdown else 0.0
     output_cost = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
-    margin_cost = (
-        cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
-    )
+    margin_cost = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
 
     # Get model info for per-token pricing display
     try:

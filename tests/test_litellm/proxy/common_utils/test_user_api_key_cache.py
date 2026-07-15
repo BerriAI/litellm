@@ -3,10 +3,15 @@ from typing import Any
 
 import pytest
 
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
 
 
@@ -217,3 +222,53 @@ class TestUserApiKeyCache:
 
         with pytest.raises(TypeError):
             fake.set_cache("k2", {"ok": NotSerializable()})
+
+
+class TestManagementObjectTTL:
+    """
+    Regression for LIT-3338: ``general_settings.user_api_key_cache_ttl`` (which the
+    proxy propagates onto ``default_in_memory_ttl``) must win over the hardcoded
+    ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` for management-object writes.
+    """
+
+    def test_returns_configured_default_in_memory_ttl(self):
+        cache = UserApiKeyCache(default_in_memory_ttl=300)
+        assert get_management_object_ttl(cache) == 300
+
+    def test_falls_back_to_constant_when_no_default_configured(self):
+        cache = UserApiKeyCache()
+        assert cache.default_in_memory_ttl is None
+        assert (
+            get_management_object_ttl(cache)
+            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        )
+
+    def test_resolves_on_a_plain_dual_cache(self):
+        # Many call sites are typed UserApiKeyCache but exercised in tests with a
+        # bare DualCache; the resolver must work on the base type, not just the subclass.
+        assert get_management_object_ttl(DualCache(default_in_memory_ttl=300)) == 300
+        assert (
+            get_management_object_ttl(DualCache())
+            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        )
+
+    @pytest.mark.asyncio
+    async def test_management_write_uses_configured_ttl_over_constant(self):
+        mem = CapturingInMemoryCache()
+        cache = UserApiKeyCache(
+            in_memory_cache=mem,
+            redis_cache=FakeRedisCache(),
+            default_in_memory_ttl=300,
+        )
+        assert get_management_object_ttl(cache) != (
+            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        )
+
+        await cache.async_set_cache(
+            "team_id:abc",
+            _make_key_obj("t"),
+            model_type=UserAPIKeyAuth,
+            ttl=get_management_object_ttl(cache),
+        )
+
+        assert mem.last_ttl == 300

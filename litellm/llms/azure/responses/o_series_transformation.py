@@ -46,9 +46,7 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
         # Filter out unsupported parameters for O-series models
         o_series_supported_params = [
-            param
-            for param in base_supported_params
-            if param not in o_series_unsupported_params
+            param for param in base_supported_params if param not in o_series_unsupported_params
         ]
 
         return o_series_supported_params

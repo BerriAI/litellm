@@ -36,9 +36,7 @@ class Authenticator:
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
-        self.api_key_file = os.path.join(
-            self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
-        )
+        self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
         self._ensure_token_dir()
 
     def get_access_token(self) -> str:
@@ -57,9 +55,7 @@ class Authenticator:
                 if access_token:
                     return access_token
         except IOError:
-            verbose_logger.warning(
-                "No existing access token found or error reading file"
-            )
+            verbose_logger.warning("No existing access token found or error reading file")
 
         for attempt in range(3):
             verbose_logger.debug(f"Access token acquisition attempt {attempt + 1}/3")
@@ -161,9 +157,7 @@ class Authenticator:
         """
         access_token = self.get_access_token()
         headers = self._get_github_headers(access_token)
-        api_key_url = os.getenv(
-            "GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL
-        )
+        api_key_url = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -177,13 +171,9 @@ class Authenticator:
                 if "token" in response_json:
                     return response_json
                 else:
-                    verbose_logger.warning(
-                        f"API key response missing token: {response_json}"
-                    )
+                    verbose_logger.warning(f"API key response missing token: {response_json}")
             except httpx.HTTPStatusError as e:
-                verbose_logger.error(
-                    f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
-                )
+                verbose_logger.error(f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {str(e)}")
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
 
@@ -235,9 +225,7 @@ class Authenticator:
         """
         try:
             sync_client = _get_httpx_client()
-            device_code_url = os.getenv(
-                "GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL
-            )
+            device_code_url = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
             client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
             resp = sync_client.post(
                 device_code_url,
@@ -291,9 +279,7 @@ class Authenticator:
         sync_client = _get_httpx_client()
         max_attempts = 12  # 1 minute (12 * 5 seconds)
 
-        access_token_url = os.getenv(
-            "GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL
-        )
+        access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
         client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
 
         for attempt in range(max_attempts):
@@ -313,13 +299,8 @@ class Authenticator:
                 if "access_token" in resp_json:
                     verbose_logger.info("Authentication successful!")
                     return resp_json["access_token"]
-                elif (
-                    "error" in resp_json
-                    and resp_json.get("error") == "authorization_pending"
-                ):
-                    verbose_logger.debug(
-                        f"Authorization pending (attempt {attempt+1}/{max_attempts})"
-                    )
+                elif "error" in resp_json and resp_json.get("error") == "authorization_pending":
+                    verbose_logger.debug(f"Authorization pending (attempt {attempt + 1}/{max_attempts})")
                 else:
                     verbose_logger.warning(f"Unexpected response: {resp_json}")
             except httpx.HTTPStatusError as e:
@@ -335,9 +316,7 @@ class Authenticator:
                     status_code=400,
                 )
             except Exception as e:
-                verbose_logger.error(
-                    f"Unexpected error polling for access token: {str(e)}"
-                )
+                verbose_logger.error(f"Unexpected error polling for access token: {str(e)}")
                 raise GetAccessTokenError(
                     message=f"Failed to get access token: {str(e)}",
                     status_code=400,

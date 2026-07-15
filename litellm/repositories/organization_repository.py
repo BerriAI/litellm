@@ -24,13 +24,9 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
     ) -> Optional[LiteLLM_OrganizationTable]:
         return await super().find_by_id(organization_id, id_field)
 
-    async def find_by_alias(
-        self, organization_alias: str
-    ) -> Optional[LiteLLM_OrganizationTable]:
+    async def find_by_alias(self, organization_alias: str) -> Optional[LiteLLM_OrganizationTable]:
         """Find an organization by alias."""
-        records = await self.table.find_many(
-            where={"organization_alias": organization_alias}
-        )
+        records = await self.table.find_many(where={"organization_alias": organization_alias})
         if records:
             return self._to_model(records[0])
         return None
@@ -88,16 +84,10 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
 
         return await self.update(organization_id, data, id_field="organization_id")
 
-    async def delete_organization(
-        self, organization_id: str
-    ) -> Optional[LiteLLM_OrganizationTable]:
+    async def delete_organization(self, organization_id: str) -> Optional[LiteLLM_OrganizationTable]:
         """Delete an organization."""
         return await self.delete(organization_id, id_field="organization_id")
 
-    async def update_spend(
-        self, organization_id: str, spend: float
-    ) -> Optional[LiteLLM_OrganizationTable]:
+    async def update_spend(self, organization_id: str, spend: float) -> Optional[LiteLLM_OrganizationTable]:
         """Update organization spend."""
-        return await self.update(
-            organization_id, {"spend": spend}, id_field="organization_id"
-        )
+        return await self.update(organization_id, {"spend": spend}, id_field="organization_id")

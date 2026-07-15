@@ -15,9 +15,7 @@ LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
 async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
-    verbose_logger.debug(
-        "Email Alerting: Getting all team members for team_id=%s", team_id
-    )
+    verbose_logger.debug("Email Alerting: Getting all team members for team_id=%s", team_id)
     if team_id is None:
         return []
     from litellm.proxy.proxy_server import prisma_client
@@ -76,9 +74,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
 
     _team_id = webhook_event.team_id
     team_alias = webhook_event.team_alias
-    verbose_logger.debug(
-        "Email Alerting: Sending Team Budget Alert for team=%s", team_alias
-    )
+    verbose_logger.debug("Email Alerting: Sending Team Budget Alert for team=%s", team_alias)
 
     email_logo_url = os.getenv("SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None))
     email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
@@ -93,9 +89,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
         email_support_contact = LITELLM_SUPPORT_CONTACT
     recipient_emails = await get_all_team_member_emails(_team_id)
     recipient_emails_str: str = ",".join(recipient_emails)
-    verbose_logger.debug(
-        "Email Alerting: Sending team budget alert to %s", recipient_emails_str
-    )
+    verbose_logger.debug("Email Alerting: Sending team budget alert to %s", recipient_emails_str)
 
     event_name = webhook_event.event_message
     max_budget = webhook_event.max_budget

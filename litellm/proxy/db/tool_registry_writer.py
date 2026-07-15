@@ -121,13 +121,9 @@ async def batch_upsert_tools(
                     },
                 },
             )
-        verbose_proxy_logger.debug(
-            "tool_registry_writer: upserted %d tool(s)", len(data)
-        )
+        verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(data))
     except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer batch_upsert_tools error: %s", e
-        )
+        verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
 
 
 async def list_tools(
@@ -204,9 +200,7 @@ async def update_tool_policy(
         )
         return await get_tool(prisma_client, tool_name)
     except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer update_tool_policy error: %s", e
-        )
+        verbose_proxy_logger.error("tool_registry_writer update_tool_policy error: %s", e)
         return None
 
 
@@ -231,9 +225,7 @@ async def get_tools_by_names(
             for row in rows
         }
     except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer get_tools_by_names error: %s", e
-        )
+        verbose_proxy_logger.error("tool_registry_writer get_tools_by_names error: %s", e)
         return {}
 
 
@@ -286,9 +278,7 @@ async def list_overrides_for_tool(
                 )
         return out
     except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer list_overrides_for_tool error: %s", e
-        )
+        verbose_proxy_logger.error("tool_registry_writer list_overrides_for_tool error: %s", e)
         return []
 
 
@@ -316,12 +306,10 @@ class ToolPolicyRegistry:
                 reason="sync_tool_policy_from_db_tools_lookup_failure",
             )
             self._tool_input_policies = {
-                row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted"
-                for row in tools
+                row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted" for row in tools
             }
             self._tool_output_policies = {
-                row.tool_name: getattr(row, "output_policy", "untrusted") or "untrusted"
-                for row in tools
+                row.tool_name: getattr(row, "output_policy", "untrusted") or "untrusted" for row in tools
             }
 
             perms = await call_with_db_reconnect_retry(
@@ -343,9 +331,7 @@ class ToolPolicyRegistry:
                 len(self._blocked_tools_by_op_id),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "ToolPolicyRegistry sync_tool_policy_from_db error: %s", e
-            )
+            verbose_proxy_logger.exception("ToolPolicyRegistry sync_tool_policy_from_db error: %s", e)
             raise
 
     def get_input_policy(self, tool_name: str) -> str:
@@ -414,9 +400,7 @@ async def add_tool_to_object_permission_blocked(
         )
         return True
     except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer add_tool_to_object_permission_blocked error: %s", e
-        )
+        verbose_proxy_logger.error("tool_registry_writer add_tool_to_object_permission_blocked error: %s", e)
         return False
 
 

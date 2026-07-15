@@ -1,6 +1,6 @@
 "use client";
 
-import { SearchTools } from "@/components/SearchTools";
+import { SearchTools } from "./_components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function SearchToolsPage() {

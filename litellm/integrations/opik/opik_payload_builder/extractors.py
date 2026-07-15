@@ -66,9 +66,7 @@ def extract_opik_metadata(
     if requester_opik:
         opik_meta.update(requester_opik)
 
-    _logging.verbose_logger.debug(
-        f"litellm_opik_metadata - {json.dumps(opik_meta, default=str)}"
-    )
+    _logging.verbose_logger.debug(f"litellm_opik_metadata - {json.dumps(opik_meta, default=str)}")
 
     return opik_meta
 
@@ -94,9 +92,7 @@ def extract_span_identifiers(
     try:
         return current_span_data.trace_id, current_span_data.id
     except AttributeError:
-        _logging.verbose_logger.warning(
-            f"Unexpected current_span_data format: {type(current_span_data)}"
-        )
+        _logging.verbose_logger.warning(f"Unexpected current_span_data format: {type(current_span_data)}")
         return None, None
 
 
@@ -156,9 +152,7 @@ def apply_proxy_header_overrides(
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
-                _logging.verbose_logger.warning(
-                    f"Failed to parse tags from header: {value}"
-                )
+                _logging.verbose_logger.warning(f"Failed to parse tags from header: {value}")
 
     return project_name, tags, thread_id
 
@@ -226,8 +220,6 @@ def extract_and_build_metadata(
 
     # Add debug info if cost calculation failed
     if "response_cost_failure_debug_info" in litellm_kwargs:
-        metadata["response_cost_failure_debug_info"] = litellm_kwargs[
-            "response_cost_failure_debug_info"
-        ]
+        metadata["response_cost_failure_debug_info"] = litellm_kwargs["response_cost_failure_debug_info"]
 
     return metadata

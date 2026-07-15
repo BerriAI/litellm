@@ -2,6 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import UsageIndicator from "./UsageIndicator";
 
 vi.mock("./networking", () => ({
@@ -16,6 +17,11 @@ vi.mock("@/app/(dashboard)/hooks/useDisableUsageIndicator", () => ({
 import { getRemainingUsers } from "./networking";
 
 const mockGetRemainingUsers = vi.mocked(getRemainingUsers);
+
+const renderWithClient = (ui: React.ReactElement) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+};
 
 const DEFAULT_USAGE_DATA = {
   total_users: 100,
@@ -33,7 +39,7 @@ describe("UsageIndicator", () => {
   });
 
   it("should render when given access token and usage data loads", async () => {
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -41,7 +47,7 @@ describe("UsageIndicator", () => {
   });
 
   it("should not show Near limit when users usage is below 80% (1/100 -> 1%)", async () => {
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -58,7 +64,7 @@ describe("UsageIndicator", () => {
       total_users_remaining: null,
     });
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await waitFor(() => {
       expect(screen.queryByText("Usage")).not.toBeInTheDocument();
@@ -76,7 +82,7 @@ describe("UsageIndicator", () => {
       total_teams_remaining: 1,
     });
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -94,7 +100,7 @@ describe("UsageIndicator", () => {
       total_teams_remaining: null,
     });
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -112,7 +118,7 @@ describe("UsageIndicator", () => {
       total_teams_remaining: -2,
     });
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -121,7 +127,7 @@ describe("UsageIndicator", () => {
   });
 
   it("should render nothing when accessToken is null", () => {
-    render(<UsageIndicator accessToken={null} width={220} />);
+    renderWithClient(<UsageIndicator accessToken={null} width={220} />);
 
     expect(mockGetRemainingUsers).not.toHaveBeenCalled();
     expect(screen.queryByText("Usage")).not.toBeInTheDocument();
@@ -131,7 +137,7 @@ describe("UsageIndicator", () => {
     const { useDisableUsageIndicator } = await import("@/app/(dashboard)/hooks/useDisableUsageIndicator");
     (useDisableUsageIndicator as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await waitFor(() => {
       expect(screen.queryByText("Usage")).not.toBeInTheDocument();
@@ -143,7 +149,7 @@ describe("UsageIndicator", () => {
   it("should show Loading while fetching", () => {
     mockGetRemainingUsers.mockImplementation(() => new Promise(() => {}));
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     expect(screen.getByText("Loading...")).toBeInTheDocument();
   });
@@ -152,7 +158,7 @@ describe("UsageIndicator", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGetRemainingUsers.mockRejectedValue(new Error("Network error"));
 
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     expect(await screen.findByText("Failed to load usage data")).toBeInTheDocument();
 
@@ -161,7 +167,7 @@ describe("UsageIndicator", () => {
 
   it("should minimize when user clicks minimize button", async () => {
     const user = userEvent.setup();
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 
@@ -174,7 +180,7 @@ describe("UsageIndicator", () => {
 
   it("should restore from minimized when user clicks restore button", async () => {
     const user = userEvent.setup();
-    render(<UsageIndicator accessToken="token" width={220} />);
+    renderWithClient(<UsageIndicator accessToken="token" width={220} />);
 
     await screen.findByText("Usage");
 

@@ -61,9 +61,7 @@ SONIOX_HANDLER_ONLY_PARAMS: List[str] = [
 class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     """Configuration for Soniox async speech-to-text transcription."""
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         # `language` is mapped onto Soniox's `language_hints`.
         # `response_format` is handled by LiteLLM (Soniox doesn't support
         # SRT/VTT natively but we synthesize them from token timestamps).
@@ -96,12 +94,8 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SonioxException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return SonioxException(message=error_message, status_code=status_code, headers=headers)
 
     def validate_environment(
         self,
@@ -165,9 +159,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if value is not None:
                 body[key] = value
 
-        return AudioTranscriptionRequestData(
-            data=body, files=None, content_type="application/json"
-        )
+        return AudioTranscriptionRequestData(data=body, files=None, content_type="application/json")
 
     def transform_audio_transcription_response(
         self,
@@ -242,9 +234,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Best-effort metadata fields matching OpenAI's verbose_json shape.
         if transcription_meta.get("audio_duration_ms") is not None:
             try:
-                response["duration"] = (
-                    float(transcription_meta["audio_duration_ms"]) / 1000.0
-                )
+                response["duration"] = float(transcription_meta["audio_duration_ms"]) / 1000.0
             except (TypeError, ValueError):
                 pass
 

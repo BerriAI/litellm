@@ -57,9 +57,7 @@ def styled_prompt():
 
     # Now move cursor up to the input line and get input
     click.echo("\033[2A", nl=False)  # Move cursor up 2 lines
-    click.echo(
-        f"\r{left_border} {prompt_text}", nl=False
-    )  # Position at start of input line
+    click.echo(f"\r{left_border} {prompt_text}", nl=False)  # Position at start of input line
 
     try:
         # Get user input

@@ -368,8 +368,10 @@ class VertexAIBatchPrediction(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response = response.json()
-        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
-            response=_json_response
+        vertex_batch_response = (
+            VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
+                response=_json_response
+            )
         )
         return vertex_batch_response
 
@@ -391,8 +393,10 @@ class VertexAIBatchPrediction(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response = response.json()
-        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
-            response=_json_response
+        vertex_batch_response = (
+            VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
+                response=_json_response
+            )
         )
         return vertex_batch_response
 
@@ -484,9 +488,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(
-                f"Error: {retrieve_response.status_code} {retrieve_response.text}"
-            )
+            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
 
         _json_response = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
@@ -532,9 +534,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(
-                f"Error: {retrieve_response.status_code} {retrieve_response.text}"
-            )
+            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
 
         _json_response = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(

@@ -26,15 +26,10 @@ class GCSCache(BaseCache):
     ) -> None:
         super().__init__()
         self.bucket_name = bucket_name or GCSBucketBase(bucket_name=None).BUCKET_NAME
-        self.path_service_account = (
-            path_service_account
-            or GCSBucketBase(bucket_name=None).path_service_account_json
-        )
+        self.path_service_account = path_service_account or GCSBucketBase(bucket_name=None).path_service_account_json
         self.key_prefix = gcs_path.rstrip("/") + "/" if gcs_path else ""
         # create httpx clients
-        self.async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_client = _get_httpx_client()
 
     def _construct_headers(self) -> dict:
@@ -64,9 +59,7 @@ class GCSCache(BaseCache):
             data = json.dumps(value)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
-            print_verbose(
-                f"GCS Caching: async_set_cache() - Got exception from GCS: {e}"
-            )
+            print_verbose(f"GCS Caching: async_set_cache() - Got exception from GCS: {e}")
 
     def get_cache(self, key, **kwargs):
         try:
@@ -83,9 +76,7 @@ class GCSCache(BaseCache):
                 return cached_response
             return None
         except Exception as e:
-            verbose_logger.error(
-                f"GCS Caching: get_cache() - Got exception from GCS: {e}"
-            )
+            verbose_logger.error(f"GCS Caching: get_cache() - Got exception from GCS: {e}")
 
     async def async_get_cache(self, key, **kwargs):
         try:
@@ -98,9 +89,7 @@ class GCSCache(BaseCache):
                 return json.loads(response.text)
             return None
         except Exception as e:
-            verbose_logger.error(
-                f"GCS Caching: async_get_cache() - Got exception from GCS: {e}"
-            )
+            verbose_logger.error(f"GCS Caching: async_get_cache() - Got exception from GCS: {e}")
 
     def flush_cache(self):
         pass

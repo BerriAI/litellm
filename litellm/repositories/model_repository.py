@@ -33,9 +33,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         encrypted = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
-                encrypted[key] = encrypt_value_helper(
-                    value, new_encryption_key=self._encryption_key
-                )
+                encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
             else:
                 encrypted[key] = value
         return encrypted
@@ -65,15 +63,11 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
             data["model_info"] = json.loads(data["model_info"])
 
         if data.get("litellm_params"):
-            data["litellm_params"] = self._decrypt_litellm_params(
-                data["litellm_params"]
-            )
+            data["litellm_params"] = self._decrypt_litellm_params(data["litellm_params"])
 
         return LiteLLM_ProxyModelTable(**data)
 
-    async def find_by_id(
-        self, model_id: str, id_field: str = "model_id"
-    ) -> Optional[LiteLLM_ProxyModelTable]:
+    async def find_by_id(self, model_id: str, id_field: str = "model_id") -> Optional[LiteLLM_ProxyModelTable]:
         return await super().find_by_id(model_id, id_field)
 
     async def find_by_name(self, model_name: str) -> List[LiteLLM_ProxyModelTable]:
@@ -158,14 +152,10 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         """Delete a model."""
         return await self.delete(model_id, id_field="model_id")
 
-    async def block_model(
-        self, model_id: str, updated_by: str
-    ) -> Optional[LiteLLM_ProxyModelTable]:
+    async def block_model(self, model_id: str, updated_by: str) -> Optional[LiteLLM_ProxyModelTable]:
         """Block a model."""
         return await self.update_model(model_id, updated_by, blocked=True)
 
-    async def unblock_model(
-        self, model_id: str, updated_by: str
-    ) -> Optional[LiteLLM_ProxyModelTable]:
+    async def unblock_model(self, model_id: str, updated_by: str) -> Optional[LiteLLM_ProxyModelTable]:
         """Unblock a model."""
         return await self.update_model(model_id, updated_by, blocked=False)
