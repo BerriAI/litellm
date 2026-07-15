@@ -54,7 +54,10 @@ class ResponsesAPIRequestUtils:
         if len(message_positions) == len(original_items):
             return [*merged_input]
         if not message_positions:
-            return [*merged_input, *original_items]
+            verbose_logger.warning(
+                "Prompt management hook returned messages without Responses API input messages; merged messages were ignored"
+            )
+            return [*original_items]
 
         corresponding_messages = len(client_input) == len(merged_input) and all(
             original.get("role") == merged.get("role")
