@@ -113,7 +113,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -1745,6 +1745,18 @@ async def check_and_update_if_proxy_admin_id(user_role: str, user_id: str, prism
 async def auth_callback(request: Request, state: Optional[str] = None):
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
+
+    oauth_error = request.query_params.get("error")
+    if oauth_error:
+        oauth_error_description = request.query_params.get("error_description")
+        verbose_proxy_logger.warning(
+            f"SSO callback received OAuth error: {oauth_error}, description: {oauth_error_description}"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail=f"OAuth error: {oauth_error}"
+            + (f", error_description: {oauth_error_description}" if oauth_error_description else ""),
+        )
 
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
@@ -3737,8 +3749,7 @@ class MicrosoftSSOHandler:
     Handles Microsoft SSO callback response and returns a CustomOpenID object
     """
 
-    graph_api_base_url = "https://graph.microsoft.com/v1.0"
-    graph_api_user_groups_endpoint = f"{graph_api_base_url}/me/memberOf"
+    DEFAULT_GRAPH_API_BASE_URL = "https://graph.microsoft.com/v1.0"
 
     """
     Constants
@@ -3747,6 +3758,19 @@ class MicrosoftSSOHandler:
 
     # used for debugging to show the user groups litellm found from Graph API
     GRAPH_API_RESPONSE_KEY = "graph_api_user_groups"
+
+    @staticmethod
+    def get_graph_api_base_url() -> str:
+        """
+        Returns the Microsoft Graph API base URL, configurable via the
+        `MICROSOFT_GRAPH_ENDPOINT` env var so non-default clouds such as Azure
+        Government (GCC High) can point at `https://graph.microsoft.us/v1.0`
+        """
+        return get_secret_str("MICROSOFT_GRAPH_ENDPOINT") or MicrosoftSSOHandler.DEFAULT_GRAPH_API_BASE_URL
+
+    @staticmethod
+    def get_graph_api_user_groups_endpoint() -> str:
+        return f"{MicrosoftSSOHandler.get_graph_api_base_url()}/me/memberOf"
 
     @staticmethod
     async def get_microsoft_callback_response(
@@ -3924,7 +3948,7 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = MicrosoftSSOHandler.get_graph_api_user_groups_endpoint()
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -4007,33 +4031,44 @@ class MicrosoftSSOHandler:
 
         Users use Enterprise Applications to manage Groups and Users on Microsoft Entra ID
         """
-        base_url = "https://graph.microsoft.com/v1.0"
+        base_url = MicrosoftSSOHandler.get_graph_api_base_url()
         # Endpoint to get app role assignments for the given service principal
         endpoint = f"/servicePrincipals/{service_principal_id}/appRoleAssignedTo"
-        url = base_url + endpoint
+        next_link: str | None = base_url + endpoint
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
-        response = await async_client.get(url, headers=headers)
-        response_json = response.json()
-        verbose_proxy_logger.debug(f"Response from service principal app role assigned to: {response_json}")
         group_ids: List[str] = []
         service_principal_teams: List[MicrosoftServicePrincipalTeam] = []
+        page_count = 0
 
-        for _object in response_json.get("value", []):
-            if _object.get("principalType") == "Group":
-                # Append the group ID to the list
-                group_ids.append(_object.get("principalId"))
-                # Append the service principal team to the list
-                service_principal_teams.append(
-                    MicrosoftServicePrincipalTeam(
-                        principalDisplayName=_object.get("principalDisplayName"),
-                        principalId=_object.get("principalId"),
+        while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            response = await async_client.get(next_link, headers=headers)
+            response_json = response.json()
+            verbose_proxy_logger.debug(f"Response from service principal app role assigned to: {response_json}")
+
+            for _object in response_json.get("value", []):
+                if _object.get("principalType") == "Group":
+                    # Append the group ID to the list
+                    group_ids.append(_object.get("principalId"))
+                    # Append the service principal team to the list
+                    service_principal_teams.append(
+                        MicrosoftServicePrincipalTeam(
+                            principalDisplayName=_object.get("principalDisplayName"),
+                            principalId=_object.get("principalId"),
+                        )
                     )
-                )
+
+            next_link = response_json.get("@odata.nextLink")
+            page_count += 1
+
+        if next_link is not None and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            verbose_proxy_logger.warning(
+                f"Reached maximum page limit of {MicrosoftSSOHandler.MAX_GRAPH_API_PAGES}. Some service principal group assignments may not be included."
+            )
 
         return group_ids, service_principal_teams
 

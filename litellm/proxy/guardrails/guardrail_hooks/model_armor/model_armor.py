@@ -60,6 +60,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     - Post-call sanitization (sanitizeModelResponse)
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]
+
     def __init__(
         self,
         template_id: Optional[str] = None,
@@ -76,6 +86,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
             ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         # Initialize parent classes first
         super().__init__(**kwargs)
