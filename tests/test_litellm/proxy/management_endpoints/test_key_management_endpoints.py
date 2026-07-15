@@ -563,7 +563,7 @@ async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, capl
         generate_key_fn,
     )
 
-    raw_key = "sk-short-secret"
+    raw_key = "sk-short-secret-a1b2"
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
         await generate_key_fn(
             data=GenerateKeyRequest(key=raw_key),
@@ -1336,10 +1336,10 @@ async def test_get_new_token_with_valid_key(monkeypatch):
     )
 
     # Test with valid new_key
-    data = RegenerateKeyRequest(new_key="sk-test123456789")
+    data = RegenerateKeyRequest(new_key="sk-test1234567890abc")
     result = await get_new_token(data)
 
-    assert result == "sk-test123456789"
+    assert result == "sk-test1234567890abc"
 
 
 @pytest.mark.asyncio
@@ -1368,6 +1368,110 @@ async def test_get_new_token_with_invalid_key(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_new_token_rejects_short_new_key(monkeypatch):
+    """Regression test for LIT-4355: a short custom key like sk-99 must be rejected,
+    otherwise the stored key_name (sk-...{last 4 chars}) reveals the entire key."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    data = RegenerateKeyRequest(new_key="sk-99")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_new_token(data)
+
+    assert exc_info.value.status_code == 400
+    assert "at least 20 characters" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("short_key", ["sk-1234", "sk-abcdefghijklmnop"])
+async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
+    """Regression test for LIT-4355: /key/generate must reject custom keys shorter
+    than the minimum length (including the 19-char boundary); sk-1234 used to be
+    accepted and fully exposed via key_name."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    assert len(short_key) < 20
+
+    with pytest.raises(ProxyException) as exc_info:
+        await generate_key_fn(
+            data=GenerateKeyRequest(key=short_key),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+            ),
+        )
+
+    assert exc_info.value.code == "400"
+    assert "at least 20 characters" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch):
+    """Custom keys at exactly the minimum length (20 chars) are still accepted."""
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    custom_key = "sk-abcdefghijklmnopq"
+    assert len(custom_key) == 20
+
+    response = await generate_key_fn(
+        data=GenerateKeyRequest(key=custom_key),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+        ),
+    )
+
+    assert response.key == custom_key
 
 
 @pytest.mark.asyncio

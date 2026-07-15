@@ -65,6 +65,16 @@ def test_redact_string_catches_secret_patterns():
     assert redact_string(normal) == normal
 
 
+def test_redact_string_catches_minimum_length_virtual_key():
+    """Regression test for LIT-4355: keys at the enforced 20-char minimum
+    (MINIMUM_CUSTOM_KEY_LENGTH) must be treated as key-shaped by the scrubber."""
+    minimum_length_key = "sk-abcdefghijklmnopq"
+    assert len(minimum_length_key) == 20
+    result = redact_string("msg: " + minimum_length_key)
+    assert minimum_length_key not in result
+    assert "REDACTED" in result
+
+
 def test_filter_redacts_secrets_in_logger_output():
     def log_messages():
         verbose_logger.debug("Key: " + SECRET)
