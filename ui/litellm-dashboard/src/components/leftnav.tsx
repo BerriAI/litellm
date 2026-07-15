@@ -209,11 +209,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "projects",
         page: "projects",
-        label: (
-          <span className="flex items-center gap-2">
-            Projects <NewBadge />
-          </span>
-        ),
+        label: "Projects",
         icon: <Folder {...ICON} />,
         roles: all_admin_roles,
       },
