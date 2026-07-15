@@ -18,6 +18,12 @@ configs:
           type: redis
           host: redis
           port: 6379
+        # OTEL v2 trace destination for the logging suite's trace-completeness
+        # tests: the arize_phoenix preset is OTLP with a configurable endpoint
+        # (PHOENIX_COLLECTOR_HTTP_ENDPOINT below points it at the jaeger service),
+        # so gen-AI spans export through a preset-owned provider - the code path
+        # where trace splits actually happen - with no cloud credentials needed.
+        callbacks: ["arize_phoenix"]
 
       router_settings:
         routing_strategy: simple-shuffle
@@ -68,9 +74,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_OTEL_V2: "true"
+      PHOENIX_COLLECTOR_HTTP_ENDPOINT: http://jaeger:4318/v1/traces
+      PHOENIX_API_KEY: local-jaeger-noauth
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       UI_USERNAME: admin
       UI_PASSWORD: sk-1234
@@ -111,6 +123,18 @@ services:
     image: redis:7
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+# throwaway OTEL trace destination (OTLP ingest on 4318 inside the network,
+# query API on host 16686 for test read-back; see E2E_OTEL_QUERY_URL)
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - "16686:16686"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:14269/"]
       interval: 3s
       timeout: 3s
       retries: 20

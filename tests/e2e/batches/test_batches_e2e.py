@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pytest
@@ -49,7 +50,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
+from models import KeyGenerateBody, SpendLogRow
 
 pytestmark = pytest.mark.e2e
 
@@ -349,6 +350,10 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     the file-read path fires while the batch itself is not blocked.
     ``resources.key()`` cannot set limits, so the key is minted on the gateway
     directly and its delete deferred.
+
+    Snapshots read /spend/logs/v2 over a bounded window around the test instead
+    of the unpaginated /spend/logs whole-table read, which grows with the
+    environment and OOMed the e2e runner on stage.
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
     key = client.gateway.generate_key(
@@ -356,8 +361,13 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     )
     resources.defer(lambda: client.gateway.delete_key(key))
 
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    window_end = window_start + timedelta(hours=2)
     before = frozenset(
-        row.request_id for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
+        row.request_id
+        for row in unattributed_rows(
+            client.gateway.spend_logs_window(start=window_start, end=window_end)
+        )
     )
 
     file = unwrap(
@@ -379,7 +389,9 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
 
     new_orphans = [
         row
-        for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
+        for row in unattributed_rows(
+            client.gateway.spend_logs_window(start=window_start, end=window_end)
+        )
         if row.request_id not in before
     ]
     assert not new_orphans, (

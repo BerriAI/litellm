@@ -461,6 +461,53 @@ async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoi
     ]
 
 
+@pytest.mark.asyncio
+async def test_get_group_ids_from_service_principal_paginates_through_all_pages():
+    # Arrange
+    page_one = {
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-123/appRoleAssignedTo?$skiptoken=page2",
+        "value": [
+            {
+                "principalType": "Group",
+                "principalId": "group-on-page-1",
+                "principalDisplayName": "Group On Page 1",
+            }
+        ],
+    }
+    page_two = {
+        "value": [
+            {
+                "principalType": "Group",
+                "principalId": "group-on-page-2",
+                "principalDisplayName": "Group On Page 2",
+            }
+        ],
+    }
+    responses = [page_one, page_two]
+
+    async def mock_get(url, *args, **kwargs):
+        mock = MagicMock()
+        mock.json.return_value = responses.pop(0)
+        return mock
+
+    async_client = MagicMock()
+    async_client.get = mock_get
+
+    # Act
+    group_ids, teams = await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+        service_principal_id="sp-123",
+        async_client=async_client,
+        access_token="mock_token",
+    )
+
+    # Assert
+    assert group_ids == ["group-on-page-1", "group-on-page-2"]
+    assert [team["principalId"] for team in teams] == [
+        "group-on-page-1",
+        "group-on-page-2",
+    ]
+
+
 def test_get_group_ids_from_graph_api_response():
     # Arrange
     mock_response = MicrosoftGraphAPIUserGroupResponse(
@@ -2138,6 +2185,36 @@ class TestCLIKeyRegenerationFlow:
         assert not _is_valid_cli_sso_login_id("cli-test\n1234567890")
         assert not _is_valid_cli_sso_login_id("cli-test\x001234567890")
         assert not _is_valid_cli_sso_login_id("sk-test1234567890")
+
+    def test_cli_sso_flow_lookup_tells_legacy_clients_to_upgrade(self):
+        """Legacy CLIs send self-generated sk-<uuid> login ids; the 400 must say the CLI is outdated"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = None
+
+        with pytest.raises(HTTPException) as legacy_exc:
+            _get_cli_sso_flow_or_raise(
+                login_id="sk-85c789af-fc21-474c-9dc9-b5d794fe07ec",
+                cache=mock_cache,
+            )
+        assert legacy_exc.value.status_code == 400
+        assert "out of date" in legacy_exc.value.detail
+        assert "pip install" in legacy_exc.value.detail
+        mock_cache.get_cache.assert_not_called()
+
+        with pytest.raises(HTTPException) as generic_exc:
+            _get_cli_sso_flow_or_raise(login_id="not-a-valid-id", cache=mock_cache)
+        assert generic_exc.value.status_code == 400
+        assert generic_exc.value.detail == "Invalid CLI login session id"
+
+        with pytest.raises(HTTPException) as expired_exc:
+            _get_cli_sso_flow_or_raise(login_id="cli-test_1234567890", cache=mock_cache)
+        assert expired_exc.value.status_code == 400
+        assert "session not found or expired" in expired_exc.value.detail
+        assert "enable_redis_auth_cache" in expired_exc.value.detail
 
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):
