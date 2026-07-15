@@ -347,7 +347,7 @@ class AnthropicResponsesStreamWrapper:
             pass
         except Exception as e:
             verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
-            self._chunk_queue.append(self._make_error_chunk(f"Upstream provider error while streaming: {str(e)}"))
+            self._chunk_queue.append(self._make_error_chunk("Upstream provider error while streaming."))
             self._sent_message_stop = True
 
         # Drain any remaining queued chunks

@@ -144,7 +144,7 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
     async def test_mid_stream_exception_emits_error_event_before_ending(self):
         async def exploding_stream():
             yield {"type": "response.created"}
-            raise RuntimeError("connection reset by upstream")
+            raise RuntimeError("connection reset by https://user:secret@host/v1")
 
         wrapper = AnthropicResponsesStreamWrapper(responses_stream=exploding_stream(), model="m")
         chunks = []
@@ -153,7 +153,10 @@ class TestUpstreamFailuresEmitAnthropicErrorEvents:
 
         assert chunks[0]["type"] == "message_start"
         assert chunks[-1]["type"] == "error"
-        assert "connection reset by upstream" in chunks[-1]["error"]["message"]
+        # A non-empty error event is surfaced, but the raw transport exception
+        # (which can carry upstream URLs/credentials) must not reach the client.
+        assert chunks[-1]["error"]["message"] == "Upstream provider error while streaming."
+        assert "secret" not in chunks[-1]["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_sse_wrapper_renders_event_error(self):
