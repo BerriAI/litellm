@@ -698,7 +698,7 @@ async def _route_anthropic_with_multi_backend(
             endpoint=endpoint,
             target=target_url,
             custom_headers=auth_header,
-            _forward_headers=False,  # Do NOT forward client auth to external backends
+            _forward_headers=True,  # Auth is protected by custom_headers dedup in forward_headers_from_request
             is_streaming_request=is_streaming,
             custom_llm_provider="anthropic",
         )
