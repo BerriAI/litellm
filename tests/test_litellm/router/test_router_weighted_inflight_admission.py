@@ -75,3 +75,22 @@ async def test_make_call_waits_for_existing_lease(router: Router):
     finish.set()
     assert await first == "first"
     assert await second == "second"
+
+
+@pytest.mark.asyncio
+async def test_request_cannot_select_admission_class_or_leak_control_kwarg(router: Router):
+    observed: dict[str, object] = {}
+
+    async def original_function(**kwargs: object):
+        observed.update(kwargs)
+        return "response"
+
+    response = await router.make_call(
+        original_function,
+        admission_class="untrusted-background",
+        metadata={"admission_class": "untrusted-background"},
+    )
+    assert response == "response"
+    assert observed["metadata"] == {"admission_class": "untrusted-background"}
+    assert "admission_class" not in observed
+    assert router.weighted_inflight_admission.metrics.snapshot()["admitted"] == 1

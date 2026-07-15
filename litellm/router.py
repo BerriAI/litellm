@@ -6543,17 +6543,7 @@ class Router:
         model_group = kwargs.get("model")
         admission_lease = None
         if self.weighted_inflight_admission is not None:
-            metadata_value = cast(object, kwargs.get("litellm_metadata") or kwargs.get("metadata"))
-            metadata = cast(dict[str, object], metadata_value) if isinstance(metadata_value, dict) else {}
-            request_admission_class = cast(object, kwargs.get("admission_class"))
-            metadata_admission_class = metadata.get("admission_class")
-            admission_class = (
-                request_admission_class
-                if isinstance(request_admission_class, str)
-                else metadata_admission_class
-                if isinstance(metadata_admission_class, str)
-                else self.weighted_inflight_admission_class
-            )
+            admission_class = self.weighted_inflight_admission_class
             if admission_class is None:
                 raise ValueError(
                     "weighted_inflight_admission_class is required when weighted_inflight_admission is configured"
@@ -6567,7 +6557,7 @@ class Router:
             if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
                 response = await response
             response = await self.set_response_headers(
-                response=response, model_group=model_group, request_kwargs=kwargs
+                response=response, model_group=model_group, request_kwargs=call_kwargs
             )
 
             if admission_lease is not None:
