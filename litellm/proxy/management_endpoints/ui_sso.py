@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.team_endpoints import new_team, team_mem
 from litellm.proxy.management_endpoints.types import (
     CustomOpenID,
     get_litellm_user_role,
+    get_most_permissive_litellm_user_role,
     is_valid_litellm_user_role,
 )
 from litellm.proxy.utils import (
@@ -3848,13 +3849,11 @@ class MicrosoftSSOHandler:
         # Combine groups and app roles
         user_role: Optional[LitellmUserRoles] = None
         if app_roles:
-            # Check if any app role is a valid LitellmUserRoles
-            for role_str in app_roles:
-                role = get_litellm_user_role(role_str)
-                if role is not None:
-                    user_role = role
-                    verbose_proxy_logger.debug(f"Found valid LitellmUserRoles '{role.value}' in app_roles")
-                    break
+            user_role = get_most_permissive_litellm_user_role(app_roles)
+            if user_role is not None:
+                verbose_proxy_logger.debug(
+                    f"Selected most permissive LitellmUserRoles '{user_role.value}' from app_roles: {app_roles}"
+                )
 
         verbose_proxy_logger.debug(f"Combined team_ids (groups + app roles): {user_team_ids}")
 

@@ -1,7 +1,11 @@
 import jwt
+import pytest
 
 from litellm.proxy.management_endpoints.ui_sso import MicrosoftSSOHandler
-from litellm.proxy.management_endpoints.types import get_litellm_user_role
+from litellm.proxy.management_endpoints.types import (
+    get_litellm_user_role,
+    get_most_permissive_litellm_user_role,
+)
 from litellm.proxy._types import LitellmUserRoles
 
 
@@ -89,3 +93,28 @@ def test_defaults_to_internal_user_viewer_when_no_role():
     # Default role would be internal_user_viewer
     default_role = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
     assert default_role.value == "internal_user_viewer"
+
+
+@pytest.mark.parametrize(
+    "app_roles, expected",
+    [
+        # Regression for #33434: the most permissive role wins regardless of
+        # its position in the array, instead of always picking the first entry.
+        (["internal_user", "proxy_admin"], LitellmUserRoles.PROXY_ADMIN),
+        (["proxy_admin", "internal_user"], LitellmUserRoles.PROXY_ADMIN),
+        (
+            ["internal_user_viewer", "internal_user", "proxy_admin_viewer"],
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ),
+        (["org_admin", "proxy_admin_viewer"], LitellmUserRoles.ORG_ADMIN),
+        # Unknown roles are ignored; the single valid one is selected.
+        (["some_custom_role", "internal_user"], LitellmUserRoles.INTERNAL_USER),
+        (["PROXY_ADMIN", "internal_user"], LitellmUserRoles.PROXY_ADMIN),
+        (["internal_user"], LitellmUserRoles.INTERNAL_USER),
+        # No valid roles at all.
+        (["some_custom_role", "another_unknown_role"], None),
+        ([], None),
+    ],
+)
+def test_selects_most_permissive_app_role(app_roles, expected):
+    assert get_most_permissive_litellm_user_role(app_roles) == expected
