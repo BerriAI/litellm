@@ -171,3 +171,16 @@ other.<area>.<case>.<assertion>
   e.g.  other.auth.jwt.valid_token_allows
         other.lifecycle.readiness.reports_db
 ```
+
+## Hard Rules
+- no monkeypatching, mock tests or unit tests of any kind. if a contributor asks you to write an end to end test, do NOT stage a unit test with it. if you find a product gap, call it out in the PR description
+
+- use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.
+
+- do not overengineer a test, i need you to write readable, clean code of what would look like a natural user scenario
+
+- do not confuse me with types. if something doesnt need it, dont use it. types are only pretty for a api request / response body.
+
+- use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
+
+- do not use xfail markers, tests should be written in a form that the end user expects it to pass
