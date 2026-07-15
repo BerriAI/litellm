@@ -54,20 +54,8 @@ TOOL_USE_ARGS = [
     "Bash(echo pong)",
     "--permission-mode",
     "dontAsk",
+    "--include-partial-messages",
 ]
-
-# Floor on the number of stream-json records we expect to see for a
-# tool-use turn. A buffered (non-streamed) wire for this multi-turn
-# flow collapses to roughly: one `system` init + one `assistant` with
-# the `tool_use` block + a `user` tool_result + one `assistant` final
-# text + one `result`, i.e. ~5 records (the CLI executes the tool
-# locally and sends the result back, producing a second model turn
-# even on a fully buffered proxy). Real fine-grained streaming
-# produces many more (incremental input_json_delta events,
-# intermediate assistant deltas, etc., typically 15+). We pick a
-# floor comfortably above the buffered case so the assertion catches
-# the regression without being flaky on short responses.
-MIN_STREAM_EVENTS = 8
 
 
 def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
@@ -82,6 +70,24 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 return True
     return False
+
+
+def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
+    """Count `input_json_delta` records among the `stream_event`
+    entries. Zero means the proxy collapsed the streamed tool input
+    into a single complete block instead of forwarding the incremental
+    deltas the upstream emitted."""
+    inner_events = (
+        event.get("event") for event in events if event.get("type") == "stream_event"
+    )
+    return sum(
+        1
+        for inner in inner_events
+        if isinstance(inner, Mapping)
+        and inner.get("type") == "content_block_delta"
+        and isinstance(inner.get("delta"), Mapping)
+        and inner["delta"].get("type") == "input_json_delta"
+    )
 
 
 def test_tool_use_streaming_bedrock_converse(compat_result):
@@ -132,10 +138,11 @@ def test_tool_use_streaming_bedrock_converse(compat_result):
             failures.append(error)
             continue
 
-        if len(outcome.events) < MIN_STREAM_EVENTS:
+        if _count_input_json_deltas(outcome.events) == 0:
             error = (
-                f"[{model}] only {len(outcome.events)} stream-json events observed "
-                f"(< {MIN_STREAM_EVENTS}); proxy likely buffered the response"
+                f"[{model}] no input_json_delta stream events observed; proxy "
+                f"likely buffered the tool input into a complete block or "
+                f"stripped fine-grained tool streaming"
             )
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
