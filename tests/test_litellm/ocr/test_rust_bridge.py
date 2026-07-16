@@ -130,6 +130,42 @@ class RaisingAsyncBridge:
         raise RuntimeError("bridge failed")
 
 
+class SsrfRejectingBridge:
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise ValueError(
+            "invalid request: OCR document URL rejected by SSRF protection: "
+            "http://169.254.169.254/latest/meta-data/"
+        )
+
+
+class SsrfRejectingAsyncBridge:
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise ValueError(
+            "invalid request: OCR document URL rejected by SSRF protection: "
+            "http://169.254.169.254/latest/meta-data/"
+        )
+
+
 class RecordingLogging:
     """A spy standing in for ``LiteLLMLoggingObj`` to capture ``pre_call``."""
 
@@ -453,6 +489,61 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
 
     assert captured["model"] == "mistral-ocr-latest"
     assert captured["custom_llm_provider"] == "mistral"
+
+
+def test_ocr_input_rejection_maps_to_bad_request():
+    rust_bridge._set_rust_ocr_bridge(ocr=SsrfRejectingBridge())
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.ocr(
+            model="azure_ai/pixtral-12b-2409",
+            document={
+                "type": "document_url",
+                "document_url": "http://169.254.169.254/latest/meta-data/",
+            },
+            api_key="sk-test",
+            api_base="https://example.services.ai.azure.com",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "SSRF protection" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_aocr_input_rejection_maps_to_bad_request():
+    rust_bridge._set_rust_ocr_bridge(aocr=SsrfRejectingAsyncBridge())
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aocr(
+            model="azure_ai/pixtral-12b-2409",
+            document={
+                "type": "document_url",
+                "document_url": "http://169.254.169.254/latest/meta-data/",
+            },
+            api_key="sk-test",
+            api_base="https://example.services.ai.azure.com",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "SSRF protection" in str(exc_info.value)
+
+
+def test_ocr_provider_runtime_error_is_not_downgraded_to_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    rust_bridge._set_rust_ocr_bridge(ocr=RaisingBridge())
+
+    with pytest.raises(CapturedException):
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert captured["original_exception"].__class__ is RuntimeError
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):

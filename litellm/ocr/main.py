@@ -7,7 +7,7 @@ import mimetypes
 import os
 import re
 from io import IOBase
-from typing import Any, Coroutine, Union, cast
+from typing import Any, Coroutine, NoReturn, Union, cast
 
 import httpx
 
@@ -199,6 +199,19 @@ def _missing_rust_bridge_error() -> RuntimeError:
     )
 
 
+def _raise_ocr_input_error(
+    e: ValueError,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+) -> NoReturn:
+    raise litellm.BadRequestError(
+        message=str(e),
+        model=model,
+        llm_provider=custom_llm_provider or "",
+    ) from e
+
+
 async def _run_rust_aocr(
     rust_aocr: RustAocr,
     model: str,
@@ -357,6 +370,10 @@ async def aocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
+        if isinstance(e, ValueError):
+            _raise_ocr_input_error(
+                e, model=model, custom_llm_provider=custom_llm_provider
+            )
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -621,6 +638,10 @@ def ocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
+        if isinstance(e, ValueError):
+            _raise_ocr_input_error(
+                e, model=model, custom_llm_provider=custom_llm_provider
+            )
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,

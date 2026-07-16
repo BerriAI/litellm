@@ -8,6 +8,7 @@ use litellm_core::ocr::transformation::OcrProviderConfig;
 use litellm_core::CoreResult;
 use reqwest::Url;
 use serde_json::{Map, Value};
+use url::Host;
 
 use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
@@ -169,36 +170,38 @@ fn blocked_url_error(url: &Url) -> CoreError {
     ))
 }
 
+fn reject_blocked_literal(ip: IpAddr, url: &Url) -> CoreResult<()> {
+    if is_blocked_ip(ip) {
+        return Err(blocked_url_error(url));
+    }
+    Ok(())
+}
+
+async fn validate_resolved_host(domain: &str, url: &Url) -> CoreResult<()> {
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| blocked_url_error(url))?;
+    let addresses: Vec<_> = tokio::net::lookup_host((domain, port))
+        .await
+        .map_err(|_| blocked_url_error(url))?
+        .collect();
+    if addresses.is_empty() || addresses.iter().any(|address| is_blocked_ip(address.ip())) {
+        return Err(blocked_url_error(url));
+    }
+    Ok(())
+}
+
 async fn validate_safe_fetch_url(url: &Url) -> CoreResult<()> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(blocked_url_error(url));
     }
 
-    let host = url.host_str().ok_or_else(|| blocked_url_error(url))?;
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_blocked_ip(ip) {
-            return Err(blocked_url_error(url));
-        }
-        return Ok(());
+    match url.host() {
+        Some(Host::Ipv4(ip)) => reject_blocked_literal(IpAddr::V4(ip), url),
+        Some(Host::Ipv6(ip)) => reject_blocked_literal(IpAddr::V6(ip), url),
+        Some(Host::Domain(domain)) => validate_resolved_host(domain, url).await,
+        None => Err(blocked_url_error(url)),
     }
-
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| blocked_url_error(url))?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
-    let mut saw_address = false;
-    for address in addresses {
-        saw_address = true;
-        if is_blocked_ip(address.ip()) {
-            return Err(blocked_url_error(url));
-        }
-    }
-    if !saw_address {
-        return Err(blocked_url_error(url));
-    }
-    Ok(())
 }
 
 fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url> {
@@ -214,6 +217,20 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url>
 }
 
 async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)> {
+    fetch_with_redirects(url, |candidate| async move {
+        validate_safe_fetch_url(&candidate).await
+    })
+    .await
+}
+
+async fn fetch_with_redirects<V, Fut>(
+    url: &str,
+    validate: V,
+) -> CoreResult<(Url, reqwest::Response)>
+where
+    V: Fn(Url) -> Fut,
+    Fut: std::future::Future<Output = CoreResult<()>>,
+{
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -222,7 +239,7 @@ async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)
         .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
 
     for _ in 0..MAX_SAFE_FETCH_REDIRECTS {
-        validate_safe_fetch_url(&current_url).await?;
+        validate(current_url.clone()).await?;
         let response = client
             .get(current_url.clone())
             .send()
@@ -258,8 +275,8 @@ fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Core
 async fn read_response_with_limit(
     mut response: reqwest::Response,
     url: &Url,
+    max_bytes: u64,
 ) -> CoreResult<Vec<u8>> {
-    let max_bytes = max_document_download_bytes();
     if let Some(content_length) = response.content_length() {
         enforce_download_size(content_length, max_bytes, url)?;
     } else {
@@ -306,7 +323,8 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         .filter(|value| !value.is_empty())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let bytes = read_response_with_limit(response, &final_url).await?;
+    let bytes =
+        read_response_with_limit(response, &final_url, max_document_download_bytes()).await?;
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)
@@ -504,8 +522,8 @@ pub(super) async fn poll_document_intelligence(
     timeout: Option<Duration>,
 ) -> CoreResult<Value> {
     if !same_origin(operation_url, original_url) {
-        return Err(CoreError::InvalidResponse(
-            "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
+        return Err(CoreError::InvalidRequest(
+            "Azure Document Intelligence: rejected unsafe polling target".to_string(),
         ));
     }
 
@@ -557,6 +575,275 @@ pub(super) async fn poll_document_intelligence(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+
+    struct CountingServer {
+        addr: SocketAddr,
+        connections: Arc<AtomicUsize>,
+        handle: JoinHandle<()>,
+    }
+
+    impl CountingServer {
+        fn connection_count(&self) -> usize {
+            self.connections.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for CountingServer {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn spawn_counting_server(response: Vec<u8>) -> CountingServer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = connections.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut discard = [0u8; 2048];
+                let _ = socket.read(&mut discard).await;
+                let _ = socket.write_all(&response).await;
+                let _ = socket.flush().await;
+            }
+        });
+        CountingServer {
+            addr,
+            connections,
+            handle,
+        }
+    }
+
+    fn http_response(headers: &str, body: &[u8]) -> Vec<u8> {
+        [headers.as_bytes(), body].concat()
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_all_special_use_ranges() {
+        let blocked = [
+            "http://127.0.0.1/x",
+            "http://10.0.0.1/x",
+            "http://172.16.0.1/x",
+            "http://192.168.1.1/x",
+            "http://169.254.169.254/x",
+            "http://100.64.0.1/x",
+            "http://198.18.0.1/x",
+            "http://192.0.2.1/x",
+            "http://[::1]/x",
+            "http://[fd00::1]/x",
+            "http://[fe80::1]/x",
+            "http://[::ffff:169.254.169.254]/x",
+            "http://[::ffff:10.0.0.1]/x",
+            "http://[::ffff:100.64.0.1]/x",
+            "http://[::ffff:198.18.0.1]/x",
+            "ftp://8.8.8.8/x",
+        ];
+        for raw in blocked {
+            let url = Url::parse(raw).unwrap();
+            let error = validate_safe_fetch_url(&url).await.unwrap_err();
+            assert!(
+                matches!(&error, CoreError::InvalidRequest(message) if message.contains("SSRF protection")),
+                "{raw} should be rejected, got {error:?}"
+            );
+        }
+
+        let allowed = Url::parse("http://8.8.8.8/x").unwrap();
+        assert!(validate_safe_fetch_url(&allowed).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn loopback_fetch_rejected_without_connecting() {
+        let server = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n",
+            b"hi",
+        ))
+        .await;
+        let url = format!("http://127.0.0.1:{}/doc.png", server.addr.port());
+        let error = convert_document_url_to_data_uri(json!({
+            "type": "image_url",
+            "image_url": url,
+        }))
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("SSRF protection")),
+            "got {error:?}"
+        );
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn mapped_ipv6_loopback_fetch_rejected_without_connecting() {
+        let server = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n",
+            b"hi",
+        ))
+        .await;
+        let url = format!("http://[::ffff:127.0.0.1]:{}/doc.png", server.addr.port());
+        let error = convert_document_url_to_data_uri(json!({
+            "type": "image_url",
+            "image_url": url,
+        }))
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("SSRF protection")),
+            "got {error:?}"
+        );
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn redirect_to_loopback_rejected_without_connecting_to_target() {
+        let target = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\n",
+            b"secret",
+        ))
+        .await;
+        let location = format!("http://127.0.0.1:{}/internal", target.addr.port());
+        let redirector = spawn_counting_server(
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        )
+        .await;
+        let redirector_port = redirector.addr.port();
+        let start_url = format!("http://127.0.0.1:{redirector_port}/doc.png");
+
+        let validate = move |candidate: Url| async move {
+            if candidate.port() == Some(redirector_port) {
+                return Ok(());
+            }
+            validate_safe_fetch_url(&candidate).await
+        };
+        let error = fetch_with_redirects(&start_url, validate)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("SSRF protection")),
+            "got {error:?}"
+        );
+        assert!(redirector.connection_count() >= 1);
+        assert_eq!(target.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn foreign_operation_location_rejected_without_connecting() {
+        let foreign = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n",
+            b"{}",
+        ))
+        .await;
+        let operation_url = format!("http://127.0.0.1:{}/op", foreign.addr.port());
+        let original_url = format!("http://127.0.0.1:{}/analyze", foreign.addr.port() ^ 1);
+
+        let error = poll_document_intelligence(&operation_url, &original_url, &[], None)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("polling target")),
+            "got {error:?}"
+        );
+        assert_eq!(foreign.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn same_origin_operation_location_polls_target() {
+        let body = br#"{"status":"succeeded","analyzeResult":{}}"#;
+        let server = spawn_counting_server(http_response(
+            &format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()),
+            body,
+        ))
+        .await;
+        let operation_url = format!("http://127.0.0.1:{}/op", server.addr.port());
+
+        let result = poll_document_intelligence(&operation_url, &operation_url, &[], None).await;
+
+        assert!(result.is_ok(), "got {result:?}");
+        assert!(server.connection_count() >= 1);
+    }
+
+    #[tokio::test]
+    async fn poll_timeout_override_is_enforced() {
+        let body = br#"{"status":"running"}"#;
+        let server = spawn_counting_server(http_response(
+            &format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nRetry-After: 0\r\n\r\n",
+                body.len()
+            ),
+            body,
+        ))
+        .await;
+        let operation_url = format!("http://127.0.0.1:{}/op", server.addr.port());
+
+        let error = poll_document_intelligence(
+            &operation_url,
+            &operation_url,
+            &[],
+            Some(Duration::from_millis(150)),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::Network(message) if message.contains("timed out")),
+            "got {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_exceeding_cap_without_content_length_is_rejected() {
+        let server = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            &vec![b'a'; 4096],
+        ))
+        .await;
+        let url_str = format!("http://127.0.0.1:{}/big", server.addr.port());
+        let response = reqwest::Client::new().get(&url_str).send().await.unwrap();
+        assert!(response.content_length().is_none());
+
+        let url = Url::parse(&url_str).unwrap();
+        let error = read_response_with_limit(response, &url, 1024)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("exceeds maximum")),
+            "got {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_within_cap_without_content_length_succeeds() {
+        let server = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            &vec![b'a'; 512],
+        ))
+        .await;
+        let url_str = format!("http://127.0.0.1:{}/small", server.addr.port());
+        let response = reqwest::Client::new().get(&url_str).send().await.unwrap();
+        assert!(response.content_length().is_none());
+
+        let url = Url::parse(&url_str).unwrap();
+        let bytes = read_response_with_limit(response, &url, 1024)
+            .await
+            .unwrap();
+
+        assert_eq!(bytes.len(), 512);
+    }
 
     #[test]
     fn blocks_private_and_metadata_ips() {
