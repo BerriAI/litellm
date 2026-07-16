@@ -74,7 +74,7 @@ def test_build_matrix_any_fail_makes_cell_fail():
         {
             "feature_id": "f",
             "provider": "anthropic",
-            "result": {"status": "fail", "error": "[claude-opus-4-7] timeout"},
+            "result": {"status": "fail", "error": "[claude-opus-4-8] timeout"},
         },
         {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
     ]
@@ -87,7 +87,7 @@ def test_build_matrix_any_fail_makes_cell_fail():
     )
     cell = matrix["features"][0]["providers"]["anthropic"]
     assert cell["status"] == "fail"
-    assert cell["error"] == "[claude-opus-4-7] timeout"
+    assert cell["error"] == "[claude-opus-4-8] timeout"
 
 
 def test_build_matrix_joins_all_failure_errors_in_one_cell():
@@ -110,7 +110,7 @@ def test_build_matrix_joins_all_failure_errors_in_one_cell():
         {
             "feature_id": "f",
             "provider": "anthropic",
-            "result": {"status": "fail", "error": "[claude-opus-4-7] timeout"},
+            "result": {"status": "fail", "error": "[claude-opus-4-8] timeout"},
         },
     ]
     matrix = build_matrix(
@@ -123,7 +123,7 @@ def test_build_matrix_joins_all_failure_errors_in_one_cell():
     cell = matrix["features"][0]["providers"]["anthropic"]
     assert cell["status"] == "fail"
     assert "[claude-haiku-4-5] 429" in cell["error"]
-    assert "[claude-opus-4-7] timeout" in cell["error"]
+    assert "[claude-opus-4-8] timeout" in cell["error"]
 
 
 def test_build_matrix_mixed_pass_and_not_tested_surfaces_pass():
@@ -393,7 +393,7 @@ def test_build_matrix_6x5_grid_matches_published_sample():
 
     feature_ids = [feature["id"] for feature in manifest["features"]]
     providers = manifest["providers"]
-    models = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]
+    models = ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-4-8"]
 
     results = []
     for feature_id in feature_ids:
@@ -440,7 +440,7 @@ def test_build_matrix_1x5_grid_one_failing_model_breaks_cell():
             "provider": "bedrock_invoke",
             "result": {
                 "status": "fail",
-                "error": "[claude-opus-4-7-bedrock-invoke] claude CLI exited 1: throttled",
+                "error": "[claude-opus-4-8-bedrock-invoke] claude CLI exited 1: throttled",
             },
         },
         {
@@ -459,7 +459,7 @@ def test_build_matrix_1x5_grid_one_failing_model_breaks_cell():
     )
     cell = matrix["features"][0]["providers"]["bedrock_invoke"]
     assert cell["status"] == "fail"
-    assert "claude-opus-4-7-bedrock-invoke" in cell["error"]
+    assert "claude-opus-4-8-bedrock-invoke" in cell["error"]
 
 
 def test_build_from_paths_writes_output(tmp_path):

@@ -141,18 +141,37 @@ def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider)
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
+DEFAULT_TIERS = ("haiku-4-5", "sonnet-5", "opus-4-8")
+
+PROVIDER_TIER_OVERRIDES = {
+    "vertex_ai": ("haiku-4-5", "sonnet-4-6", "opus-4-7"),
+    "azure": ("haiku-4-5", "sonnet-4-6", "opus-4-8"),
+}
+
+
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
 def test_per_provider_test_file_imports_and_parametrizes_three_models(
     feature_id, provider
 ):
     """Every test file must reference the three Claude tiers required
-    by the PRD: Haiku 4.5, Sonnet 4.6, Opus 4.7. Implementations may
-    use plain aliases or per-provider-suffixed aliases (e.g.
-    `claude-opus-4-7-bedrock-invoke`), so we check for the tier
-    substrings rather than exact alias names."""
+    by the PRD: small, mid, and large; Haiku 4.5, Sonnet 5, and Opus
+    4.8 as of the 2026-07 tier bump. Implementations may use plain
+    aliases or per-provider-suffixed aliases (e.g.
+    `claude-opus-4-8-bedrock-invoke`), so we check for the tier
+    substrings rather than exact alias names.
+
+    Two provider columns are pinned to older tiers until quota is
+    granted: Vertex AI has 0 TPM for the sonnet-5 / opus-4-8 base
+    models in the suite's project+region (deterministic 429), and
+    Microsoft Foundry has a hard 0 TPM quota limit for Claude Sonnet 5
+    in the suite's subscription, so its sonnet slot stays on
+    sonnet-4-6 while its opus slot runs the deployed opus-4-8. Once
+    quota requests land, flip the overrides here and the matching
+    aliases in `test_config.yaml` and the per-provider test files."""
+    tiers = PROVIDER_TIER_OVERRIDES.get(provider, DEFAULT_TIERS)
     text = (REPO_ROOT / feature_id / f"test_{provider}.py").read_text()
-    for tier in ("haiku-4-5", "sonnet-4-6", "opus-4-7"):
+    for tier in tiers:
         assert (
             tier in text
         ), f"{feature_id}/test_{provider}.py does not reference {tier}"
@@ -179,5 +198,5 @@ def test_azure_test_file_drives_the_proxy(feature_id):
     )
     assert '"status": "not_applicable"' not in text, (
         f"{feature_id}/test_azure.py still reports not_applicable; Microsoft Foundry "
-        "now hosts Claude (Haiku 4.5, Sonnet 4.6, Opus 4.7), so this row must run."
+        "now hosts Claude (Haiku 4.5, Sonnet 4.6, Opus 4.8), so this row must run."
     )

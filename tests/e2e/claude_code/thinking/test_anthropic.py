@@ -36,8 +36,8 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
 ]
 
 # --effort max maps to the largest thinking budget on every supported
@@ -45,15 +45,15 @@ ANTHROPIC_MODELS = [
 # use a CLI flag (rather than the legacy MAX_THINKING_TOKENS env var)
 # because Claude Code 2.x reads thinking config from --effort, not from
 # the env, and silently no-ops the env var. We use `max` rather than
-# `high` because Sonnet 4.6 / Opus 4.7 only emit thinking blocks when
+# `high` because Sonnet 5 / Opus 4.8 only emit thinking blocks when
 # the budget is generous and the prompt is non-trivial.
 THINKING_ARGS = ["--effort", "max"]
 # A puzzle non-trivial enough that Sonnet/Opus actually engage thinking
 # rather than answer from memory. Trivial arithmetic ("3-2=?") is
 # optimized away on the modern tiers and arrives without a thinking
 # block, which would make this test silently false-fail under
-# `--effort max`. Haiku 4.5 thinks even for trivial prompts; Sonnet 4.6
-# and Opus 4.7 only emit thinking when the upstream judges it useful.
+# `--effort max`. Haiku 4.5 thinks even for trivial prompts; Sonnet 5
+# and Opus 4.8 only emit thinking when the upstream judges it useful.
 THINKING_PROMPT = (
     "I have a 3-gallon jug and a 5-gallon jug. How can I measure "
     "exactly 4 gallons of water? Think through the steps carefully."

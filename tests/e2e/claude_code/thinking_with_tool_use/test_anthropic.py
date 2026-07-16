@@ -40,8 +40,8 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
 ]
 
 # Extended thinking on, with a small budget — enough to surface a

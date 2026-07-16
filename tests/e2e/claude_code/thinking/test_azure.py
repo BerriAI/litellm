@@ -8,10 +8,7 @@ that the upstream returned a `thinking` content block.
 Foundry's Claude deployments advertise `supports_reasoning: true` in
 LiteLLM's pricing metadata; the `thinking={"type": "enabled", ...}`
 parameter passes through `azure_ai/claude-*` to Foundry's
-`/anthropic/v1/messages` endpoint unchanged. Note that
-`claude-opus-4-7-preview` documents thinking as not supported on
-Foundry; if that lands, this row may flip to a partial pass and we'll
-re-evaluate.
+`/anthropic/v1/messages` endpoint unchanged.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/e2e/claude_code/conftest.py`:
@@ -40,7 +37,7 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 AZURE_MODELS = [
     "claude-haiku-4-5-azure",
     "claude-sonnet-4-6-azure",
-    "claude-opus-4-7-azure",
+    "claude-opus-4-8-azure",
 ]
 
 THINKING_ARGS = ["--effort", "max"]

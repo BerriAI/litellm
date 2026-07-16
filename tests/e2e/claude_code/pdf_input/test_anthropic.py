@@ -37,8 +37,8 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
 ]
 
 # Smallest valid PDF that renders a single visible word ("PONG"). Built

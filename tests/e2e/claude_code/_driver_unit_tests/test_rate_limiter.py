@@ -60,11 +60,11 @@ from claude_code.rate_limiter import (
     "model, expected",
     [
         ("claude-haiku-4-5", PROVIDER_ANTHROPIC),
-        ("claude-sonnet-4-6", PROVIDER_ANTHROPIC),
-        ("claude-opus-4-7", PROVIDER_ANTHROPIC),
+        ("claude-sonnet-5", PROVIDER_ANTHROPIC),
+        ("claude-opus-4-8", PROVIDER_ANTHROPIC),
         ("claude-haiku-4-5-azure", PROVIDER_AZURE),
-        ("claude-sonnet-4-6-azure", PROVIDER_AZURE),
-        ("claude-opus-4-7-vertex", PROVIDER_VERTEX_AI),
+        ("claude-sonnet-5-azure", PROVIDER_AZURE),
+        ("claude-opus-4-8-vertex", PROVIDER_VERTEX_AI),
         ("claude-haiku-4-5-bedrock-converse", PROVIDER_BEDROCK_CONVERSE),
         ("claude-haiku-4-5-bedrock-invoke", PROVIDER_BEDROCK_INVOKE),
     ],
@@ -87,7 +87,7 @@ def test_infer_provider_rejects_empty_string():
 def test_infer_provider_is_case_insensitive():
     """Aliases in the proxy config sometimes drift between cases; we
     should still route them to the right column."""
-    assert infer_provider("CLAUDE-OPUS-4-7-AZURE") == PROVIDER_AZURE
+    assert infer_provider("CLAUDE-OPUS-4-8-AZURE") == PROVIDER_AZURE
 
 
 # ---------------------------------------------------------------------------

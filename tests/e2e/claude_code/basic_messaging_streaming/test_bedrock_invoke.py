@@ -19,8 +19,8 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-sonnet-5-bedrock-invoke",
+    "claude-opus-4-8-bedrock-invoke",
 ]
 
 

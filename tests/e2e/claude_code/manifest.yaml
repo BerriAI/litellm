@@ -36,7 +36,7 @@ features:
     name: Thinking
     # The single row covers both API shapes Anthropic exposes — manual
     # `thinking: {type: "enabled", budget_tokens: N}` (Haiku 4.5) and
-    # `thinking: {type: "adaptive"}` (Opus 4.7); Sonnet 4.6 supports
+    # `thinking: {type: "adaptive"}` (Opus 4.8); Sonnet 5 supports
     # either and Claude Code picks per model. A break in either
     # transformer surfaces as a red cell because all three tiers must
     # pass for the cell to go green. The row was named
@@ -98,6 +98,6 @@ features:
     # 200k context window so the request can only succeed when the
     # beta header makes it all the way through the proxy to the
     # upstream. Haiku 4.5 is intentionally omitted from this row's
-    # model list (its window is 200k); Sonnet 4.6 and Opus 4.7 are
-    # the only tiers exercised. Costs roughly $4/cell/run --
+    # model list (its window is 200k); the Sonnet and Opus tiers are
+    # the only ones exercised. Costs roughly $4/cell/run --
     # tighten the prompt-token target if pricing changes meaningfully.

@@ -68,12 +68,12 @@ from claude_code.cli_driver import (
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
-# Haiku 4.5 is excluded -- only Sonnet 4.6 and Opus 4.7 support the
+# Haiku 4.5 is excluded -- only Sonnet 5 and Opus 4.8 support the
 # 1M-context beta. See module docstring for the per-cell-aggregator
 # rationale.
 BEDROCK_CONVERSE_MODELS: Sequence[str] = (
-    "claude-sonnet-4-6-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-sonnet-5-bedrock-converse",
+    "claude-opus-4-8-bedrock-converse",
 )
 
 # Beta header that opts an Anthropic-shape model into the 1M context

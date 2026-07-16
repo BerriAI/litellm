@@ -41,7 +41,7 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 AZURE_MODELS = [
     "claude-haiku-4-5-azure",
     "claude-sonnet-4-6-azure",
-    "claude-opus-4-7-azure",
+    "claude-opus-4-8-azure",
 ]
 
 # Minimal 1x1 red PNG, base64-encoded. We embed it directly as the
