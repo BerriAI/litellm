@@ -40,6 +40,11 @@ OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").
 DD_SITE = os.environ.get("DD_SITE", "datadoghq.com").strip()
 DD_API_KEY = os.environ.get("DD_API_KEY", "").strip()
 DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
+# After the first event is searchable, keep watching this long for a late
+# duplicate before the exactly-one assertion: real-DataDog ingestion jitter can
+# make one call's two events searchable tens of seconds apart, and a duplicate
+# that surfaces late IS the bug (LIT-4447), so one poll interval is not enough.
+DD_SETTLE_SECONDS = float(os.environ.get("E2E_DD_SETTLE_SECONDS", "30"))
 
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.

@@ -18,7 +18,14 @@ from dataclasses import dataclass
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_config import DD_API_KEY, DD_APP_KEY, DD_SITE, POLL_INTERVAL, POLL_TIMEOUT
+from e2e_config import (
+    DD_API_KEY,
+    DD_APP_KEY,
+    DD_SETTLE_SECONDS,
+    DD_SITE,
+    POLL_INTERVAL,
+    POLL_TIMEOUT,
+)
 from e2e_http import URL, Headers, Success, post
 
 
@@ -97,17 +104,30 @@ class DdLogsReader:
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """Poll until at least one matching event is searchable (the callback
         flushes in periodic batches and DataDog ingestion adds seconds of lag),
-        then re-read after one more interval so a late duplicate cannot hide
-        from the exactly-one assertion. At the deadline the last result is
-        returned as-is."""
+        then keep re-reading for DD_SETTLE_SECONDS so a late duplicate cannot
+        hide from the exactly-one assertion - real-DataDog jitter can surface
+        one call's two events tens of seconds apart. At the deadline the last
+        result is returned as-is."""
         deadline = time.monotonic() + POLL_TIMEOUT
         while time.monotonic() < deadline:
             events = self.events_for_marker(marker)
             if events:
-                time.sleep(POLL_INTERVAL)
-                return self.events_for_marker(marker)
+                return self._settled_events_for_marker(marker, events)
             time.sleep(POLL_INTERVAL)
         return self.events_for_marker(marker)
+
+    def _settled_events_for_marker(
+        self, marker: str, events: list[DdLogEvent]
+    ) -> list[DdLogEvent]:
+        """Re-read at every poll interval until the settle window closes; a
+        duplicate ends the watch early because more waiting cannot clear it."""
+        settle_deadline = time.monotonic() + DD_SETTLE_SECONDS
+        while time.monotonic() < settle_deadline:
+            time.sleep(POLL_INTERVAL)
+            events = self.events_for_marker(marker)
+            if len(events) > 1:
+                return events
+        return events
 
 
 def build_dd_logs_reader() -> DdLogsReader:
