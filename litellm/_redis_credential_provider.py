@@ -1,9 +1,11 @@
 import asyncio
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
+
+from litellm.secret_managers.get_azure_ad_token_provider import AzureTokenCredential
 
 # Azure AD scope for Redis Cache for Azure.
 AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
@@ -115,7 +117,7 @@ class AzureADCredentialProvider(CredentialProvider):
     fail authentication after the initial token expired (~1 hour TTL).
     """
 
-    def __init__(self, credential: Any, username: Optional[str] = None) -> None:
+    def __init__(self, credential: AzureTokenCredential, username: Optional[str] = None) -> None:
         self._credential = credential
         self._username = username
 

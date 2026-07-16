@@ -295,12 +295,8 @@ async def test_recreate_prisma_client_recreates_both_writer_and_reader():
     with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
         await routing.recreate_prisma_client("writer-url", http_client=None)
 
-    writer.recreate_prisma_client.assert_awaited_once_with(
-        "writer-url", http_client=None, expected_generation=None
-    )
-    reader.recreate_prisma_client.assert_awaited_once_with(
-        "reader-url", http_client=None
-    )
+    writer.recreate_prisma_client.assert_awaited_once_with("writer-url", http_client=None, expected_generation=None)
+    reader.recreate_prisma_client.assert_awaited_once_with("reader-url", http_client=None)
     assert routing.reader_unavailable is False
 
 
@@ -335,9 +331,7 @@ async def test_recreate_degrades_reader_if_reader_recreate_fails():
     writer.recreate_prisma_client = AsyncMock()
     reader = MagicMock()
     reader.iam_token_db_auth = False
-    reader.recreate_prisma_client = AsyncMock(
-        side_effect=RuntimeError("reader still down")
-    )
+    reader.recreate_prisma_client = AsyncMock(side_effect=RuntimeError("reader still down"))
 
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
 
@@ -390,9 +384,7 @@ async def test_recreate_iam_reader_refreshes_token():
     await routing.recreate_prisma_client("writer-url")
 
     reader.get_rds_iam_token.assert_called_once()
-    reader.recreate_prisma_client.assert_awaited_once_with(
-        "postgresql://u:fresh@h:5432/db", http_client=None
-    )
+    reader.recreate_prisma_client.assert_awaited_once_with("postgresql://u:fresh@h:5432/db", http_client=None)
     assert routing.reader_unavailable is False
 
 
@@ -479,9 +471,7 @@ async def test_writer_recreate_passes_http_client_through(monkeypatch):
 
     writer = PrismaWrapper(original_prisma=MagicMock(), iam_token_db_auth=False)
     sentinel_http = object()
-    await writer.recreate_prisma_client(
-        "postgresql://u:p@h:5432/db", http_client=sentinel_http
-    )
+    await writer.recreate_prisma_client("postgresql://u:p@h:5432/db", http_client=sentinel_http)
 
     assert captured_kwargs == {"http": sentinel_http}
 
@@ -559,14 +549,8 @@ async def test_iam_refresh_logs_carry_log_prefix(caplog):
 
     messages = [r.getMessage() for r in caplog.records]
     # Both start and stop notifications carry the prefix.
-    assert any(
-        m.startswith("[reader] Started RDS IAM token proactive refresh")
-        for m in messages
-    )
-    assert any(
-        m.startswith("[reader] Stopped RDS IAM token refresh background task")
-        for m in messages
-    )
+    assert any(m.startswith("[reader] Started RDS IAM token proactive refresh") for m in messages)
+    assert any(m.startswith("[reader] Stopped RDS IAM token refresh background task") for m in messages)
 
 
 def test_get_rds_iam_token_returns_none_when_iam_disabled():
@@ -697,9 +681,7 @@ def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch, unset
         "port": "5432",
         "user": "litellm",
     }
-    assert new_url == (
-        "postgresql://litellm:WRITER-TOKEN@writer.aurora.local:5432/litellm?schema=public"
-    )
+    assert new_url == ("postgresql://litellm:WRITER-TOKEN@writer.aurora.local:5432/litellm?schema=public")
     # Writer updates its own env var (DATABASE_URL by default), not the reader's.
     assert os.environ["DATABASE_URL"] == new_url
 
@@ -750,9 +732,7 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
         "user": "lit",
     }
     assert new_url is not None
-    assert new_url.startswith(
-        "postgresql://lit:FRESH-TOKEN@reader.aurora.local:5432/litellm"
-    )
+    assert new_url.startswith("postgresql://lit:FRESH-TOKEN@reader.aurora.local:5432/litellm")
     # The reader updates its OWN env var; writer's DATABASE_URL is left alone.
     assert os.environ["DATABASE_URL_READ_REPLICA"] == new_url
     assert os.environ["DATABASE_URL"] == "writer-url-untouched"
@@ -786,13 +766,9 @@ async def test_reader_recreate_uses_datasource_override(monkeypatch):
         recreate_uses_datasource=True,
     )
 
-    await reader.recreate_prisma_client(
-        "postgresql://u:newtoken@h:5432/db", http_client=None
-    )
+    await reader.recreate_prisma_client("postgresql://u:newtoken@h:5432/db", http_client=None)
 
-    assert captured_kwargs == {
-        "datasource": {"url": "postgresql://u:newtoken@h:5432/db"}
-    }
+    assert captured_kwargs == {"datasource": {"url": "postgresql://u:newtoken@h:5432/db"}}
 
 
 @pytest.mark.asyncio
@@ -820,16 +796,12 @@ async def test_writer_recreate_does_not_use_datasource(monkeypatch):
         iam_token_db_auth=True,
     )
 
-    await writer.recreate_prisma_client(
-        "postgresql://u:newtoken@h:5432/db", http_client=None
-    )
+    await writer.recreate_prisma_client("postgresql://u:newtoken@h:5432/db", http_client=None)
 
     assert "datasource" not in captured_kwargs
 
 
-def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
-    monkeypatch, caplog
-):
+def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(monkeypatch, caplog):
     """A transient AWS STS error (or any other failure) during the reader
     IAM token mint must NOT abort proxy startup. The reader is opt-in, so
     `PrismaClient.__init__` should log a warning and fall back to the
@@ -862,9 +834,7 @@ def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
         raise RuntimeError("simulated AWS STS hiccup")
 
     fake_iam_module.generate_iam_auth_token = boom
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy.auth.rds_iam_token", fake_iam_module
-    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_iam_module)
 
     from litellm.proxy.utils import PrismaClient
 
@@ -879,9 +849,45 @@ def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
     assert isinstance(client.db, PrismaWrapper)
     assert not isinstance(client.db, RoutingPrismaWrapper)
     # And the operator gets a clear warning.
-    assert any(
-        "Failed to initialize read replica Prisma client" in r.getMessage()
-        for r in caplog.records
+    assert any("Failed to initialize read replica Prisma client" in r.getMessage() for r in caplog.records)
+
+
+def test_prisma_client_configures_azure_token_refresh_for_writer_and_reader(monkeypatch):
+    from litellm.proxy.db.prisma_client import DatabaseTokenAuth
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://reader%40example.com@reader.postgres.database.azure.com:5432/litellm",
+    )
+
+    class FakePrisma:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_prisma_module = MagicMock()
+    fake_prisma_module.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
+
+    with patch(
+        "litellm.proxy.auth.azure_postgres_token.generate_azure_postgres_auth_token",
+        return_value="AZURE_TOKEN",
+    ):
+        from litellm.proxy.utils import PrismaClient
+
+        client = PrismaClient(
+            database_url="postgresql://writer@writer.postgres.database.azure.com:5432/litellm",
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert isinstance(client.db, RoutingPrismaWrapper)
+    assert client.db.writer.database_token_auth == DatabaseTokenAuth.AZURE_ENTRA
+    assert client.db.reader.database_token_auth == DatabaseTokenAuth.AZURE_ENTRA
+    assert (
+        os.environ["DATABASE_URL_READ_REPLICA"]
+        == "postgresql://reader%40example.com:AZURE_TOKEN@reader.postgres.database.azure.com:5432/litellm"
     )
 
 
@@ -940,10 +946,7 @@ async def test_connect_logs_writer_degradation(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await routing.connect()
 
-    assert any(
-        "Failed to connect to primary (writer) DB" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any("Failed to connect to primary (writer) DB" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -974,9 +977,7 @@ async def test_recreate_keeps_writer_unavailable_when_writer_recreate_fails():
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
     writer = MagicMock()
-    writer.recreate_prisma_client = AsyncMock(
-        side_effect=RuntimeError("primary still down")
-    )
+    writer.recreate_prisma_client = AsyncMock(side_effect=RuntimeError("primary still down"))
     reader = MagicMock()
     reader.iam_token_db_auth = False
     reader.recreate_prisma_client = AsyncMock()
