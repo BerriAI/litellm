@@ -1797,6 +1797,8 @@ async def _user_api_key_auth_builder(
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,
+                                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                                    entity_id=f"{valid_token.user_id}:{valid_token.team_id}",
                                 )
 
             # Check 3. If token is expired
