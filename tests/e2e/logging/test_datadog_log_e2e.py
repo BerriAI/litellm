@@ -12,11 +12,13 @@ payload missing the cost all fail here.
 Both halves of the contract are asserted: the recorded state (the proxy
 reports the DataDogLogger callback active via /health/readiness/details) and
 the enforced behavior (the event at the intake, with the cost cross-checked
-exactly against the x-litellm-response-cost header of the very response the
-caller received).
+against the x-litellm-response-cost header of the very response the caller
+received).
 """
 
 from __future__ import annotations
+
+import math
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -89,7 +91,10 @@ def _assert_exactly_one_event(
     assert outcome.response_cost is not None and outcome.response_cost > 0, (
         f"the response must report x-litellm-response-cost, got {outcome.response_cost!r}"
     )
-    assert abs(payload.response_cost - outcome.response_cost) < 1e-12, (
+    # Relative tolerance, not bit-equality: the cost round-trips through
+    # DataDog's attribute indexing, whose float serialization may drift in the
+    # last bits; 9 significant digits still catches any real cost discrepancy.
+    assert math.isclose(payload.response_cost, outcome.response_cost, rel_tol=1e-9), (
         f"payload response_cost {payload.response_cost} must equal the response header "
         f"cost {outcome.response_cost}"
     )
