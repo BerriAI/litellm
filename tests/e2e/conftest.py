@@ -15,11 +15,12 @@ shared fixtures build on it.
 
 import functools
 import sys
+from collections.abc import Generator, Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 import requests
+from pluggy import Result
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
@@ -86,7 +87,9 @@ def pytest_runtest_call(item: pytest.Item) -> None:
 
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
-def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]):
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[object]
+) -> Generator[None, Result[object], None]:
     """Emit one structured E2E_RESULT line per finished test for Loki/Grafana.
 
     Status-history panels should aggregate by package (and optional covers), not
@@ -94,14 +97,16 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]):
     """
     outcome = yield
     report = outcome.get_result()
+    if not isinstance(report, pytest.TestReport):
+        return
     from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
 
     result = result_from_pytest(
-        nodeid=report.nodeid,
-        when=report.when,
-        failed=report.failed,
-        skipped=report.skipped,
-        passed=report.passed,
+        nodeid=str(report.nodeid),
+        when=str(report.when),
+        failed=bool(report.failed),
+        skipped=bool(report.skipped),
+        passed=bool(report.passed),
         duration_seconds=float(report.duration),
         covers=covers_from_item(item),
     )

@@ -15,9 +15,10 @@ Drill-down uses node_id / covers in Explore, not status-history cardinality.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 Outcome = Literal["passed", "failed", "error", "skipped", "xfailed", "xpassed"]
 
@@ -30,6 +31,16 @@ class E2EResult:
     duration_ms: int
     node_id: str
     covers: tuple[str, ...]
+
+
+@runtime_checkable
+class _MarkerArgs(Protocol):
+    args: Sequence[object]
+
+
+@runtime_checkable
+class _ItemWithCovers(Protocol):
+    def iter_markers(self, name: str) -> Iterable[object]: ...
 
 
 def package_from_nodeid(nodeid: str) -> str:
@@ -48,15 +59,17 @@ def file_from_nodeid(nodeid: str) -> str:
 
 def covers_from_item(item: object) -> tuple[str, ...]:
     """Read @pytest.mark.covers cell ids from a pytest Item."""
-    iter_markers = getattr(item, "iter_markers", None)
-    if iter_markers is None:
+    if not isinstance(item, _ItemWithCovers):
         return ()
-    ids: list[str] = []
-    for marker in iter_markers(name="covers"):
-        for arg in marker.args:
-            if isinstance(arg, str) and arg:
-                ids.append(arg)
-    return tuple(dict.fromkeys(ids))
+    return tuple(
+        dict.fromkeys(
+            arg
+            for marker in item.iter_markers(name="covers")
+            if isinstance(marker, _MarkerArgs)
+            for arg in marker.args
+            if isinstance(arg, str) and arg
+        )
+    )
 
 
 def outcome_from_report(when: str, failed: bool, skipped: bool, passed: bool) -> Outcome | None:
