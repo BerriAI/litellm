@@ -3222,6 +3222,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
         "_litellm_rate_limit_descriptors",
