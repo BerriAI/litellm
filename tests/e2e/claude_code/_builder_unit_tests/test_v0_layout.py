@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = REPO_ROOT / "manifest.yaml"
+SUITE_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = SUITE_ROOT / "manifest.yaml"
 
 # The PRD's "Features in v0" section, in row order.
 EXPECTED_FEATURE_IDS = [
@@ -90,14 +90,14 @@ def test_manifest_every_feature_has_human_readable_name(manifest):
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 def test_feature_directory_exists(feature_id):
-    feature_dir = REPO_ROOT / feature_id
+    feature_dir = SUITE_ROOT / feature_id
     assert feature_dir.is_dir(), f"missing feature directory: {feature_dir}"
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
 def test_per_provider_test_file_exists(feature_id, provider):
-    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    test_file = SUITE_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
@@ -106,7 +106,7 @@ def test_feature_directory_has_init_file(feature_id):
     """Each feature directory needs an __init__.py so pytest collects
     the per-provider test files as a package — matches the layout
     established by `basic_messaging_non_streaming/`."""
-    init_file = REPO_ROOT / feature_id / "__init__.py"
+    init_file = SUITE_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
 
 
@@ -117,7 +117,7 @@ def test_feature_directory_has_init_file(feature_id):
 # a broken post-v0 directory still fails CI.
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
 def test_every_manifest_feature_has_directory(feature_id):
-    feature_dir = REPO_ROOT / feature_id
+    feature_dir = SUITE_ROOT / feature_id
     assert feature_dir.is_dir(), (
         f"manifest declares {feature_id!r} but {feature_dir} is missing — "
         "feature_id MUST match its on-disk directory (see manifest.yaml header)."
@@ -126,7 +126,7 @@ def test_every_manifest_feature_has_directory(feature_id):
 
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
 def test_every_manifest_feature_has_init_file(feature_id):
-    init_file = REPO_ROOT / feature_id / "__init__.py"
+    init_file = SUITE_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
 
 
@@ -137,7 +137,7 @@ def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider)
     backed by a per-provider test file. Without this check, a missing
     file silently becomes a `not_tested` cell in the published matrix
     rather than a CI failure surfacing the layout drift."""
-    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    test_file = SUITE_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
@@ -171,7 +171,7 @@ def test_azure_test_file_drives_the_proxy(feature_id):
     that wraps them — both shapes drive the proxy, and we don't want
     this layout pin to block legitimate de-duplication of test bodies.
     """
-    text = (REPO_ROOT / feature_id / "test_azure.py").read_text()
+    text = (SUITE_ROOT / feature_id / "test_azure.py").read_text()
     assert "run_claude" in text or "run_basic_messaging_cell" in text, (
         f"{feature_id}/test_azure.py must drive the claude CLI via run_claude() "
         "or a shared helper that wraps it; the not_applicable stub was removed "

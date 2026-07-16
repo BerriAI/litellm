@@ -66,6 +66,23 @@ configs:
             model: openai/text-embedding-3-small
             api_key: os.environ/OPENAI_API_KEY
 
+        # v2 auto-router with the LLM complexity classifier. SIMPLE stays on the
+        # openai backend; every higher tier routes to the anthropic backend, so the
+        # served deployment (read back from the spend log's model) reveals whether
+        # the LLM classifier actually ran or silently fell back to heuristic scoring.
+        - model_name: complexity-smart-router
+          litellm_params:
+            model: auto_router/complexity_router
+            complexity_router_config:
+              classifier_type: llm
+              classifier_llm_config:
+                model: gpt-5.5
+              tiers:
+                SIMPLE: gpt-5.5
+                MEDIUM: claude-haiku-4-5
+                COMPLEX: claude-haiku-4-5
+                REASONING: claude-haiku-4-5
+
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
