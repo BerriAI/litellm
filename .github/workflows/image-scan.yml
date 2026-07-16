@@ -51,6 +51,13 @@ jobs:
       - name: Build runtime image
         run: docker build -f docker/Dockerfile.non_root -t litellm-image-scan:${{ github.sha }} .
 
+      - name: Assert prisma migration assets ship at the source path
+        run: |
+          docker run --rm --entrypoint sh litellm-image-scan:${{ github.sha }} -c '
+            test -f /app/litellm-proxy-extras/litellm_proxy_extras/schema.prisma &&
+            find /app/litellm-proxy-extras/litellm_proxy_extras/migrations -name migration.sql | grep -q .
+          '
+
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
       # vendored node engine) that osv-scan cannot see. osv-scan stays the fast
