@@ -163,14 +163,47 @@ async def test_does_not_skip_when_reservation_covers_a_different_counter():
 
 
 @pytest.mark.asyncio
-async def test_team_keys_skip_personal_budget():
+async def test_team_keys_enforce_personal_budget_by_default():
+    """With the default policy (`skip_user_budget_on_team_key` unset/false) a
+    team key must still enforce the user's personal budget, matching
+    `common_checks` and budget reservation. Regression for #33323."""
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = _make_user_api_key_auth(
         user_max_budget=10.0,
         team_id="team-1",
     )
 
-    with patch(
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=20.0),
+    ) as mock_get_spend:
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    mock_get_spend.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_keys_skip_personal_budget_when_flag_set():
+    """`skip_user_budget_on_team_key=True` restores the legacy behavior where a
+    team key skips the user's personal budget."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(
+        user_max_budget=10.0,
+        team_id="team-1",
+    )
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"skip_user_budget_on_team_key": True},
+        clear=True,
+    ), patch(
         "litellm.proxy.proxy_server.get_current_spend",
         new=AsyncMock(return_value=999.0),
     ) as mock_get_spend:
@@ -183,6 +216,53 @@ async def test_team_keys_skip_personal_budget():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_team_key_unaffected_by_skip_flag():
+    """The `skip_user_budget_on_team_key` flag only exempts team keys; a
+    non-team key must still be enforced even when the flag is set."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0, team_id=None)
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"skip_user_budget_on_team_key": True},
+        clear=True,
+    ), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=20.0),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_spend_lookup_failure_fails_closed():
+    """A spend-lookup infrastructure error (e.g. cache down) must propagate so
+    the hook fails closed instead of silently admitting the request.
+    Regression for #33323."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0, team_id=None)
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(side_effect=RuntimeError("cache down")),
+    ):
+        with pytest.raises(RuntimeError, match="cache down"):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
 
 
 @pytest.mark.asyncio
