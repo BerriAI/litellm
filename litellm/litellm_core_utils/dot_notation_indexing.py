@@ -79,11 +79,12 @@ def get_nested_value(data: Dict[str, Any], key_path: str, default: Optional[T] =
 
 
 def _parse_path_segments(path: str) -> list[str]:
-    """
+    r"""
     Parse a JSONPath-like string into segments using regex.
 
     Handles:
     - Dot notation: "a.b.c" → ["a", "b", "c"]
+    - Escaped dots: r"a.b\.c" → ["a", "b.c"]
     - Array wildcards: "a[*].b" → ["a", "[*]", "b"]
     - Array indices: "a[0].b" → ["a", "[0]", "b"]
 
