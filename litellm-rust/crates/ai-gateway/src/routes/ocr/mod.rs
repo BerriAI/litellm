@@ -243,12 +243,21 @@ mod tests {
     }
 
     fn app_with_deployment(api_base: &str) -> axum::Router {
+        app_with_params("mistral/mistral-ocr-latest", None, api_base)
+    }
+
+    fn app_with_params(
+        model: &str,
+        custom_llm_provider: Option<&str>,
+        api_base: &str,
+    ) -> axum::Router {
         let router = ModelRouter::new(vec![Deployment {
             model_name: "rust-ocr-mistral".to_string(),
             litellm_params: LiteLLMParams {
-                model: "mistral/mistral-ocr-latest".to_string(),
+                model: model.to_string(),
                 api_key: Some("sk-upstream".to_string()),
                 api_base: Some(api_base.to_string()),
+                custom_llm_provider: custom_llm_provider.map(str::to_string),
             },
         }]);
         let state = AppState {
@@ -301,6 +310,36 @@ mod tests {
                 "upstream must receive the deployment credential: {upstream_request}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn explicit_custom_llm_provider_resolves_model_without_prefix() {
+        let (upstream, upstream_handle) = spawn_mock_upstream().await;
+        let addr = serve(app_with_params(
+            "mistral-ocr-latest",
+            Some("mistral"),
+            &upstream,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/v1/ocr"))
+            .bearer_auth(MASTER_KEY)
+            .json(&serde_json::json!({
+                "model": "rust-ocr-mistral",
+                "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
+            }))
+            .send()
+            .await
+            .expect("request sent");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: Value = response.json().await.expect("json body");
+        assert_eq!(body["object"], "ocr");
+        assert_eq!(body["model"], "rust-ocr-mistral");
+
+        let upstream_request = upstream_handle.await.expect("upstream served");
+        assert!(upstream_request.starts_with("POST"), "{upstream_request}");
     }
 
     #[tokio::test]

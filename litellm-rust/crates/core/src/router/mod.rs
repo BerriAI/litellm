@@ -69,6 +69,7 @@ mod tests {
                 model: model.to_string(),
                 api_key: None,
                 api_base: None,
+                custom_llm_provider: None,
             },
         }
     }

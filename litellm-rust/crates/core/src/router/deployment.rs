@@ -12,6 +12,8 @@ pub struct LiteLLMParams {
     pub api_key: Option<String>,
     #[serde(default)]
     pub api_base: Option<String>,
+    #[serde(default)]
+    pub custom_llm_provider: Option<String>,
 }
 
 /// One entry of the `model_list`, mirroring Python's deployment dict.
@@ -39,6 +41,20 @@ mod tests {
         assert_eq!(
             deployment.litellm_params.api_base.as_deref(),
             Some("https://x")
+        );
+        assert_eq!(deployment.litellm_params.custom_llm_provider, None);
+    }
+
+    #[test]
+    fn deserializes_explicit_custom_llm_provider() {
+        let entry = r#"{
+            "model_name": "rust-ocr-mistral",
+            "litellm_params": {"model": "mistral-ocr-latest", "custom_llm_provider": "mistral"}
+        }"#;
+        let deployment: Deployment = serde_json::from_str(entry).expect("valid entry");
+        assert_eq!(
+            deployment.litellm_params.custom_llm_provider.as_deref(),
+            Some("mistral")
         );
     }
 }

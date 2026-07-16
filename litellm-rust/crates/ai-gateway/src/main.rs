@@ -156,6 +156,7 @@ fn build_router_from_env() -> Router {
             model,
             api_key,
             api_base: None,
+            custom_llm_provider: None,
         },
     };
     Router::new(vec![deployment])

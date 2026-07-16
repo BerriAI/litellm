@@ -39,6 +39,23 @@ Not allowed in `core`:
 Python owns rollout state and fallback while Rust is being introduced. Rust
 paths must be off by default until parity tests prove equivalence with Python.
 
+## Port parity: mirror Python, do not hand-roll
+
+This workspace ports LiteLLM's Python behavior; it does not reinvent it. When
+Python already centralizes a piece of logic, mirror that abstraction and its field names;
+do not reimplement a local shortcut that diverges from Python. See the
+`porting-python-to-rust` skill and always apply it when adding or changing a Rust
+route, provider transform, router, or config resolution.
+
+Provider resolution is the canonical rule: a deployment's provider comes from its
+`custom_llm_provider` (in `litellm_params`), resolved through
+`litellm_core::get_llm_provider` (the pure port of `litellm.get_llm_provider`).
+Never hand-roll `model.split('/')` in a route (no bespoke `split_provider`): that
+ignores the explicit `custom_llm_provider` and drifts from Python. `LiteLLMParams`
+carries `custom_llm_provider` so it deserializes straight from the proxy
+`model_list`. If `get_llm_provider` lacks a Python behavior you need, extend that
+one helper to match Python rather than branching in the caller.
+
 ## Production Bar
 
 Rust code in this workspace is held to a strict parity and robustness bar from
