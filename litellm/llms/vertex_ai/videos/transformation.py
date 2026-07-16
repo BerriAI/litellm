@@ -97,6 +97,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         "720x1280": "9:16",
         "1080x1920": "9:16",
     }
+    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: dict[str, str] = {
+        "1280x720": "720p",
+        "1920x1080": "1080p",
+        "720x1280": "720p",
+        "1080x1920": "1080p",
+    }
 
     def __init__(self):
         BaseVideoConfig.__init__(self)
@@ -140,8 +146,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
-        - size → resolution when inferable ("1280x720"/"720x1280" → "720p",
-          "1920x1080"/"1080x1920" → "1080p"); skipped if ``resolution`` is already set
+        - size → resolution for Veo 3 models when inferable
+          ("1280x720"/"720x1280" → "720p", "1920x1080"/"1080x1920" → "1080p");
+          skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
         mapped_params: Final[dict[str, Any]] = {}
@@ -168,10 +175,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                     mapped_params["aspectRatio"] = aspect_ratio
                 nested_params: Final = video_create_optional_params.get("parameters")
                 has_resolution = "resolution" in mapped_params or (
-                    isinstance(nested_params, dict)
-                    and nested_params.get("resolution") is not None
+                    isinstance(nested_params, dict) and nested_params.get("resolution") is not None
                 )
-                if not has_resolution:
+                supports_resolution = model.removeprefix("vertex_ai/").startswith("veo-3.")
+                if supports_resolution and not has_resolution:
                     inferred_resolution = self._convert_size_to_resolution(size)
                     if inferred_resolution is not None:
                         mapped_params["resolution"] = inferred_resolution
@@ -201,18 +208,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         return self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO.get(size, "16:9")
 
     def _convert_size_to_resolution(self, size: str) -> str | None:
-        if not size or size not in self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO:
-            return None
-        try:
-            width, height = size.split("x", 1)
-            smaller_edge = min(int(width), int(height))
-        except (ValueError, TypeError):
-            return None
-        if smaller_edge == 720:
-            return "720p"
-        if smaller_edge == 1080:
-            return "1080p"
-        return None
+        return self._OPENAI_VIDEO_SIZE_TO_RESOLUTION.get(size)
 
     def validate_environment(
         self,
