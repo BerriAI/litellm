@@ -337,6 +337,87 @@ def test_video_input_tokens_gemini_omni_flash_preview():
     )
 
 
+def test_audio_input_tokens_gemini_priced_at_text_rate():
+    """Regression for LIT-4474: audio prompt tokens must fall back to the text input rate.
+
+    gemini-3-pro-preview declares supports_audio_input but has no input_cost_per_audio_token,
+    so audio tokens were previously billed at $0.
+    """
+    model = "gemini-3-pro-preview"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[f"gemini/{model}"]
+    assert model_cost_map.get("input_cost_per_audio_token") is None
+
+    text_tokens = 1000
+    audio_tokens = 5000
+    prompt_tokens = text_tokens + audio_tokens
+    usage = Usage(
+        completion_tokens=0,
+        prompt_tokens=prompt_tokens,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            audio_tokens=audio_tokens,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens,
+        10,
+    )
+    assert round(prompt_cost, 10) != round(
+        model_cost_map["input_cost_per_token"] * text_tokens,
+        10,
+    )
+
+
+def test_audio_video_input_tokens_gemini_use_above_200k_tier():
+    """Regression for LIT-4474: audio/video fallbacks must honor the >200k long-context tier.
+
+    Falling back to the raw un-tiered input_cost_per_token undercounts when the request crosses
+    the 200k boundary; audio and video should be priced at input_cost_per_token_above_200k_tokens
+    like text.
+    """
+    model = "gemini-3-pro-preview"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[f"gemini/{model}"]
+    hi_rate = model_cost_map["input_cost_per_token_above_200k_tokens"]
+    assert hi_rate != model_cost_map["input_cost_per_token"]
+
+    text_tokens = 100000
+    audio_tokens = 60000
+    video_tokens = 80000
+    prompt_tokens = text_tokens + audio_tokens + video_tokens
+    usage = Usage(
+        completion_tokens=0,
+        prompt_tokens=prompt_tokens,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            audio_tokens=audio_tokens,
+            video_tokens=video_tokens,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    assert round(prompt_cost, 10) == round(hi_rate * prompt_tokens, 10)
+
+
 def test_video_tokens_fallback_to_base_cost():
     """Video output tokens fall back to the base output rate when output_cost_per_video_token is not set."""
     from unittest.mock import patch

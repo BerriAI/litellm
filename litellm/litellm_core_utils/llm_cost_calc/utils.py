@@ -581,7 +581,10 @@ def _calculate_input_cost(
     ### AUDIO COST
     if prompt_tokens_details["audio_tokens"]:
         audio_cost_key = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
+        if model_info.get(audio_cost_key) is None:
+            prompt_cost += float(prompt_tokens_details["audio_tokens"]) * prompt_base_cost
+        else:
+            prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
 
     ### IMAGE TOKEN COST
     if prompt_tokens_details["image_tokens"]:
@@ -596,8 +599,11 @@ def _calculate_input_cost(
     if prompt_tokens_details["video_tokens"]:
         video_token_cost_key = "input_cost_per_video_token"
         if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
+            prompt_cost += float(prompt_tokens_details["video_tokens"]) * prompt_base_cost
+        else:
+            prompt_cost += calculate_cost_component(
+                model_info, video_token_cost_key, prompt_tokens_details["video_tokens"]
+            )
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
