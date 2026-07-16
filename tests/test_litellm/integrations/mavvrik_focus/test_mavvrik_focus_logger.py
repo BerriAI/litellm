@@ -1,15 +1,21 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import polars as pl
 import pytest
 
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
-from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import MavvrikFocusLogger
+from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+    MavvrikFocusLogger,
+    _with_token_tags,
+)
 
 
 class _Frame:
     def __init__(self, *, empty: bool) -> None:
         self._empty = empty
+        self.columns: list = []
 
     def __len__(self) -> int:
         return 0 if self._empty else 1
@@ -65,3 +71,35 @@ async def test_export_window_delivers_empty_payload_for_empty_export(
         time_window=window,
         filename="metrics.csv",
     )
+
+
+def test_with_token_tags_merges_prompt_and_completion_tokens() -> None:
+    data = pl.DataFrame({"prompt_tokens": [57], "completion_tokens": [753]})
+    normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})
+
+    result = _with_token_tags(data, normalized)
+
+    tags = json.loads(result["Tags"][0])
+    assert tags == {
+        "model": "azure/gpt-4o-mini",
+        "prompt_tokens": "57",
+        "completion_tokens": "753",
+    }
+
+
+def test_with_token_tags_noop_when_token_columns_absent() -> None:
+    data = pl.DataFrame({"model": ["azure/gpt-4o-mini"]})
+    normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})
+
+    result = _with_token_tags(data, normalized)
+
+    assert result is normalized
+
+
+def test_with_token_tags_noop_on_row_count_mismatch() -> None:
+    data = pl.DataFrame({"prompt_tokens": [57, 12], "completion_tokens": [753, 40]})
+    normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})
+
+    result = _with_token_tags(data, normalized)
+
+    assert result is normalized
