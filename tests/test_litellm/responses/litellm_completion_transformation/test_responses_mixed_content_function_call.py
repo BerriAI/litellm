@@ -58,10 +58,8 @@ def test_mixed_content_function_call_emits_tool_calls():
     into the assistant message's `tool_calls`, with text parts preserved as
     content. The follow-up function_call_output must still be paired by
     matching call_id."""
-    messages = (
-        LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-            input=_make_input()
-        )
+    messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=_make_input()
     )
 
     roles = [_get(m, "role") for m in messages]
@@ -70,8 +68,7 @@ def test_mixed_content_function_call_emits_tool_calls():
     assistant_msg = next(m for m in messages if _get(m, "role") == "assistant")
     tool_calls = _get(assistant_msg, "tool_calls") or []
     assert len(tool_calls) == 1, (
-        f"expected exactly 1 tool_call lifted from mixed content, got "
-        f"{len(tool_calls)} (assistant={assistant_msg})"
+        f"expected exactly 1 tool_call lifted from mixed content, got {len(tool_calls)} (assistant={assistant_msg})"
     )
     tc = tool_calls[0]
     tc_id = _get(tc, "id")
@@ -88,9 +85,7 @@ def test_mixed_content_function_call_emits_tool_calls():
     # is still reachable.
     content = _get(assistant_msg, "content")
     if isinstance(content, list):
-        text_blob = "".join(
-            (p.get("text") if isinstance(p, dict) else "") or "" for p in content
-        )
+        text_blob = "".join((p.get("text") if isinstance(p, dict) else "") or "" for p in content)
     else:
         text_blob = content or ""
     assert "ok" in text_blob, f"text part lost: content={content!r}"
@@ -99,10 +94,8 @@ def test_mixed_content_function_call_emits_tool_calls():
 def test_mixed_content_pairs_with_function_call_output():
     """The matching `function_call_output` (a `role=tool` message after the
     transformation) must be present and reference the same call_id."""
-    messages = (
-        LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-            input=_make_input()
-        )
+    messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=_make_input()
     )
 
     tool_msgs = [m for m in messages if _get(m, "role") == "tool"]
@@ -116,15 +109,13 @@ def test_mixed_content_pairs_with_function_call_output():
 def test_text_only_assistant_unchanged():
     """Regression guard — a text-only assistant.content list must not gain a
     tool_calls entry from the new code path."""
-    messages = (
-        LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-            input=[
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "ok"}],
-                }
-            ]
-        )
+    messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=[
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+            }
+        ]
     )
     assert len(messages) == 1
     assert _get(messages[0], "role") == "assistant"

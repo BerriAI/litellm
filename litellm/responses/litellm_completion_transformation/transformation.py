@@ -909,10 +909,7 @@ class LiteLLMCompletionResponsesConfig:
             if (
                 role == "assistant"
                 and isinstance(content, list)
-                and any(
-                    isinstance(part, dict) and part.get("type") == "function_call"
-                    for part in content
-                )
+                and any(isinstance(part, dict) and part.get("type") == "function_call" for part in content)
             ):
                 return LiteLLMCompletionResponsesConfig._transform_responses_api_mixed_assistant_content_to_chat_completion_message(
                     content_list=content
@@ -1174,8 +1171,10 @@ class LiteLLMCompletionResponsesConfig:
 
         transformed_content: Any = None
         if non_call_parts:
-            transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                non_call_parts
+            transformed_content = (
+                LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    non_call_parts
+                )
             )
 
         return [
