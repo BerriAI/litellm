@@ -367,7 +367,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
-        self.is_async_entrypoint: Optional[bool] = None
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
         self.function_id = function_id
@@ -1544,15 +1543,9 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
-    def _is_sync_litellm_request(self, litellm_params: dict) -> bool:
-        """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.).
-
-        ``is_async_entrypoint`` is stamped by the ``@client`` wrapper that ran the request
-        and is authoritative; the ``a*`` flag heuristic covers logging objects constructed
-        outside ``@client`` (proxy passthrough endpoints, realtime, MCP).
-        """
-        if self.is_async_entrypoint is not None:
-            return not self.is_async_entrypoint
+    @staticmethod
+    def _is_sync_litellm_request(litellm_params: dict) -> bool:
+        """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.)."""
         return (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
             and litellm_params.get(CallTypes.aresponses.value, False) is not True
@@ -1632,6 +1625,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time=start_time,
             end_time=end_time,
             cache_hit=cache_hit,
+            run_custom_logger_hooks=False,
             **kwargs,
         )
 
@@ -1985,7 +1979,15 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_success_handler(result=complete_streaming_response)
         return
 
-    def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+    def success_handler(
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        run_custom_logger_hooks: Optional[bool] = None,
+        **kwargs,
+    ):
         verbose_logger.debug(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
@@ -1997,7 +1999,11 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = self._is_sync_litellm_request(litellm_params)
+        is_sync_request = (
+            run_custom_logger_hooks
+            if run_custom_logger_hooks is not None
+            else self._is_sync_litellm_request(litellm_params)
+        )
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -2783,12 +2789,23 @@ class Logging(LiteLLMLoggingBaseClass):
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+    def failure_handler(
+        self,
+        exception,
+        traceback_exception,
+        start_time=None,
+        end_time=None,
+        run_custom_logger_hooks: Optional[bool] = None,
+    ):
         verbose_logger.debug(f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}")
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = self._is_sync_litellm_request(litellm_params)
+        is_sync_request = (
+            run_custom_logger_hooks
+            if run_custom_logger_hooks is not None
+            else self._is_sync_litellm_request(litellm_params)
+        )
 
         try:
             start_time, end_time = self._failure_handler_helper_fn(
@@ -3084,6 +3101,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time,
             end_time,
             cache_hit,
+            run_custom_logger_hooks=False,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
