@@ -5477,3 +5477,41 @@ def test_resolve_model_name_from_model_id_multiple_wildcards():
     )
     assert result is None, f"Expected None for non-matching provider, got '{result}'"
 
+
+def test_resolve_model_name_from_model_id_prefers_provider_qualified_model():
+    """
+    When multiple providers expose the same concrete model suffix under different
+    public aliases, provider-aware resolve must pick the matching provider's
+    deployment rather than the first suffix match.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-veo",
+                "litellm_params": {
+                    "model": "gemini/veo-3.0-generate-preview",
+                    "api_key": "gemini-key",
+                },
+            },
+            {
+                "model_name": "vertex-veo",
+                "litellm_params": {
+                    "model": "vertex_ai/veo-3.0-generate-preview",
+                    "vertex_project": "vertex-project",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex-veo", f"Expected 'vertex-veo', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider="gemini",
+    )
+    assert result == "gemini-veo", f"Expected 'gemini-veo', got '{result}'"
+
