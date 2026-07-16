@@ -10,6 +10,7 @@ on:
           - list
           - get
           - dismiss
+          - list_secrets
       dismissals:
         required: false
         default: '[]'
@@ -57,6 +58,17 @@ jobs:
           echo '```json' >> $GITHUB_STEP_SUMMARY
           cat alert.json | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: List secret scanning alerts
+        if: inputs.mode == 'list_secrets'
+        run: |
+          if gh api --paginate "repos/${{ github.repository }}/secret-scanning/alerts?state=open&per_page=100" > secrets.json; then
+            total=$(jq length secrets.json)
+            echo "Open secret-scanning alerts: $total" | tee -a $GITHUB_STEP_SUMMARY
+            jq -r '.[] | "#\(.number) [\(.secret_type)]: \(.locations_url // "no-location-url")"' secrets.json | tee -a $GITHUB_STEP_SUMMARY
+          else
+            echo "secret-scanning API call failed (likely missing token scope)" | tee -a $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Dismiss alerts
         if: inputs.mode == 'dismiss'
