@@ -2634,6 +2634,8 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "key"
+        assert exc_info.value.entity_id == "test-hashed-token"
 
 
 @pytest.mark.asyncio
@@ -2861,6 +2863,8 @@ async def test_team_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team"
+        assert exc_info.value.entity_id == "test-team"
 
 
 @pytest.mark.asyncio
@@ -2888,6 +2892,8 @@ async def test_end_user_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "end_user"
+        assert exc_info.value.entity_id == "customer-1"
 
 
 @pytest.mark.asyncio
@@ -2926,6 +2932,8 @@ async def test_tag_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "tag"
+        assert exc_info.value.entity_id == "paid-tag"
 
 
 @pytest.mark.asyncio
@@ -2976,6 +2984,8 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team_member"
+        assert exc_info.value.entity_id == "test-user:test-team"
 
 
 class TestGuardrailModificationCheck:

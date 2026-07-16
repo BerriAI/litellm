@@ -412,6 +412,171 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+class TestLangfuseOtelKeyDynamicConfig:
+    """Key/team-scoped Langfuse credentials must define the full export target
+    (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
+
+    CLEAN_ENV_VARS = [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "LANGFUSE_OTEL_HOST",
+        "OTEL_EXPORTER",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_HEADERS",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ]
+
+    def _clean_env(self):
+        cleaned = {k: v for k, v in os.environ.items() if k not in self.CLEAN_ENV_VARS}
+        return patch.dict(os.environ, cleaned, clear=True)
+
+    def _dynamic_params(self, **overrides):
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        params = {
+            "langfuse_public_key": "key_public",
+            "langfuse_secret_key": "key_secret",
+            "langfuse_host": "https://langfuse.example.com",
+        }
+        params.update(overrides)
+        return StandardCallbackDynamicParams(**{k: v for k, v in params.items() if v is not None})
+
+    def test_construct_dynamic_otel_config_with_key_credentials(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params())
+
+        assert config is not None
+        assert config.exporter == "otlp_http"
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+
+        import base64
+
+        expected_auth = base64.b64encode(b"key_public:key_secret").decode()
+        assert config.headers == f"Authorization=Basic {expected_auth}"
+
+    def test_construct_dynamic_otel_config_host_without_protocol(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host="langfuse.example.com"))
+
+        assert config is not None
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_defaults_to_us_cloud(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
+
+        assert config is not None
+        assert config.endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_falls_back_to_env_host(self):
+        with self._clean_env():
+            with patch.dict(os.environ, {"LANGFUSE_HOST": "https://env-host.example.com"}):
+                logger = LangfuseOtelLogger()
+                config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
+
+        assert config is not None
+        assert config.endpoint == "https://env-host.example.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_requires_both_keys(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+
+            assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_secret_key=None)) is None
+            assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_public_key=None)) is None
+
+    def test_key_dynamic_params_create_otlp_exporter_without_global_env(self):
+        """Without global LANGFUSE_* env vars, a request carrying key-scoped Langfuse
+        credentials must get a tracer exporting via OTLP HTTP to that key's host."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            assert logger.OTEL_EXPORTER == "console"
+
+            tracer = logger.get_tracer_to_use_for_request(
+                {"standard_callback_dynamic_params": self._dynamic_params()}
+            )
+
+        assert tracer is not logger.tracer
+        assert len(logger._tracer_provider_cache) == 1
+
+        provider = next(iter(logger._tracer_provider_cache.values()))
+        span_processors = provider._active_span_processor._span_processors
+        assert len(span_processors) == 1
+        assert isinstance(span_processors[0], BatchSpanProcessor)
+
+        exporter = span_processors[0].span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
+
+        import base64
+
+        expected_auth = base64.b64encode(b"key_public:key_secret").decode()
+        assert exporter._headers == {"Authorization": f"Basic {expected_auth}"}
+
+    def test_key_dynamic_params_reuse_cached_provider(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            kwargs = {"standard_callback_dynamic_params": self._dynamic_params()}
+            logger.get_tracer_to_use_for_request(kwargs)
+            logger.get_tracer_to_use_for_request(kwargs)
+
+        assert len(logger._tracer_provider_cache) == 1
+
+    def test_no_dynamic_params_keeps_default_tracer(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            tracer = logger.get_tracer_to_use_for_request({})
+
+        assert tracer is logger.tracer
+        assert logger._tracer_provider_cache == {}
+
+    def test_key_credentials_never_passed_to_debug_logger(self):
+        """The span-processor debug logs must receive a redacted header value, so the
+        key-scoped Langfuse secret never enters a log record regardless of downstream
+        handler configuration, while the exporter still gets the real header."""
+        import base64
+
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
+        from litellm.integrations import opentelemetry as otel_module
+
+        secret = base64.b64encode(b"key_public:key_secret").decode()
+
+        recorded_arguments = []
+
+        def _spy(message, *args, **kwargs):
+            recorded_arguments.append(" ".join(str(part) for part in (message, *args)))
+
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
+                logger.get_tracer_to_use_for_request(
+                    {"standard_callback_dynamic_params": self._dynamic_params()}
+                )
+
+        logged = "\n".join(recorded_arguments)
+        assert "initializing span processor" in logged
+        assert secret not in logged
+        assert f"Basic {secret}" not in logged
+
+        provider = next(iter(logger._tracer_provider_cache.values()))
+        exporter = provider._active_span_processor._span_processors[0].span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._headers == {"Authorization": f"Basic {secret}"}
+
+
 class TestLangfuseOtelResponsesAPI:
     """Test suite for Langfuse OTEL integration with ResponsesAPI"""
 

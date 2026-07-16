@@ -319,21 +319,31 @@ class Gateway:
         return self.transport.probe(path, params=params)
 
 
-def build_gateway() -> Gateway:
+def build_gateway(
+    *,
+    base_url: str = PROXY_BASE_URL,
+    master_key: str = MASTER_KEY,
+    control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
+) -> Gateway:
     """The Gateway every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
-    base URLs are the same for a monolithic proxy, so routing is then a no-op."""
+    base URLs are the same for a monolithic proxy, so routing is then a no-op.
+
+    The endpoints are injectable for callers that resolve the proxy some other
+    way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
+    pass all three together, since a caller that overrides only the data plane
+    would leave management calls pointed at the env default."""
     return Gateway(
         transport=SplitTransport(
             data=HttpTransport(
-                base_url=PROXY_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
             control=HttpTransport(
-                base_url=CONTROL_PLANE_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=control_plane_base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
         ),

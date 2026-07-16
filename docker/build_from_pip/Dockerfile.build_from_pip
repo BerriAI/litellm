@@ -36,7 +36,7 @@ RUN uv venv --python python && \
       "opentelemetry-api==1.28.0" \
       "opentelemetry-sdk==1.28.0" \
       "opentelemetry-exporter-otlp==1.28.0" \
-      "ddtrace==2.19.0" \
+      "ddtrace==4.11.0" \
       "sentry-sdk==2.21.0" \
       "mangum==0.17.0" \
       "azure-ai-contentsafety==1.0.0" \

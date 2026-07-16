@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = REPO_ROOT / "manifest.yaml"
+SUITE_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = SUITE_ROOT / "manifest.yaml"
 
 # The PRD's "Features in v0" section, in row order.
 EXPECTED_FEATURE_IDS = [
@@ -132,14 +132,14 @@ def test_manifest_every_feature_has_human_readable_name(manifest):
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 def test_feature_directory_exists(feature_id):
-    feature_dir = REPO_ROOT / feature_id
+    feature_dir = SUITE_ROOT / feature_id
     assert feature_dir.is_dir(), f"missing feature directory: {feature_dir}"
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
 def test_per_provider_test_file_exists(feature_id, provider):
-    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    test_file = SUITE_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
@@ -148,7 +148,7 @@ def test_feature_directory_has_init_file(feature_id):
     """Each feature directory needs an __init__.py so pytest collects
     the per-provider test files as a package — matches the layout
     established by `basic_messaging_non_streaming/`."""
-    init_file = REPO_ROOT / feature_id / "__init__.py"
+    init_file = SUITE_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
 
 
@@ -159,7 +159,7 @@ def test_feature_directory_has_init_file(feature_id):
 # a broken post-v0 directory still fails CI.
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
 def test_every_manifest_feature_has_directory(feature_id):
-    feature_dir = REPO_ROOT / feature_id
+    feature_dir = SUITE_ROOT / feature_id
     assert feature_dir.is_dir(), (
         f"manifest declares {feature_id!r} but {feature_dir} is missing — "
         "feature_id MUST match its on-disk directory (see manifest.yaml header)."
@@ -168,7 +168,7 @@ def test_every_manifest_feature_has_directory(feature_id):
 
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
 def test_every_manifest_feature_has_init_file(feature_id):
-    init_file = REPO_ROOT / feature_id / "__init__.py"
+    init_file = SUITE_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
 
 
@@ -179,7 +179,7 @@ def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider)
     backed by a per-provider test file. Without this check, a missing
     file silently becomes a `not_tested` cell in the published matrix
     rather than a CI failure surfacing the layout drift."""
-    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    test_file = SUITE_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
@@ -193,8 +193,8 @@ def test_per_provider_test_file_imports_and_parametrizes_three_models(
     use plain aliases or per-provider-suffixed aliases (e.g.
     `claude-opus-4-7-bedrock-invoke`), so we check for the tier
     substrings rather than exact alias names."""
-    text = (REPO_ROOT / feature_id / f"test_{provider}.py").read_text()
-    for tier in ("haiku-4-5", "sonnet-4-6", "opus-4-7"):
+    text = (SUITE_ROOT / feature_id / f"test_{provider}.py").read_text()
+    for tier in ("haiku-4-5", "sonnet-4-5", "opus-4-7"):
         assert (
             tier in text
         ), f"{feature_id}/test_{provider}.py does not reference {tier}"
@@ -206,7 +206,7 @@ def test_gpt_cell_test_file_exists(feature_id, provider):
     """Every (GPT feature, GPT provider) cell must be backed by a test
     file; a missing file silently becomes a `not_tested` cell in the
     published matrix rather than a CI failure surfacing the drift."""
-    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    test_file = SUITE_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
@@ -216,7 +216,7 @@ def test_gpt_cell_references_three_gpt_tiers(feature_id, provider):
     """Every live GPT cell must exercise Sol, Terra, and Luna — the
     same all-tiers-or-red rule the v0 columns apply to the three
     Claude tiers."""
-    text = (REPO_ROOT / feature_id / f"test_{provider}.py").read_text()
+    text = (SUITE_ROOT / feature_id / f"test_{provider}.py").read_text()
     for tier in GPT_TIER_SUBSTRINGS:
         assert (
             tier in text
@@ -229,7 +229,7 @@ def test_vertex_ai_gpt_cell_is_a_static_not_applicable_stub(feature_id):
     `vertex_ai_gpt` cells must report `not_applicable` and must not
     drive the claude CLI. If Google adds the models, flip the stubs to
     live cells and update this pin alongside GPT_LIVE_PROVIDERS."""
-    text = (REPO_ROOT / feature_id / "test_vertex_ai_gpt.py").read_text()
+    text = (SUITE_ROOT / feature_id / "test_vertex_ai_gpt.py").read_text()
     assert '"status": "not_applicable"' in text, (
         f"{feature_id}/test_vertex_ai_gpt.py must report not_applicable while "
         "GCP Vertex AI does not offer the GPT-5.6 family."
@@ -253,7 +253,7 @@ def test_azure_test_file_drives_the_proxy(feature_id):
     that wraps them — both shapes drive the proxy, and we don't want
     this layout pin to block legitimate de-duplication of test bodies.
     """
-    text = (REPO_ROOT / feature_id / "test_azure.py").read_text()
+    text = (SUITE_ROOT / feature_id / "test_azure.py").read_text()
     assert "run_claude" in text or "run_basic_messaging_cell" in text, (
         f"{feature_id}/test_azure.py must drive the claude CLI via run_claude() "
         "or a shared helper that wraps it; the not_applicable stub was removed "

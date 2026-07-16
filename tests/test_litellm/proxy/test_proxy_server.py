@@ -2589,6 +2589,84 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_load_config_default_internal_user_params_max_budget_scientific_notation(tmp_path):
+    """
+    Helm's toYaml renders large floats in scientific notation without a
+    decimal mantissa (e.g. 1e+09), which PyYAML parses as a string.
+    load_config must coerce default_internal_user_params.max_budget to
+    float, otherwise every consumer of the raw dict (/user/new, SSO,
+    SCIM user creation) passes the string to Prisma, which rejects it
+    since max_budget must be Float or Null. Keys outside the coercion
+    (including ones not on DefaultInternalUserParams, like
+    auto_create_key) must pass through unchanged.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  default_internal_user_params:\n"
+        "    user_role: internal_user\n"
+        "    max_budget: 1e+09\n"
+        "    budget_duration: 30d\n"
+        "    auto_create_key: false\n"
+    )
+
+    original_params = litellm.default_internal_user_params
+    try:
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+        assert litellm.default_internal_user_params == {
+            "user_role": "internal_user",
+            "max_budget": 1000000000.0,
+            "budget_duration": "30d",
+            "auto_create_key": False,
+        }
+        assert isinstance(litellm.default_internal_user_params["max_budget"], float)
+    finally:
+        litellm.default_internal_user_params = original_params
+
+
+@pytest.mark.asyncio
+async def test_load_config_default_internal_user_params_without_max_budget(tmp_path):
+    """
+    default_internal_user_params without max_budget (or with an explicit
+    null) must be stored as-is and not gain a max_budget key.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    absent_config_file = tmp_path / "absent_config.yaml"
+    absent_config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  default_internal_user_params:\n"
+        "    user_role: internal_user\n"
+    )
+
+    null_config_file = tmp_path / "null_config.yaml"
+    null_config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  default_internal_user_params:\n"
+        "    user_role: internal_user\n"
+        "    max_budget: null\n"
+    )
+
+    original_params = litellm.default_internal_user_params
+    try:
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(absent_config_file))
+        assert litellm.default_internal_user_params == {"user_role": "internal_user"}
+
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(null_config_file))
+        assert litellm.default_internal_user_params == {
+            "user_role": "internal_user",
+            "max_budget": None,
+        }
+    finally:
+        litellm.default_internal_user_params = original_params
+
+
+@pytest.mark.asyncio
 async def test_load_config_user_url_validation_handles_null_and_string_false(tmp_path, monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6185,6 +6263,32 @@ async def test_update_general_settings_store_model_in_db_false():
 
         assert ps.store_model_in_db is False
         assert ps.general_settings["store_model_in_db"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_value,expected",
+    [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
+)
+async def test_update_general_settings_disable_auto_add_proxy_admin_to_teams(db_value, expected):
+    """
+    Verify _update_general_settings propagates disable_auto_add_proxy_admin_to_teams
+    from the DB config into the live general_settings dict, so a UI toggle via
+    /config/field/update takes effect on the next config poll instead of
+    requiring a proxy restart.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"disable_auto_add_proxy_admin_to_teams": db_value}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["disable_auto_add_proxy_admin_to_teams"] is expected
 
 
 @pytest.mark.asyncio
