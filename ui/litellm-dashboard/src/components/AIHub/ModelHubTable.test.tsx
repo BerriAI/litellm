@@ -92,7 +92,9 @@ describe("ModelHubTable", () => {
 
       await waitFor(() => {
         if (shouldRedirect) {
-          expect(mockRouterReplace).toHaveBeenCalledWith("http://localhost:4000/ui/login");
+          expect(mockRouterReplace).toHaveBeenCalledWith(
+            `http://localhost:4000/ui/login?redirect_to=${encodeURIComponent(window.location.href)}`,
+          );
         } else {
           expect(mockRouterReplace).not.toHaveBeenCalled();
         }

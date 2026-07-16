@@ -33,6 +33,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
+import { buildLoginUrlWithReturn } from "@/utils/returnUrlUtils";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -108,7 +109,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        router.replace(`${getProxyBaseUrl()}/ui/login`);
+        router.replace(buildLoginUrlWithReturn(`${getProxyBaseUrl()}/ui/login`));
         return;
       }
     }
