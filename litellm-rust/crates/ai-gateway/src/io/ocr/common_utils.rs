@@ -280,6 +280,66 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
+fn sniff_mime_from_magic_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"%PDF-") {
+        return Some("application/pdf");
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(&[0x49, 0x49, 0x2a, 0x00]) || bytes.starts_with(&[0x4d, 0x4d, 0x00, 0x2a])
+    {
+        return Some("image/tiff");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+fn mime_from_url_extension(url_path: &str) -> Option<&'static str> {
+    let file_name = url_path.rsplit('/').next()?;
+    let extension = file_name.rsplit_once('.')?.1.to_ascii_lowercase();
+    match extension.as_str() {
+        "pdf" => Some("application/pdf"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "tiff" | "tif" => Some("image/tiff"),
+        "bmp" => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+fn resolve_document_mime(
+    header_content_type: Option<String>,
+    bytes: &[u8],
+    url_path: &str,
+) -> String {
+    if let Some(header) = &header_content_type {
+        if !header.eq_ignore_ascii_case("application/octet-stream")
+            && !header.eq_ignore_ascii_case("binary/octet-stream")
+        {
+            return header.clone();
+        }
+    }
+    sniff_mime_from_magic_bytes(bytes)
+        .or_else(|| mime_from_url_extension(url_path))
+        .map(str::to_string)
+        .or(header_content_type)
+        .unwrap_or_else(|| "application/octet-stream".to_string())
+}
+
 pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
@@ -297,16 +357,16 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
             body: truncate_error_body(&body),
         });
     }
-    let content_type = response
+    let header_content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+        .map(str::to_string);
     let bytes = read_response_with_limit(response, &final_url).await?;
+    let content_type = resolve_document_mime(header_content_type, &bytes, final_url.path());
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)
@@ -593,6 +653,96 @@ mod tests {
             CoreError::InvalidRequest(message)
                 if message.contains("SSRF protection")
         ));
+    }
+
+    #[test]
+    fn sniff_mime_detects_supported_signatures() {
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"%PDF-1.7\nrest"),
+            Some("application/pdf")
+        );
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"\xff\xd8\xff\xe0rest"),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"GIF89arest"),
+            Some("image/gif")
+        );
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"RIFF\x00\x00\x00\x00WEBPrest"),
+            Some("image/webp")
+        );
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"II*\x00rest"),
+            Some("image/tiff")
+        );
+        assert_eq!(sniff_mime_from_magic_bytes(b"BMrest"), Some("image/bmp"));
+        assert_eq!(sniff_mime_from_magic_bytes(b"plain text"), None);
+        assert_eq!(
+            sniff_mime_from_magic_bytes(b"RIFF\x00\x00\x00\x00WAVErest"),
+            None
+        );
+    }
+
+    #[test]
+    fn mime_from_url_extension_maps_known_suffixes() {
+        assert_eq!(
+            mime_from_url_extension("/files/report.pdf"),
+            Some("application/pdf")
+        );
+        assert_eq!(mime_from_url_extension("/a/b/c.PNG"), Some("image/png"));
+        assert_eq!(mime_from_url_extension("/scan.jpeg"), Some("image/jpeg"));
+        assert_eq!(mime_from_url_extension("/no-extension"), None);
+        assert_eq!(mime_from_url_extension("/dotless/path"), None);
+    }
+
+    #[test]
+    fn resolve_document_mime_prefers_specific_header() {
+        assert_eq!(
+            resolve_document_mime(Some("image/png".to_string()), b"%PDF-1.4", "/x.pdf"),
+            "image/png"
+        );
+    }
+
+    #[test]
+    fn resolve_document_mime_sniffs_when_header_is_octet_stream() {
+        assert_eq!(
+            resolve_document_mime(
+                Some("application/octet-stream".to_string()),
+                b"%PDF-1.4 payload",
+                "/x"
+            ),
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn resolve_document_mime_uses_url_extension_when_header_and_bytes_ambiguous() {
+        assert_eq!(
+            resolve_document_mime(None, b"unrecognized bytes", "/docs/file.pdf"),
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn resolve_document_mime_falls_back_to_octet_stream() {
+        assert_eq!(
+            resolve_document_mime(None, b"unrecognized bytes", "/docs/file"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resolve_document_mime(
+                Some("application/octet-stream".to_string()),
+                b"unrecognized bytes",
+                "/docs/file"
+            ),
+            "application/octet-stream"
+        );
     }
 
     #[tokio::test]
