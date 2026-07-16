@@ -1,9 +1,9 @@
 [project]
 name = "litellm"
-version = "1.93.0"
+version = "1.94.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.10, <3.14"
+requires-python = ">=3.10, <3.15"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -62,10 +62,11 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
-    "litellm-proxy-extras==0.4.76",
-    "litellm-enterprise==0.1.49",
+    "litellm-proxy-extras==0.4.77",
+    "litellm-enterprise==0.1.50",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
+    "InquirerPy>=0.3.4,<1.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
@@ -74,11 +75,12 @@ proxy = [
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
-# SDK plus just these three; none of the server runtime in `proxy` is pulled in.
+# SDK plus just these four; none of the server runtime in `proxy` is pulled in.
 cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
+    "InquirerPy>=0.3.4,<1.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
@@ -129,7 +131,7 @@ proxy-runtime = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
-    "ddtrace>=2.19.0,<3.0",
+    "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
@@ -205,7 +207,7 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.2.0",
+    "Pillow==12.3.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
@@ -264,6 +266,8 @@ constraint-dependencies = [
     "aiohttp>=3.14.1,<4.0",
     "packaging>=24.0",
     "soupsieve>=2.8.4",
+    "httplib2>=0.32.0",
+    "setuptools>=83.0.0",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
@@ -284,7 +288,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.93.0"
+version = "1.94.0"
 version_files = [
     "pyproject.toml:^version",
 ]

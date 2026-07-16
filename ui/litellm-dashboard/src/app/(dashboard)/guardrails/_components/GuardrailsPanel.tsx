@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Button, Dropdown, Tabs } from "antd";
-import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
+import { Tabs } from "antd";
+import { ChevronDown, Code, Plus } from "lucide-react";
 import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/cva.config";
 import AddGuardrailForm from "./add_guardrail_form";
 import GuardrailTable from "./guardrail_table";
 import { isAdminRole } from "@/utils/roles";
@@ -133,30 +141,26 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   children: (
                     <>
                       <div className="flex justify-between items-center mb-4">
-                        <Dropdown
-                          menu={{
-                            items: [
-                              {
-                                key: "provider",
-                                icon: <PlusOutlined />,
-                                label: "Add Provider Guardrail",
-                                onClick: handleAddGuardrail,
-                              },
-                              {
-                                key: "custom_code",
-                                icon: <CodeOutlined />,
-                                label: "Create Custom Code Guardrail",
-                                onClick: handleAddCustomCodeGuardrail,
-                              },
-                            ],
-                          }}
-                          trigger={["click"]}
-                          disabled={!accessToken}
-                        >
-                          <Button disabled={!accessToken}>
-                            + Add New Guardrail <DownOutlined className="ml-2" />
-                          </Button>
-                        </Dropdown>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            disabled={!accessToken}
+                            className={cn(buttonVariants({ variant: "default" }))}
+                          >
+                            <Plus />
+                            Add New Guardrail
+                            <ChevronDown />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start" className="w-56">
+                            <DropdownMenuItem onClick={handleAddGuardrail}>
+                              <Plus />
+                              Add Provider Guardrail
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={handleAddCustomCodeGuardrail}>
+                              <Code />
+                              Create Custom Code Guardrail
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
 
                       {selectedGuardrailId ? (
@@ -171,9 +175,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                           guardrailsList={guardrailsList}
                           isLoading={isLoading}
                           onDeleteClick={handleDeleteClick}
-                          accessToken={accessToken}
-                          onGuardrailUpdated={fetchGuardrails}
-                          isAdmin={isAdmin}
                           onGuardrailClick={(id) => setSelectedGuardrailId(id)}
                         />
                       )}

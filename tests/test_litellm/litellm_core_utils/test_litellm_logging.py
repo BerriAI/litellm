@@ -32,6 +32,13 @@ def logging_obj():
     )
 
 
+def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
+    assert logging_obj.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
 def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
@@ -3707,3 +3714,85 @@ def test_set_cost_breakdown_stores_reasoning_cost():
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
     assert "reasoning_cost" not in no_reasoning.cost_breakdown
+
+
+def _build_payload_for_media_response(logging_obj, init_response_obj, kwargs=None):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs=kwargs or {"litellm_call_id": "media-call-id", "model": "test-model", "messages": []},
+        init_response_obj=init_response_obj,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def test_image_response_sets_output_image_count_on_usage_object(logging_obj):
+    """Generated-image count must land on metadata.usage_object for callbacks (e.g. Prometheus)."""
+    from litellm.types.utils import ImageResponse
+
+    response = ImageResponse(created=1, data=[{"url": "https://img/1"}, {"url": "https://img/2"}])
+
+    payload = _build_payload_for_media_response(logging_obj, response)
+
+    assert payload is not None
+    assert payload["metadata"]["usage_object"]["output_image_count"] == 2
+
+
+def test_output_image_count_survives_message_redaction(logging_obj, monkeypatch):
+    """Redaction replaces the ImageResponse body, so the count must be captured pre-redaction."""
+    import litellm
+    from litellm.types.utils import ImageResponse
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    response = ImageResponse(created=1, data=[{"url": "https://img/1"}])
+
+    payload = _build_payload_for_media_response(logging_obj, response)
+
+    assert payload is not None
+    assert payload["response"] == {"text": "redacted-by-litellm"}
+    assert payload["metadata"]["usage_object"]["output_image_count"] == 1
+
+
+def test_non_image_response_has_no_output_image_count(logging_obj):
+    payload = _build_payload_for_media_response(
+        logging_obj, {"id": "chatcmpl-1", "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+    )
+
+    assert payload is not None
+    assert "output_image_count" not in payload["metadata"]["usage_object"]
+
+
+def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
+    """Video usage bills by duration; the payload must keep duration_seconds even with zero tokens."""
+    payload = _build_payload_for_media_response(
+        logging_obj, {"id": "video-1", "usage": {"duration_seconds": 4.0}}
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
+    assert payload["total_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+
+
+def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
+    """
+    pre_call/post_call must not stash their locals (full messages, the Logging
+    object, complete_input_dict) into module-level state. That pinned the most
+    recent request's entire payload in memory for the life of the worker,
+    which with multi-hundred-KB requests is a permanent per-worker leak.
+    """
+    litellm.error_logs.clear()
+    big_input = [{"role": "user", "content": "x" * 10_000}]
+
+    logging_obj.pre_call(input=big_input, api_key="sk-test")
+    logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
+
+    assert litellm.error_logs == {}
