@@ -508,6 +508,13 @@ curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/
   LITELLM_CLI_REF=<branch-or-commit> sh
 ```
 
+Point the CLI at your real proxy and key before running any `lite model-groups` or `lite autoroute` command -- like every other command in this CLI, they read `LITELLM_PROXY_URL`/`LITELLM_PROXY_API_KEY` (or `--base-url`/`--api-key`), no `lite login` required:
+
+```bash
+export LITELLM_PROXY_URL=http://localhost:4000
+export LITELLM_PROXY_API_KEY=sk-...
+```
+
 #### List Your Accessible Model Groups
 
 ```bash
