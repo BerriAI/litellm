@@ -51,7 +51,9 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
         page.fill("#username", UI_USERNAME)
         page.fill("#password", UI_PASSWORD)
         page.click('button[type="submit"]')
-        page.wait_for_function("() => document.cookie.includes('token=')")
+        page.wait_for_function(
+            "() => document.cookie.includes('token=') || !document.querySelector('#username')"
+        )
         yield page
     finally:
         context.close()
