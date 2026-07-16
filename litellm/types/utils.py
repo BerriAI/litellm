@@ -168,6 +168,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
+    supported_audio_formats: list[Literal["mp3", "wav"]] | None
+    vertex_ai_audio_api: Literal["lyria_predict", "lyria_interactions"] | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
 
