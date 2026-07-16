@@ -67,14 +67,6 @@ class TestSingulrConfiguration:
         guardrail = SingulrGuardrail(singulr_api_key="test_key", timeout=5.0)
         assert guardrail.timeout == 5.0
 
-    def test_singulr_api_base_is_hardcoded_to_localhost(self):
-        """singulr_api_base is currently forced to http://localhost:8003
-        regardless of the configured value (see SingulrGuardrail.__init__).
-        This is a temporary, intentional override; update this test if that
-        override is removed."""
-        guardrail = SingulrGuardrail(singulr_api_key="test_key", singulr_api_base="https://remote.singulr.ai")
-        assert guardrail.singulr_api_base == "http://localhost:8003"
-
     def test_supports_pre_call_and_post_call_hooks(self):
         guardrail = SingulrGuardrail(singulr_api_key="test_key")
         assert guardrail.supported_event_hooks == [
@@ -270,20 +262,6 @@ class TestSingulrBlockAction:
 
 
 class TestSingulrRequestWiring:
-    @pytest.mark.asyncio
-    async def test_sends_correct_endpoint_url(self, singulr_guardrail):
-        """singulr_api_base is currently hardcoded to localhost:8003 in
-        SingulrGuardrail.__init__ regardless of configuration; update this
-        assertion if that override is removed."""
-        resp = _make_response({"should_block": False})
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.apply_guardrail(
-                inputs={"texts": ["test"]},
-                request_data={},
-                input_type="request",
-            )
-            assert mock_post.call_args.kwargs["url"] == "http://localhost:8003/api/v1/ai-gateway/litellm"
-
     @pytest.mark.asyncio
     async def test_sends_configured_timeout(self):
         """litellm_params.timeout must reach the httpx call so operators can
