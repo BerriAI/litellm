@@ -3150,6 +3150,7 @@ all_litellm_params = (
         "use_client",
         "id",
         "fallbacks",
+        "routing_strategy",
         "azure",
         "headers",
         "model_list",
