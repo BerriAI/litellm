@@ -127,11 +127,16 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     return record
 
 
-def resolve_api_key_helper() -> str:
+def resolve_api_key_helper(base_url: str) -> str:
     """Build the shell command Claude Code should run for its apiKeyHelper.
 
     Resolves `lite` to an absolute path so the helper works regardless of the
-    PATH visible to whatever subprocess Claude Code spawns it from.
+    PATH visible to whatever subprocess Claude Code spawns it from. Passing
+    --base-url explicitly (rather than relying on the bare invocation Claude
+    Code would otherwise use) makes `print-token` enforce that the cached
+    token was actually issued for this proxy -- without it, a token minted
+    for a different, previously-logged-into proxy would be handed to
+    whichever server `up` currently points at.
     """
     lite_path = shutil.which("lite")
     if lite_path is None:
@@ -139,24 +144,25 @@ def resolve_api_key_helper() -> str:
             "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs "
             "an absolute path to it, so `lite up` cannot continue."
         )
-    return f"{shlex.quote(lite_path)} auth print-token"
+    return f"{shlex.quote(lite_path)} auth print-token --base-url {shlex.quote(base_url)}"
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
+    base_url = ctx.obj["base_url"].rstrip("/")
     token_data = load_token()
-    if token_data and is_cli_token_fresh(token_data):
+    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
         return
 
     if not sys.stdin.isatty():
         raise UpError(
-            "No fresh LiteLLM login found. Run `lite login` first (apiKeyHelper "
+            "No fresh LiteLLM login found for this proxy. Run `lite login` first (apiKeyHelper "
             "reads this token on every Claude Code request)."
         )
 
-    click.echo("No fresh LiteLLM login found; starting login...")
+    click.echo("No fresh LiteLLM login found for this proxy; starting login...")
     ctx.invoke(login)
     token_data = load_token()
-    if not token_data or not is_cli_token_fresh(token_data):
+    if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
 
 
@@ -195,7 +201,7 @@ def up(ctx: click.Context) -> None:
                 "running (or crashed without cleanup). Run `lite down` first."
             )
 
-        api_key_helper = resolve_api_key_helper()
+        api_key_helper = resolve_api_key_helper(base_url)
         original_existed = CLAUDE_SETTINGS_PATH.exists()
         original_settings = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
