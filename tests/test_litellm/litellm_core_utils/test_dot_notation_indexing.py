@@ -112,6 +112,30 @@ class TestDeleteNestedValue:
         result = delete_nested_value(data, "a.b.c")
         assert result == {"a": {"b": {"d": 2}}}
 
+    def test_delete_nested_key_with_escaped_dot(self):
+        """Test deleting a key that contains a literal dot, preserving siblings."""
+        data = {"metadata": {"trace.id": "remove", "keep": "value"}}
+
+        result = delete_nested_value(data, r"metadata.trace\.id")
+
+        assert result == {"metadata": {"keep": "value"}}
+
+    def test_delete_top_level_key_with_escaped_dot(self):
+        """Test deleting a top-level key that contains a literal dot."""
+        data = {"trace.id": "remove", "keep": "value"}
+
+        result = delete_nested_value(data, r"trace\.id")
+
+        assert result == {"keep": "value"}
+
+    def test_delete_key_with_multiple_escaped_dots(self):
+        """Test deleting a key whose name contains multiple literal dots."""
+        data = {"a.b.c": "remove", "keep": "value"}
+
+        result = delete_nested_value(data, r"a\.b\.c")
+
+        assert result == {"keep": "value"}
+
     def test_delete_array_wildcard(self):
         """Test deleting a field from all array elements."""
         data = {

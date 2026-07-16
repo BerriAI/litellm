@@ -78,12 +78,13 @@ def get_nested_value(data: Dict[str, Any], key_path: str, default: Optional[T] =
     return current if isinstance(current, type(default)) else default
 
 
-def _parse_path_segments(path: str) -> list:
-    """
+def _parse_path_segments(path: str) -> list[str]:
+    r"""
     Parse a JSONPath-like string into segments using regex.
 
     Handles:
     - Dot notation: "a.b.c" → ["a", "b", "c"]
+    - Escaped dots: r"a.b\.c" → ["a", "b.c"]
     - Array wildcards: "a[*].b" → ["a", "[*]", "b"]
     - Array indices: "a[0].b" → ["a", "[0]", "b"]
 
@@ -101,9 +102,8 @@ def _parse_path_segments(path: str) -> list:
 
     # Match field names OR bracket expressions
     # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern = r"[^\.\[]+|\[[^\]]*\]"
-    segments = re.findall(pattern, path)
-    return segments
+    pattern = r"(?:\\\.|[^\.\[])+|\[[^\]]*\]"
+    return [segment.replace("\\.", ".") for segment in re.findall(pattern, path)]
 
 
 def _delete_nested_value_custom(
