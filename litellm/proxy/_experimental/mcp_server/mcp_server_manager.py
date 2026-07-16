@@ -195,18 +195,22 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
     MCPAuth.oauth_delegate,
 )
 
-_BACKGROUND_MCP_TOOL_LISTING_TASKS: set[asyncio.Task[list[MCPTool]]] = set()
+_MCP_TOOL_LISTING_TASKS_MAX_SIZE = 100
+_MCP_TOOL_LISTING_TASKS: set[asyncio.Task[list[MCPTool]]] = set()
 
 
-def _consume_background_task_result(task: asyncio.Task[list[MCPTool]]) -> None:
-    _BACKGROUND_MCP_TOOL_LISTING_TASKS.discard(task)
-    if not task.cancelled():
-        task.exception()
+def _consume_tool_listing_task_result(task: asyncio.Task[list[MCPTool]]) -> None:
+    _MCP_TOOL_LISTING_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        verbose_logger.debug("MCP tool-listing task finished with error: %s", exception)
 
 
-def _detach_background_task(task: asyncio.Task[list[MCPTool]]) -> None:
-    _BACKGROUND_MCP_TOOL_LISTING_TASKS.add(task)
-    task.add_done_callback(_consume_background_task_result)
+def _track_tool_listing_task(task: asyncio.Task[list[MCPTool]]) -> None:
+    _MCP_TOOL_LISTING_TASKS.add(task)
+    task.add_done_callback(_consume_tool_listing_task_result)
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -3841,12 +3845,20 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
+        if len(_MCP_TOOL_LISTING_TASKS) >= _MCP_TOOL_LISTING_TASKS_MAX_SIZE:
+            verbose_logger.warning(
+                "Skipping tool listing for %s because the worker already has %d active MCP tool-listing tasks",
+                server_name,
+                _MCP_TOOL_LISTING_TASKS_MAX_SIZE,
+            )
+            raise MCPServerListError(ServerListFault(tag="internal"), server_name)
+
         list_tools_task = asyncio.create_task(client.list_tools(raise_on_error=True))
+        _track_tool_listing_task(list_tools_task)
         try:
             done, _ = await asyncio.wait((list_tools_task,), timeout=MCP_TOOL_LISTING_TIMEOUT)
             if list_tools_task not in done:
                 list_tools_task.cancel()
-                _detach_background_task(list_tools_task)
                 raise TimeoutError
             tools = await list_tools_task
             verbose_logger.debug(f"Tools from {server_name}: {tools}")
@@ -3855,11 +3867,15 @@ class MCPServerManager:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                list_tools_task.cancel()
+                verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+                raise
             if list_tools_task.cancelled():
                 verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
                 raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
             list_tools_task.cancel()
-            _detach_background_task(list_tools_task)
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
             raise
         except ConnectionError as e:
