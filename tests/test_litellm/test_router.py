@@ -5304,3 +5304,176 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+def test_resolve_model_name_from_model_id_wildcard_pattern():
+    """
+    Test that resolve_model_name_from_model_id correctly resolves model names
+    for wildcard patterns using PatternMatchRouter.
+
+    This is critical for video status/content endpoints where model_id extracted
+    from video_id (e.g., "veo-3.0-generate-preview") needs to match wildcard
+    patterns like "vertex_ai/*" to inject credentials from the model config.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex_ai/*",
+                "litellm_params": {
+                    "model": "vertex_ai/*",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                },
+            },
+            {
+                "model_name": "specific-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-pro",
+                    "vertex_project": "specific-project",
+                    "vertex_location": "us-east1",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex_ai/*", f"Expected 'vertex_ai/*', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="gemini-2.0-flash",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex_ai/*", f"Expected 'vertex_ai/*', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider=None,
+    )
+    assert result is None, f"Expected None without provider, got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="specific-model",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "specific-model", f"Expected 'specific-model', got '{result}'"
+
+
+def test_resolve_model_name_from_model_id_exact_match():
+    """
+    Test that resolve_model_name_from_model_id correctly resolves exact model names.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gpt-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "api_key": "test-key",
+                },
+            },
+            {
+                "model_name": "veo-model",
+                "litellm_params": {
+                    "model": "vertex_ai/veo-2.0-generate-001",
+                    "vertex_project": "test-project",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(model_id="my-gpt-model")
+    assert result == "my-gpt-model", f"Expected 'my-gpt-model', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(model_id="veo-2.0-generate-001")
+    assert result == "veo-model", f"Expected 'veo-model', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(model_id="non-existent-model")
+    assert result is None, f"Expected None, got '{result}'"
+
+
+def test_resolve_model_name_from_model_id_provider_prefix():
+    """
+    Test that resolve_model_name_from_model_id handles provider prefix correctly.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex_ai/gemini-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-pro",
+                    "vertex_project": "test-project",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="vertex_ai/gemini-pro",
+        custom_llm_provider=None,
+    )
+    assert result == "vertex_ai/gemini-pro", f"Expected 'vertex_ai/gemini-pro', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="gemini-pro",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex_ai/gemini-pro", f"Expected 'vertex_ai/gemini-pro', got '{result}'"
+
+
+def test_resolve_model_name_from_model_id_multiple_wildcards():
+    """
+    Test that resolve_model_name_from_model_id works with multiple wildcard patterns.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex_ai/*",
+                "litellm_params": {
+                    "model": "vertex_ai/*",
+                    "vertex_project": "vertex-project",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "openai-key",
+                },
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "anthropic-key",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex_ai/*", f"Expected 'vertex_ai/*', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="gpt-4o",
+        custom_llm_provider="openai",
+    )
+    assert result == "openai/*", f"Expected 'openai/*', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="claude-3-opus",
+        custom_llm_provider="anthropic",
+    )
+    assert result == "anthropic/*", f"Expected 'anthropic/*', got '{result}'"
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="some-model",
+        custom_llm_provider="bedrock",
+    )
+    assert result is None, f"Expected None for non-matching provider, got '{result}'"
+
