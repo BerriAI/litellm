@@ -180,6 +180,32 @@ async def test_fetch_network_error_maps_to_upstream_unavailable(raised):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth",
+    [
+        PrivateKeyJwtAuth(private_key=SecretStr("not-a-pem-key"), signing_alg="RS256"),
+        PrivateKeyJwtAuth(private_key=SecretStr(_PRIVATE_PEM), signing_alg="XX999"),
+    ],
+    ids=["garbage-key", "unknown-alg"],
+)
+async def test_fetch_unsignable_client_assertion_is_misconfigured_not_a_crash(auth):
+    client = AsyncMock()
+    with patch(_PATCH_TARGET, return_value=client):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            auth,
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+    client.post.assert_not_called()
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
+
+
+@pytest.mark.asyncio
 async def test_fetch_invalid_json_maps_to_upstream_unavailable():
     bad = MagicMock()
     bad.raise_for_status = MagicMock()

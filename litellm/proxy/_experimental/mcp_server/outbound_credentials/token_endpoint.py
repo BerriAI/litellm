@@ -76,7 +76,16 @@ class TokenEndpointClient:
         grant_params: Mapping[str, str],
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
-        data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+        try:
+            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+        except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
+            verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
+            return Error(
+                CredError.of_misconfigured(
+                    "token exchange failed: could not sign the client assertion; "
+                    "check client_private_key and client_assertion_signing_alg"
+                )
+            )
         try:
             raw = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
