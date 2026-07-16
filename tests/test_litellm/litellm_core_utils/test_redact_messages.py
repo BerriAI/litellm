@@ -320,6 +320,176 @@ class TestPerformRedaction:
         assert choice.message.content == "redacted-by-litellm"
         assert choice.message.reasoning_content == "redacted-by-litellm"
 
+    def test_redacts_tool_call_arguments_in_model_response_dict(self):
+        """Assistant tool call arguments must not leak when redaction is on."""
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                        "function_call": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "sensitive-city"}',
+                        },
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        message = redacted["choices"][0]["message"]
+        assert message["content"] == "redacted-by-litellm"
+        tool_call = message["tool_calls"][0]
+        assert tool_call["function"]["arguments"] == "redacted-by-litellm"
+        assert tool_call["function"]["name"] == "get_weather"
+        assert message["function_call"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_in_streaming_delta_dict(self):
+        result = {
+            "choices": [
+                {
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        delta = redacted["choices"][0]["delta"]
+        assert delta["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_on_model_response_object(self):
+        result = litellm.ModelResponse(
+            id="resp-1",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        tool_call = redacted.choices[0].message.tool_calls[0]
+        assert tool_call.function.arguments == "redacted-by-litellm"
+        assert tool_call.function.name == "get_weather"
+        assert result.choices[0].message.tool_calls[0].function.arguments == (
+            '{"city": "sensitive-city"}'
+        )
+
+    def test_redacts_tool_call_arguments_on_streaming_response_object(self):
+        """Reproduces the Stream=True path where tool calls arrive as deltas."""
+        streaming_choice = litellm.utils.StreamingChoices(
+            delta=litellm.utils.Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "sensitive-city"}',
+                        },
+                    }
+                ],
+            )
+        )
+        streaming_response = SimpleNamespace(choices=[streaming_choice])
+        details = {
+            "stream": True,
+            "complete_streaming_response": streaming_response,
+        }
+
+        perform_redaction(details, None)
+
+        tool_call = streaming_response.choices[0].delta.tool_calls[0]
+        assert tool_call.function.arguments == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_in_standard_logging_object(self):
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "get_weather",
+                                            "arguments": '{"city": "sensitive-city"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        message = details["standard_logging_object"]["response"]["choices"][0]["message"]
+        assert message["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_responses_api_function_call_arguments_dict(self):
+        result = {
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "arguments": '{"city": "sensitive-city"}',
+                    "call_id": "call_1",
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
+        assert redacted["output"][0]["name"] == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),

@@ -72,6 +72,7 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
+import BetaBadge from "./BetaBadge";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -211,7 +212,7 @@ const menuGroups: MenuGroup[] = [
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <NewBadge />
+            Projects <BetaBadge />
           </span>
         ),
         icon: <Folder {...ICON} />,
@@ -247,13 +248,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
+      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
       {
         key: "experimental",
         page: "experimental",
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
           { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
           {
             key: "transform-request",
