@@ -9,6 +9,7 @@ import { TopModelData } from "../types";
 
 interface KeyModelUsageViewProps {
   topModels: TopModelData[];
+  title?: string;
 }
 
 const VISIBLE_ROWS = 5;
@@ -70,7 +71,7 @@ const columns: ColumnsType<TopModelData> = [
   },
 ];
 
-const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
+const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels, title = "Model Usage" }) => {
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   if (topModels.length === 0) {
@@ -80,7 +81,7 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle className="text-base font-semibold">Model Usage</CardTitle>
+        <CardTitle className="text-base font-semibold">{title}</CardTitle>
         <CardAction>
           <div className="flex space-x-2">
             <button

@@ -43,6 +43,7 @@ class KeyMetricWithMetadata(MetricBase):
     """Base class for metrics with additional metadata"""
 
     metadata: KeyMetadata = Field(default_factory=KeyMetadata)
+    model_breakdown: Dict[str, SpendMetrics] = Field(default_factory=dict)
 
 
 class MetricWithMetadata(MetricBase):
