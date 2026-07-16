@@ -9,7 +9,7 @@ import click
 import yaml
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from ..up import CLAUDE_SETTINGS_PATH, load_json_or_empty, restore_claude_settings, write_backup
+from ..up import CLAUDE_SETTINGS_PATH, UpError, load_json_or_empty, restore_claude_settings, write_backup
 from ..up import BackupRecord as ClaudeBackupRecord
 from .process import (
     AUTOROUTE_DIR,
@@ -81,7 +81,10 @@ def up() -> None:
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
 
-    existing_pid = read_pid_record()
+    try:
+        existing_pid = read_pid_record()
+    except UpError as e:
+        raise click.ClickException(str(e))
     if existing_pid is not None and is_running(existing_pid.pid):
         raise click.ClickException(
             "An ephemeral proxy is already running (lite autoroute up looks already active). "
@@ -107,16 +110,21 @@ def up() -> None:
         clear_pid_record()
         raise click.ClickException(str(e))
 
-    original_existed = CLAUDE_SETTINGS_PATH.exists()
-    original_settings = load_json_or_empty(CLAUDE_SETTINGS_PATH)
-    write_backup(
-        ClaudeBackupRecord(existed=original_existed, content=original_settings if original_existed else None),
-        AUTOROUTE_BACKUP_PATH,
-    )
-    merged = merge_claude_settings_static_token(original_settings, base_url, master_key)
-    CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with secure_create(CLAUDE_SETTINGS_PATH) as f:
-        json.dump(merged, f, indent=2)
+    try:
+        original_existed = CLAUDE_SETTINGS_PATH.exists()
+        original_settings = load_json_or_empty(CLAUDE_SETTINGS_PATH)
+        write_backup(
+            ClaudeBackupRecord(existed=original_existed, content=original_settings if original_existed else None),
+            AUTOROUTE_BACKUP_PATH,
+        )
+        merged = merge_claude_settings_static_token(original_settings, base_url, master_key)
+        CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with secure_create(CLAUDE_SETTINGS_PATH) as f:
+            json.dump(merged, f, indent=2)
+    except UpError as e:
+        terminate(process.pid)
+        clear_pid_record()
+        raise click.ClickException(str(e))
 
     click.echo(f"litellm: ephemeral auto-router proxy up at {base_url} (pid {process.pid})")
     click.echo("Claude Code sessions started now will route through it. Press Ctrl-C to stop and restore.")
@@ -129,7 +137,14 @@ def up() -> None:
             return
         terminate(process.pid)
         clear_pid_record()
-        restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
+        try:
+            restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
+        except UpError as e:
+            # Runs from atexit/a signal handler too, outside Click's own exception
+            # handling -- raising here would only produce an unhandled-exception
+            # warning on stderr, not a clean message.
+            click.echo(str(e), err=True)
+            return
         click.echo("\nStopped ephemeral proxy and restored Claude Code settings.")
         click.echo(
             f"Restart any Claude Code session still open from this session, or another local account could "
@@ -154,13 +169,22 @@ def up() -> None:
 @autoroute_group.command("down")
 def down() -> None:
     """Restore Claude Code settings and stop a leftover ephemeral proxy, if any"""
-    record: PidRecord | None = read_pid_record()
+    try:
+        record: PidRecord | None = read_pid_record()
+    except UpError as e:
+        # down is the crash-recovery path -- a corrupt pid record must not block it; clear the
+        # unusable record and keep going rather than leaving the user with no way to clean up.
+        click.echo(f"{e} Clearing it and continuing cleanup.", err=True)
+        record = None
     if record is not None and is_running(record.pid):
         terminate(record.pid)
         click.echo(f"Stopped leftover ephemeral proxy (pid {record.pid}).")
     clear_pid_record()
 
-    restored = restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
+    try:
+        restored = restore_claude_settings(CLAUDE_SETTINGS_PATH, AUTOROUTE_BACKUP_PATH)
+    except UpError as e:
+        raise click.ClickException(str(e))
     if restored is None:
         click.echo("Nothing to restore.")
     elif restored.existed:

@@ -148,6 +148,34 @@ class TestUpCommand:
         assert written_config["general_settings"]["master_key"] == "fixed-master-key"
         assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 
+    def test_teardown_reports_clean_error_when_backup_is_corrupt(self, monkeypatch, tmp_path):
+        """A corrupt backup at teardown time (e.g. a concurrent process wrote garbage to it) must
+        not crash the whole command -- _restore_once in up.py handles the identical case in
+        lite up the same way, echoing the error instead of propagating it."""
+        config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        fake_process = FakeProcess(pid=11111)
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 65432)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        def fake_wait(self, timeout=None):
+            backup_path.write_text("not json at all {{{")
+            return True
+
+        monkeypatch.setattr("threading.Event.wait", fake_wait)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code == 0, result.output
+        assert "invalid or unexpected JSON" in result.output
+        assert not pid_record_path.exists()
+
     def test_surfaces_clean_error_and_cleans_up_when_health_check_fails(self, monkeypatch, tmp_path):
         config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
@@ -174,6 +202,30 @@ class TestUpCommand:
         assert not pid_record_path.exists()
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == original_settings
+
+    def test_terminates_ephemeral_proxy_when_claude_settings_is_corrupt(self, monkeypatch, tmp_path):
+        """The health check can pass and the proxy can come up fine, but if
+        ~/.claude/settings.json turns out to be corrupt, the just-started proxy must not be left
+        running with no pid record -- exactly the leak `lite autoroute down` exists to clean up."""
+        config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text("not json at all {{{")
+
+        fake_process = FakeProcess(pid=777)
+        terminate_calls = []
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 23456)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert "invalid JSON" in result.output
+        assert terminate_calls == [777]
+        assert not pid_record_path.exists()
+        assert not backup_path.exists()
 
 
 class TestDownCommand:
@@ -213,3 +265,36 @@ class TestDownCommand:
         assert result.exit_code == 0, result.output
         assert "Nothing to restore." in result.output
         assert not claude_settings_path.exists()
+
+    def test_clears_a_corrupt_pid_record_and_still_restores_settings(self, monkeypatch, tmp_path):
+        """down is specifically the crash-recovery path -- a pid file truncated by a mid-write
+        crash must not block it from clearing the record and restoring Claude settings anyway."""
+        _config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        pid_record_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_record_path.write_text("not json at all {{{")
+        original_settings = {"theme": "dark"}
+        write_backup(ClaudeBackupRecord(existed=True, content=original_settings), backup_path)
+        claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "fixed-master-key"}}))
+
+        result = self.runner.invoke(down)
+
+        assert result.exit_code == 0, result.output
+        assert "invalid or unexpected JSON" in result.output
+        assert "Restored" in result.output
+        assert not pid_record_path.exists()
+        assert not backup_path.exists()
+        assert json.loads(claude_settings_path.read_text()) == original_settings
+
+    def test_surfaces_clean_error_when_backup_is_corrupt(self, monkeypatch, tmp_path):
+        _config_path, _log_path, _claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("not json at all {{{")
+
+        result = self.runner.invoke(down)
+
+        assert result.exit_code != 0
+        assert "invalid or unexpected JSON" in result.output

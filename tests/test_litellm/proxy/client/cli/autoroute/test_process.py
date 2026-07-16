@@ -9,6 +9,7 @@ from litellm.proxy.client.cli.commands.autoroute import process as process_modul
 from litellm.proxy.client.cli.commands.autoroute.process import (
     PidRecord,
     ProcessLaunchError,
+    UpError,
     allocate_free_port,
     clear_pid_record,
     is_running,
@@ -65,6 +66,13 @@ class TestPidRecordRoundTrip:
 
     def test_read_missing_file_returns_none(self, tmp_path):
         assert read_pid_record(tmp_path / "missing.json") is None
+
+    def test_read_raises_clean_error_on_corrupt_content(self, tmp_path):
+        path = tmp_path / "pid.json"
+        path.write_text("not json at all {{{")
+
+        with pytest.raises(UpError, match="invalid or unexpected JSON"):
+            read_pid_record(path)
 
     def test_clear_removes_an_existing_record(self, tmp_path):
         path = tmp_path / "pid.json"

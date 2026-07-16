@@ -12,9 +12,9 @@ from pathlib import Path
 
 import click
 import requests
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
-from ..up import secure_create
+from ..up import UpError, secure_create
 
 AUTOROUTE_DIR = Path.home() / ".litellm" / "autorouter"
 CONFIG_PATH = AUTOROUTE_DIR / "config.yaml"
@@ -103,7 +103,11 @@ def read_pid_record(path: Path | None = None) -> PidRecord | None:
     if not resolved_path.exists():
         return None
     with open(resolved_path, "r") as f:
-        return _PID_RECORD_ADAPTER.validate_json(f.read())
+        content = f.read()
+    try:
+        return _PID_RECORD_ADAPTER.validate_json(content)
+    except ValidationError:
+        raise UpError(f"{resolved_path} contains invalid or unexpected JSON; cannot proceed safely.")
 
 
 def clear_pid_record(path: Path | None = None) -> None:
