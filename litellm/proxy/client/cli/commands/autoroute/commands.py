@@ -21,6 +21,7 @@ from .process import (
     clear_pid_record,
     is_running,
     launch_proxy,
+    missing_proxy_runtime_modules,
     poll_liveliness,
     read_pid_record,
     secure_create,
@@ -80,6 +81,16 @@ def up() -> None:
     """Launch the ephemeral auto-router proxy and route Claude Code through it"""
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
+
+    missing = missing_proxy_runtime_modules()
+    if missing:
+        raise click.ClickException(
+            "lite autoroute up launches a local litellm proxy, which needs the proxy runtime that the "
+            f"thin `litellm[cli]` install does not include (missing: {', '.join(missing)}). Install the "
+            "proxy runtime with `uv tool install --force 'litellm[proxy]'`, or to QA a branch, "
+            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install.sh | "
+            "LITELLM_CLI_REF=<branch> sh`."
+        )
 
     try:
         existing_pid = read_pid_record()

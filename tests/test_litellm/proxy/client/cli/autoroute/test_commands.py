@@ -69,6 +69,25 @@ class TestUpCommand:
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "lite autoroute configure" in result.output
 
+    def test_refuses_with_actionable_error_when_proxy_runtime_missing(self, monkeypatch, tmp_path):
+        """`up` launches a real litellm proxy, which the thin `litellm[cli]` install cannot run.
+        It must fail fast with an actionable message pointing at the proxy install, before it ever
+        tries to launch the doomed subprocess (which would otherwise die with a bare ImportError)."""
+        config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        monkeypatch.setattr(commands_module, "missing_proxy_runtime_modules", lambda: ("fastapi", "websockets"))
+
+        def _fail_if_launched(*args, **kwargs):
+            raise AssertionError("launch_proxy must not run when the proxy runtime is missing")
+
+        monkeypatch.setattr(commands_module, "launch_proxy", _fail_if_launched)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert "fastapi, websockets" in result.output
+        assert "litellm[proxy]" in result.output
+
     def test_refuses_when_pid_record_exists_and_process_still_running(self, monkeypatch, tmp_path):
         config_path, _log_path, _settings_path, _backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
