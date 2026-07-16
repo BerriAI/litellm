@@ -971,9 +971,13 @@ def calculate_image_response_cost_from_usage(
     input_tokens_details = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     if input_tokens_details is not None:
+        # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
+        # or an object; read it tolerantly like the output side below, so image
+        # input tokens are priced at input_cost_per_image_token instead of
+        # silently falling back to the text rate.
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=getattr(input_tokens_details, "text_tokens", None),
-            image_tokens=getattr(input_tokens_details, "image_tokens", None),
+            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
+            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
             cached_tokens=0,
         )
 
