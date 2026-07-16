@@ -202,11 +202,11 @@ class TestNova2ParameterMapping:
         assert result["reasoningConfig"]["type"] == "enabled"
         assert result["reasoningConfig"]["maxReasoningEffort"] == "low"
 
-    def test_nova_2_regional_variant_apac(self):
-        """Test that APAC regional variant of Nova 2 works correctly."""
+    def test_nova_2_regional_variant_jp(self):
+        """Test that JP regional variant of Nova 2 works correctly."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "jp.amazon.nova-2-lite-v1:0"
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
@@ -295,11 +295,11 @@ class TestNova15SupportedParameters:
         # Verify thinking is NOT in supported params
         assert "thinking" not in supported_params
 
-    def test_nova_2_regional_variant_apac_supported_params(self):
-        """Test that APAC regional variant returns same supported params."""
+    def test_nova_2_regional_variant_jp_supported_params(self):
+        """Test that JP regional variant returns same supported params."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "jp.amazon.nova-2-lite-v1:0"
         supported_params = config.get_supported_openai_params(model)
 
         # Verify reasoning_effort is in supported params
@@ -605,6 +605,31 @@ class TestNova2EndToEndResponse:
 # ---------------------------------------------------------------------------
 # Multi-turn — reasoning_content round-trips back to Bedrock format
 # ---------------------------------------------------------------------------
+
+
+class TestNova2GeoInferenceIds:
+    """Regression tests for Bedrock geo inference profile IDs for Nova 2 Lite.
+
+    Covers https://github.com/BerriAI/litellm/issues/33211: the jp. prefix is the
+    correct AWS geo inference ID for the Japan region; apac. does not exist for
+    Nova 2 Lite and causes a BadRequestError from Bedrock.
+    """
+
+    def test_jp_nova_2_lite_in_model_cost(self) -> None:
+        assert "jp.amazon.nova-2-lite-v1:0" in litellm.model_cost, (
+            "jp.amazon.nova-2-lite-v1:0 must be a recognised model ID; "
+            "it is the correct Geo: JP inference profile per the AWS model card"
+        )
+
+    def test_apac_nova_2_lite_not_in_model_cost(self) -> None:
+        assert "apac.amazon.nova-2-lite-v1:0" not in litellm.model_cost, (
+            "apac.amazon.nova-2-lite-v1:0 is an invalid AWS model ID for Nova 2 Lite; "
+            "Bedrock rejects it with 'The provided model identifier is invalid'"
+        )
+
+    def test_jp_nova_2_lite_is_detected_as_nova_2(self) -> None:
+        config = AmazonConverseConfig()
+        assert config._is_nova_2_model("jp.amazon.nova-2-lite-v1:0") is True
 
 
 class TestNova2MultiTurnMessageTranslation:
