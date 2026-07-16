@@ -984,11 +984,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectsPage.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1525,14 +1520,6 @@
   },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2091,11 +2078,6 @@
     }
   },
   "src/components/pass_through_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/pass_through_settings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
