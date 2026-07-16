@@ -1655,17 +1655,6 @@
       "count": 1
     }
   },
-  "src/components/UsageIndicator.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 1
-    }
-  },
   "src/components/activity_metrics.tsx": {
     "no-nested-ternary": {
       "count": 1
