@@ -3455,6 +3455,29 @@ class TestBedrockOnlyScanNewMessages:
                 "turn 3 question",
             ]
 
+    def test_incremental_scan_cache_prefers_proxy_shared_cache(self):
+        guardrail = self._guardrail()
+        shared = DualCache()
+        proxy_logging = MagicMock()
+        proxy_logging.internal_usage_cache.dual_cache = shared
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+            assert guardrail._incremental_scan_cache() is shared
+
+    def test_incremental_scan_cache_falls_back_when_proxy_logging_missing(self):
+        from litellm.integrations.custom_guardrail import dc as fallback_cache
+
+        guardrail = self._guardrail()
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", None):
+            assert guardrail._incremental_scan_cache() is fallback_cache
+
+    def test_incremental_scan_cache_falls_back_when_proxy_not_importable(self):
+        from litellm.integrations.custom_guardrail import dc as fallback_cache
+
+        guardrail = self._guardrail()
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": None}):
+            assert guardrail._incremental_scan_cache() is fallback_cache
+
     @pytest.mark.asyncio
     async def test_blocked_turn_is_rescanned_on_retry(self):
         guardrail = self._guardrail()
