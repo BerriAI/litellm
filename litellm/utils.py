@@ -1324,7 +1324,7 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            if logging_obj.is_async_entrypoint is None:
+            if getattr(logging_obj, "is_async_entrypoint", None) is None:
                 logging_obj.is_async_entrypoint = False
 
             ## LOAD CREDENTIALS
@@ -1607,7 +1607,7 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            if logging_obj.is_async_entrypoint is None:
+            if getattr(logging_obj, "is_async_entrypoint", None) is None:
                 logging_obj.is_async_entrypoint = True
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)

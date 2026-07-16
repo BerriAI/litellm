@@ -1063,7 +1063,10 @@ async def test_sync_only_logger_receives_async_event_through_dispatch_gate(loggi
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=model_response, start_time=now, end_time=now
         )
-        executor.submit(lambda: None).result()
+        deadline = time.monotonic() + 5
+        while not events and time.monotonic() < deadline:
+            executor.submit(lambda: None).result()
+            time.sleep(0.05)
 
     assert events == ["sync_success"]
 
