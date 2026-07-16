@@ -687,6 +687,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    sanitize_error_detail: Optional[bool] = Field(
+        default=True,
+        description=(
+            "For guardrail='model_armor': omit the raw Model Armor response from "
+            "caller-facing errors and logs by default. Set False to restore verbose output."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,

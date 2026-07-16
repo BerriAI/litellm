@@ -413,8 +413,8 @@ async def test_model_armor_api_error_handling():
             )
 
         assert exc_info.value.status_code == 400
-        assert "Model Armor API error" in str(exc_info.value.detail)
-        assert "upstream 500" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Model Armor API error: upstream request failed"
+        assert "Internal Server Error" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -651,7 +651,119 @@ async def test_model_armor_api_failure_returns_400():
 
         # Should be 400, NOT the upstream 500
         assert exc_info.value.status_code == 400
-        assert "upstream 500" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Model Armor API error: upstream request failed"
+        assert "Internal Server Error" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_error_output_sanitization(sanitize: bool):
+    marker = "SYNTHETIC_MODEL_ARMOR_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    error_response = AsyncMock(status_code=500, text=marker)
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=error_response)
+    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
+        verbose_proxy_logger, "error"
+    ) as error_log, pytest.raises(HTTPException) as exc_info:
+        await guardrail.make_model_armor_request(content=marker)
+
+    direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
+    if sanitize:
+        assert marker not in str(exc_info.value.detail)
+        assert marker not in direct_log
+    else:
+        assert marker in str(exc_info.value.detail)
+        assert marker in direct_log
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_match_found_sanitizes_caller_and_logging(sanitize: bool):
+    marker = "SYNTHETIC_MATCH_FOUND_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "inspectResult": {
+                            "matchState": "MATCH_FOUND",
+                            "findings": [{"marker": marker}],
+                        }
+                    }
+                }
+            }
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        event_hook=[GuardrailEventHooks.pre_mcp_call],
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    request_data = {
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type=litellm.types.utils.CallTypes.call_mcp_tool.value,
+        )
+
+    detail = exc_info.value.detail
+    logged_response = request_data["metadata"]["_model_armor_response"]
+    if sanitize:
+        assert detail == {"error": "Content blocked by Model Armor"}
+        assert logged_response == {}
+        assert marker not in str(detail)
+        assert marker not in str(logged_response)
+    else:
+        assert detail["model_armor_response"] == armor_response
+        assert logged_response == armor_response
+        assert marker in str(detail)
+        assert marker in str(logged_response)
+
+
+def test_model_armor_sanitize_error_detail_config_wiring():
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    config = {"guardrail_name": "model-armor-test"}
+    params = {
+        "guardrail": "model_armor",
+        "mode": "pre_mcp_call",
+        "template_id": "test-template",
+        "project_id": "test-project",
+    }
+    opted_out = initialize_guardrail(
+        LitellmParams(**params, sanitize_error_detail=False), config
+    )
+    explicit_null = initialize_guardrail(
+        LitellmParams(**params, sanitize_error_detail=None), config
+    )
+    default = initialize_guardrail(LitellmParams(**params), config)
+
+    assert opted_out.sanitize_error_detail is False
+    assert explicit_null.sanitize_error_detail is True
+    assert default.sanitize_error_detail is True
 
 
 def test_model_armor_ui_friendly_name():
@@ -1394,7 +1506,10 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
             )
 
         info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_name"] == guardrail.guardrail_name
         assert info[0]["guardrail_status"] == "guardrail_intervened"
+        assert "model_armor_response" not in info[0]["guardrail_response"]
+        assert "sanitizationResult" not in info[0]["guardrail_response"]
 
     # 2: if an API error - guardrail status should be guardrail_failed_to_respond"
     guardrail2 = ModelArmorGuardrail(
