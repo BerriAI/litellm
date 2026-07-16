@@ -241,13 +241,34 @@ def _check_cli_sso_start_rate_limit(
 
 
 def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+    if isinstance(login_id, str) and login_id.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Your litellm CLI is out of date and uses a login flow this proxy no longer supports. "
+                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `litellm-proxy login` again."
+            ),
+        )
     if not _is_valid_cli_sso_login_id(login_id):
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
     cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
     flow = cache.get_cache(key=cache_key)
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        verbose_proxy_logger.warning(
+            "CLI SSO login session not found in cache for login_id=%s. If the proxy runs multiple replicas, "
+            "a shared Redis cache (enable_redis_auth_cache: true) is required for CLI login to work.",
+            login_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CLI login session not found or expired. Run `litellm-proxy login` again. "
+                "If this happens immediately after starting a login, the proxy is likely running multiple "
+                "replicas without a shared cache; configure Redis with `enable_redis_auth_cache: true` "
+                "so every replica can see the login session."
+            ),
+        )
     return flow
 
 
