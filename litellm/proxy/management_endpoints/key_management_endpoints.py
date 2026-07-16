@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
+    MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -1022,6 +1023,14 @@ async def _common_key_generation_helper(
             detail={"error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {_masked}"},
         )
 
+    if data.key is not None and len(data.key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."
+            },
+        )
+
     # check org key limits - done here to handle inheriting org id from team
     if data.organization_id is not None:
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -1474,7 +1483,7 @@ async def generate_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -1688,7 +1697,7 @@ async def generate_service_account_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -4356,7 +4365,6 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
         await _check_custom_key_allowed(data.new_key)
-        new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4364,6 +4372,12 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
                     "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
                 },
             )
+        if len(data.new_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"New key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."},
+            )
+        new_token = data.new_key
     else:
         new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
     return new_token
@@ -4470,7 +4484,7 @@ async def _execute_virtual_key_regeneration(
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
-    new_token_key_name = f"sk-...{new_token[-4:]}"
+    new_token_key_name = abbreviate_api_key(api_key=new_token)
     update_data = {"token": new_token_hash, "key_name": new_token_key_name}
 
     non_default_values = {}
@@ -4550,7 +4564,7 @@ async def regenerate_key_fn(
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
         - key: Optional[str] - The key to regenerate.
         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-        - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+        - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key

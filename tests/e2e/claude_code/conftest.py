@@ -33,7 +33,6 @@ from __future__ import annotations
 import functools
 import json
 import os
-import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -42,6 +41,8 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import pytest
 import yaml
+
+from claude_code.cli_driver import RATE_LIMIT_SHAPED_RE
 
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
@@ -62,11 +63,10 @@ DEFAULT_RATE_LIMIT_SUMMARY_PATH = "compat-rate-limit-summary.json"
 # the rate limiter is supposed to back off from. False positives on a
 # genuinely slow upstream are tolerable here because the worst case is
 # the binary search runs at a slightly lower rate than necessary.
-_RATE_LIMIT_RE = re.compile(
-    r"(?:\b429\b|rate[\s_-]?limit|too\s+many\s+requests|throttl(?:ed|ing)|"
-    r"claude\s+CLI\s+timed\s+out)",
-    re.IGNORECASE,
-)
+#
+# The pattern lives in `cli_driver` so the driver's retry-on-rate-limit
+# logic and this summary classify failures identically.
+_RATE_LIMIT_RE = RATE_LIMIT_SHAPED_RE
 
 
 @dataclass

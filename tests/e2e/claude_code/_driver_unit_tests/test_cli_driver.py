@@ -19,6 +19,7 @@ from claude_code.cli_driver import (
     ClaudeCLIError,
     DriverResult,
     failure_diagnostic,
+    is_rate_limit_shaped,
     run_claude,
     run_claude_models_parallel,
 )
@@ -793,3 +794,199 @@ def test_failure_diagnostic_uses_last_result_event_status():
     diag = failure_diagnostic(result)
     assert "api_status=429" in diag
     assert "500" not in diag
+
+
+_RATE_LIMITED_STDOUT = (
+    json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "API Error: 429 Too Many Requests"}
+                ]
+            },
+        }
+    )
+    + "\n"
+    + json.dumps({"type": "result", "api_error_status": 429})
+    + "\n"
+)
+
+_OK_STDOUT = (
+    json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "pong"}]},
+        }
+    )
+    + "\n"
+)
+
+
+class _FlakyRunner:
+    """Fake runner that rate-limits each model N times before succeeding.
+
+    Keeps a per-model call count so tests can assert exactly how many
+    attempts the retry loop made — the load-bearing detail a canned
+    single-response runner can't express.
+    """
+
+    def __init__(self, failures_before_success: dict):
+        self.failures_before_success = dict(failures_before_success)
+        self.calls: dict = {}
+
+    def __call__(self, cmd, env, capture_output, text, timeout, check, input=None):
+        model = cmd[cmd.index("--model") + 1]
+        self.calls[model] = self.calls.get(model, 0) + 1
+        if self.calls[model] <= self.failures_before_success.get(model, 0):
+            return _Completed(returncode=1, stdout=_RATE_LIMITED_STDOUT)
+        return _Completed(returncode=0, stdout=_OK_STDOUT)
+
+
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        (ClaudeCLIError("claude CLI timed out after 120.0s"), True),
+        (ClaudeCLIError("claude CLI not found at 'claude'"), False),
+        (
+            DriverResult(
+                text="",
+                events=[{"type": "result", "api_error_status": 429}],
+                exit_code=1,
+            ),
+            True,
+        ),
+        (DriverResult(text="Too Many Requests", exit_code=1), True),
+        (DriverResult(text="", stderr="throttled by upstream", exit_code=1), True),
+        (DriverResult(text="rate limit exceeded", exit_code=0), False),
+        (DriverResult(text="", stderr="auth failed", exit_code=2), False),
+    ],
+)
+def test_is_rate_limit_shaped_classification(outcome, expected):
+    """The retry trigger must match 429/throttle/timeout markers on
+    failures only — a passing result mentioning '429' in its reply text
+    must never be classified as retryable."""
+    assert is_rate_limit_shaped(outcome) is expected
+
+
+def test_run_claude_models_parallel_retries_rate_limited_model_until_success():
+    """A model that 429s once must be retried after the backoff sleep and
+    end up green, while an untroubled sibling model runs exactly once."""
+    runner = _FlakyRunner({"flaky": 1})
+    sleeps: List[float] = []
+
+    outcomes = run_claude_models_parallel(
+        models=["flaky", "steady"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+        rate_limit_retries=2,
+        rate_limit_backoff_seconds=0.5,
+        sleep=sleeps.append,
+    )
+
+    assert isinstance(outcomes["flaky"], DriverResult)
+    assert outcomes["flaky"].exit_code == 0
+    assert outcomes["flaky"].text == "pong"
+    assert runner.calls == {"flaky": 2, "steady": 1}
+    assert sleeps == [0.5]
+
+
+def test_run_claude_models_parallel_does_not_retry_non_rate_limit_failures():
+    """A deterministic failure (bad auth) must fail fast: no sleeps, one
+    attempt — retrying it would just triple the matrix wall time."""
+
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+        return _Completed(returncode=2, stdout="", stderr="auth failed")
+
+    sleeps: List[float] = []
+    outcomes = run_claude_models_parallel(
+        models=["a"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+        rate_limit_retries=2,
+        rate_limit_backoff_seconds=0.5,
+        sleep=sleeps.append,
+    )
+
+    assert outcomes["a"].exit_code == 2
+    assert sleeps == []
+
+
+def test_run_claude_models_parallel_returns_last_failure_when_retries_exhausted():
+    """A persistently rate-limited model exhausts its budget (initial
+    attempt + N retries, each preceded by one backoff sleep) and still
+    surfaces the 429 diagnostic instead of masking it."""
+    runner = _FlakyRunner({"stuck": 99})
+    sleeps: List[float] = []
+
+    outcomes = run_claude_models_parallel(
+        models=["stuck"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+        rate_limit_retries=2,
+        rate_limit_backoff_seconds=0.25,
+        sleep=sleeps.append,
+    )
+
+    assert runner.calls == {"stuck": 3}
+    assert sleeps == [0.25, 0.25]
+    assert outcomes["stuck"].exit_code == 1
+    assert "429" in failure_diagnostic(outcomes["stuck"])
+
+
+def test_run_claude_models_parallel_retries_timeout_shaped_cli_errors():
+    """CLI timeouts are how saturated upstreams usually present (the CLI
+    retries 429s internally until the harness kills it), so a timeout
+    must be retried like an explicit 429."""
+    calls: List[int] = []
+
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+        calls.append(1)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        return _Completed(returncode=0, stdout=_OK_STDOUT)
+
+    sleeps: List[float] = []
+    outcomes = run_claude_models_parallel(
+        models=["a"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+        rate_limit_retries=1,
+        rate_limit_backoff_seconds=0.5,
+        sleep=sleeps.append,
+    )
+
+    assert isinstance(outcomes["a"], DriverResult)
+    assert outcomes["a"].text == "pong"
+    assert len(calls) == 2
+    assert sleeps == [0.5]
+
+
+def test_run_claude_models_parallel_zero_retries_disables_backoff():
+    """`rate_limit_retries=0` must restore the old single-attempt
+    behavior exactly: one call, no sleeps, failure returned as-is."""
+    runner = _FlakyRunner({"stuck": 99})
+    sleeps: List[float] = []
+
+    outcomes = run_claude_models_parallel(
+        models=["stuck"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+        rate_limit_retries=0,
+        rate_limit_backoff_seconds=0.5,
+        sleep=sleeps.append,
+    )
+
+    assert runner.calls == {"stuck": 1}
+    assert sleeps == []
+    assert outcomes["stuck"].exit_code == 1
