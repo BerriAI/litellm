@@ -165,20 +165,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self.client = client
         self._ssl_verify = ssl_verify  # Store for per-request SSL override
         super().__init__(client=client, owns_session=owns_session)
-        # Store the client factory for recreating sessions when needed. An
-        # explicit session_factory wins so a concrete `client` (e.g. a shared
-        # session) still recreates with keep-alive wiring instead of a bare
-        # ClientSession.
         self._client_factory: Callable[[], ClientSession] | None = (
             session_factory if session_factory is not None else client if callable(client) else None
         )
 
     def _new_session(self) -> ClientSession:
-        """
-        Build a fresh ClientSession, preferring the stored factory (which
-        carries the SO_KEEPALIVE socket factory) and falling back to a
-        keep-alive-aware default rather than a bare aiohttp.ClientSession().
-        """
         if self._client_factory is not None:
             return self._client_factory()
 

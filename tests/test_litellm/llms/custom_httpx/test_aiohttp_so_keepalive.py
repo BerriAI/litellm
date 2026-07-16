@@ -164,19 +164,10 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
 
 
 def _last_socket_factory(mock_tcp_connector):
-    """socket_factory kwarg of the most recent TCPConnector(...) construction."""
     return mock_tcp_connector.call_args.kwargs.get("socket_factory")
 
 
 def test_shared_session_transport_recreates_with_socket_factory(monkeypatch):
-    """
-    Regression for issue #33567: when the aiohttp transport is built around a
-    caller-provided shared ClientSession, it must still recreate stale sessions
-    (closed / cross-loop) through a keep-alive-aware factory. Before the fix the
-    shared-session transport stored no factory, so _get_valid_client_session
-    fell back to a bare aiohttp.ClientSession() with no socket_factory and
-    AIOHTTP_SO_KEEPALIVE had zero effect on the Azure/OpenAI path.
-    """
     from litellm.llms.custom_httpx import http_handler as http_handler_module
 
     monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
@@ -197,9 +188,7 @@ def test_shared_session_transport_recreates_with_socket_factory(monkeypatch):
             transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
                 shared_session=shared_session
             )
-            # Transport reuses the shared session as the live client...
             assert transport.client is shared_session
-            # ...but a keep-alive-aware factory backs every recreation.
             assert transport._client_factory is not None
             transport._new_session()
 
@@ -208,18 +197,12 @@ def test_shared_session_transport_recreates_with_socket_factory(monkeypatch):
 
 
 def test_new_session_falls_back_to_keepalive_default(monkeypatch):
-    """
-    A transport constructed with a concrete client and no factory must still
-    rebuild through the keep-alive-aware default rather than a bare session.
-    """
     from litellm.llms.custom_httpx import http_handler as http_handler_module
     from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
     monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
     monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
 
-    # A non-callable client stands in for a concrete ClientSession so no
-    # factory is inferred from it.
     concrete_session = object()
     transport = LiteLLMAiohttpTransport(client=concrete_session, session_factory=None)
     assert transport._client_factory is None
