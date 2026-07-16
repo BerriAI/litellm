@@ -39,6 +39,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
+    ChoiceLogprobs,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
@@ -1041,6 +1042,17 @@ class CustomStreamWrapper:
                 del model_response.choices[0].delta.reasoning_content
         return
 
+    @staticmethod
+    def _normalize_logprobs(logprobs: Any) -> Any:
+        """Convert raw provider/SDK logprobs into litellm's own ``ChoiceLogprobs`` so the chunk stays serializable."""
+        if logprobs is None or isinstance(logprobs, ChoiceLogprobs):
+            return logprobs
+        if isinstance(logprobs, BaseModel):
+            return ChoiceLogprobs(**logprobs.model_dump())
+        if isinstance(logprobs, dict):
+            return ChoiceLogprobs(**logprobs)
+        return logprobs
+
     def _dispatch_provider_chunk(
         self,
         chunk: Any,
@@ -1345,7 +1357,7 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = response_obj["original_chunk"].system_fingerprint
                     self.system_fingerprint = response_obj["original_chunk"].system_fingerprint
             if response_obj["logprobs"] is not None:
-                model_response.choices[0].logprobs = response_obj["logprobs"]
+                model_response.choices[0].logprobs = self._normalize_logprobs(response_obj["logprobs"])
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
