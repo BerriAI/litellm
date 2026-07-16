@@ -165,7 +165,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_object_id: str,
         file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Optional[List[str]] = None,
     ) -> None:
+        from prisma import Json
+
         verbose_logger.info(
             f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache"
         )
@@ -191,6 +194,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
                     "team_id": user_api_key_dict.team_id,
+                    "api_key": user_api_key_dict.api_key or None,
+                    "request_tags": Json(request_tags) if request_tags else None,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
