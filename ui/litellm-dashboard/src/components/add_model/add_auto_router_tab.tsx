@@ -21,6 +21,7 @@ import {
   getSemanticConfigError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import { getSemanticRouterError } from "./build_semantic_router_validation";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
 
@@ -164,23 +165,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   };
 
   const submitSemanticRouter = (name: string) => {
-    if (!form.getFieldValue("auto_router_default_model")) {
-      NotificationManager.fromBackend("Please select a Default Model");
-      return;
-    }
-
-    if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
-      NotificationManager.fromBackend("Please configure at least one route for the auto router");
-      return;
-    }
-
-    const invalidRoutes = routerConfig.routes.filter(
-      (route: any) => !route.name || !route.description || route.utterances.length === 0,
-    );
-    if (invalidRoutes.length > 0) {
-      NotificationManager.fromBackend(
-        "Please ensure all routes have a target model, description, and at least one utterance",
-      );
+    const validationError = getSemanticRouterError({
+      defaultModel: form.getFieldValue("auto_router_default_model"),
+      embeddingModel: form.getFieldValue("auto_router_embedding_model"),
+      routerConfig,
+    });
+    if (validationError) {
+      NotificationManager.fromBackend(validationError);
       return;
     }
 
@@ -358,18 +349,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               </Form.Item>
 
               <Form.Item
+                rules={[{ required: true, message: "Embedding model is required" }]}
                 label="Embedding Model"
                 name="auto_router_embedding_model"
-                tooltip="Optional: embedding model to use for semantic routing decisions"
+                tooltip="Embedding model to use for semantic routing decisions"
                 labelCol={{ span: 10 }}
                 labelAlign="left"
               >
                 <AntdSelect
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   options={modelGroupOptions}
                   style={{ width: "100%" }}
                   showSearch
-                  allowClear
                 />
               </Form.Item>
             </>
