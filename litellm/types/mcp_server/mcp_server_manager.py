@@ -64,7 +64,12 @@ class MCPServer(BaseModel):
     Opt-in allowlist of header names; empty or unset forwards nothing. The gateway answers the caller
     over a stream whose HTTP headers are already committed before the tool runs, so these are relayed
     as protocol metadata rather than as HTTP response headers. Credential, cookie, upstream-session and
-    hop-by-hop headers are never forwarded (see ``MCP_RESPONSE_HEADER_DENYLIST``)."""
+    hop-by-hop headers are never forwarded (see ``MCP_RESPONSE_HEADER_DENYLIST``).
+
+    Honored only on the ``http`` (streamable-HTTP) transport, the one that exposes the upstream
+    ``tools/call`` HTTP response. stdio carries no HTTP, and SSE returns only an ack on its POST and
+    delivers the result over a pre-committed stream, so on those the setting is inert and loading a
+    server configured this way logs a warning."""
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
