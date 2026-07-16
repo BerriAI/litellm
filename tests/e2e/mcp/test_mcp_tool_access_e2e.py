@@ -44,6 +44,11 @@ class TestMcpToolAccess:
         created = client.create_server(McpServerCreateBody(alias=alias, url=MCP_STUB_URL, allow_all_keys=True))
         resources.defer(lambda: client.delete_server(created.server_id))
 
+        stored = client.server_info(created.server_id)
+        assert stored.alias == alias
+        assert stored.url == MCP_STUB_URL
+        assert stored.allow_all_keys is True
+
         key = client.gateway.generate_key(KeyGenerateBody())
         resources.defer(lambda: client.gateway.delete_key(key))
         _ = client.poll_tool_names(alias, {"x-litellm-api-key": f"Bearer {key}"})
@@ -61,6 +66,11 @@ class TestMcpToolAccess:
         alias = f"e2emcp{unique_marker()}"
         created = client.create_server(McpServerCreateBody(alias=alias, url=MCP_STUB_URL, allow_all_keys=True))
         resources.defer(lambda: client.delete_server(created.server_id))
+
+        stored = client.server_info(created.server_id)
+        assert stored.alias == alias
+        assert stored.url == MCP_STUB_URL
+        assert stored.allow_all_keys is True
 
         key = client.gateway.generate_key(KeyGenerateBody())
         resources.defer(lambda: client.gateway.delete_key(key))
