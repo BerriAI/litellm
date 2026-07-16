@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { getRemainingUsers } from "./networking";
 
 import { cn } from "@/lib/cva.config";
-import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { formatExpirationStatus, getDaysUntilExpiration } from "@/utils/licenseUtils";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 
 interface UsageIndicatorProps {
@@ -31,18 +31,6 @@ interface UsageData {
   total_teams_used: number;
   total_teams_remaining: number | null;
 }
-
-// Format expiration for display
-const formatExpirationDisplay = (daysRemaining: number | null): string => {
-  if (daysRemaining === null) return "No expiration";
-  if (daysRemaining < 0) return "Expired";
-  if (daysRemaining === 0) return "Expires today";
-  if (daysRemaining === 1) return "1 day remaining";
-  if (daysRemaining < 30) return `${daysRemaining} days remaining`;
-  if (daysRemaining < 60) return "1 month remaining";
-  const months = Math.floor(daysRemaining / 30);
-  return `${months} months remaining`;
-};
 
 export default function UsageIndicator({ accessToken, width = 220 }: UsageIndicatorProps) {
   const disableUsageIndicator = useDisableUsageIndicator();
@@ -292,7 +280,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   ) : isLicenseExpiringSoon ? (
                     <TrendingUp className="h-3 w-3" />
                   ) : null}
-                  <span className="truncate">{formatExpirationDisplay(daysUntilExpiration)}</span>
+                  <span className="truncate">{formatExpirationStatus(licenseInfo.expiration_date)}</span>
                 </div>
               </div>
             )}
@@ -529,7 +517,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     isLicenseExpiringSoon && "text-yellow-600",
                   )}
                 >
-                  {formatExpirationDisplay(daysUntilExpiration)}
+                  {formatExpirationStatus(licenseInfo.expiration_date)}
                 </span>
               </div>
               {licenseInfo.license_type && (
