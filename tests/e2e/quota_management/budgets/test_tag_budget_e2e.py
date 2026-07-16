@@ -11,7 +11,7 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
@@ -23,7 +23,7 @@ TINY_BUDGET = 1e-6
 def _tagged_call(client: BudgetClient, key: str, tag: str):
     result = client.chat(
         key,
-        "claude-haiku-4-5",
+        CHEAP_ANTHROPIC_MODEL,
         f"hi {unique_marker()}",
         tags=[tag],
         max_tokens=64,

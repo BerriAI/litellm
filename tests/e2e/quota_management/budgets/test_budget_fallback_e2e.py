@@ -9,13 +9,13 @@ import time
 import pytest
 
 from budget_client import BudgetClient, model_budget
-from e2e_config import unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from lifecycle import ResourceManager
 from models import AnthropicMessagesResponse
 
 pytestmark = pytest.mark.e2e
 
-PRIMARY_MODEL = "claude-haiku-4-5"
+PRIMARY_MODEL = CHEAP_ANTHROPIC_MODEL
 FALLBACK_MODEL = "gpt-5.5"
 
 

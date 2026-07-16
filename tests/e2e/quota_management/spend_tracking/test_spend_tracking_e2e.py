@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from e2e_config import CHEAP_ANTHROPIC_MODEL
 from e2e_http import Result, Success
 from lifecycle import ResourceManager
 from models import ChatResponse, SpendLogs, SpendLogsParams
@@ -397,14 +398,14 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
     )
     claude = unwrap(
         client.chat(
-            scoped_key, "claude-haiku-4-5", f"one word {unique_marker()}", max_tokens=16
+            scoped_key, CHEAP_ANTHROPIC_MODEL, f"one word {unique_marker()}", max_tokens=16
         )
     )
 
     def both_models_costed(rows: list[SpendLogRow]) -> bool:
         costed = [r.model or "" for r in rows if (r.spend or 0) > 0]
         return any("gemini-2.5-flash" in m for m in costed) and any(
-            "claude-haiku-4-5" in m for m in costed
+            CHEAP_ANTHROPIC_MODEL in m for m in costed
         )
 
     rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
@@ -412,7 +413,7 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         rows, lambda r: "gemini-2.5-flash" in (r.model or ""), "for the gemini call"
     )
     claude_row = _require_row(
-        rows, lambda r: "claude-haiku-4-5" in (r.model or ""), "for the claude call"
+        rows, lambda r: CHEAP_ANTHROPIC_MODEL in (r.model or ""), "for the claude call"
     )
 
     assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
