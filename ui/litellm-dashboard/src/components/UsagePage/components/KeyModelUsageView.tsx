@@ -29,6 +29,22 @@ const columns: ColumnsType<TopModelData> = [
     render: (value) => <MoneyCell value={value} decimals={2} />,
   },
   {
+    title: "Requests",
+    dataIndex: "requests",
+    key: "requests",
+    render: (value, record) => (
+      <span>
+        {value?.toLocaleString() || 0} ({record.request_share?.toFixed(1) || "0.0"}%)
+      </span>
+    ),
+  },
+  {
+    title: "Total Tokens",
+    dataIndex: "tokens",
+    key: "tokens",
+    render: (value) => value?.toLocaleString() || 0,
+  },
+  {
     title: "Successful",
     dataIndex: "successful_requests",
     key: "successful_requests",
@@ -41,9 +57,15 @@ const columns: ColumnsType<TopModelData> = [
     render: (value) => <span className="text-red-600">{value?.toLocaleString() || 0}</span>,
   },
   {
-    title: "Tokens",
-    dataIndex: "tokens",
-    key: "tokens",
+    title: "Cache Read",
+    dataIndex: "cache_read_input_tokens",
+    key: "cache_read_input_tokens",
+    render: (value) => value?.toLocaleString() || 0,
+  },
+  {
+    title: "Cache Write",
+    dataIndex: "cache_creation_input_tokens",
+    key: "cache_creation_input_tokens",
     render: (value) => value?.toLocaleString() || 0,
   },
 ];
@@ -81,11 +103,11 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           <div className="max-h-[234px] overflow-y-auto">
             <BarChart
               style={{ height: topModels.length * 40 }}
-              data={topModels.map((m) => ({ key: m.model, spend: m.spend }))}
+              data={topModels.map((model) => ({ key: model.model, requests: model.requests }))}
               index="key"
-              categories={["spend"]}
+              categories={["requests"]}
               colors={["cyan"]}
-              valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+              valueFormatter={(value) => formatNumberWithCommas(value, 0)}
               layout="vertical"
               yAxisWidth={180}
               tickGap={5}

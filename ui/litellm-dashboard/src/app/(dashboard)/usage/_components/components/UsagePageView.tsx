@@ -439,6 +439,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData.results],
   );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
+  const modelGroupMetrics = useMemo(
+    () => processActivityData(userSpendData, "model_groups", teams),
+    [userSpendData, teams],
+  );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
@@ -534,6 +538,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <TabList variant="solid" className="mt-1">
                     <Tab>Cost</Tab>
                     <Tab>Model Activity</Tab>
+                    <Tab>Public Model Activity</Tab>
                     <Tab>Key Activity</Tab>
                     <Tab>MCP Server Activity</Tab>
                     <Tab>Endpoint Activity</Tab>
@@ -840,6 +845,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   {/* Activity Panel */}
                   <TabPanel>
                     <ActivityMetrics modelMetrics={modelMetrics} />
+                  </TabPanel>
+                  <TabPanel>
+                    <ActivityMetrics modelMetrics={modelGroupMetrics} />
                   </TabPanel>
                   <TabPanel>
                     <ActivityMetrics modelMetrics={keyMetrics} />

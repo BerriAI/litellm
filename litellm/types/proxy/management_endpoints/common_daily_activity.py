@@ -49,6 +49,7 @@ class MetricWithMetadata(MetricBase):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     # API key breakdown for this metric (e.g., which API keys are using this MCP server)
     api_key_breakdown: Dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+    model_breakdown: Dict[str, SpendMetrics] = Field(default_factory=dict)
 
 
 class BreakdownMetrics(BaseModel):

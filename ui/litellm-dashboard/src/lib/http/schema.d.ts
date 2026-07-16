@@ -27517,6 +27517,10 @@ export interface components {
                 [key: string]: unknown;
             };
             metrics: components["schemas"]["SpendMetrics"];
+            /** Model Breakdown */
+            model_breakdown?: {
+                [key: string]: components["schemas"]["SpendMetrics"];
+            };
         };
         /** Mode */
         Mode: {

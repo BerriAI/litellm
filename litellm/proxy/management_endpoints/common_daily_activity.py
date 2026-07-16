@@ -133,6 +133,13 @@ def update_breakdown_metrics(
         breakdown.model_groups[record.model_group].metrics = update_metrics(
             breakdown.model_groups[record.model_group].metrics, record
         )
+        if record.model:
+            if record.model not in breakdown.model_groups[record.model_group].model_breakdown:
+                breakdown.model_groups[record.model_group].model_breakdown[record.model] = SpendMetrics()
+            breakdown.model_groups[record.model_group].model_breakdown[record.model] = update_metrics(
+                breakdown.model_groups[record.model_group].model_breakdown[record.model],
+                record,
+            )
 
         # Update API key breakdown for this model
         if record.api_key not in breakdown.model_groups[record.model_group].api_key_breakdown:
@@ -484,6 +491,7 @@ def _build_aggregated_sql_query(
             (date, model),
             (date, model, api_key),
             (date, model_group),
+            (date, model, model_group),
             (date, model_group, api_key),
             (date, custom_llm_provider),
             (date, custom_llm_provider, api_key),
@@ -588,6 +596,7 @@ _GROUP_DATE_API_KEY = 31  # 0b0011111
 _GROUP_DATE_MODEL = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY = 15  # 0b0001111
 _GROUP_DATE_MODEL_GROUP = 55  # 0b0110111
+_GROUP_DATE_MODEL_MODEL_GROUP = 39  # 0b0100111
 _GROUP_DATE_MODEL_GROUP_API_KEY = 23  # 0b0010111
 _GROUP_DATE_PROVIDER = 59  # 0b0111011
 _GROUP_DATE_PROVIDER_API_KEY = 27  # 0b0011011
@@ -695,6 +704,13 @@ def _aggregate_grouping_sets_records_sync(
         elif level == _GROUP_DATE_MODEL_GROUP:
             if record.model_group:
                 assign_metric_with_metadata(breakdown.model_groups, record.model_group, metrics)
+        elif level == _GROUP_DATE_MODEL_MODEL_GROUP:
+            if record.model_group and record.model:
+                parent = breakdown.model_groups.get(record.model_group)
+                if parent is None:
+                    parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
+                    breakdown.model_groups[record.model_group] = parent
+                parent.model_breakdown[record.model] = metrics
         elif level == _GROUP_DATE_MODEL_GROUP_API_KEY:
             if record.model_group and record.api_key:
                 assign_api_key_breakdown(
