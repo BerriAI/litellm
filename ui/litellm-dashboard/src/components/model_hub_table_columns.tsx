@@ -3,6 +3,7 @@ import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { StatusBadge } from "@/components/shared/table_cells";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface ModelHubData {
   model_group: string;
