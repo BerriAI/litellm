@@ -304,6 +304,35 @@ async def test_bulk_update_plans_budget_writes_without_per_member_inline_prisma(
     assert cache.async_delete_cache.await_count == 4
     assert response.total_requested == 2
     assert [member.user_id for member in response.successful_updates] == ["user-1", "user-2"]
+    assert response.successful_updates[0].model_dump(exclude_unset=True) == {
+        "team_id": "team-1234",
+        "user_id": "user-1",
+        "tpm_limit": 42,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_role_only_response_omits_unset_budget_fields(monkeypatch):
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[Member(user_id="user-1", role="admin")],
+    )
+    _bulk_setup(monkeypatch, team_row)
+
+    response = await bulk_update_team_members(
+        team_id="team-1234",
+        data=BulkTeamMemberUpdateRequest(
+            user_ids=["user-1"],
+            update_fields=TeamMemberBulkUpdateFields(role="user"),
+        ),
+        http_request=_bulk_request(),
+        user_api_key_dict=_ADMIN,
+    )
+
+    assert response.successful_updates[0].model_dump(exclude_unset=True) == {
+        "team_id": "team-1234",
+        "user_id": "user-1",
+    }
 
 
 @pytest.mark.asyncio

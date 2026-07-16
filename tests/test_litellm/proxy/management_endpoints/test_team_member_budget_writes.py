@@ -80,6 +80,50 @@ def test_plan_empty_patch_is_noop():
     assert plan.writes == ()
 
 
+def test_plan_dedupes_update_budget_writes_for_shared_private_budget_id():
+    plan = plan_member_budget_writes(
+        memberships=(
+            MembershipBudgetSnapshot(user_id="u1", budget_id="shared-private"),
+            MembershipBudgetSnapshot(user_id="u2", budget_id="shared-private"),
+            MembershipBudgetSnapshot(user_id="u3", budget_id="other"),
+        ),
+        budgets_by_id={
+            "shared-private": BudgetFieldSnapshot(budget_id="shared-private", fields={"tpm_limit": 1}),
+            "other": BudgetFieldSnapshot(budget_id="other", fields={"tpm_limit": 2}),
+        },
+        budget_patch={"tpm_limit": 9},
+        team_default_budget_id=None,
+        actor_user_id="admin",
+    )
+
+    updates = tuple(write for write in plan.writes if isinstance(write, UpdateBudget))
+    assert len(updates) == 2
+    assert {write.budget_id for write in updates} == {"shared-private", "other"}
+
+
+def test_plan_clone_inherits_shared_duration_and_sets_reset_at():
+    plan = plan_member_budget_writes(
+        memberships=(MembershipBudgetSnapshot(user_id="on-default", budget_id="default"),),
+        budgets_by_id={
+            "default": BudgetFieldSnapshot(
+                budget_id="default",
+                fields={"budget_duration": "30d", "max_budget": 50.0},
+            ),
+        },
+        budget_patch={"tpm_limit": 3},
+        team_default_budget_id="default",
+        actor_user_id="admin",
+        new_budget_id_factory=lambda: "nb-1",
+    )
+
+    assert len(plan.writes) == 1
+    write = plan.writes[0]
+    assert isinstance(write, CreateAndAttachBudget)
+    assert write.create_data["budget_duration"] == "30d"
+    assert write.create_data["budget_reset_at"] is not None
+    assert write.create_data["tpm_limit"] == 3
+
+
 class _RecordingDb:
     def __init__(self):
         self.created = []

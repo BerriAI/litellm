@@ -3064,11 +3064,37 @@ async def _apply_team_member_update(
     )
 
 
+_BULK_MEMBER_RESPONSE_FIELDS = frozenset(
+    {
+        "max_budget_in_team",
+        "tpm_limit",
+        "rpm_limit",
+        "budget_duration",
+        "allowed_models",
+    }
+)
+
+
+def _successful_member_update_response(
+    *,
+    team_id: str,
+    user_id: str,
+    update_fields: TeamMemberBulkUpdateFields,
+) -> TeamMemberUpdateResponse:
+    fields_set = update_fields.model_fields_set
+    return TeamMemberUpdateResponse(
+        team_id=team_id,
+        user_id=user_id,
+        **{field: getattr(update_fields, field) for field in _BULK_MEMBER_RESPONSE_FIELDS if field in fields_set},
+    )
+
+
 @router.patch(
     "/v2/team/{team_id}/members",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=BulkTeamMemberUpdateResponse,
+    response_model_exclude_unset=True,
 )
 @management_endpoint_wrapper
 async def bulk_update_team_members(
@@ -3210,14 +3236,10 @@ async def bulk_update_team_members(
         )
 
     successful_updates = [
-        TeamMemberUpdateResponse(
+        _successful_member_update_response(
             team_id=team_id,
             user_id=user_id,
-            max_budget_in_team=data.update_fields.max_budget_in_team,
-            tpm_limit=data.update_fields.tpm_limit,
-            rpm_limit=data.update_fields.rpm_limit,
-            budget_duration=data.update_fields.budget_duration,
-            allowed_models=data.update_fields.allowed_models,
+            update_fields=data.update_fields,
         )
         for user_id in valid_user_ids
     ]

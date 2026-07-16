@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import reduce
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from uuid import uuid4
 
@@ -75,11 +76,31 @@ def _build_create_data(
             if _is_set_budget_value(value):
                 create_data[field] = value
     create_data.update(write_data)
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    if create_data.get("budget_duration") is None:
         create_data.pop("budget_reset_at", None)
+    elif "budget_reset_at" not in create_data:
+        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
     return create_data
+
+
+def _dedupe_update_budget_writes(writes: Sequence[MemberBudgetWrite]) -> tuple[MemberBudgetWrite, ...]:
+    last_update_by_id = {write.budget_id: write for write in writes if isinstance(write, UpdateBudget)}
+    if len(last_update_by_id) == sum(1 for write in writes if isinstance(write, UpdateBudget)):
+        return tuple(writes)
+
+    def step(
+        acc: tuple[tuple[MemberBudgetWrite, ...], frozenset[str]],
+        write: MemberBudgetWrite,
+    ) -> tuple[tuple[MemberBudgetWrite, ...], frozenset[str]]:
+        out, seen = acc
+        if not isinstance(write, UpdateBudget):
+            return (*out, write), seen
+        if write.budget_id in seen:
+            return acc
+        return (*out, last_update_by_id[write.budget_id]), seen | {write.budget_id}
+
+    result, _ = reduce(step, writes, ((), frozenset()))
+    return result
 
 
 def plan_member_budget_writes(
@@ -145,7 +166,7 @@ def plan_member_budget_writes(
             )
         )
 
-    return MemberBudgetWritePlan(writes=tuple(writes))
+    return MemberBudgetWritePlan(writes=_dedupe_update_budget_writes(writes))
 
 
 class TeamMemberBudgetDb(Protocol):
