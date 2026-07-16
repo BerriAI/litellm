@@ -20,6 +20,10 @@ flow in run_daily.sh:
   4. The install's bin dir reaches PATH only inside the two `env -i`
      blocks that spawn `claude` (probe and pytest), never at script
      scope where later git/gh/curl/uv steps run with the token env.
+  5. The npm install and the probe additionally run inside an
+     unprivileged user+pid namespace with a fresh /proc: env scrubbing
+     alone is not a boundary because same-uid package code can read
+     the secret-bearing parent's /proc/<pid>/environ.
 
 The resolve/install/probe block is extracted out of run_daily.sh and
 executed with a stub resolver and a fake `npm`, mirroring the fake-curl
@@ -156,6 +160,18 @@ def _build_harness(tmp_path: Path, installed_version: str) -> PinHarness:
     )
     fake_npm.chmod(0o755)
 
+    fake_unshare = fake_bin / "unshare"
+    fake_unshare.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            while [[ "${1:-}" == --* ]]; do shift; done
+            exec "$@"
+            """
+        )
+    )
+    fake_unshare.chmod(0o755)
+
     script = (
         _PREAMBLE
         + f'WORKDIR="{workdir}"\n'
@@ -291,6 +307,38 @@ def test_static_npm_bin_dir_scoped_to_probe_and_pytest_env_blocks() -> None:
             f"`gh` would then execute in later steps with the full "
             f"systemd-injected token environment."
         )
+
+
+def test_static_npm_install_and_probe_run_in_user_pid_namespace() -> None:
+    body = RUN_DAILY.read_text()
+    unshare_cmd = "unshare --user --map-current-user --pid --fork --mount-proc"
+    assert "unshare" in _required_commands(body), (
+        "run_daily.sh must require unshare up front and die early on "
+        "kernels that cannot create unprivileged user namespaces, "
+        "instead of degrading to unsandboxed package execution."
+    )
+    lines = _executable_lines(_extract_pin_snippet())
+    assert lines.count(unshare_cmd) == 2, (
+        "both package-code execution points (npm install and the claude "
+        "probe) must run inside the user+pid namespace; `env -i` alone "
+        "is not a boundary because same-uid package code can read the "
+        "secret-bearing parent's /proc/<pid>/environ."
+    )
+    resolver_call = _anchor(lines, "pr_gate_version_resolver.py")
+    npm_call = _anchor(lines, "npm install --prefix")
+    assert unshare_cmd in lines[resolver_call:npm_call], (
+        "the npm install (whose lifecycle scripts run package code) must "
+        "be unshare-wrapped"
+    )
+    probe_block = _executable_lines(
+        _extract_block(
+            body, "PROBED_CLAUDE_VERSION=", '[[ -n "${PROBED_CLAUDE_VERSION}" ]]'
+        )
+    )
+    assert _anchor(probe_block, unshare_cmd) < _anchor(probe_block, "claude --version"), (
+        "the installed claude binary must be spawned inside the "
+        "user+pid namespace"
+    )
 
 
 def _required_commands(body: str) -> tuple[str, ...]:

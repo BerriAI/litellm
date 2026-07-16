@@ -22,7 +22,7 @@
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, npm, python3.
+# Required commands on $PATH: git, uv, gh, jq, curl, npm, python3, unshare.
 # Required state: ~/litellm/litellm checked out (this file lives in it),
 # $WORKTREE is created on first run, gh is already authenticated.
 #
@@ -90,9 +90,12 @@ trap cleanup EXIT INT TERM
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-for cmd in git uv gh jq curl npm python3; do
+for cmd in git uv gh jq curl npm python3 unshare; do
   command -v "${cmd}" >/dev/null 2>&1 || die "missing required command: ${cmd}"
 done
+
+unshare --user --map-current-user --pid --fork --mount-proc true 2>/dev/null \
+  || die "cannot create an unprivileged user+pid namespace (unshare --user --pid); refusing to run npm package code without one"
 
 # Publishing is from a fork (agent-shin/litellm-docs) so neither the cron
 # host nor the bot identity needs write access to BerriAI/litellm-docs. We
@@ -173,7 +176,13 @@ log "resolved litellm: ${LITELLM_VERSION}"
 # the proxy or test harness ever starts. Resolve, install, and probe
 # under `env -i` with the same minimal allowlist the pytest step below
 # uses (the matrix run itself goes through cli_driver.py, which already
-# scrubs the CLI env).
+# scrubs the CLI env). The env scrub alone is not a boundary, though:
+# package code still runs as the same uid and could read the secrets
+# straight out of this script's /proc/<pid>/environ. The two points
+# that execute package code (npm install with its lifecycle scripts,
+# and the installed `claude` binary) therefore also run inside an
+# unprivileged user+pid namespace with a freshly mounted /proc, in
+# which the secret-bearing parent process does not exist.
 #
 # These steps also run under a fresh empty HOME instead of the runtime
 # user's real $HOME. `ProtectHome=read-only` in the systemd unit
@@ -206,6 +215,7 @@ env -i \
   LANG="${LANG:-C.UTF-8}" \
   LC_ALL="${LC_ALL:-}" \
   TMPDIR="${TMPDIR:-/tmp}" \
+  unshare --user --map-current-user --pid --fork --mount-proc \
   npm install --prefix "${CLAUDE_CLI_PREFIX}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
   || die "npm install of @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} failed"
 CLAUDE_CLI_BIN="${CLAUDE_CLI_PREFIX}/node_modules/.bin"
@@ -218,6 +228,7 @@ PROBED_CLAUDE_VERSION="$(env -i \
   LANG="${LANG:-C.UTF-8}" \
   LC_ALL="${LC_ALL:-}" \
   TMPDIR="${TMPDIR:-/tmp}" \
+  unshare --user --map-current-user --pid --fork --mount-proc \
   claude --version 2>/dev/null \
   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' \
   | head -n1 || true)"
