@@ -928,7 +928,9 @@ def test_azure_postgres_auth_requires_azure_identity(monkeypatch):
         _build_azure_postgres_credential()
 
 
-def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
+def test_writer_get_azure_postgres_token_uses_database_env_vars(
+    monkeypatch, unset_database_url
+):
     """Writer Azure passwordless auth reads the same DATABASE_HOST/PORT/USER/NAME
     env vars as the existing RDS IAM path, but mints an Entra token instead of
     an AWS presigned token."""
