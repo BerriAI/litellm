@@ -722,7 +722,17 @@ async def update_mcp_server(
         data_dict["credentials"] = None
 
     if auth_type_changed or url_changed:
-        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
+        # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
+        # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
+        # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
+        # resolution merge; only a genuinely new submitted value is kept.
+        data_dict.update(
+            {
+                field: None
+                for field in _AUTH_FLOW_SCOPED_FIELDS
+                if field not in data_dict or data_dict[field] == getattr(existing, field, None)
+            }
+        )
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
