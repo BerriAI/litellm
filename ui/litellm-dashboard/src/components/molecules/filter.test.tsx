@@ -326,6 +326,67 @@ describe("FilterComponent", () => {
     });
   });
 
+  it("shows a loading state (not an empty list) while a searchable filter's data is still loading", async () => {
+    const user = userEvent.setup({ delay: null });
+    const mockSearchFn = vi.fn().mockResolvedValue([]);
+
+    const options: FilterOption[] = [
+      {
+        name: "model",
+        label: "Model",
+        isSearchable: true,
+        loading: true,
+        searchFn: mockSearchFn,
+      },
+    ];
+
+    renderWithProviders(
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    const modelLabel = screen.getByText("Model");
+    const modelSelect = within(modelLabel.closest("div")!).getByRole("combobox");
+    await user.click(modelSelect);
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading...")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("No results found")).not.toBeInTheDocument();
+    // It must not cache an empty initial-options list while the source is still loading.
+    expect(mockSearchFn).not.toHaveBeenCalled();
+  });
+
+  it("loads initial options once a searchable filter's data finishes loading", async () => {
+    const user = userEvent.setup({ delay: null });
+    const mockSearchFn = vi.fn().mockResolvedValue([{ label: "Team A", value: "team-a" }]);
+    const baseOption: FilterOption = { name: "model", label: "Model", isSearchable: true, searchFn: mockSearchFn };
+
+    const { rerender } = renderWithProviders(
+      <FilterComponent
+        options={[{ ...baseOption, loading: true }]}
+        onApplyFilters={mockOnApplyFilters}
+        onResetFilters={mockOnResetFilters}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+    expect(mockSearchFn).not.toHaveBeenCalled();
+
+    rerender(
+      <FilterComponent
+        options={[{ ...baseOption, loading: false }]}
+        onApplyFilters={mockOnApplyFilters}
+        onResetFilters={mockOnResetFilters}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSearchFn).toHaveBeenCalledWith("");
+    });
+  });
+
   it("should handle search errors gracefully", async () => {
     const user = userEvent.setup({ delay: null });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -484,6 +545,44 @@ describe("FilterComponent", () => {
         teamId: "team1",
       });
     });
+  });
+
+  it("cancels a pending debounced search when the component unmounts mid-type", async () => {
+    const user = userEvent.setup({ delay: null });
+    const mockSearchFn = vi.fn().mockResolvedValue([{ label: "Result", value: "result" }]);
+
+    const options: FilterOption[] = [
+      {
+        name: "model",
+        label: "Model",
+        isSearchable: true,
+        searchFn: mockSearchFn,
+      },
+    ];
+
+    const { unmount } = renderWithProviders(
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    await waitFor(() => {
+      expect(mockSearchFn).toHaveBeenCalledWith("");
+    });
+
+    vi.clearAllMocks();
+
+    const modelLabel = screen.getByText("Model");
+    const modelSelect = within(modelLabel.closest("div")!).getByRole("combobox");
+    await user.click(modelSelect);
+    await user.type(modelSelect, "test");
+
+    expect(mockSearchFn).not.toHaveBeenCalled();
+
+    unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mockSearchFn).not.toHaveBeenCalled();
   });
 
   it("should reset all filter values when reset button is clicked", async () => {

@@ -12,8 +12,10 @@ export interface Team {
   rpm_limit: number | null;
   organization_id: string;
   created_at: string;
+  updated_at?: string | null;
   keys: KeyResponse[];
   keys_count?: number;
+  members_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
@@ -45,6 +47,7 @@ export interface KeyResponse {
   budget_reset_at: string;
   allowed_cache_controls: string[];
   allowed_routes: string[];
+  key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;
@@ -97,6 +100,7 @@ export interface KeyResponse {
     agent_access_groups?: string[];
   };
   access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
@@ -165,9 +169,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -188,7 +190,6 @@ const useKeyList = ({
         null,
         expand.join(","),
       );
-      console.log("data", data);
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -200,16 +201,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

@@ -61,6 +61,19 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
+def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
+    """Whether the deployment opted into forwarding /v1/messages untranslated.
+
+    The opt-in is ``model_info.supported_endpoints`` containing ``"/v1/messages"``,
+    declared per deployment in config.yaml and plumbed here as ``kwargs["model_info"]``
+    by the router.
+    """
+    if not isinstance(model_info, dict):
+        return False
+    supported_endpoints = model_info.get("supported_endpoints")
+    return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
+
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -135,6 +148,7 @@ async def _try_websearch_short_circuit(
     tools: Optional[List[Dict]],
     custom_llm_provider: Optional[str],
     stream: Optional[bool],
+    kwargs: Optional[dict] = None,
 ) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
     """
     Attempt to short-circuit a web-search-only request.
@@ -164,6 +178,7 @@ async def _try_websearch_short_circuit(
             messages=messages,
             tools=tools,
             custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
         )
         if response is not None:
             anthropic_response = cast(AnthropicMessagesResponse, response)
@@ -186,7 +201,7 @@ async def anthropic_messages(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: Optional[Union[str, list]] = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
@@ -216,6 +231,12 @@ async def anthropic_messages(
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
 
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
@@ -273,6 +294,7 @@ async def anthropic_messages(
         tools=tools,
         custom_llm_provider=custom_llm_provider,
         stream=original_stream,
+        kwargs={**kwargs, "metadata": metadata},
     )
     if short_circuit_response is not None:
         return short_circuit_response
@@ -362,7 +384,7 @@ def anthropic_messages_handler(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: Optional[Union[str, list]] = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
@@ -398,6 +420,12 @@ def anthropic_messages_handler(
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -456,6 +484,14 @@ def anthropic_messages_handler(
             model=model,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
+    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
+        kwargs.get("model_info")
+    ):
+        from litellm.llms.openai_like.messages.transformation import (
+            OpenAILikeAnthropicMessagesConfig,
+        )
+
+        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         _shared_kwargs = dict(

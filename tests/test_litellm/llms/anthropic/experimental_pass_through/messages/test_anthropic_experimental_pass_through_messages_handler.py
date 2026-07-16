@@ -715,3 +715,109 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     assert spy.call_count == 1
     assert captured["presanitized"] is True
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+def _gate_stubs(monkeypatch):
+    """Patch the gate's downstream dispatch targets so config selection can be
+    observed without making a network call.
+
+    Returns ``(captured, translation_calls)`` where ``captured["config"]`` is the
+    provider config handed to the native passthrough path and ``translation_calls``
+    counts hits on the Anthropic->OpenAI translation handlers.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+    translation_calls = {"count": 0}
+
+    def fake_native(**kwargs):
+        captured["config"] = kwargs.get("anthropic_messages_provider_config")
+        return "native-passthrough"
+
+    def fake_translation(**kwargs):
+        translation_calls["count"] += 1
+        return "translated"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToResponsesAPIHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToCompletionTransformationHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_translation),
+    )
+    return captured, translation_calls
+
+
+def test_gate_passthrough_when_supported_endpoints_opts_in(monkeypatch):
+    """provider=openai + model_info.supported_endpoints containing /v1/messages
+    must route to the native passthrough config, NOT the translation handlers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+    from litellm.llms.openai_like.messages.transformation import (
+        OpenAILikeAnthropicMessagesConfig,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions", "/v1/messages"]},
+    )
+
+    assert result == "native-passthrough"
+    assert isinstance(captured["config"], OpenAILikeAnthropicMessagesConfig)
+    assert translation_calls["count"] == 0
+
+
+def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
+    """Default behavior is unchanged: without the /v1/messages opt-in, an openai
+    deployment is translated (Responses API), never passed through natively."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured
+
+
+def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypatch):
+    """A deployment that lists only /v1/chat/completions is still translated;
+    the opt-in is specifically the /v1/messages entry."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info={"supported_endpoints": ["/v1/chat/completions"]},
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured

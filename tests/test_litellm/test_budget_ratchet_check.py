@@ -1,9 +1,8 @@
 """Tests for scripts/budget_ratchet_check.py.
 
-The guard's contract is "baselines and ceilings may only fall": a raised ceiling, a
-raised baseline (even when slack is cut to keep the ceiling flat), a dropped rule, or
-a deleted file is a regression, while a lowered/equal baseline and ceiling, a brand-new
-rule, or a brand-new budget file is fine. Each branch is pinned here.
+The guard's contract is "limits may only fall": a raised limit, a dropped rule, or
+a deleted file is a regression, while a lowered/equal limit, a brand-new rule, or a
+brand-new budget file is fine. Each branch is pinned here.
 """
 
 import importlib.util
@@ -19,69 +18,64 @@ ratchet = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ratchet)
 
 
-def _spec_of(baseline, slack):
-    return {"baseline": baseline, "slack": slack}
+def _spec_of(limit):
+    return {"limit": limit}
 
 
-def test_caps_sum_baseline_and_slack_and_skip_malformed():
-    caps = ratchet._caps({"LIT006": _spec_of(1013, 10), "junk": 5})
-    assert caps == {"LIT006": 1023}  # malformed (non-dict) spec ignored
+def test_limits_read_the_limit_and_skip_malformed():
+    limits = ratchet._limits({"LIT006": _spec_of(1023), "junk": 5})
+    assert limits == {"LIT006": 1023}  # malformed (non-dict) spec ignored
 
 
-def test_raised_ceiling_is_a_regression():
-    base = {"LIT006": _spec_of(1013, 10)}
-    head = {"LIT006": _spec_of(1013, 11)}  # cap 1023 -> 1024
+def test_limits_fall_back_to_legacy_baseline_plus_slack():
+    # The base side of a diff can predate the `limit` migration; its ceiling is
+    # baseline + slack, read on the same footing as a new-schema `limit`.
+    assert ratchet._limits({"LIT006": {"baseline": 1013, "slack": 10}}) == {"LIT006": 1023}
+
+
+def test_migration_from_legacy_schema_to_equal_limit_is_clean():
+    # baseline+slack (1023) -> limit 1023 is the same ceiling, so no regression.
+    base = {"LIT006": {"baseline": 1013, "slack": 10}}
+    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1023)}) == []
+    # ...and a genuine raise across the migration is still caught.
+    regs = ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1024)})
+    assert [r.rule for r in regs] == ["LIT006"] and "1023 -> 1024" in regs[0].detail
+
+
+def test_raised_limit_is_a_regression():
+    base = {"LIT006": _spec_of(1023)}
+    head = {"LIT006": _spec_of(1024)}
     regs = ratchet.regressions_for("b.json", base, head)
     assert [r.rule for r in regs] == ["LIT006"]
     assert "1023 -> 1024" in regs[0].detail
 
 
-def test_lowered_or_equal_ceiling_is_clean():
-    base = {"LIT006": _spec_of(1013, 10)}
-    # baseline drops, slack flat -> ceiling falls
-    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1000, 10)}) == []
+def test_lowered_or_equal_limit_is_clean():
+    base = {"LIT006": _spec_of(1023)}
+    # limit drops
+    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1000)}) == []
     # nothing changes
-    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1013, 10)}) == []
-    # slack cut while baseline holds -> ceiling falls, baseline flat
-    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1013, 0)}) == []
-
-
-def test_raised_baseline_is_a_regression_even_when_ceiling_held_flat():
-    # baseline 1013 -> 1023 with slack cut 10 -> 0 keeps the ceiling at 1023, but a
-    # higher baseline bakes in more accepted debt and must still surface as a regression
-    base = {"LIT006": _spec_of(1013, 10)}
-    regs = ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1023, 0)})
-    assert [r.rule for r in regs] == ["LIT006"]
-    assert "baseline raised 1013 -> 1023" in regs[0].detail
-    assert "ceiling raised" not in regs[0].detail
-
-
-def test_raised_baseline_and_ceiling_report_both_reasons():
-    base = {"LIT006": _spec_of(1013, 10)}
-    regs = ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1100, 10)})
-    assert [r.rule for r in regs] == ["LIT006"]
-    assert "ceiling raised 1023 -> 1110" in regs[0].detail
-    assert "baseline raised 1013 -> 1100" in regs[0].detail
+    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1023)}) == []
 
 
 def test_dropped_rule_is_a_regression():
-    regs = ratchet.regressions_for("b.json", {"LIT007": _spec_of(0, 0)}, {})
+    regs = ratchet.regressions_for("b.json", {"LIT007": _spec_of(0)}, {})
     assert [r.rule for r in regs] == ["LIT007"]
     assert "dropped" in regs[0].detail
 
 
 def test_new_rule_in_head_is_clean():
-    assert ratchet.regressions_for("b.json", {}, {"new-rule": _spec_of(5, 0)}) == []
+    assert ratchet.regressions_for("b.json", {}, {"new-rule": _spec_of(5)}) == []
 
 
 def test_deleted_budget_file_is_a_regression():
-    regs = ratchet.regressions_for("b.json", {"LIT006": _spec_of(1, 0)}, None)
+    regs = ratchet.regressions_for("b.json", {"LIT006": _spec_of(1)}, None)
     assert [r.rule for r in regs] == ["*"]
     assert "deleted" in regs[0].detail
 
 
 def test_new_budget_file_has_nothing_to_ratchet():
-    assert ratchet.regressions_for("b.json", None, {"LIT006": _spec_of(1, 0)}) == []
+    assert ratchet.regressions_for("b.json", None, {"LIT006": _spec_of(1)}) == []
 
 
 def test_default_budgets_watch_every_budget_file_in_the_repo():

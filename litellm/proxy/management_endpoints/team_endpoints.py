@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -26,6 +26,7 @@ from litellm._uuid import uuid
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     BlockTeamRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
@@ -75,6 +76,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -93,6 +95,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
+    enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -1045,6 +1048,13 @@ async def new_team(
         if data.team_id is None:
             data.team_id = str(uuid.uuid4())
         else:
+            if data.team_id == UI_TEAM_ID:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"team_id '{UI_TEAM_ID}' is reserved for LiteLLM UI dashboard sessions and cannot be used for a real team. Please use a different team id."
+                    },
+                )
             # Check if team_id exists already
             _existing_team_id = await prisma_client.get_data(
                 team_id=data.team_id, table_name="team", query_type="find_unique"
@@ -1144,6 +1154,12 @@ async def new_team(
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
+        await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+            requested_mcp_servers=(data.object_permission.mcp_servers if data.object_permission is not None else None),
+            existing_object_permission_id=None,
+            is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client=prisma_client,
+        )
         data_json = await _set_object_permission(
             data_json=data_json,
             prisma_client=prisma_client,
@@ -1605,6 +1621,7 @@ async def update_team(
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -1846,6 +1863,12 @@ async def update_team(
 
         # Check object permission
         if data.object_permission is not None:
+            await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+                requested_mcp_servers=data.object_permission.mcp_servers,
+                existing_object_permission_id=existing_team_row.object_permission_id,
+                is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+                prisma_client=prisma_client,
+            )
             updated_kv = await handle_update_object_permission(
                 data_json=updated_kv,
                 existing_team_row=existing_team_row,
@@ -1912,6 +1935,87 @@ async def update_team(
 
         return {"team_id": team_row.team_id, "data": team_row}
     except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+@router.patch(
+    "/team/{team_id}",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_TeamTable,
+)
+async def patch_team(
+    team_id: str,
+    http_request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    litellm_changed_by: Annotated[
+        Optional[str],
+        Header(
+            description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+        ),
+    ] = None,
+):
+    """
+    Partially update a team using RFC 7386 JSON Merge Patch semantics.
+
+    `team_id` is taken from the path. `metadata` is merged with the team's stored
+    metadata rather than replacing it: an omitted key is preserved, `key: null`
+    deletes it, and any other value overwrites (recursing into nested objects).
+    Every other field behaves exactly like `POST /team/update` (omitted preserves,
+    a value overwrites). Returns the full updated team.
+
+    ```
+    curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data-raw '{
+        "metadata": {"cost_center": "1234", "deprecated_key": null}
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        try:
+            body = await http_request.json()
+        except (json.JSONDecodeError, ValueError):
+            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
+
+        body_team_id = body.pop("team_id", None)
+        if body_team_id is not None and body_team_id != team_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"team_id in body ({body_team_id}) does not match team_id in path ({team_id})"},
+            )
+
+        if "metadata" in body:
+            existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+            if existing_team_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"Team not found, passed team_id={team_id}"},
+                )
+            existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
+            body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
+
+        update_request = UpdateTeamRequest(team_id=team_id, **body)
+
+        result = await update_team(
+            data=update_request,
+            http_request=http_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+        return result["data"]
+    except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
         raise handle_exception_on_proxy(e)
 
 
@@ -3447,7 +3551,7 @@ async def team_info(
         try:
             team_info: Optional[BaseModel] = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": team_id},
-                include={"object_permission": True},
+                include={"litellm_model_table": True, "object_permission": True},
             )
             if team_info is None:
                 raise Exception

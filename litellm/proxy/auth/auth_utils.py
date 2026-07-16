@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
@@ -278,6 +278,12 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # NVIDIA Riva fields consumed by the audio-transcription handler
+    # via ``optional_params``. Banned for the same reason as the
+    # provider-specific entries above: a caller-supplied value retargets
+    # the request away from the admin's pinned configuration.
+    "nvcf_function_id",
+    "use_ssl",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     # Observability credentials, hosts, and project identifiers: derived
@@ -369,6 +375,16 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    litellm_params = _coerce_metadata_to_dict(request_body.get("litellm_params"))
+    if litellm_params is not None:
+        litellm_params_metadata = _coerce_metadata_to_dict(litellm_params.get("metadata"))
+        if litellm_params_metadata is not None:
+            _check_banned_params(
+                litellm_params_metadata,
+                general_settings,
+                llm_router,
+                model,
+            )
     return True
 
 
@@ -959,6 +975,20 @@ def get_team_mcp_rpm_limit(
     return None
 
 
+def get_key_tag_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[dict[str, int]]:
+    """
+    Get the per-request-tag rpm limit configured on a given api key.
+
+    The returned dict is keyed by request tag, so each tag/group tracked on
+    the key gets its own independent RPM counter.
+    """
+    if user_api_key_dict.metadata:
+        return user_api_key_dict.metadata.get("tag_rpm_limit")
+    return None
+
+
 def get_project_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
@@ -1503,4 +1533,6 @@ def get_model_from_request(
 
 
 def abbreviate_api_key(api_key: str) -> str:
+    if len(api_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        return "sk-..."
     return f"sk-...{api_key[-4:]}"

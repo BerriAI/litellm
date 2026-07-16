@@ -3,12 +3,16 @@ import binascii
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+    normalize_token_endpoint_auth_method,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -41,6 +45,64 @@ from litellm.types.mcp import MCPCredentials
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
+    {
+        "authorization_url",
+        "token_url",
+        "registration_url",
+        "oauth2_flow",
+        "dcr_bridge",
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    }
+)
+
+# Token-exchange settings with dedicated columns that also exist on
+# ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
+# columns). Every write lifts blob values into the columns and strips them from
+# the stored blob, so the read-time ``column or blob`` fallback only serves rows
+# the current code has never written — a cleared column can then never be
+# silently resurrected by a stale blob copy. These keys are stored plaintext
+# (endpoints/identifiers, not secrets), so values lift as-is.
+_TOKEN_EXCHANGE_COLUMN_FIELDS: frozenset = frozenset(
+    {
+        "token_exchange_endpoint",
+        "audience",
+        "subject_token_type",
+        "token_exchange_profile",
+    }
+)
+
+# The client-forwarded token modes share one stored-credential shape: the admin-declared upstream
+# OAuth app (client_id/client_secret) plus the same authorize relay, and neither mints anything the
+# gateway keeps. So a switch WITHIN this class must preserve the stored app, unlike a cross-class
+# switch (e.g. an oauth2 row whose client may be DCR-minted and is not reusable elsewhere).
+_CLIENT_FORWARDED_AUTH_TYPES: frozenset = frozenset({"true_passthrough", "oauth_delegate"})
+
+# Minted token material that must never survive a client rotation on a persisted row.
+_MINTED_TOKEN_CREDENTIAL_FIELDS: frozenset = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def _credential_auth_class(auth_type: Optional[str]) -> Optional[str]:
+    """Collapse the client-forwarded modes to one credential class; every other auth_type is its own
+    class. Used so credential handling keys off whether the stored-credential shape actually changed,
+    not off a raw auth_type inequality that treats true_passthrough<->oauth_delegate as a full reset."""
+    if auth_type in _CLIENT_FORWARDED_AUTH_TYPES:
+        return "client_forwarded"
+    return auth_type
+
+
+def _drop_stale_minted_on_client_rotation(merged: Dict[str, Any], new_creds: Dict[str, Any]) -> Dict[str, Any]:
+    """When the update rotates the client, drop stale minted token keys it did not itself set, so an old
+    app's access/refresh token never rides forward under the new client. A no-op when no client key changed."""
+    if "client_id" not in new_creds and "client_secret" not in new_creds:
+        return merged
+    return {
+        key: value for key, value in merged.items() if key not in _MINTED_TOKEN_CREDENTIAL_FIELDS or key in new_creds
+    }
 
 
 def _is_global_env_var_scope(scope: Any) -> bool:
@@ -237,6 +299,14 @@ def _prepare_mcp_server_data(
     # Handle credentials serialization
     credentials = data_dict.get("credentials")
     if credentials is not None:
+        # Lift legacy blob-shaped token-exchange settings into their dedicated
+        # columns (an explicit top-level value wins, including an explicit
+        # null) and strip them from the blob so it never seeds the read-time
+        # fallback for rows written by current code.
+        for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+            blob_value = credentials.pop(te_field, None)
+            if blob_value is not None and te_field not in data_dict:
+                data_dict[te_field] = blob_value
         data_dict["credentials"] = encrypt_credentials(credentials=credentials, encryption_key=_get_salt_key())
         data_dict["credentials"] = safe_dumps(data_dict["credentials"])
 
@@ -517,7 +587,11 @@ async def delete_mcp_server_from_virtualkey():
     pass
 
 
-async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Optional[LiteLLM_MCPServerTable]:
+async def delete_mcp_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    invalidate_token_cache: Optional[Callable[[str, str], Awaitable[None]]] = None,
+) -> Optional[LiteLLM_MCPServerTable]:
     """
     Delete the mcp server from the db by server_id
 
@@ -528,6 +602,12 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
     caller-visible error. Each table is cleaned independently so a failure on one
     still attempts the other.
 
+    Each enumerated credential row's user also gets their cached per-user token
+    invalidated (legacy cache + v2 store, via invalidate_token_cache, defaulting
+    to the manager's shared invalidation): the caches are keyed by
+    (user_id, server_id), so without this a re-created server reusing the same
+    server_id would serve tokens minted for the deleted server until TTL.
+
     Returns the deleted mcp server record if it exists, otherwise None
     """
     deleted_server = await MCPServerRepository(prisma_client).table.delete(
@@ -536,6 +616,18 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
         },
     )
     if deleted_server is not None:
+        credential_user_ids: List[str] = []
+        try:
+            credential_rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
+                where={"server_id": server_id}
+            )
+            credential_user_ids = [row.user_id for row in credential_rows]
+        except Exception as e:  # noqa: BLE001 - enumeration is best-effort; cached tokens expire by TTL
+            verbose_proxy_logger.warning(
+                "MCP server %s deleted but per-user credential enumeration failed; cached tokens expire by TTL: %s",
+                server_id,
+                e,
+            )
         for model, label in (
             (prisma_client.db.litellm_mcpusercredentials, "credential"),
             (prisma_client.db.litellm_mcpuserenvvars, "env var"),
@@ -550,6 +642,15 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
                     label,
                     e,
                 )
+        if credential_user_ids:
+            if invalidate_token_cache is None:
+                from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                    global_mcp_server_manager,
+                )
+
+                invalidate_token_cache = global_mcp_server_manager.invalidate_user_oauth_token_cache
+            for user_id in credential_user_ids:
+                await invalidate_token_cache(user_id, server_id)
     return deleted_server
 
 
@@ -599,29 +700,54 @@ async def update_mcp_server(
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
     has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
-    if data.auth_type or has_credentials:
+    # An explicit token-exchange column write (set or clear) also migrates the
+    # legacy blob copies below, so the existing row is needed for those updates.
+    explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
+    if data.auth_type or has_credentials or explicit_te_write:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
-    # Clear stale credentials when auth_type changes but no new credentials provided
-    if (
+    auth_type_changed = bool(
         data.auth_type
-        and "credentials" not in data_dict
         and existing
-        and existing.auth_type is not None
-        and existing.auth_type != data.auth_type
-    ):
+        and _credential_auth_class(existing.auth_type) != _credential_auth_class(data.auth_type)
+    )
+
+    # Clear stale credentials when auth_type changes but no new credentials provided
+    if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
+
+    if auth_type_changed:
+        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
+
+    # An explicit column write that does not touch credentials must still migrate
+    # the row's legacy blob copies: lift values for columns the caller left
+    # untouched, strip every copy from the blob. Without this, clearing a column
+    # (e.g. to re-enable RFC 9728/8414 discovery) would leave the blob copy in
+    # place, and the next credentials update's migrate-on-write would silently
+    # repopulate the column the admin just cleared. (When credentials ARE in the
+    # update, the merge below performs the same migration.)
+    if explicit_te_write and "credentials" not in data_dict and existing is not None and existing.credentials:
+        existing_creds = (
+            json.loads(existing.credentials) if isinstance(existing.credentials, str) else dict(existing.credentials)
+        )
+        if _TOKEN_EXCHANGE_COLUMN_FIELDS & existing_creds.keys():
+            for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+                legacy_value = existing_creds.pop(te_field, None)
+                if legacy_value is not None and te_field not in data_dict and getattr(existing, te_field, None) is None:
+                    data_dict[te_field] = legacy_value
+            data_dict["credentials"] = safe_dumps(existing_creds)
 
     # Merge credentials: preserve existing fields not present in the update.
     # Without this, a partial credential update (e.g. changing only region)
     # would wipe encrypted secrets that the UI cannot display back.
     if "credentials" in data_dict and data_dict["credentials"] is not None:
         if existing and existing.credentials:
-            # Only merge when auth_type is unchanged. Switching auth types
-            # (e.g. oauth2 → api_key) should replace credentials entirely
-            # to avoid stale secrets from the previous auth type lingering.
-            auth_type_unchanged = data.auth_type is None or data.auth_type == existing.auth_type
-            if auth_type_unchanged:
+            # Only merge when the credential CLASS is unchanged. A cross-class switch
+            # (e.g. oauth2 → api_key, or oauth2 → true_passthrough) replaces credentials
+            # entirely to avoid stale secrets from the previous class lingering; a switch
+            # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
+            # the same declared app and so must merge, not replace.
+            if not auth_type_changed:
                 existing_creds = (
                     json.loads(existing.credentials)
                     if isinstance(existing.credentials, str)
@@ -632,12 +758,34 @@ async def update_mcp_server(
                     if isinstance(data_dict["credentials"], str)
                     else dict(data_dict["credentials"])
                 )
-                # New values override existing; existing keys not in update are preserved
-                merged = {**existing_creds, **new_creds}
+                # New values override existing; existing keys not in update are preserved. A client
+                # rotation additionally drops the previous app's stale minted token keys.
+                merged = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
+                # Migrate-on-write for legacy rows: token-exchange settings the
+                # old blob shape carried move to their dedicated columns (unless
+                # the caller set the column this update, or the row already has
+                # one) and are never re-persisted in the blob. Stored plaintext,
+                # so the merged value lifts as-is.
+                for te_field in _TOKEN_EXCHANGE_COLUMN_FIELDS:
+                    legacy_value = merged.pop(te_field, None)
+                    if (
+                        legacy_value is not None
+                        and te_field not in data_dict
+                        and getattr(existing, te_field, None) is None
+                    ):
+                        data_dict[te_field] = legacy_value
                 data_dict["credentials"] = safe_dumps(merged)
 
     # Add audit fields
     data_dict["updated_by"] = touched_by
+
+    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
+    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
+    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
+    if "credentials" in data_dict and data_dict["credentials"] is None:
+        from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+        data_dict["credentials"] = Json(None)
 
     updated_mcp_server = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id},
@@ -994,6 +1142,103 @@ async def list_user_oauth_credentials(
     return results
 
 
+def _decrypted_credential_field(creds: Dict[str, object], field: str) -> object:
+    """Return one credential field decrypted with the global salt key; non-string and legacy
+    plaintext values come back unchanged (decrypt_value_helper returns the original on failure)."""
+    value = creds.get(field)
+    if not isinstance(value, str):
+        return value
+    return decrypt_value_helper(
+        value=value,
+        key=field,
+        exception_type="debug",
+        return_original_value=True,
+    )
+
+
+def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
+    """The upstream-OAuth-token-determining fields of an MCP server: the resource/audience (url, or
+    spec_path for OpenAPI servers), the OAuth mode/grant (auth_type, oauth2_flow), the
+    authorization-server endpoints, and the OAuth client + scopes. Mirrors the dashboard's
+    getOAuthAuthorizationIdentity. When any of these change on a server update, previously stored
+    per-user tokens were minted for the old identity and are stale. Excludes transport and
+    delegate_auth_to_upstream, which do not affect what token is minted (RFC 8707/8693).
+
+    client_id/client_secret are compared decrypted: stored values are NaCl-encrypted with a fresh
+    nonce on every write, so comparing ciphertext would flag every routine save as an identity
+    change and purge tokens that are still valid."""
+    creds = getattr(server, "credentials", None)
+    if isinstance(creds, str):
+        try:
+            parsed: object = json.loads(creds)
+        except ValueError:
+            parsed = None
+    else:
+        parsed = creds
+    creds_dict: Dict[str, object] = parsed if isinstance(parsed, dict) else {}
+    return (
+        getattr(server, "url", None),
+        getattr(server, "spec_path", None),
+        getattr(server, "auth_type", None),
+        getattr(server, "oauth2_flow", None),
+        getattr(server, "authorization_url", None),
+        getattr(server, "token_url", None),
+        getattr(server, "registration_url", None),
+        _decrypted_credential_field(creds_dict, "client_id"),
+        _decrypted_credential_field(creds_dict, "client_secret"),
+        creds_dict.get("scopes"),
+    )
+
+
+async def purge_user_oauth_credentials_for_server(
+    prisma_client: PrismaClient,
+    server_id: str,
+    invalidate_token_cache: Optional[Callable[[str, str], Awaitable[None]]] = None,
+) -> int:
+    """Delete every stored per-user OAuth token for a server and invalidate each user's cached
+    token everywhere it can be served from (the legacy per-user token cache and the v2 per-user OAuth
+    token store), so no user keeps a token minted for a superseded configuration. Called when a server
+    update changes a mint-relevant field (see mcp_oauth_token_identity). Returns the number of rows
+    removed.
+
+    LiteLLM_MCPUserCredentials also stores BYOK API keys in the same column; only rows whose payload
+    decodes as an OAuth2 credential (see _decode_oauth_payload) are deleted, because a config change
+    only invalidates minted tokens, never a user's own stored key. Rows are therefore deleted per
+    (user_id, server_id) pair rather than by a blanket server_id filter. An OAuth row inserted while
+    the purge runs for a user not yet enumerated survives; a re-auth completing in the window for an
+    already-enumerated user is deleted along with the stale row (the pair delete cannot tell them
+    apart), which costs that user one extra re-auth and nothing else.
+
+    invalidate_token_cache is injectable for tests; it defaults to the manager's shared
+    invalidate_user_oauth_token_cache, the single invalidation point for per-user tokens."""
+    repo = MCPUserCredentialsRepository(prisma_client)
+    rows = await repo.table.find_many(where={"server_id": server_id})
+    oauth_rows = [row for row in rows if _decode_oauth_payload(row.credential_b64) is not None]
+    if not oauth_rows:
+        return 0
+    deleted_count = await repo.table.delete_many(
+        where={"server_id": server_id, "user_id": {"in": [row.user_id for row in oauth_rows]}}
+    )
+    if invalidate_token_cache is None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        invalidate_token_cache = global_mcp_server_manager.invalidate_user_oauth_token_cache
+
+    for row in oauth_rows:
+        await invalidate_token_cache(row.user_id, server_id)
+    if deleted_count != len(oauth_rows):
+        verbose_proxy_logger.warning(
+            "MCP server %s: purge removed %d OAuth credential row(s) but %d were enumerated; "
+            "row(s) were deleted concurrently during the purge",
+            server_id,
+            deleted_count,
+            len(oauth_rows),
+        )
+    return deleted_count
+
+
 async def refresh_user_oauth_token(
     prisma_client: PrismaClient,
     user_id: str,
@@ -1030,20 +1275,21 @@ async def refresh_user_oauth_token(
         )
         return None
 
-    token_data: Dict[str, str] = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }
-    if client_id:
-        token_data["client_id"] = client_id
-    if client_secret:
-        token_data["client_secret"] = client_secret
-
     try:
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=normalize_token_endpoint_auth_method(getattr(server, "token_endpoint_auth_method", None)),
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        token_data: Dict[str, str] = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            **client_auth.body,
+        }
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
         response = await async_client.post(
             token_url,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **client_auth.headers},
             data=token_data,
         )
         response.raise_for_status()
@@ -1221,6 +1467,23 @@ def _remaining_token_seconds(expires_at: str | None) -> int | None:
         exp_dt = exp_dt.replace(tzinfo=timezone.utc)
     remaining = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
     return remaining if remaining > 0 else None
+
+
+async def get_active_submitted_mcp_server_ids_for_user(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> list[str]:
+    """Return active BYOM servers submitted by this user (creator visibility)."""
+    if not user_id:
+        return []
+
+    rows = await MCPServerRepository(prisma_client).table.find_many(
+        where={
+            "submitted_by": user_id,
+            "approval_status": MCPApprovalStatus.active,
+        },
+    )
+    return [row.server_id for row in rows]
 
 
 async def approve_mcp_server(

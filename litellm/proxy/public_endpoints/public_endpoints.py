@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
@@ -213,11 +214,10 @@ async def get_agents(request: Request):
     if litellm.public_agent_groups is None:
         return []
 
-    proxy_base = str(request.base_url).rstrip("/")
     return [
         {
             **(agent.agent_card_params or {}),
-            "url": f"{proxy_base}/a2a/{agent.agent_id}",
+            "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
         if agent.agent_id in litellm.public_agent_groups

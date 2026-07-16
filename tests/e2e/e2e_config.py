@@ -21,6 +21,17 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
     "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
 ).rstrip("/")
 
+UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
+UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
+
+CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
+CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+
+# Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
+# service in docker-compose.yml maps it to host 16686). Trace-completeness tests
+# read exported spans back through it.
+OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
+
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))

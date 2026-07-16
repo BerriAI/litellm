@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.router_utils.common_utils import _is_proxy_admin_request
 
 # Router-internal mock_testing_* flag names — kept in sync with
 # ``litellm.types.router.MockRouterTestingParams`` by the test
@@ -363,6 +364,7 @@ async def route_request(
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+    is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -435,9 +437,6 @@ async def route_request(
             "aget_run",
             "acancel_run",
             "adelete_run",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
-            "acreate_realtime_transcription_session",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
@@ -518,6 +517,13 @@ async def route_request(
         team_model_name = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name
+            return getattr(llm_router, f"{route_type}")(**data)
+
+        elif (
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] in router_model_names or llm_router.has_model_id(data["model"]):

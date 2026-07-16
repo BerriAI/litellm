@@ -182,6 +182,13 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         caps=_CAPS_XHIGH_MAX,
     ),
     ModelEntry(
+        alias="claude-sonnet-5",
+        model="anthropic/claude-sonnet-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+    ),
+    ModelEntry(
         alias="claude-sonnet-4-6",
         model="anthropic/claude-sonnet-4-6",
         mode="adaptive",

@@ -382,15 +382,25 @@ class MCPClient:
                 if root_cause is not None and isinstance(in_flight_error, asyncio.CancelledError):
                     raise root_cause from in_flight_error
 
-    async def run_with_session(self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]) -> TSessionResult:
-        """Open a session, run the provided coroutine, and clean up."""
+    async def run_with_session(
+        self,
+        operation: Callable[[ClientSession], Awaitable[TSessionResult]],
+        *,
+        quiet_on_error: bool = False,
+    ) -> TSessionResult:
+        """Open a session, run the provided coroutine, and clean up.
+
+        quiet_on_error demotes the failure line to debug for callers that own the exception
+        (call_tool / list_tools under raise_on_error), so an expected pass-through re-auth does
+        not emit a warning per call; every other caller keeps the operator-visible warning."""
         http_client: Optional[httpx.AsyncClient] = None
         try:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
-            verbose_logger.warning("MCP client run_with_session failed for %s", self.server_url or "stdio")
+            _log = verbose_logger.debug if quiet_on_error else verbose_logger.warning
+            _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
         finally:
             if http_client is not None:
@@ -491,7 +501,7 @@ class MCPClient:
             return await session.list_tools()
 
         try:
-            result = await self.run_with_session(_list_tools_operation)
+            result = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
             tool_count = len(result.tools)
             tool_names = [tool.name for tool in result.tools]
             verbose_logger.info(f"MCP client listed {tool_count} tools from {self.server_url or 'stdio'}: {tool_names}")
@@ -501,7 +511,13 @@ class MCPClient:
             raise
         except Exception as e:
             error_type = type(e).__name__
-            verbose_logger.exception(
+            # Mirror call_tool: when the caller opted into raise_on_error it owns the exception and
+            # logs it at the fitting level (an expected pass-through re-auth 401 is info, not an
+            # error), so log at debug here to avoid an error-level line + traceback that would trip
+            # error-rate alerts on that expected signal. The swallow path still logs the full
+            # exception because nothing downstream will surface the failure.
+            _log = verbose_logger.debug if raise_on_error else verbose_logger.exception
+            _log(
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
                 f"Error: {str(e)}, "
@@ -510,7 +526,8 @@ class MCPClient:
             )
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
-                verbose_logger.error(
+                _log_broken = verbose_logger.debug if raise_on_error else verbose_logger.error
+                _log_broken(
                     "MCP client detected broken connection/stream during list_tools - "
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
@@ -520,13 +537,28 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
+    @staticmethod
+    def error_tool_result(exc: Exception) -> MCPCallToolResult:
+        """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
+        return MCPCallToolResult(
+            content=[TextContent(type="text", text=f"{type(exc).__name__}: {str(exc)}")],
+            isError=True,
+        )
+
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Optional[Callable] = None,
+        raise_on_error: bool = False,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
+
+        Args:
+            raise_on_error: When True, re-raise the underlying exception instead of returning an
+                ``isError=True`` result. The token-exchange (OBO) tool-call path uses this to detect
+                an upstream 401 so it can re-mint the exchanged token and retry once; every other
+                caller keeps the default and gets graceful ``isError`` degradation.
         """
         verbose_logger.info(f"MCP client calling tool '{call_tool_request_params.name}'")
 
@@ -552,7 +584,7 @@ class MCPClient:
             )
 
         try:
-            tool_result = await self.run_with_session(_call_tool_operation)
+            tool_result = await self.run_with_session(_call_tool_operation, quiet_on_error=raise_on_error)
             verbose_logger.info(f"MCP client tool call '{call_tool_request_params.name}' completed successfully")
             return tool_result
         except asyncio.CancelledError:
@@ -565,7 +597,13 @@ class MCPClient:
             verbose_logger.debug(f"MCP client tool call traceback:\n{error_trace}")
             # Log detailed error information
             error_type = type(e).__name__
-            verbose_logger.error(
+            # When the caller opted into raise_on_error it owns the exception and logs it at the
+            # level that fits (an expected pass-through re-auth 401 is info, not an operator-actionable
+            # error), so log at debug here to avoid an error-level line that would trip error-rate
+            # alerts on that expected signal. The swallow path (raise_on_error=False) still logs at
+            # error because nothing downstream will surface the failure.
+            _log = verbose_logger.debug if raise_on_error else verbose_logger.error
+            _log(
                 f"MCP client call_tool failed - "
                 f"Error Type: {error_type}, "
                 f"Error: {str(e)}, "
@@ -575,15 +613,14 @@ class MCPClient:
             )
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
-                verbose_logger.error(
+                _log(
                     "MCP client detected broken connection/stream - "
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
+            if raise_on_error:
+                raise
             # Return a default error result instead of raising
-            return MCPCallToolResult(
-                content=[TextContent(type="text", text=f"{error_type}: {str(e)}")],  # Empty content for error case
-                isError=True,
-            )
+            return self.error_tool_result(e)
 
     async def list_prompts(self) -> List[Prompt]:
         """List available prompts from the server."""

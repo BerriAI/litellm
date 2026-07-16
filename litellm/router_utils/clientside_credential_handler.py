@@ -52,6 +52,13 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         "oci_tenancy",
         "oci_key",
         "oci_key_file",
+        # NVIDIA Riva fields — consumed by
+        # ``litellm/llms/nvidia_riva/audio_transcription/handler.py`` via
+        # optional_params and not declared on CredentialLiteLLMParams.
+        # Admin-pinned values must not flow through on a caller-redirected
+        # ``api_base`` for the same reason as the OCI entries above.
+        "nvcf_function_id",
+        "use_ssl",
     ]
     return typed_fields + kwargs_only_fields
 

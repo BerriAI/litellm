@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -924,7 +925,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
-        litellm.error_logs["PRE_CALL"] = locals()
         try:
             self._pre_call(
                 input=input,
@@ -1134,7 +1134,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
-        litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)
         try:
@@ -1297,6 +1296,7 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_total_amount: Optional[float] = None,
         cache_read_cost: Optional[float] = None,
         cache_creation_cost: Optional[float] = None,
+        reasoning_cost: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1325,6 +1325,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
         if cache_creation_cost is not None and cache_creation_cost > 0:
             self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
+        if reasoning_cost is not None and reasoning_cost > 0:
+            self.cost_breakdown["reasoning_cost"] = reasoning_cost
 
         # Store additional costs if provided (free-form dict for extensibility)
         if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
@@ -1383,6 +1385,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if cache_hit is True:
             return 0.0
+
+        transformed_result = self._generate_content_result_as_model_response(result)
+        if transformed_result is not None:
+            result = transformed_result
 
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
@@ -1463,6 +1469,39 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    def _generate_content_result_as_model_response(self, result: object) -> Optional[ModelResponse]:
+        """
+        Native Google :generateContent bodies report token usage under
+        ``usageMetadata``, which the cost calculator does not read, so a raw body
+        always costs 0. The async success path already transforms it into a
+        ``ModelResponse`` before costing; do the same transformation here so the
+        synchronously-built ``x-litellm-response-cost`` header carries the real
+        cost. Returns ``None`` (leaving the original result untouched) for other
+        call types, for already-transformed ``ModelResponse`` results, and on any
+        transformation failure.
+        """
+        if self.call_type not in (
+            CallTypes.generate_content.value,
+            CallTypes.agenerate_content.value,
+        ):
+            return None
+        if isinstance(result, ModelResponse) or not isinstance(result, (BaseModel, dict)):
+            return None
+        try:
+            import httpx
+
+            completion_response = result.model_dump(by_alias=True) if isinstance(result, BaseModel) else dict(result)
+            return litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+                completion_response=completion_response,
+                model_response=ModelResponse(),
+                model=self.model or "",
+                logging_obj=self,
+                raw_response=httpx.Response(status_code=200, headers={}),
+            )
+        except Exception as e:  # noqa: BLE001 - cost normalization must never break the response path
+            verbose_logger.debug(f"generate_content response cost normalization failed: {e}")
+            return None
+
     async def _response_cost_calculator_async(
         self,
         result: Union[
@@ -1490,6 +1529,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aembedding.value, False) is not True
             and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
+            and litellm_params.get(CallTypes.allm_passthrough_route.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
@@ -2535,6 +2575,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
                         model_call_details=model_call_details
                     )
+                    model_call_details = redact_streaming_responses_for_custom_logger(
+                        model_call_details=model_call_details, custom_logger=callback
+                    )
                     ##################################
                     if self.stream is True:
                         if "async_complete_streaming_response" in model_call_details:
@@ -3029,7 +3072,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """
@@ -4682,7 +4725,7 @@ class StandardLoggingPayloadSetup:
         api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
-            model=None,
+            model=base_model if custom_pricing else None,
             completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
@@ -5167,9 +5210,14 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
-        usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
+        raw_usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=response_obj,
             combined_usage_object=cast(Optional[Usage], kwargs.get("combined_usage_object")),
+        )
+        usage_dict = (
+            {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
+            if isinstance(init_response_obj, ImageResponse) and init_response_obj.data
+            else raw_usage_dict
         )
 
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
@@ -5228,6 +5276,11 @@ def get_standard_logging_object_payload(
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
+        # The router overrides completion_response.model to the model-group alias before
+        # this payload is built, so cost-map lookup via that alias always misses.
+        # Fall back to the actual deployment model set by the router in metadata.
+        if base_model is None:
+            base_model = metadata.get("deployment")
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         raw_response_cost = kwargs.get("response_cost")
         response_cost: float = raw_response_cost or 0.0
@@ -5349,7 +5402,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa: T201
+        print(json.dumps(payload, indent=4), flush=True)  # noqa: T201
 
 
 def get_standard_logging_metadata(
