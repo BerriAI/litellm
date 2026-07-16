@@ -128,6 +128,29 @@ describe("SidebarUsageCard", () => {
     expect(container.querySelector('[data-slot="meter"]')).toBeNull();
   });
 
+  it("shows the exact license expiration date as the subtitle instead of time remaining", async () => {
+    mockUseLicenseInfo.mockReturnValue(licenseResult({ ...ACTIVE_LICENSE, expiration_date: "2099-12-31" }));
+
+    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+
+    expect(await screen.findByText("Expires Dec 31, 2099")).toBeInTheDocument();
+    expect(screen.queryByText(/(day|days|month|months) remaining/)).not.toBeInTheDocument();
+  });
+
+  it("shows the exact date as the subtitle when the license is expired", async () => {
+    mockUseLicenseInfo.mockReturnValue(licenseResult({ ...ACTIVE_LICENSE, expiration_date: "2020-01-01" }));
+
+    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+
+    expect(await screen.findByText("Expired Jan 1, 2020")).toBeInTheDocument();
+  });
+
+  it("falls back to Active plan when the license has no expiration date", async () => {
+    renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
+
+    expect(await screen.findByText("Active plan")).toBeInTheDocument();
+  });
+
   it("shows a collapsed rail button that expands the sidebar", async () => {
     const onExpandRail = vi.fn();
     const user = userEvent.setup();
