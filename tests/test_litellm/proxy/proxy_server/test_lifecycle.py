@@ -417,58 +417,45 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
     assert result is None
 
 
-def _install_fake_azure_identity(monkeypatch):
-    """Install a fake ``azure.identity`` so credential selection can be exercised
-    without the real Azure SDK installed. Returns the two sentinel classes."""
-    import sys
-    import types
+def test_load_from_azure_key_vault_uses_shared_credential_builder(monkeypatch):
+    """The Key Vault loader must build its credential via the shared
+    ``get_azure_credential`` helper (so workload identity and other credential
+    types are honored) rather than hard-coding ``DefaultAzureCredential``."""
+    import litellm
+    import litellm.secret_managers.get_azure_ad_token_provider as azure_cred_mod
 
-    class FakeDefaultAzureCredential:
-        pass
+    monkeypatch.setenv("AZURE_KEY_VAULT_URI", "https://example.vault.azure.net/")
+    monkeypatch.setattr(litellm, "secret_manager_client", None, raising=False)
 
-    class FakeWorkloadIdentityCredential:
-        pass
+    sentinel_credential = object()
+    sentinel_client = object()
+    observed = {}
 
-    azure_module = types.ModuleType("azure")
-    identity_module = types.ModuleType("azure.identity")
-    identity_module.DefaultAzureCredential = FakeDefaultAzureCredential
-    identity_module.WorkloadIdentityCredential = FakeWorkloadIdentityCredential
-    azure_module.identity = identity_module
+    def fake_get_azure_credential():
+        observed["credential_built"] = True
+        return sentinel_credential
 
-    monkeypatch.setitem(sys.modules, "azure", azure_module)
-    monkeypatch.setitem(sys.modules, "azure.identity", identity_module)
-    return FakeDefaultAzureCredential, FakeWorkloadIdentityCredential
+    fake_secret_client_module = MagicMock()
 
+    def fake_secret_client(vault_url, credential):
+        observed["vault_url"] = vault_url
+        observed["credential"] = credential
+        return sentinel_client
 
-def test_get_azure_key_vault_credential_defaults_to_default_credential(monkeypatch):
-    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
-    monkeypatch.delenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", raising=False)
+    fake_secret_client_module.SecretClient = fake_secret_client
+    monkeypatch.setattr(azure_cred_mod, "get_azure_credential", fake_get_azure_credential)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "azure.keyvault.secrets",
+        fake_secret_client_module,
+    )
 
-    credential = ps._get_azure_key_vault_credential()
+    load_from_azure_key_vault(use_azure_key_vault=True)
 
-    assert isinstance(credential, default_cls)
-    assert not isinstance(credential, workload_cls)
-
-
-@pytest.mark.parametrize("truthy", ["true", "True", "TRUE"])
-def test_get_azure_key_vault_credential_uses_workload_identity_when_enabled(monkeypatch, truthy):
-    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
-    monkeypatch.setenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", truthy)
-
-    credential = ps._get_azure_key_vault_credential()
-
-    assert isinstance(credential, workload_cls)
-    assert not isinstance(credential, default_cls)
-
-
-@pytest.mark.parametrize("falsy", ["false", "False", "0", "unset-like"])
-def test_get_azure_key_vault_credential_uses_default_when_disabled(monkeypatch, falsy):
-    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
-    monkeypatch.setenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", falsy)
-
-    credential = ps._get_azure_key_vault_credential()
-
-    assert isinstance(credential, default_cls)
+    assert observed["credential_built"] is True
+    assert observed["credential"] is sentinel_credential
+    assert observed["vault_url"] == "https://example.vault.azure.net/"
+    assert litellm.secret_manager_client is sentinel_client
 
 
 # ---------------------------------------------------------------------------
