@@ -799,22 +799,16 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 
 
 def test_is_sync_litellm_request(logging_obj):
-    assert logging_obj.is_async_entrypoint is None
     assert logging_obj._is_sync_litellm_request({}) is True
     assert logging_obj._is_sync_litellm_request({"acompletion": True}) is False
     assert logging_obj._is_sync_litellm_request({"allm_passthrough_route": True}) is False
 
-    logging_obj.is_async_entrypoint = True
-    assert logging_obj._is_sync_litellm_request({}) is False
-
-    logging_obj.is_async_entrypoint = False
-    assert logging_obj._is_sync_litellm_request({"acompletion": True}) is True
-
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_success_logs_custom_logger_exactly_once(logging_obj):
-    """A request stamped async by the @client wrapper must reach a CustomLogger exactly
-    once, via the async hook only; the sync success_handler skips CustomLogger hooks.
+    """On an async request the sync success_handler runs only to service legacy sync-only
+    callbacks; when the async sync-sweep passes run_custom_logger_hooks=False it must skip
+    the CustomLogger hook so a both-hook logger fires exactly once, via the async hook.
     Regression guard for LIT-4447."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -823,7 +817,6 @@ async def test_anthropic_messages_success_logs_custom_logger_exactly_once(loggin
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
-    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
 
@@ -852,7 +845,7 @@ async def test_anthropic_messages_success_logs_custom_logger_exactly_once(loggin
         ),
     ):
         await logging_obj.async_success_handler(result=model_response)
-        logging_obj.success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response, run_custom_logger_hooks=False)
 
     mock_async_log.assert_awaited_once()
     mock_sync_log.assert_not_called()
@@ -860,9 +853,10 @@ async def test_anthropic_messages_success_logs_custom_logger_exactly_once(loggin
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(logging_obj):
-    """A request stamped async by the @client wrapper must reach a CustomLogger exactly
-    once on failure, via the async hook only; the sync failure_handler skips CustomLogger
-    hooks. Regression guard for LIT-4447."""
+    """On an async request the sync failure_handler runs only to service legacy sync-only
+    callbacks; when the async sync-sweep passes run_custom_logger_hooks=False it must skip
+    the CustomLogger hook so a both-hook logger fires exactly once, via the async hook.
+    Regression guard for LIT-4447."""
     from litellm.integrations.custom_logger import CustomLogger
 
     class DummyLogger(CustomLogger):
@@ -870,7 +864,6 @@ async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(loggin
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
-    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
 
@@ -887,7 +880,7 @@ async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(loggin
         ),
     ):
         await logging_obj.async_failure_handler(exception, "traceback")
-        logging_obj.failure_handler(exception, "traceback")
+        logging_obj.failure_handler(exception, "traceback", run_custom_logger_hooks=False)
 
     mock_async_log.assert_awaited_once()
     mock_sync_log.assert_not_called()
@@ -951,7 +944,6 @@ async def test_sync_only_custom_logger_still_logs_async_request_exactly_once(log
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
-    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
 
@@ -976,7 +968,7 @@ async def test_sync_only_custom_logger_still_logs_async_request_exactly_once(log
         return_value=[sync_only_logger],
     ):
         await logging_obj.async_success_handler(result=model_response)
-        logging_obj.success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response, run_custom_logger_hooks=False)
 
     assert events == ["sync_success"]
 
@@ -989,7 +981,7 @@ async def test_sync_only_custom_logger_still_logs_async_request_exactly_once(log
         return_value=[sync_only_logger],
     ):
         await logging_obj.async_failure_handler(exception, "traceback")
-        logging_obj.failure_handler(exception, "traceback")
+        logging_obj.failure_handler(exception, "traceback", run_custom_logger_hooks=False)
 
     assert events == ["sync_failure"]
 
@@ -1038,7 +1030,6 @@ async def test_sync_only_logger_receives_async_event_through_dispatch_gate(loggi
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
-    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
     logging_obj.dynamic_success_callbacks = None
@@ -1072,12 +1063,13 @@ async def test_sync_only_logger_receives_async_event_through_dispatch_gate(loggi
 
 
 @pytest.mark.asyncio
-async def test_async_client_entrypoint_stamps_and_dedupes_flagless_call_type():
+async def test_async_client_entrypoint_dedupes_flagless_call_type():
     """End-to-end through the real @client wrapper: litellm.anthropic_messages sets no
-    `a*` flag in litellm_params, so only the wrapper-stamped is_async_entrypoint marks
-    the request async. With the executor sync dispatch open (a surviving plain-callable
-    callback, same mechanism as a legacy string callback), the CustomLogger must fire
-    via the async hook exactly once. Regression guard for LIT-4447 and LIT-4475."""
+    `a*` flag in litellm_params, yet the async path fires async_log_success_event and then
+    runs the sync sweep with run_custom_logger_hooks=False. With the executor sync dispatch
+    open (a surviving plain-callable callback, same mechanism as a legacy string callback),
+    a both-hook CustomLogger must fire via the async hook exactly once. Regression guard
+    for LIT-4447."""
 
     events = []
 
@@ -1120,17 +1112,15 @@ async def test_async_client_entrypoint_stamps_and_dedupes_flagless_call_type():
 
 
 @pytest.mark.asyncio
-async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
-    """An async entrypoint that internally invokes a sync @client function with the
-    shared logging object (e.g. agenerate_content delegating to generate_content) must
-    keep is_async_entrypoint=True; the inner sync wrapper must not overwrite the
-    entrypoint's stamp, and the nested request must reach a CustomLogger exactly once,
-    via the async hook. Regression guard for LIT-4475 (gemini /generate_content kept
-    double-logging because the inner sync wrapper flipped the bit back to sync)."""
+async def test_nested_async_to_sync_client_dedupes_custom_logger():
+    """An async entrypoint that internally invokes a sync @client function on the shared
+    logging object (e.g. agenerate_content delegating to generate_content) must reach a
+    both-hook CustomLogger exactly once, not twice. Regression guard for LIT-4475 (gemini
+    /generate_content double-logged because the inner sync wrapper also ran the CustomLogger
+    hook)."""
     from litellm.litellm_core_utils.thread_pool_executor import executor
     from litellm.utils import client
 
-    observed = {}
     events = []
 
     class Rec(CustomLogger):
@@ -1145,7 +1135,6 @@ async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
 
     @client
     def fake_inner_sync(model: str, messages=None, **kwargs):
-        observed["inner_bit"] = kwargs["litellm_logging_obj"].is_async_entrypoint
         return ModelResponse(
             model=model,
             choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
@@ -1154,9 +1143,7 @@ async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
 
     @client
     async def fake_outer_async(model: str, messages=None, **kwargs):
-        result = fake_inner_sync(model=model, messages=messages, **kwargs)
-        observed["outer_bit_after_inner"] = kwargs["litellm_logging_obj"].is_async_entrypoint
-        return result
+        return fake_inner_sync(model=model, messages=messages, **kwargs)
 
     rec = Rec()
     original_success = litellm.success_callback
@@ -1174,12 +1161,7 @@ async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
         litellm.success_callback = original_success
         litellm._async_success_callback = original_async
 
-    assert observed == {"inner_bit": True, "outer_bit_after_inner": True}
-    assert events == ["async"]
-
-    fake_inner_sync(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
-
-    assert observed["inner_bit"] is False
+    assert len(events) == 1
 
 
 def test_get_litellm_params_propagates_allm_passthrough_route(logging_obj):

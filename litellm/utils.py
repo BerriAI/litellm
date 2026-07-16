@@ -1324,8 +1324,6 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            if getattr(logging_obj, "is_async_entrypoint", None) is None:
-                logging_obj.is_async_entrypoint = False
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
@@ -1607,8 +1605,6 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            if getattr(logging_obj, "is_async_entrypoint", None) is None:
-                logging_obj.is_async_entrypoint = True
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
@@ -1804,7 +1800,7 @@ def client(original_function):
             if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
-                        e, traceback_exception, start_time, end_time
+                        e, traceback_exception, start_time, end_time, run_custom_logger_hooks=False
                     )  # DO NOT MAKE THREADED - router retry fallback relies on this!
                 except Exception as e:
                     raise e
