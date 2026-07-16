@@ -3508,6 +3508,61 @@ def test_gemini_token_usage_standard_response():
     assert result.completion_tokens_details.image_tokens == 10
 
 
+def test_gemini_grounded_request_tool_use_prompt_tokens():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33530
+
+    Grounded Gemini requests (googleSearch) report toolUsePromptTokenCount, which
+    Gemini folds into totalTokenCount but LiteLLM previously dropped. This caused
+    prompt_tokens + completion_tokens != total_tokens. The grounding tokens must be
+    surfaced on prompt_tokens_details.tool_use_prompt_tokens and folded into
+    prompt_tokens so the accounting reconciles.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 50,
+        "toolUsePromptTokenCount": 30,
+        "totalTokenCount": 180,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.prompt_tokens == 130
+    assert result.completion_tokens == 50
+    assert result.total_tokens == 180
+    assert result.prompt_tokens + result.completion_tokens == result.total_tokens
+    assert result.prompt_tokens_details is not None
+    assert result.prompt_tokens_details.tool_use_prompt_tokens == 30
+
+
+def test_gemini_grounded_request_with_thinking_no_double_count():
+    """
+    With grounding active, is_candidate_token_count_inclusive must account for
+    toolUsePromptTokenCount; otherwise it wrongly treats an inclusive candidate
+    count as exclusive and double-counts thoughtsTokenCount into completion_tokens.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 50,
+        "thoughtsTokenCount": 20,
+        "toolUsePromptTokenCount": 30,
+        "totalTokenCount": 180,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.prompt_tokens == 130
+    assert result.completion_tokens == 50
+    assert result.total_tokens == 180
+    assert result.prompt_tokens + result.completion_tokens == result.total_tokens
+
+
 def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
     """
     Test that image generation models correctly separate prompt and completion token details.

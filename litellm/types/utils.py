@@ -1492,6 +1492,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    tool_use_prompt_tokens: Optional[int] = None
+    """Number of tokens present in tool-use prompt(s). Used for Gemini grounded requests so prompt_tokens + completion_tokens reconciles with total_tokens."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.character_count is None:
@@ -1508,6 +1511,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.tool_use_prompt_tokens is None:
+            del self.tool_use_prompt_tokens
 
 
 class ServerToolUse(BaseModel):
