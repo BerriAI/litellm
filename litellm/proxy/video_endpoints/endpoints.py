@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
+    encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     video_reference_to_id,
@@ -107,6 +108,7 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(generated, data.get("model"))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -115,7 +117,7 @@ async def video_generation(
             version=version,
         )
     else:
-        return generated
+        return encoded_response
 
 
 @router.get(
@@ -502,6 +504,7 @@ async def video_remix(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(remixed, data.get("model"))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -510,7 +513,7 @@ async def video_remix(
             version=version,
         )
     else:
-        return remixed
+        return encoded_response
 
 
 @router.post(
@@ -815,6 +818,7 @@ async def video_edit(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(edited, data.get("model"))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -823,7 +827,7 @@ async def video_edit(
             version=version,
         )
     else:
-        return edited
+        return encoded_response
 
 
 @router.post(
@@ -912,6 +916,7 @@ async def video_extension(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(extended, data.get("model"))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -920,4 +925,4 @@ async def video_extension(
             version=version,
         )
     else:
-        return extended
+        return encoded_response
