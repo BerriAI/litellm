@@ -73,6 +73,11 @@ class SCIMMultiValuedAttribute(BaseModel):
 
 SCIM_MULTI_VALUED_LIST_ADAPTER = TypeAdapter(List[SCIMMultiValuedAttribute])
 
+SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS = {
+    "entitlements": SCIM_ENTITLEMENTS_METADATA_KEY,
+    "roles": SCIM_ROLES_METADATA_KEY,
+}
+
 
 class SCIMUserManager(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

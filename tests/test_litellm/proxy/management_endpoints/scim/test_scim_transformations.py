@@ -215,6 +215,40 @@ class TestScimTransformations:
             assert scim_user.roles[0].primary is True
 
     @pytest.mark.asyncio
+    async def test_transform_user_with_malformed_directory_metadata_fails_soft(
+        self, mock_prisma_client
+    ):
+        """Metadata is writable outside the SCIM surface; a corrupted value on one
+        user must omit the attribute, not fail the whole directory response"""
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+
+        user = LiteLLM_UserTable(
+            user_id="user-corrupt",
+            user_email="corrupt@example.com",
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={
+                "scim_entitlements": [{"display": 123}],
+                "scim_roles": {"value": "not-a-list"},
+                "scim_enterprise": {"manager": 42},
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user
+            )
+
+            assert scim_user.id == "user-corrupt"
+            assert scim_user.entitlements is None
+            assert scim_user.roles is None
+            assert scim_user.enterprise_user is None
+            assert SCIM_ENTERPRISE_USER_SCHEMA not in scim_user.schemas
+
+    @pytest.mark.asyncio
     async def test_transform_user_without_enterprise_metadata_omits_schema(
         self, mock_user, mock_prisma_client
     ):

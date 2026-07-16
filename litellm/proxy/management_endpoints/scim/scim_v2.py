@@ -1383,12 +1383,30 @@ def _handle_group_operations(op_type: str, value: Any, teams_set: Set[str]) -> O
     return None
 
 
+def _multi_valued_attribute_base(path: str) -> str:
+    """The attribute name a SCIM path targets, stripped of any value filter or sub-attribute."""
+    return path.split("[", 1)[0].split(".", 1)[0]
+
+
 def _handle_multi_valued_attribute_update(path: str, op_type: str, value: Any, metadata: dict[str, Any]) -> None:
     """Handle add/replace/remove for the entitlements and roles multi-valued attributes."""
-    metadata_key = SCIM_ENTITLEMENTS_METADATA_KEY if path == "entitlements" else SCIM_ROLES_METADATA_KEY
+    base = _multi_valued_attribute_base(path)
+    metadata_key = SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS[base]
+    if path != base:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Filtered or sub-attribute paths are not supported for {base}; PATCH the full attribute"},
+        )
+
     if op_type == "remove":
         metadata.pop(metadata_key, None)
         return
+
+    if value is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"The {op_type} operation on {base} requires a 'value' member (RFC 7644 Section 3.5.2)"},
+        )
 
     normalized = value if isinstance(value, list) else [value]
     try:
@@ -1396,7 +1414,7 @@ def _handle_multi_valued_attribute_update(path: str, op_type: str, value: Any, m
     except ValidationError:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid value for {path}: expected a list of objects with a 'value' sub-attribute"},
+            detail={"error": f"Invalid value for {base}: expected a list of objects with a 'value' sub-attribute"},
         )
 
     dumped = [attr.model_dump(exclude_none=True) for attr in attrs]
@@ -1442,7 +1460,7 @@ def _apply_patch_ops(
                     _handle_displayname_update(op_type, val, update_data)
                 elif key_lower == "externalid":
                     _handle_externalid_update(op_type, val, update_data)
-                elif key_lower in ("entitlements", "roles"):
+                elif key_lower in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
                     _handle_multi_valued_attribute_update(key_lower, op_type, val, metadata)
                 elif key_lower == "name" and isinstance(val, dict):
                     for name_key, name_val in val.items():
@@ -1464,7 +1482,7 @@ def _apply_patch_ops(
             _handle_active_update(op_type, value, metadata)
         elif path in ("name.givenname", "name.familyname"):
             _handle_name_update(path, op_type, value, scim_metadata)
-        elif path in ("entitlements", "roles"):
+        elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
         elif path.startswith("groups"):
             new_replace_set = _handle_group_operations(op_type, value, teams_set)
