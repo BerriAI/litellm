@@ -417,6 +417,60 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
     assert result is None
 
 
+def _install_fake_azure_identity(monkeypatch):
+    """Install a fake ``azure.identity`` so credential selection can be exercised
+    without the real Azure SDK installed. Returns the two sentinel classes."""
+    import sys
+    import types
+
+    class FakeDefaultAzureCredential:
+        pass
+
+    class FakeWorkloadIdentityCredential:
+        pass
+
+    azure_module = types.ModuleType("azure")
+    identity_module = types.ModuleType("azure.identity")
+    identity_module.DefaultAzureCredential = FakeDefaultAzureCredential
+    identity_module.WorkloadIdentityCredential = FakeWorkloadIdentityCredential
+    azure_module.identity = identity_module
+
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity_module)
+    return FakeDefaultAzureCredential, FakeWorkloadIdentityCredential
+
+
+def test_get_azure_key_vault_credential_defaults_to_default_credential(monkeypatch):
+    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
+    monkeypatch.delenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", raising=False)
+
+    credential = ps._get_azure_key_vault_credential()
+
+    assert isinstance(credential, default_cls)
+    assert not isinstance(credential, workload_cls)
+
+
+@pytest.mark.parametrize("truthy", ["true", "True", "TRUE"])
+def test_get_azure_key_vault_credential_uses_workload_identity_when_enabled(monkeypatch, truthy):
+    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
+    monkeypatch.setenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", truthy)
+
+    credential = ps._get_azure_key_vault_credential()
+
+    assert isinstance(credential, workload_cls)
+    assert not isinstance(credential, default_cls)
+
+
+@pytest.mark.parametrize("falsy", ["false", "False", "0", "unset-like"])
+def test_get_azure_key_vault_credential_uses_default_when_disabled(monkeypatch, falsy):
+    default_cls, workload_cls = _install_fake_azure_identity(monkeypatch)
+    monkeypatch.setenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY", falsy)
+
+    credential = ps._get_azure_key_vault_credential()
+
+    assert isinstance(credential, default_cls)
+
+
 # ---------------------------------------------------------------------------
 # cost_tracking
 # ---------------------------------------------------------------------------

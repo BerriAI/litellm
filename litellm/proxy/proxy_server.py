@@ -126,6 +126,7 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from azure.core.credentials import TokenCredential
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -2040,12 +2041,33 @@ def _resolve_pydantic_type(typ) -> List:
     return typs
 
 
+def _get_azure_key_vault_credential() -> "TokenCredential":
+    """
+    Build the credential used to authenticate to Azure Key Vault.
+
+    When ``AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY`` is truthy, use
+    ``WorkloadIdentityCredential`` (federated token auth for AKS workload identity,
+    no client secret needed); it reads ``AZURE_TENANT_ID``, ``AZURE_CLIENT_ID`` and
+    ``AZURE_FEDERATED_TOKEN_FILE`` from the environment. Otherwise fall back to
+    ``DefaultAzureCredential``.
+    """
+    from litellm.secret_managers.main import str_to_bool
+
+    if str_to_bool(os.getenv("AZURE_KEY_VAULT_USE_WORKLOAD_IDENTITY")) is True:
+        from azure.identity import WorkloadIdentityCredential
+
+        return WorkloadIdentityCredential()
+
+    from azure.identity import DefaultAzureCredential
+
+    return DefaultAzureCredential()
+
+
 def load_from_azure_key_vault(use_azure_key_vault: bool = False):
     if use_azure_key_vault is False:
         return
 
     try:
-        from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
@@ -2054,7 +2076,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         if KVUri is None:
             raise Exception("Error when loading keys from Azure Key Vault: AZURE_KEY_VAULT_URI is not set.")
 
-        credential = DefaultAzureCredential()
+        credential = _get_azure_key_vault_credential()
 
         # Create the SecretClient using the credential
         client = SecretClient(vault_url=KVUri, credential=credential)
