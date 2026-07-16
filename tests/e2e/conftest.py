@@ -22,6 +22,7 @@ import pytest
 import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
+from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
 from lifecycle import GatewayProvider, ResourceManager
 
 
@@ -95,8 +96,6 @@ def pytest_runtest_makereport(
     scrape pytest progress basenames. See e2e_result_reporter.py.
     """
     report = yield
-    from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
-
     result = result_from_pytest(
         nodeid=str(report.nodeid),
         when=str(report.when),
