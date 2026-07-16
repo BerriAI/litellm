@@ -117,7 +117,9 @@ def harness():
 
     router = MagicMock(spec=Router)
     resolve_model = MagicMock(
-        side_effect=lambda model_id: RESOLVED_MODELS.get(model_id)
+        side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(
+            model_id
+        )
     )
     router.resolve_model_name_from_model_id = resolve_model
 
