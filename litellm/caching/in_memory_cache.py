@@ -47,7 +47,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
-        self._increment_lock = threading.RLock()
+        self._increment_lock = threading.Lock()
 
     def check_value_size(self, value: Any):
         """
