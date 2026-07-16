@@ -36,6 +36,12 @@ AZURE_CHAT_MODELS = tuple(
     )
 )
 
+AZURE_CUSTOM_NAME_CHAT_MODEL = (
+    f"azure-{os.environ.get('E2E_AZURE_CUSTOM_MODEL', 'gpt-5.6-sol-e2e')}"
+)
+
+AZURE_GPT4O_CHAT_MODEL = f"azure-{os.environ.get('E2E_AZURE_GPT4O_MODEL', 'gpt-4o')}"
+
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.

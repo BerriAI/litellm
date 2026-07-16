@@ -84,6 +84,22 @@ configs:
             api_base: os.environ/AZURE_API_BASE
             api_key: os.environ/AZURE_API_KEY
 
+        - model_name: azure-${E2E_AZURE_CUSTOM_MODEL:-gpt-5.6-sol-e2e}
+          litellm_params:
+            model: azure/${E2E_AZURE_CUSTOM_MODEL:-gpt-5.6-sol-e2e}
+            api_base: os.environ/AZURE_API_BASE
+            api_key: os.environ/AZURE_API_KEY
+            drop_params: false
+          model_info:
+            base_model: ${E2E_AZURE_CUSTOM_BASE_MODEL:-azure/gpt-5.6-sol}
+
+        - model_name: azure-${E2E_AZURE_GPT4O_MODEL:-gpt-4o}
+          litellm_params:
+            model: azure/${E2E_AZURE_GPT4O_MODEL:-gpt-4o}
+            api_base: os.environ/AZURE_API_BASE
+            api_key: os.environ/AZURE_API_KEY
+            max_tokens: 512
+
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest

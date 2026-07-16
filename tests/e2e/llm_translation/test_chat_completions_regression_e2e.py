@@ -11,13 +11,28 @@ that empties the completion for any provider fails that provider's row here.
 The Azure OpenAI streaming cases apply the same standard to the SSE path: every
 data event must parse as a chat.completion.chunk and the deltas must reassemble
 into real text, not just count as a 200 with chunks.
+
+Two cases guard specific customer-reported Azure regressions beyond the happy
+path. GH #31243: reasoning_effort='none' against a custom-named deployment must
+resolve model capabilities through base_model and reach Azure with reasoning
+actually disabled; the prompt is chosen to spend reasoning tokens at default
+effort, so the test fails on a gate 400 (the SDK-level bug PR #28490 fixed) and
+also on a silently dropped param (which drop_params=true would otherwise mask).
+GH #31614 (still open, marked xfail): a config-level max_tokens default
+combined with a client-sent max_completion_tokens forwards both parameters to
+Azure, which rejects the pair; the strict xfail flips when a fix lands.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from e2e_config import AZURE_CHAT_MODELS, unique_marker
+from e2e_config import (
+    AZURE_CHAT_MODELS,
+    AZURE_CUSTOM_NAME_CHAT_MODEL,
+    AZURE_GPT4O_CHAT_MODEL,
+    unique_marker,
+)
 from e2e_http import unwrap
 from models import ChatBody, ChatMessage, ChatStreamChunk
 from passthrough_client import PassthroughClient
@@ -133,4 +148,90 @@ class TestChatCompletionsRegression:
         assert content.strip(), (
             f"{model}: stream chunks reassembled to an empty "
             f"completion (#28991): {result.events[:5]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.azure_openai.thinking.nonstream.works")
+    def test_azure_custom_deployment_name_reasoning_effort_none(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        response = unwrap(
+            client.gateway.chat(
+                scoped_key,
+                ChatBody(
+                    model=AZURE_CUSTOM_NAME_CHAT_MODEL,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                "A farmer has 17 sheep, all but 9 run away, then "
+                                "he buys twice as many as remain minus 3. How many "
+                                "sheep? Reply with just the number. "
+                                f"(session {unique_marker()})"
+                            ),
+                        )
+                    ],
+                    max_completion_tokens=2000,
+                    reasoning_effort="none",
+                ),
+            )
+        )
+
+        assert response.choices, (
+            f"{AZURE_CUSTOM_NAME_CHAT_MODEL}: reasoning_effort='none' on a "
+            f"custom-named deployment must resolve capabilities via base_model "
+            f"(GH #31243): {response}"
+        )
+        message = response.choices[0].message
+        assert message is not None and message.content and message.content.strip(), (
+            f"{AZURE_CUSTOM_NAME_CHAT_MODEL}: empty completion for "
+            f"reasoning_effort='none' (GH #31243): {response}"
+        )
+        reasoning_tokens = (
+            response.usage.completion_tokens_details.reasoning_tokens
+            if response.usage and response.usage.completion_tokens_details
+            else None
+        )
+        assert not reasoning_tokens, (
+            f"{AZURE_CUSTOM_NAME_CHAT_MODEL}: reasoning_effort='none' must "
+            f"disable reasoning, but the model spent {reasoning_tokens} "
+            f"reasoning tokens (GH #31243): {response.usage}"
+        )
+
+    @pytest.mark.covers(
+        "llm.chat_completions.azure_openai.basic.nonstream.token_param_dedup"
+    )
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "GH #31614: a config-level max_tokens default plus a client "
+            "max_completion_tokens forwards both to Azure, which rejects the pair"
+        ),
+    )
+    def test_azure_config_token_cap_with_client_max_completion_tokens(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        response = unwrap(
+            client.gateway.chat(
+                scoped_key,
+                ChatBody(
+                    model=AZURE_GPT4O_CHAT_MODEL,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"reply with one word {unique_marker()}",
+                        )
+                    ],
+                    max_completion_tokens=256,
+                ),
+            )
+        )
+
+        assert response.choices, (
+            f"{AZURE_GPT4O_CHAT_MODEL}: client max_completion_tokens on a "
+            f"deployment with a config max_tokens default must still complete "
+            f"(GH #31614): {response}"
+        )
+        message = response.choices[0].message
+        assert message is not None and message.content and message.content.strip(), (
+            f"{AZURE_GPT4O_CHAT_MODEL}: empty completion (GH #31614): {response}"
         )
