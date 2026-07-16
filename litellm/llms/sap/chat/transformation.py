@@ -181,6 +181,23 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return self._resolve_deployment_url()
 
     def _resolve_deployment_url(self) -> str:
+        """Auto-discover the orchestration deployment URL from SAP AI Core.
+
+        This is the **fallback** (step 3) in the URL resolution chain.  It is
+        only called when neither of the faster paths produced a URL:
+
+        1. ``optional_params["deployment_url"]`` — caller-supplied, no network
+           call needed.
+        2. ``AICORE_ORCHESTRATION_DEPLOYMENT_URL`` env var — operator-supplied,
+           no network call needed.
+        3. **This method** — lists all deployments, filters to those whose
+           scenario and executable are both ``"orchestration"``, picks the one
+           with the most recent ``createdAt`` timestamp, and warns when more
+           than one candidate is found.
+
+        Raises:
+            GenAIHubOrchestrationError: if no orchestration deployment exists.
+        """
         client = litellm.module_level_client
         deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
 
@@ -209,7 +226,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 f"SAP: found {len(valid)} orchestration deployments; using the newest one "
                 f"(name={chosen[2]!r}, url={chosen[0]!r}). "
                 f"Others ignored: {others}. "
-                "Pass `deployment_url` in `litellm_params` to route to a specific deployment."
+                "Set AICORE_ORCHESTRATION_DEPLOYMENT_URL or pass deployment_url in "
+                "optional_params to route to a specific deployment."
             )
             return chosen[0]
 
@@ -280,7 +298,29 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ):
-        base = litellm_params.get("deployment_url") or self.deployment_url
+        """Resolve the SAP orchestration endpoint URL using a three-step chain.
+
+        Resolution order (first match wins, no network call unless step 3 is
+        reached):
+
+        1. ``optional_params["deployment_url"]`` — caller passes the exact URL
+           as a per-request optional param.  Takes precedence over everything.
+        2. ``AICORE_ORCHESTRATION_DEPLOYMENT_URL`` env var — operator sets this
+           once at deployment time to pin a specific orchestration deployment.
+        3. Auto-discovery via :meth:`_resolve_deployment_url` — lists
+           deployments from the AI Core management API, picks the newest
+           orchestration deployment, and warns when multiple are found.
+        """
+        import os
+
+        # Step 1: per-request override via optional_params
+        base = optional_params.get("deployment_url")
+        # Step 2: env-var override (operator-level, no discovery needed)
+        if not base:
+            base = os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
+        # Step 3: auto-discovery (network call, result is cached on the instance)
+        if not base:
+            base = self.deployment_url
         return f"{base}/v2/completion"
 
     def _build_prompt_module(

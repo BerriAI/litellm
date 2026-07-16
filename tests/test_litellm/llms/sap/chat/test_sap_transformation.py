@@ -1,3 +1,4 @@
+import os
 import warnings
 import pytest
 from unittest.mock import patch, MagicMock
@@ -700,6 +701,7 @@ class TestDeploymentSelection:
                 mock_log.warning.assert_called_once()
                 msg = mock_log.warning.call_args[0][0]
                 assert "2 orchestration deployments" in msg
+                assert "AICORE_ORCHESTRATION_DEPLOYMENT_URL" in msg
                 assert "deployment_url" in msg
 
     def test_no_deployments_raises(self):
@@ -711,7 +713,8 @@ class TestDeploymentSelection:
                 config._resolve_deployment_url()
         assert "No orchestration deployment found" in str(exc_info.value)
 
-    def test_get_complete_url_respects_deployment_url_in_litellm_params(self):
+    def test_get_complete_url_respects_deployment_url_in_optional_params(self):
+        """Step 1: deployment_url in optional_params skips discovery entirely."""
         config = _make_config()
         explicit_url = "https://my-custom-deploy.sap.com/v2/inference/deployments/abc123"
         mock_client = MagicMock()
@@ -720,20 +723,59 @@ class TestDeploymentSelection:
                 api_base=None,
                 api_key=None,
                 model="gpt-4o",
-                optional_params={},
-                litellm_params={"deployment_url": explicit_url},
+                optional_params={"deployment_url": explicit_url},
+                litellm_params={},
             )
         assert url == f"{explicit_url}/v2/completion"
         mock_client.get.assert_not_called()
 
-    def test_get_complete_url_falls_back_to_discovery_when_no_deployment_url(self):
+    def test_get_complete_url_respects_env_var(self):
+        """Step 2: AICORE_ORCHESTRATION_DEPLOYMENT_URL skips discovery."""
+        config = _make_config()
+        env_url = "https://env-deploy.sap.com/v2/inference/deployments/envid"
+        mock_client = MagicMock()
+        with patch("litellm.module_level_client", mock_client):
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = config.get_complete_url(
+                    api_base=None,
+                    api_key=None,
+                    model="gpt-4o",
+                    optional_params={},
+                    litellm_params={},
+                )
+        assert url == f"{env_url}/v2/completion"
+        mock_client.get.assert_not_called()
+
+    def test_get_complete_url_optional_params_beats_env_var(self):
+        """Step 1 takes precedence over step 2."""
+        config = _make_config()
+        optional_url = "https://optional-deploy.sap.com/v2/inference/deployments/opt"
+        env_url = "https://env-deploy.sap.com/v2/inference/deployments/envid"
+        mock_client = MagicMock()
+        with patch("litellm.module_level_client", mock_client):
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = config.get_complete_url(
+                    api_base=None,
+                    api_key=None,
+                    model="gpt-4o",
+                    optional_params={"deployment_url": optional_url},
+                    litellm_params={},
+                )
+        assert url == f"{optional_url}/v2/completion"
+        mock_client.get.assert_not_called()
+
+    def test_get_complete_url_falls_back_to_discovery_when_no_override(self):
+        """Step 3: no optional_param, no env var → discovery runs."""
         config = _make_config()
         with patch("litellm.module_level_client", _mock_deployments("my-orch")):
-            url = config.get_complete_url(
-                api_base=None,
-                api_key=None,
-                model="gpt-4o",
-                optional_params={},
-                litellm_params={},
-            )
+            with patch.dict("os.environ", {}, clear=False):
+                # ensure env var is absent
+                os.environ.pop("AICORE_ORCHESTRATION_DEPLOYMENT_URL", None)
+                url = config.get_complete_url(
+                    api_base=None,
+                    api_key=None,
+                    model="gpt-4o",
+                    optional_params={},
+                    litellm_params={},
+                )
         assert url == "https://deploy-my-orch.sap.com/v2/completion"
