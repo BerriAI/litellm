@@ -9,10 +9,15 @@ import pytest
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../")
 
+from mcp.types import CallToolRequestParams, CallToolResult, TextContent
+
 import litellm.experimental_mcp_client.client as mcp_client_module
+from litellm.constants import MCP_RESPONSE_HEADERS_META_KEY
 from litellm.experimental_mcp_client.client import (
     MCPClient,
     _first_non_cancelled_cause,
+    _is_tool_call_request,
+    normalize_allowed_response_headers,
 )
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
@@ -695,3 +700,191 @@ async def test_run_with_session_quiet_on_error_demotes_warning_to_debug():
                 assert any("run_with_session failed" in m for m in warning_msgs), (
                     "the default path must keep the operator-visible warning"
                 )
+
+
+def _jsonrpc_response(method: str, headers: dict) -> httpx.Response:
+    """An upstream HTTP response to the given JSON-RPC method, carrying ``headers``."""
+    request = httpx.Request("POST", "http://upstream/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method})
+    return httpx.Response(200, headers=headers, request=request)
+
+
+class TestNormalizeAllowedResponseHeaders:
+    """The allowlist normalizer: one notion of blank, case, and never-forward."""
+
+    def test_unset_forwards_nothing(self):
+        assert normalize_allowed_response_headers(None) == frozenset()
+        assert normalize_allowed_response_headers([]) == frozenset()
+
+    def test_lowercases_and_strips(self):
+        assert normalize_allowed_response_headers(["  X-Example-Header  ", "X-Request-Id"]) == frozenset(
+            {"x-example-header", "x-request-id"}
+        )
+
+    def test_blank_entries_dropped(self):
+        assert normalize_allowed_response_headers(["", "   ", "\t", "X-Ok"]) == frozenset({"x-ok"})
+
+    def test_denylisted_headers_never_forwarded_even_when_configured(self):
+        """An admin cannot opt a credential, cookie, upstream session or hop-by-hop header into the result."""
+        configured = [
+            "Authorization",
+            "Proxy-Authorization",
+            "Set-Cookie",
+            "Cookie",
+            "MCP-Session-Id",
+            "WWW-Authenticate",
+            "Connection",
+            "Transfer-Encoding",
+            "X-Keep",
+        ]
+        assert normalize_allowed_response_headers(configured) == frozenset({"x-keep"})
+
+
+class TestIsToolCallRequest:
+    """Only the tools/call response may be captured, never a sibling message on the same connection."""
+
+    def test_tool_call_matches(self):
+        assert _is_tool_call_request(_jsonrpc_response("tools/call", {}).request) is True
+
+    @pytest.mark.parametrize("method", ["initialize", "tools/list", "notifications/initialized"])
+    def test_other_methods_do_not_match(self, method):
+        assert _is_tool_call_request(_jsonrpc_response(method, {}).request) is False
+
+    def test_non_json_body_does_not_match(self):
+        assert _is_tool_call_request(httpx.Request("DELETE", "http://upstream/mcp")) is False
+
+
+class TestMCPResponseHeaderCapture:
+    """Capturing the upstream tools/call response headers off the httpx seam."""
+
+    def test_no_allowlist_installs_no_hook(self):
+        """Unconfigured servers keep the stock client: no hook, no capture, no behavior change."""
+        client = MCPClient(server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        assert client._response_event_hooks() is None
+
+    @pytest.mark.asyncio
+    async def test_captures_only_allowlisted_headers_from_tool_call(self):
+        client = MCPClient(
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            allowed_response_headers=["X-Example-Header"],
+        )
+        hook = client._response_event_hooks()["response"][0]
+
+        await hook(_jsonrpc_response("tools/call", {"X-Example-Header": "hello", "X-Other": "dropped"}))
+
+        assert client._tool_call_response_headers == {"x-example-header": "hello"}
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_tool_call_responses(self):
+        """initialize and the session teardown share the connection; taking the last response would be wrong."""
+        client = MCPClient(
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            allowed_response_headers=["X-Example-Header"],
+        )
+        hook = client._response_event_hooks()["response"][0]
+
+        await hook(_jsonrpc_response("initialize", {"X-Example-Header": "from-initialize"}))
+
+        assert client._tool_call_response_headers is None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_headers_survive_a_later_sibling_response(self):
+        client = MCPClient(
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            allowed_response_headers=["X-Example-Header"],
+        )
+        hook = client._response_event_hooks()["response"][0]
+
+        await hook(_jsonrpc_response("tools/call", {"X-Example-Header": "hello"}))
+        await hook(_jsonrpc_response("tools/list", {"X-Example-Header": "later"}))
+
+        assert client._tool_call_response_headers == {"x-example-header": "hello"}
+
+
+class TestWithResponseHeadersMeta:
+    """Surfacing captured headers on the result's MCP ``_meta``."""
+
+    def _client(self):
+        return MCPClient(
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            allowed_response_headers=["X-Example-Header"],
+        )
+
+    def test_nothing_captured_leaves_result_untouched(self):
+        client = self._client()
+        result = CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        assert client._with_response_headers_meta(result).meta is None
+
+    def test_captured_headers_land_under_the_litellm_meta_key(self):
+        client = self._client()
+        client._tool_call_response_headers = {"x-example-header": "hello"}
+        result = CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        assert client._with_response_headers_meta(result).meta == {
+            MCP_RESPONSE_HEADERS_META_KEY: {"x-example-header": "hello"}
+        }
+
+    def test_preserves_meta_the_upstream_server_already_set(self):
+        """The upstream's own ``_meta`` is the caller's data; header surfacing must merge, not clobber."""
+        client = self._client()
+        client._tool_call_response_headers = {"x-example-header": "hello"}
+        result = CallToolResult(content=[TextContent(type="text", text="ok")], _meta={"upstream/trace": "abc123"})
+
+        assert client._with_response_headers_meta(result).meta == {
+            "upstream/trace": "abc123",
+            MCP_RESPONSE_HEADERS_META_KEY: {"x-example-header": "hello"},
+        }
+
+    def test_does_not_mutate_the_original_result(self):
+        client = self._client()
+        client._tool_call_response_headers = {"x-example-header": "hello"}
+        result = CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        client._with_response_headers_meta(result)
+
+        assert result.meta is None
+
+    @pytest.mark.asyncio
+    async def test_call_tool_surfaces_captured_headers_on_its_result(self):
+        """The wiring that makes the feature reachable: call_tool must surface what the session captured."""
+        client = self._client()
+
+        async def _session_that_captures(operation, *, quiet_on_error=False):
+            client._tool_call_response_headers = {"x-example-header": "hello"}
+            return CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        with patch.object(client, "run_with_session", side_effect=_session_that_captures):
+            result = await client.call_tool(CallToolRequestParams(name="echo", arguments={}))
+
+        assert result.meta == {MCP_RESPONSE_HEADERS_META_KEY: {"x-example-header": "hello"}}
+
+    @pytest.mark.asyncio
+    async def test_call_tool_leaves_result_alone_when_nothing_captured(self):
+        client = self._client()
+
+        async def _session_without_capture(operation, *, quiet_on_error=False):
+            return CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        with patch.object(client, "run_with_session", side_effect=_session_without_capture):
+            result = await client.call_tool(CallToolRequestParams(name="echo", arguments={}))
+
+        assert result.meta is None
+
+    @pytest.mark.asyncio
+    async def test_opening_a_session_clears_a_previous_calls_headers(self):
+        """Without this reset a reused client would replay the prior call's headers onto a later result."""
+        client = self._client()
+        client._tool_call_response_headers = {"x-example-header": "stale"}
+
+        async def _op(session):
+            return "unused"
+
+        with patch.object(client, "_create_transport_context", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                await client.run_with_session(_op)
+
+        assert client._tool_call_response_headers is None

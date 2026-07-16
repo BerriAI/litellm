@@ -1323,6 +1323,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                allowed_response_headers=server_config.get("allowed_response_headers", None),
                 env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
@@ -2864,6 +2865,7 @@ class MCPServerManager:
                     resolved_auth=resolved_auth,
                     sampling_callback=sampling_cb,
                     elicitation_callback=elicitation_cb,
+                    allowed_response_headers=server.allowed_response_headers,
                 )
 
             # Create SigV4 auth if configured
@@ -2889,6 +2891,7 @@ class MCPServerManager:
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
                 elicitation_callback=elicitation_cb,
+                allowed_response_headers=server.allowed_response_headers,
             )
 
     async def _get_tools_from_server(

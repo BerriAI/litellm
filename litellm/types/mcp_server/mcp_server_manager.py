@@ -58,6 +58,13 @@ class MCPServer(BaseModel):
     tool_name_to_description: Optional[Dict[str, str]] = None
     allowed_params: Optional[Dict[str, List[str]]] = None  # map of tool names to allowed parameter lists
     static_headers: Optional[Dict[str, str]] = None  # static headers to forward to the MCP server
+    allowed_response_headers: Optional[List[str]] = None
+    """Upstream ``tools/call`` response headers to surface to the caller on the MCP result's ``_meta``.
+
+    Opt-in allowlist of header names; empty or unset forwards nothing. The gateway answers the caller
+    over a stream whose HTTP headers are already committed before the tool runs, so these are relayed
+    as protocol metadata rather than as HTTP response headers. Credential, cookie, upstream-session and
+    hop-by-hop headers are never forwarded (see ``MCP_RESPONSE_HEADER_DENYLIST``)."""
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
