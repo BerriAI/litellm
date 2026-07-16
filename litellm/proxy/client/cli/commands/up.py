@@ -13,7 +13,7 @@ from types import FrameType
 from typing import IO, Iterator, Mapping
 
 import click
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
@@ -52,7 +52,10 @@ def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
         content = f.read()
     if not content.strip():
         return {}
-    return _SETTINGS_ADAPTER.validate_json(content)
+    try:
+        return _SETTINGS_ADAPTER.validate_json(content)
+    except ValidationError:
+        raise UpError(f"{path} contains invalid JSON (or its root is not an object); cannot proceed safely.")
 
 
 def merge_claude_settings(
@@ -105,7 +108,11 @@ def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
     if not path.exists():
         return None
     with open(path, "r") as f:
-        return _BACKUP_RECORD_ADAPTER.validate_json(f.read())
+        content = f.read()
+    try:
+        return _BACKUP_RECORD_ADAPTER.validate_json(content)
+    except ValidationError:
+        raise UpError(f"{path} contains invalid or unexpected JSON; cannot restore from it safely.")
 
 
 def restore_claude_settings(settings_path: Path | None = None, backup_path: Path | None = None) -> BackupRecord | None:
@@ -119,6 +126,7 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     if record is None:
         return None
     if record.existed and record.content is not None:
+        resolved_settings_path.parent.mkdir(parents=True, exist_ok=True)
         with open(resolved_settings_path, "w") as f:
             json.dump(record.content, f, indent=2)
     elif resolved_settings_path.exists():
@@ -228,8 +236,15 @@ def up(ctx: click.Context) -> None:
         stop_event.set()
 
     def _restore_once() -> None:
-        if restored.acquire(blocking=False):
+        if not restored.acquire(blocking=False):
+            return
+        try:
             _restore_and_report()
+        except UpError as e:
+            # Runs from atexit/a signal handler, outside Click's own exception
+            # handling -- raising here would only produce an unhandled-exception
+            # warning on stderr, not a clean message.
+            click.echo(str(e), err=True)
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -246,7 +261,10 @@ def down() -> None:
     Use this after a `lite up` process was killed uncleanly (e.g. `kill -9`)
     instead of stopped with Ctrl-C.
     """
-    _restore_and_report()
+    try:
+        _restore_and_report()
+    except UpError as e:
+        raise click.ClickException(str(e))
 
 
 __all__ = [

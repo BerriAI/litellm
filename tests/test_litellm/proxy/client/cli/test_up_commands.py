@@ -89,6 +89,18 @@ class TestLoadJsonOrEmpty:
         path.write_text(json.dumps({"theme": "dark"}))
         assert load_json_or_empty(path) == {"theme": "dark"}
 
+    def test_raises_clean_error_on_invalid_json(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text("not json at all {{{")
+        with pytest.raises(UpError, match="invalid JSON"):
+            load_json_or_empty(path)
+
+    def test_raises_clean_error_on_non_object_root(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps([1, 2, 3]))
+        with pytest.raises(UpError, match="invalid JSON"):
+            load_json_or_empty(path)
+
 
 class TestBackupRoundTrip:
     def test_restores_original_content_when_file_existed(self, monkeypatch, tmp_path):
@@ -123,6 +135,26 @@ class TestBackupRoundTrip:
         assert restore_claude_settings() is None
         assert not settings_path.exists()
 
+    def test_recreates_claude_dir_if_it_was_deleted_while_up_was_running(self, monkeypatch, tmp_path):
+        """If ~/.claude/ is removed while `lite up` holds it open, restoring must recreate the
+        directory rather than crash with FileNotFoundError and strand the backup file, which
+        would otherwise permanently break every future `lite down`."""
+        claude_dir = tmp_path / "claude_dir"
+        settings_path = claude_dir / "settings.json"
+        backup_path = tmp_path / "backup.json"
+        monkeypatch.setattr(up_module, "CLAUDE_SETTINGS_PATH", settings_path)
+        monkeypatch.setattr(up_module, "BACKUP_PATH", backup_path)
+        original = {"theme": "dark"}
+        claude_dir.mkdir(parents=True)
+        write_backup(BackupRecord(existed=True, content=original))
+        shutil.rmtree(claude_dir)
+
+        restored = restore_claude_settings()
+
+        assert restored is not None
+        assert json.loads(settings_path.read_text()) == original
+        assert not backup_path.exists()
+
     def test_read_backup_round_trips_write_backup(self, monkeypatch, tmp_path):
         _patch_paths(monkeypatch, tmp_path)
         write_backup(BackupRecord(existed=True, content={"a": 1}))
@@ -131,6 +163,14 @@ class TestBackupRoundTrip:
     def test_read_backup_missing_file_returns_none(self, monkeypatch, tmp_path):
         _patch_paths(monkeypatch, tmp_path)
         assert read_backup() is None
+
+    def test_read_backup_raises_clean_error_on_corrupt_content(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("not json at all {{{")
+
+        with pytest.raises(UpError, match="invalid or unexpected JSON"):
+            read_backup()
 
     def test_write_backup_restricts_permissions_for_a_new_file(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
@@ -345,3 +385,14 @@ class TestDownCommand:
 
         assert result.exit_code == 0, result.output
         assert "Nothing to restore." in result.output
+
+    def test_surfaces_clean_error_on_a_corrupt_backup_file(self, monkeypatch, tmp_path):
+        _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("not json at all {{{")
+
+        result = self.runner.invoke(down)
+
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "invalid or unexpected JSON" in result.output
