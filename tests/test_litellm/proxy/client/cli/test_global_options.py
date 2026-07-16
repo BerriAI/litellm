@@ -46,14 +46,12 @@ def test_ensure_utf8_output_reconfigures_legacy_encoding():
     with patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
         with pytest.raises(UnicodeEncodeError):
             sys.stdout.write("\u274c")
-            sys.stdout.flush()
 
         _ensure_utf8_output()
 
         assert sys.stdout.encoding == "utf-8"
         assert sys.stderr.encoding == "utf-8"
         sys.stdout.write("\u274c \u2705")
-        sys.stdout.flush()
 
 
 def test_base_url_trailing_slash_normalized(cli_runner):
