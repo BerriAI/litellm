@@ -98,9 +98,9 @@ def _sanitize_user_api_key_auth(auth: Any) -> Any:
     return auth
 
 
-def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if not metadata:
-        return metadata
+        return {}
     return {
         k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
         for k, v in metadata.items()
@@ -763,8 +763,8 @@ class ComplexityRouter(CustomLogger):
         # embedding call. Forwarding it would let the embedding's cost callback finalize the
         # reservation, so the routed completion's own callback then skips incrementing the
         # key/team budget. Key/team attribution fields are preserved for spend logging.
-        metadata = _classifier_call_metadata(request_kwargs.get("metadata")) or {}
-        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata")) or {}
+        metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
+        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
         query_vector = (
             await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
         )[0]
