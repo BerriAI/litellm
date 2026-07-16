@@ -388,8 +388,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.assertEqual(usage_details_arg["input"], 0)
             self.assertEqual(usage_details_arg["output"], 0)
 
-            self.assertEqual(usage_details_arg["input"], 0)
-            self.assertEqual(usage_details_arg["output"], 0)
             self.assertEqual(usage_details_arg["total"], 0)
             self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 0)
             self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)

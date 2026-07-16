@@ -600,8 +600,6 @@ class LangFuseLogger:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
-                if existing_trace_id is None:
-                    trace_params.update({"tags": tags})
 
             proxy_server_request = litellm_params.get("proxy_server_request", None)
             if proxy_server_request:
