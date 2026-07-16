@@ -1,4 +1,5 @@
 import contextlib
+import importlib.util
 import json
 import os
 import signal
@@ -35,6 +36,20 @@ class PidRecord:
 
 
 _PID_RECORD_ADAPTER = TypeAdapter(PidRecord)
+
+
+_PROXY_RUNTIME_MODULES: tuple[str, ...] = ("fastapi", "uvicorn", "backoff", "orjson", "websockets", "apscheduler")
+
+
+def missing_proxy_runtime_modules() -> tuple[str, ...]:
+    """Proxy-server modules that ``lite autoroute up`` needs but the thin CLI install lacks.
+
+    ``launch_proxy`` runs the full ``litellm.proxy.proxy_cli`` server, whose dependencies live in
+    the ``proxy`` extra, not the ``cli`` extra that installs the ``lite`` command. On a thin
+    ``litellm[cli]`` install the subprocess dies with a bare ``ModuleNotFoundError``; detecting the
+    gap here lets ``up`` fail with an actionable message instead.
+    """
+    return tuple(name for name in _PROXY_RUNTIME_MODULES if importlib.util.find_spec(name) is None)
 
 
 def allocate_free_port() -> int:
@@ -165,6 +180,7 @@ __all__ = [
     "clear_pid_record",
     "is_running",
     "launch_proxy",
+    "missing_proxy_runtime_modules",
     "poll_liveliness",
     "read_pid_record",
     "secure_create",

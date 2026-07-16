@@ -256,7 +256,11 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block(
     }
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_signature_content_block():
+def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_content_block():
+    """Anthropic closes a thinking block with a chunk that carries both the full
+    thinking recap and the signature. The classifier must still resolve it to a
+    ``thinking`` block rather than raising, so the block-type transition detection
+    keeps the stream on the open thinking block."""
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -289,10 +293,19 @@ def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_
         )
     ]
 
-    with pytest.raises(ValueError):
-        LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=choices
-        )
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "I need to summar",
+        "signature": "sigsig",
+    }
 
 
 def test_translate_anthropic_messages_to_openai_thinking_blocks():
@@ -738,7 +751,12 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     assert content_block_delta["signature"] == "sigsig"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_signature():
+def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_emits_signature_delta():
+    """Regression for the /v1/messages streaming crash: Anthropic (through the chat
+    completions adapter) emits the signature in a closing chunk that also recaps the
+    full accumulated thinking. That thinking already streamed as ``thinking_delta``
+    events, so this chunk must emit only a ``signature_delta`` (never raise, never
+    re-emit the recap as a duplicate ``thinking_delta``)."""
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -771,10 +789,13 @@ def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_
         )
     ]
 
-    with pytest.raises(ValueError):
-        LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
-            choices=choices
-        )
+    (
+        delta_type,
+        delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert delta_type == "signature_delta"
+    assert delta == {"type": "signature_delta", "signature": "sigsig"}
 
 
 def test_translate_anthropic_messages_to_openai_user_message_with_base64_image():
