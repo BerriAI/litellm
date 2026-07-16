@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Annotated, Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -28,8 +28,11 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
     BlockTeamRequest,
+    BulkTeamMemberUpdateRequest,
+    BulkTeamMemberUpdateResponse,
     CommonProxyErrors,
     DeleteTeamRequest,
+    FailedTeamMemberUpdate,
     LiteLLM_AuditLogs,
     LiteLLM_DeletedTeamTable,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -57,6 +60,7 @@ from litellm.proxy._types import (
     TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
+    TeamMemberBulkUpdateFields,
     TeamMemberDeleteRequest,
     TeamMemberUpdateRequest,
     TeamMemberUpdateResponse,
@@ -92,6 +96,15 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
+)
+from litellm.proxy.management_endpoints.team_member_budget_writes import (
+    BudgetFieldSnapshot,
+    MembershipBudgetSnapshot,
+    PrismaTeamMemberBudgetDb,
+    apply_member_budget_write_plan,
+    budget_snapshot_from_row,
+    invalidate_team_membership_caches,
+    plan_member_budget_writes,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -2814,7 +2827,7 @@ _MEMBER_BUDGET_PATCH_FIELDS = {
 }
 
 
-def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> Dict[str, Any]:
+def _build_member_budget_patch(data: TeamMemberUpdateRequest | TeamMemberBulkUpdateFields) -> dict[str, Any]:
     """Map the budget fields the request actually set (merge-patch: a sent
     value updates, an explicit null clears, an absent field is left untouched)
     to their budget-table columns."""
@@ -2824,6 +2837,37 @@ def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> Dict[str, Any]:
         for request_field, column in _MEMBER_BUDGET_PATCH_FIELDS.items()
         if request_field in provided
     }
+
+
+async def _load_member_budget_snapshots(
+    *,
+    prisma_client: PrismaClient,
+    team_id: str,
+    user_ids: Sequence[str],
+    team_default_budget_id: str | None,
+) -> tuple[tuple[MembershipBudgetSnapshot, ...], dict[str, BudgetFieldSnapshot]]:
+    if not user_ids:
+        return (), {}
+
+    raw_memberships = await TeamMembershipRepository(prisma_client).table.find_many(
+        where={"team_id": team_id, "user_id": {"in": list(user_ids)}}
+    )
+    budget_id_by_user = {membership.user_id: membership.budget_id for membership in raw_memberships}
+    membership_snapshots = tuple(
+        MembershipBudgetSnapshot(user_id=user_id, budget_id=budget_id_by_user.get(user_id)) for user_id in user_ids
+    )
+
+    budget_ids = {budget_id for budget_id in budget_id_by_user.values() if budget_id is not None}
+    if team_default_budget_id is not None:
+        budget_ids.add(team_default_budget_id)
+    if not budget_ids:
+        return membership_snapshots, {}
+
+    raw_budgets = await BudgetRepository(prisma_client).table.find_many(where={"budget_id": {"in": list(budget_ids)}})
+    budgets_by_id = {
+        budget.budget_id: budget_snapshot_from_row(budget.budget_id, budget.model_dump()) for budget in raw_budgets
+    }
+    return membership_snapshots, budgets_by_id
 
 
 def _validate_budget_duration(budget_duration: Optional[str]) -> None:
@@ -2922,6 +2966,23 @@ async def team_member_update(
         user_api_key_dict=user_api_key_dict,
     )
 
+    return await _apply_team_member_update(
+        data=data,
+        returned_team_info=returned_team_info,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _apply_team_member_update(
+    data: TeamMemberUpdateRequest,
+    returned_team_info: TeamInfoResponseObject,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TeamMemberUpdateResponse:
+    """Apply a single member update against already-fetched team info so a bulk
+    caller can resolve team_info once and reuse it for every member, instead of
+    re-scanning the team, its keys, and all memberships per member."""
     team_table = returned_team_info["team_info"]
 
     ## get user id
@@ -2929,7 +2990,7 @@ async def team_member_update(
     if data.user_id is not None:
         received_user_id = data.user_id
     elif data.user_email is not None:
-        for member in returned_team_info["team_info"].members_with_roles:
+        for member in team_table.members_with_roles:
             if member.user_email is not None and member.user_email == data.user_email:
                 received_user_id = member.user_id
                 break
@@ -3000,6 +3061,171 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+    )
+
+
+@router.patch(
+    "/v2/team/{team_id}/members",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkTeamMemberUpdateResponse,
+)
+@management_endpoint_wrapper
+async def bulk_update_team_members(
+    team_id: str,
+    data: BulkTeamMemberUpdateRequest,
+    http_request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.update_fields.role == "admin" and not premium_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing",
+        )
+
+    _validate_budget_duration(data.update_fields.budget_duration)
+
+    existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Team id={} does not exist in db".format(team_id)},
+        )
+    existing_team = LiteLLM_TeamTable(**existing_team_row.model_dump())
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team)
+        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/v2/team/{team_id}/members", team_id
+                )
+            },
+        )
+
+    if data.all_members_in_team:
+        user_ids = list(
+            dict.fromkeys(member.user_id for member in existing_team.members_with_roles if member.user_id is not None)
+        )
+    else:
+        user_ids = list(dict.fromkeys(data.user_ids or []))
+
+    max_batch_size = 500
+    if len(user_ids) > max_batch_size:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Maximum {} team members can be updated at once. Found {} user_ids.".format(
+                    max_batch_size, len(user_ids)
+                )
+            },
+        )
+
+    member_user_ids = {member.user_id for member in existing_team.members_with_roles if member.user_id is not None}
+    valid_user_ids = [user_id for user_id in user_ids if user_id in member_user_ids]
+    failed_updates = [
+        FailedTeamMemberUpdate(
+            user_id=user_id, failed_reason="User id={} is not a member of team {}".format(user_id, team_id)
+        )
+        for user_id in user_ids
+        if user_id not in member_user_ids
+    ]
+
+    budget_patch = _build_member_budget_patch(data.update_fields)
+
+    raw_default_budget_id = (existing_team.metadata or {}).get("team_member_budget_id")
+    default_budget_id = raw_default_budget_id if isinstance(raw_default_budget_id, str) else None
+
+    budget_target_user_ids = valid_user_ids if budget_patch else []
+    membership_snapshots, budgets_by_id = await _load_member_budget_snapshots(
+        prisma_client=prisma_client,
+        team_id=team_id,
+        user_ids=budget_target_user_ids,
+        team_default_budget_id=default_budget_id,
+    )
+    budget_plan = plan_member_budget_writes(
+        memberships=membership_snapshots,
+        budgets_by_id=budgets_by_id,
+        budget_patch=budget_patch,
+        team_default_budget_id=default_budget_id,
+        actor_user_id=user_api_key_dict.user_id or "",
+    )
+
+    new_role = data.update_fields.role
+    valid_user_id_set = frozenset(valid_user_ids)
+    members_with_roles_json = (
+        json.dumps(
+            [
+                Member(
+                    user_id=member.user_id,
+                    role=new_role,
+                    user_email=member.user_email,
+                ).model_dump()
+                if member.user_id in valid_user_id_set
+                else member.model_dump()
+                for member in existing_team.members_with_roles
+            ]
+        )
+        if new_role is not None
+        else None
+    )
+
+    has_budget_writes = len(budget_plan.writes) > 0
+    has_role_writes = members_with_roles_json is not None
+    refreshed_team_row = None
+    if has_budget_writes or has_role_writes:
+        async with prisma_client.db.tx() as tx:
+            refreshed_team_row = await apply_member_budget_write_plan(
+                db=PrismaTeamMemberBudgetDb(tx),
+                team_id=team_id,
+                plan=budget_plan,
+                members_with_roles_json=members_with_roles_json,
+            )
+
+    if refreshed_team_row is not None:
+        await _refresh_cached_team(
+            team_row=refreshed_team_row,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    if has_budget_writes or has_role_writes:
+        await invalidate_team_membership_caches(
+            user_ids=valid_user_ids,
+            team_id=team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    successful_updates = [
+        TeamMemberUpdateResponse(
+            team_id=team_id,
+            user_id=user_id,
+            max_budget_in_team=data.update_fields.max_budget_in_team,
+            tpm_limit=data.update_fields.tpm_limit,
+            rpm_limit=data.update_fields.rpm_limit,
+            budget_duration=data.update_fields.budget_duration,
+            allowed_models=data.update_fields.allowed_models,
+        )
+        for user_id in valid_user_ids
+    ]
+    return BulkTeamMemberUpdateResponse(
+        team_id=team_id,
+        total_requested=len(user_ids),
+        successful_updates=successful_updates,
+        failed_updates=failed_updates,
     )
 
 

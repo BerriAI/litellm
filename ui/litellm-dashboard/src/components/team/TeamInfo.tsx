@@ -896,6 +896,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 setSelectedEditMember={setSelectedEditMember}
                 setIsEditMemberModalVisible={setIsEditMemberModalVisible}
                 setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+                onMembersUpdated={async () => {
+                  if (!accessToken) return;
+                  const updatedTeamData = await teamInfoCall(accessToken, teamId);
+                  setTeamData(updatedTeamData);
+                  onUpdate(updatedTeamData);
+                }}
               />
             ),
           },
