@@ -14,6 +14,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
 from typing import Any, cast
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 class _DummyMCPResult:
@@ -243,6 +244,74 @@ async def test_make_follow_up_call_uses_original_previous_response_id(
     assert response is expected_response
     assert aresponses_mock.await_args is not None
     assert aresponses_mock.await_args.kwargs["previous_response_id"] == previous_response_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_response_id", [None, "resp_previous"])
+async def test_aresponses_mcp_follow_up_uses_original_previous_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+    previous_response_id: str | None,
+):
+    responses_module = importlib.import_module("litellm.responses.main")
+    initial_response = MagicMock(spec=ResponsesAPIResponse)
+    initial_response.id = "resp_intermediate"
+    initial_response.output = [
+        OutputFunctionToolCall(
+            id="id",
+            type="function_call",
+            call_id="call-1",
+            name="foo",
+            arguments="{}",
+            status="completed",
+        )
+    ]
+    final_response = MagicMock()
+    process_tools_mock = AsyncMock(return_value=([], {}))
+    execute_tools_mock = AsyncMock(
+        return_value=[{"tool_call_id": "call-1", "result": "done"}]
+    )
+    follow_up_mock = AsyncMock(return_value=final_response)
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    handler = types.SimpleNamespace(
+        _parse_mcp_tools=LiteLLM_Proxy_MCP_Handler._parse_mcp_tools,
+        _process_mcp_tools_without_openai_transform=process_tools_mock,
+        _transform_mcp_tools_to_openai=MagicMock(return_value=[]),
+        _get_parent_request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags,
+        _should_auto_execute_tools=LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools,
+        _prepare_initial_call_params=LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params,
+        _extract_tool_calls_from_response=LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response,
+        _execute_tool_calls=execute_tools_mock,
+        _create_follow_up_input=LiteLLM_Proxy_MCP_Handler._create_follow_up_input,
+        _prepare_follow_up_call_params=LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params,
+        _make_follow_up_call=follow_up_mock,
+    )
+
+    monkeypatch.setattr(
+        responses_module, "aresponses", AsyncMock(return_value=initial_response)
+    )
+    monkeypatch.setattr(handler_module, "LiteLLM_Proxy_MCP_Handler", handler)
+
+    response = await responses_module.aresponses_api_with_mcp(
+        input="Call the tool",
+        model="test-model",
+        tools=[
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy/mcp/test",
+                "require_approval": "never",
+            }
+        ],
+        previous_response_id=previous_response_id,
+    )
+
+    assert response is final_response
+    assert follow_up_mock.await_args is not None
+    assert (
+        follow_up_mock.await_args.kwargs["previous_response_id"]
+        == previous_response_id
+    )
 
 
 @pytest.mark.asyncio
