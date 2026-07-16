@@ -1,5 +1,5 @@
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
-import { getDaysUntilExpiration } from "@/utils/licenseUtils";
+import { formatExpirationStatus } from "@/utils/licenseUtils";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/ui/meter";
@@ -18,16 +18,6 @@ interface MeterData {
   used: number;
   total: number;
 }
-
-const formatExpiration = (daysRemaining: number | null): string => {
-  if (daysRemaining === null) return "No expiration";
-  if (daysRemaining < 0) return "Expired";
-  if (daysRemaining === 0) return "Expires today";
-  if (daysRemaining === 1) return "1 day remaining";
-  if (daysRemaining < 30) return `${daysRemaining} days remaining`;
-  if (daysRemaining < 60) return "1 month remaining";
-  return `${Math.floor(daysRemaining / 30)} months remaining`;
-};
 
 const meterTone = (pct: number): "default" | "warning" | "over" => {
   if (pct > 100) return "over";
@@ -102,8 +92,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
     );
   }
 
-  const daysUntilExpiration = licenseInfo?.expiration_date ? getDaysUntilExpiration(licenseInfo.expiration_date) : null;
-  const subtitle = licenseInfo?.expiration_date ? formatExpiration(daysUntilExpiration) : "Active plan";
+  const subtitle = licenseInfo?.expiration_date ? formatExpirationStatus(licenseInfo.expiration_date) : "Active plan";
   const meters = buildMeters(data);
 
   return (
