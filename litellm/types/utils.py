@@ -1798,14 +1798,17 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        usage_to_set = None
         if "usage" in kwargs and kwargs["usage"] is not None:
             if isinstance(kwargs["usage"], dict):
-                kwargs["usage"] = Usage(**kwargs["usage"])
+                usage_to_set = Usage(**kwargs["usage"])
+                kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
                 dump = (
                     kwargs["usage"].model_dump() if hasattr(kwargs["usage"], "model_dump") else kwargs["usage"].dict()
                 )
-                kwargs["usage"] = Usage(**dump)
+                usage_to_set = Usage(**dump)
+                kwargs["usage"] = usage_to_set
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1813,6 +1816,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage_to_set is not None:
+            self.usage = usage_to_set
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2469,6 +2475,10 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_user_spend: Optional[float]
+    user_api_key_user_max_budget: Optional[float]
+    user_api_key_team_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
@@ -2687,6 +2697,10 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     #   hints). Lets dashboards split rate-limit failures by cause without
     #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
+    error_budget_entity_type: Optional[str]
+    error_budget_entity_id: Optional[str]
+    error_budget_limit: Optional[float]
+    error_budget_spend: Optional[float]
 
 
 class GuardrailMode(TypedDict, total=False):

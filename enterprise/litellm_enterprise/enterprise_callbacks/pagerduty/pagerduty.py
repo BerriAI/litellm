@@ -113,6 +113,10 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_spend=_meta.get("user_api_key_spend"),
                 user_api_key_max_budget=_meta.get("user_api_key_max_budget"),
                 user_api_key_budget_reset_at=_meta.get("user_api_key_budget_reset_at"),
+                user_api_key_user_spend=_meta.get("user_api_key_user_spend"),
+                user_api_key_user_max_budget=_meta.get("user_api_key_user_max_budget"),
+                user_api_key_team_spend=_meta.get("user_api_key_team_spend"),
+                user_api_key_team_max_budget=_meta.get("user_api_key_team_max_budget"),
                 user_api_key_org_id=_meta.get("user_api_key_org_id"),
                 user_api_key_org_alias=_meta.get("user_api_key_org_alias"),
                 user_api_key_team_id=_meta.get("user_api_key_team_id"),
@@ -196,6 +200,10 @@ class PagerDutyAlerting(SlackAlerting):
                     if user_api_key_dict.budget_reset_at
                     else None
                 ),
+                user_api_key_user_spend=user_api_key_dict.user_spend,
+                user_api_key_user_max_budget=user_api_key_dict.user_max_budget,
+                user_api_key_team_spend=user_api_key_dict.team_spend,
+                user_api_key_team_max_budget=user_api_key_dict.team_max_budget,
                 user_api_key_org_id=user_api_key_dict.org_id,
                 user_api_key_org_alias=user_api_key_dict.organization_alias,
                 user_api_key_team_id=user_api_key_dict.team_id,

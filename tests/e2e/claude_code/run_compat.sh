@@ -11,9 +11,9 @@
 #   4. If a provider has `rate_limited > 0`, halve its rate; else, double it.
 #   5. Repeat until the highest no-429 rate is found.
 #
-# Required env (proxy connection):
-#   LITELLM_PROXY_BASE_URL   e.g. http://localhost:4000
-#   LITELLM_PROXY_API_KEY    e.g. sk-1234
+# Required env (proxy connection), same names as the rest of tests/e2e:
+#   LITELLM_PROXY_URL        e.g. http://localhost:4000
+#   LITELLM_MASTER_KEY       e.g. sk-1234
 #
 # Optional env (rate limits, all default to 5 req/s; 0 disables a column):
 #   LITELLM_COMPAT_RATE_ANTHROPIC
@@ -32,8 +32,8 @@
 
 set -euo pipefail
 
-if [[ -z "${LITELLM_PROXY_BASE_URL:-}" || -z "${LITELLM_PROXY_API_KEY:-}" ]]; then
-    echo "error: LITELLM_PROXY_BASE_URL and LITELLM_PROXY_API_KEY must be set" >&2
+if [[ -z "${LITELLM_PROXY_URL:-}" || -z "${LITELLM_MASTER_KEY:-}" ]]; then
+    echo "error: LITELLM_PROXY_URL and LITELLM_MASTER_KEY must be set" >&2
     exit 64
 fi
 
