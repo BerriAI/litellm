@@ -5254,3 +5254,98 @@ def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     fields = model_response.choices[-1].message.provider_specific_fields
     assert fields["thought_signatures"] == ["sig-text"]
     assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
+
+
+def test_gemini_grounded_tool_use_prompt_tokens_surfaced():
+    """Regression for https://github.com/BerriAI/litellm/discussions/33198
+
+    Grounded Gemini requests report toolUsePromptTokenCount as its own slice of
+    totalTokenCount. Before the fix this field was dropped entirely, so
+    total_tokens had a silent, unexplained gap and reasoning tokens were at risk
+    of being double counted. The exact numbers below are from the reported request.
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 4647,
+        "candidatesTokenCount": 1495,
+        "thoughtsTokenCount": 10785,
+        "toolUsePromptTokenCount": 12499,
+        "totalTokenCount": 29426,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.prompt_tokens == 4647
+    # candidatesTokenCount (1495) is exclusive of thoughts, so reasoning is added once
+    assert result.completion_tokens == 1495 + 10785
+    assert result.total_tokens == 29426
+    assert result.completion_tokens_details.reasoning_tokens == 10785
+
+    # the previously missing slice is now visible and accounts for the whole gap
+    assert result.prompt_tokens_details is not None
+    assert result.prompt_tokens_details.tool_use_prompt_tokens == 12499
+    gap = result.total_tokens - result.prompt_tokens - result.completion_tokens
+    assert gap == result.prompt_tokens_details.tool_use_prompt_tokens
+
+
+def test_is_candidate_token_count_inclusive_with_tool_use_prompt_tokens():
+    """toolUsePromptTokenCount must be folded into the prompt side of the equality.
+
+    When candidatesTokenCount is inclusive of thoughts, totalTokenCount is
+    promptTokenCount + toolUsePromptTokenCount + candidatesTokenCount. Ignoring
+    the tool-use slice made this return False and double-count reasoning tokens.
+    """
+    inclusive_with_tool_use: UsageMetadata = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 60,  # already includes the 40 thoughts
+        "toolUsePromptTokenCount": 500,
+        "totalTokenCount": 660,
+    }
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(inclusive_with_tool_use) is True
+
+    exclusive_with_tool_use: UsageMetadata = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 20,
+        "thoughtsTokenCount": 40,
+        "toolUsePromptTokenCount": 500,
+        "totalTokenCount": 660,
+    }
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(exclusive_with_tool_use) is False
+
+
+def test_gemini_inclusive_candidates_with_tool_use_no_double_count():
+    """When candidates already includes thoughts and tool-use tokens are present,
+    reasoning tokens must not be added a second time."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 60,  # inclusive of the 40 thoughts
+        "thoughtsTokenCount": 40,
+        "toolUsePromptTokenCount": 500,
+        "totalTokenCount": 660,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 60
+    assert result.prompt_tokens_details.tool_use_prompt_tokens == 500
+
+
+def test_gemini_usage_without_tool_use_prompt_tokens_omits_field():
+    """Non-grounded requests must not gain a tool_use_prompt_tokens field."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 150,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert not hasattr(result.prompt_tokens_details, "tool_use_prompt_tokens")

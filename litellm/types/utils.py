@@ -1474,6 +1474,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    tool_use_prompt_tokens: Optional[int] = None
+    """Input tokens consumed by server-side tool-use prompts (e.g. Gemini grounding / code execution). Surfaced separately so they don't silently inflate text prompt tokens or cost."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -1504,6 +1507,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.tool_use_prompt_tokens is None:
+            del self.tool_use_prompt_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:

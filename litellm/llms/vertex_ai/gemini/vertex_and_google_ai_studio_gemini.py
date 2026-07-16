@@ -1731,15 +1731,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Check if the candidate token count is inclusive of the thinking token count
 
-        if prompttokencount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
+        if promptTokenCount + toolUsePromptTokenCount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
 
         else the candidate token count is exclusive of the thinking token count
 
+        toolUsePromptTokenCount is folded into the prompt side of the equality because grounded / tool-use requests report it as a separate slice of totalTokenCount; ignoring it made this always return False and double-count reasoning tokens (https://github.com/BerriAI/litellm/discussions/33198)
+
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
-            "candidatesTokenCount", 0
-        ) == usage_metadata.get("totalTokenCount", 0):
+        effective_prompt_tokens = usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+            "toolUsePromptTokenCount", 0
+        )
+        if effective_prompt_tokens + usage_metadata.get("candidatesTokenCount", 0) == usage_metadata.get(
+            "totalTokenCount", 0
+        ):
             return True
         else:
             return False
@@ -1888,12 +1893,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details = CompletionTokensDetailsWrapper()
             response_tokens_details.reasoning_tokens = reasoning_tokens
 
+        tool_use_prompt_tokens = usage_metadata.get("toolUsePromptTokenCount")
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=prompt_audio_tokens,
             text_tokens=prompt_text_tokens,
             image_tokens=prompt_image_tokens,
             video_tokens=prompt_video_tokens,
+            tool_use_prompt_tokens=tool_use_prompt_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
