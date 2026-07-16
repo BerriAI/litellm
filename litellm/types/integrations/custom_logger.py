@@ -2,6 +2,26 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
+RESPONSES_AGENTIC_SURFACE = "responses"
+CODE_INTERPRETER_INTERCEPTION_PREFIX = "_code_interpreter_interception"
+NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES = frozenset(
+    ("_websearch_interception", "_compression_interception")
+)
+INTERCEPTION_INTERNAL_PREFIXES = frozenset(
+    (
+        *NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+        CODE_INTERPRETER_INTERCEPTION_PREFIX,
+    )
+)
+
+
+def is_interception_internal_key(
+    key: str,
+    prefixes: frozenset[str] = INTERCEPTION_INTERNAL_PREFIXES,
+) -> bool:
+    return any(key.startswith(prefix) for prefix in prefixes)
+
 
 class StandardCustomLoggerInitParams(BaseModel):
     """

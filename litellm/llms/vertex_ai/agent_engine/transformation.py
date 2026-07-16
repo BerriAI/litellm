@@ -120,9 +120,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
         # Get project and location from litellm_params or environment
         vertex_project = self.safe_get_vertex_ai_project(litellm_params)
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
-        )
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
 
         # Build the full resource path if only engine_id was provided
         if not resource_path.startswith("projects/"):
@@ -158,9 +156,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             project_id=vertex_project,
         )
 
-        verbose_logger.debug(
-            f"Vertex Agent Engine: Authenticated for project {project_id}"
-        )
+        verbose_logger.debug(f"Vertex Agent Engine: Authenticated for project {project_id}")
 
         return {
             "Authorization": f"Bearer {access_token}",
@@ -260,17 +256,13 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
         return ""
 
-    def _calculate_usage(
-        self, model: str, messages: List[AllMessageValues], content: str
-    ) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: List[AllMessageValues], content: str) -> Optional[Usage]:
         """Calculate token usage using LiteLLM's token counter."""
         try:
             from litellm.utils import token_counter
 
             prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-            completion_tokens = token_counter(
-                model="gpt-3.5-turbo", text=content, count_response_tokens=True
-            )
+            completion_tokens = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
             total_tokens = prompt_tokens + completion_tokens
 
             return Usage(
@@ -304,9 +296,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """
         try:
             content_type = raw_response.headers.get("content-type", "").lower()
-            verbose_logger.debug(
-                f"Vertex Agent Engine response Content-Type: {content_type}"
-            )
+            verbose_logger.debug(f"Vertex Agent Engine response Content-Type: {content_type}")
 
             # Parse the SSE response
             response_text = raw_response.text
@@ -346,9 +336,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error processing Vertex Agent Engine response: {str(e)}"
-            )
+            verbose_logger.error(f"Error processing Vertex Agent Engine response: {str(e)}")
             raise VertexAgentEngineError(
                 message=f"Error processing response: {str(e)}",
                 status_code=raw_response.status_code,
@@ -401,14 +389,10 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -448,9 +432,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "vertex_ai"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "vertex_ai"), params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")
@@ -465,9 +447,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream (async)
         completion_stream = VertexAgentEngineResponseIterator(

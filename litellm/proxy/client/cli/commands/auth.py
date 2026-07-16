@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 
 # Token storage utilities
@@ -154,9 +155,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(
-    teams: List[Dict[str, Any]], selected_index: int = 0
-) -> None:
+def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console = Console()
 
@@ -270,14 +269,34 @@ def prompt_team_selection_fallback(
                 )
                 return selected_team
             else:
-                click.echo(
-                    f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-                )
+                click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
             click.echo("❌ Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
             click.echo("\n❌ Team selection cancelled.")
             return None
+
+
+def _response_error_detail(response: requests.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    return None
+
+
+def _polling_error_message(response: requests.Response) -> str:
+    detail = _response_error_detail(response)
+    if detail:
+        return f"Polling error: HTTP {response.status_code}: {detail}"
+    return f"Polling error: HTTP {response.status_code}"
+
+
+def _is_permanent_polling_error(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code != 429
 
 
 # Polling-based authentication - no local server needed
@@ -307,25 +326,20 @@ def _poll_for_ready_data(
                 if status == "ready":
                     return data
                 if status == "pending":
-                    if (
-                        pending_message
-                        and pending_log_every > 0
-                        and attempt % pending_log_every == 0
-                    ):
+                    if pending_message and pending_log_every > 0 and attempt % pending_log_every == 0:
                         click.echo(pending_message)
-                elif (
-                    other_status_message
-                    and other_status_log_every > 0
-                    and attempt % other_status_log_every == 0
-                ):
+                elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
+            elif _is_permanent_polling_error(response.status_code):
+                detail = _response_error_detail(response)
+                raise ValueError(
+                    f"The proxy rejected the login session with HTTP {response.status_code}"
+                    + (f": {detail}" if detail else f" and no error detail (from {url})")
+                )
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
-                click.echo(f"Polling error: HTTP {response.status_code}")
+                click.echo(_polling_error_message(response))
         except requests.RequestException as e:
-            if (
-                connection_error_log_every > 0
-                and attempt % connection_error_log_every == 0
-            ):
+            if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")
         time.sleep(poll_interval)
     return None
@@ -356,12 +370,45 @@ def _normalize_teams(teams, team_details):
 
 
 def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
-    response = requests.post(f"{base_url}/sso/cli/start", timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    start_url = f"{base_url}/sso/cli/start"
+    try:
+        response = requests.post(start_url, timeout=10)
+    except requests.RequestException as e:
+        raise ValueError(
+            f"Could not reach the proxy at {start_url}: {e}. "
+            "Check that the proxy is running and that --base-url points at it."
+        ) from e
+
+    if response.status_code in (404, 405):
+        raise ValueError(
+            f"POST {start_url} returned HTTP {response.status_code}. "
+            "Either --base-url is wrong, or the proxy is older than this CLI and does not support "
+            "the CLI SSO login flow; upgrade the proxy or use a CLI version that matches it."
+        )
+    if response.status_code != 200:
+        detail = _response_error_detail(response)
+        raise ValueError(
+            f"Starting CLI login failed: HTTP {response.status_code} from {start_url}"
+            + (f": {detail}" if detail else "")
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        content_type = response.headers.get("content-type", "unknown")
+        raise ValueError(
+            f"The proxy returned a non-JSON response from {start_url} (content-type: {content_type}). "
+            "A proxy, load balancer, or auth gateway in front of LiteLLM may be intercepting the request. "
+            f"Response starts with: {response.text[:200]!r}"
+        )
+
     required_fields = ("login_id", "poll_secret", "user_code")
-    if not all(isinstance(data.get(field), str) for field in required_fields):
-        raise ValueError("Invalid CLI SSO start response")
+    missing_fields = tuple(field for field in required_fields if not isinstance(data.get(field), str))
+    if missing_fields:
+        raise ValueError(
+            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+            "The proxy version may not match this CLI; upgrade whichever is older."
+        )
     return data
 
 
@@ -369,9 +416,7 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> Dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(
-    base_url: str, key_id: str, poll_secret: str
-) -> Optional[dict]:
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Optional[dict]:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -449,9 +494,7 @@ def _handle_team_selection_during_polling(
         The JWT token with the selected team, or None if selection was skipped
     """
     if not teams:
-        click.echo(
-            "ℹ️ No teams found. You can create or join teams using the web interface."
-        )
+        click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
         return None
 
     click.echo("\n" + "=" * 60)
@@ -528,9 +571,7 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
                 click.echo(f"\n✅ Selected team: {team_alias} ({team_id})")
                 return team_id
 
-            click.echo(
-                f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-            )
+            click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
             click.echo("❌ Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
@@ -553,9 +594,7 @@ def login(ctx: click.Context):
         poll_secret = cli_sso_flow["poll_secret"]
         user_code = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode(
-            {"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id}
-        )
+        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
@@ -568,9 +607,7 @@ def login(ctx: click.Context):
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result = _poll_for_authentication(
-            base_url=base_url, key_id=key_id, poll_secret=poll_secret
-        )
+        auth_result = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
 
         if auth_result:
             api_key = auth_result["api_key"]
@@ -601,6 +638,10 @@ def login(ctx: click.Context):
             return
         else:
             click.echo("❌ Authentication timed out. Please try again.")
+            click.echo(
+                "The proxy never reported the browser sign-in as finished. If you did complete it, "
+                "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
+            )
             return
 
     except KeyboardInterrupt:
@@ -616,6 +657,44 @@ def logout():
     """Logout and clear stored authentication"""
     clear_token()
     click.echo("✅ Logged out successfully. Authentication token cleared.")
+
+
+@click.command(name="print-token")
+@click.pass_context
+def print_token(ctx: click.Context):
+    """Print a valid API token for this proxy.
+
+    Designed to be used as Claude Code's `apiKeyHelper`
+    (https://docs.claude.com/en/docs/claude-code/settings): stdout must
+    contain only the token, so all diagnostics go to stderr. The token
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
+    expired, run `lite login` again.
+    """
+    token_data = load_token()
+    if not token_data:
+        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    # apiKeyHelper is invoked bare (no --base-url), so unless the caller
+    # explicitly pointed us at a server, trust whichever one `lite login`
+    # actually issued this token for -- that's the whole point of not
+    # needing a wrapper command.
+    if ctx.obj.get("base_url_explicit"):
+        base_url = ctx.obj["base_url"]
+        if token_data.get("base_url") != base_url.rstrip("/"):
+            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+            sys.exit(1)
+
+    if not is_cli_token_fresh(token_data):
+        click.echo("Token expired. Run 'lite login' again.", err=True)
+        sys.exit(1)
+
+    api_key = token_data.get("key")
+    if not api_key:
+        click.echo("No token available. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    click.echo(api_key)
 
 
 @click.command(name="whoami")
@@ -638,13 +717,19 @@ def whoami():
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(
-            f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired."
-        )
+        click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+
+
+@click.group(name="auth")
+def auth_group():
+    """Manage CLI authentication (apiKeyHelper support, etc.)"""
+
+
+auth_group.add_command(print_token)
 
 
 # Export functions for use by other CLI commands
-__all__ = ["login", "logout", "whoami", "prompt_team_selection"]
+__all__ = ["login", "logout", "print_token", "auth_group", "whoami", "prompt_team_selection"]
 
 # Export individual commands instead of grouping them
 # login, logout, and whoami will be added as top-level commands

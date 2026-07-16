@@ -106,7 +106,9 @@ async def test_custom_auth_enforces_end_user_budget_when_common_checks_skipped()
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
         if counter_key == "spend:end_user:customer-1":
             return 5.0
         return fallback_spend

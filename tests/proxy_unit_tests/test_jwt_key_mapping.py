@@ -60,7 +60,8 @@ async def test_jwt_to_virtual_key_mapping_resolution():
 
     # Use patch to mock get_key_object in the module where it's used
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+        "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+        new_callable=AsyncMock,
     ) as mock_get_key:
         mock_get_key.return_value = mock_key_obj
 
@@ -105,7 +106,8 @@ async def test_jwt_to_virtual_key_mapping_no_mapping():
 
     # Mock get_key_object just in case
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+        "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+        new_callable=AsyncMock,
     ):
         user_api_key_cache = DualCache()
 
@@ -481,7 +483,8 @@ async def test_reject_behavior_raises_403_on_no_mapping():
     user_api_key_cache = DualCache()
 
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+        "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+        new_callable=AsyncMock,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await _resolve_jwt_to_virtual_key(
@@ -519,7 +522,8 @@ async def test_reject_behavior_caches_sentinel_after_db_miss():
     user_api_key_cache = DualCache()
 
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+        "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+        new_callable=AsyncMock,
     ):
         # First call — DB miss, should raise 403 and write sentinel
         with pytest.raises(HTTPException) as exc_info:
@@ -578,7 +582,8 @@ async def test_reject_behavior_raises_403_on_cached_no_mapping():
     await user_api_key_cache.async_set_cache(cache_key, "__NO_MAPPING__")
 
     with patch(
-        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+        "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+        new_callable=AsyncMock,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await _resolve_jwt_to_virtual_key(
@@ -671,7 +676,7 @@ async def test_auto_register_creates_key_and_mapping_when_helper_invoked():
 
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key,
         patch(
@@ -803,7 +808,7 @@ async def test_auto_register_race_condition_unique_conflict():
 
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key,
         patch(
@@ -833,13 +838,7 @@ async def test_auto_register_race_condition_unique_conflict():
     # Cache should hold the winner's token, not the loser's
     cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:user-42")
     assert cached == "winner_token_hash"
-    mock_get_key.assert_called_once_with(
-        hashed_token="winner_token_hash",
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=None,
-    )
+    mock_get_key.assert_called_once_with("winner_token_hash")
 
 
 # ──────────────────────────────────────────────
@@ -1093,7 +1092,7 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
 
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key,
         patch(
@@ -1249,7 +1248,7 @@ async def test_auto_register_helper_stamps_validated_identity_context():
 
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new_callable=AsyncMock,
         ) as mock_get_key,
         patch(

@@ -30,13 +30,9 @@ from urllib.parse import quote
 # module is reloaded (e.g. ``importlib.reload``). Tests that override these
 # variables must reload this module — see
 # ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
-LITELLM_MCP_SERVER_NAME = os.environ.get(
-    "LITELLM_MCP_SERVER_NAME", "litellm-mcp-server"
-)
+LITELLM_MCP_SERVER_NAME = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get(
-    "LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM"
-)
+LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
@@ -218,12 +214,14 @@ def server_applies_tool_allowlist(mcp_server: Any) -> bool:
 
 def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     """
-    Validate and normalize MCP server payload fields (server_name and alias).
+    Validate and normalize MCP server payload fields (server_name, alias, and
+    tool_name_to_display_name).
 
     This function:
     1. Validates that server_name and alias don't contain the MCP_TOOL_PREFIX_SEPARATOR
-    2. Normalizes alias by replacing spaces with underscores
-    3. Sets default alias if not provided (using server_name as base)
+    2. Validates that tool_name_to_display_name values satisfy Bedrock's tool-name pattern
+    3. Normalizes alias by replacing spaces with underscores
+    4. Sets default alias if not provided (using server_name as base)
 
     Args:
         payload: The payload object containing server_name and alias fields
@@ -238,6 +236,10 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     # Alias validation: disallow '-'
     if hasattr(payload, "alias") and payload.alias:
         validate_mcp_server_name(payload.alias, raise_http_exception=True)
+
+    # Tool display name validation: must satisfy Bedrock's tool-name pattern
+    if hasattr(payload, "tool_name_to_display_name") and payload.tool_name_to_display_name:
+        validate_tool_display_names(payload.tool_name_to_display_name)
 
     # Alias normalization and defaulting
     alias = getattr(payload, "alias", None)
@@ -332,6 +334,30 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     return prefixed_name, ""
 
 
+def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
+    """Strip ``server``'s registered prefix from a prefixed tool/resource name.
+
+    Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
+    the first separator, this removes exactly ``{known_prefix}{separator}`` for
+    one of the server's actual registered prefixes. It therefore stays correct
+    when a prefix itself contains the separator (e.g. the UUID ``server_id``
+    used as the fallback prefix when a server has no alias, or a legacy
+    hyphenated alias), where the first-separator split would cut inside the
+    prefix and never match the stored bare tool name.
+
+    Returns ``name`` unchanged when ``server`` is known but none of its prefixes
+    match (the name is already unprefixed). Falls back to the legacy split only
+    when ``server`` is ``None``.
+    """
+    if server is None:
+        return split_server_prefix_from_name(name)[0]
+    for prefix in iter_known_server_prefixes(server):
+        candidate = normalize_server_name(prefix) + MCP_TOOL_PREFIX_SEPARATOR
+        if name.startswith(candidate):
+            return name[len(candidate) :]
+    return name
+
+
 def is_tool_name_prefixed(
     tool_name: str,
     known_server_prefixes: Optional[set] = None,
@@ -367,9 +393,7 @@ def is_tool_name_prefixed(
     return True
 
 
-def validate_mcp_server_name(
-    server_name: str, raise_http_exception: bool = False
-) -> None:
+def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
     """
     Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
 
@@ -386,11 +410,64 @@ def validate_mcp_server_name(
             from fastapi import HTTPException
             from starlette import status
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message}
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
         else:
             raise Exception(error_message)
+
+
+def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+    """The first text content of an ``isError=True`` tool result, or ``None``
+    when the result is not an error.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    is_error: object = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    if is_error is not True:
+        return None
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, (list, tuple)):
+        for item in content:
+            text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
+            if isinstance(text, str) and text:
+                return text
+    return "MCP tool call returned isError=true"
+
+
+TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def validate_tool_display_names(tool_name_to_display_name: Optional[Mapping[str, str]]) -> None:
+    """
+    Validate tool display name overrides against Bedrock's tool-name constraint.
+
+    A display name replaces the tool name sent to the LLM provider, so it must
+    satisfy the strictest provider requirement in use (Bedrock's
+    ``[a-zA-Z0-9_-]+``); a name with spaces or other characters saves
+    successfully but fails every subsequent Bedrock tool call.
+
+    Raises:
+        HTTPException: If any display name fails the pattern.
+    """
+    if not tool_name_to_display_name:
+        return
+
+    for original_name, display_name in tool_name_to_display_name.items():
+        if display_name and not TOOL_DISPLAY_NAME_PATTERN.match(display_name):
+            from fastapi import HTTPException
+            from starlette import status
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        f"Invalid display name '{display_name}' for tool '{original_name}'. "
+                        "Display names may only contain letters, digits, underscores, and "
+                        "hyphens (no spaces or other special characters), since they replace "
+                        "the tool name sent to the LLM provider."
+                    )
+                },
+            )
 
 
 class MCPMissingUserEnvVarsError(Exception):
@@ -503,9 +580,7 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
     return _ENV_VAR_PATTERN.sub(_sub, value)
 
 
-def interpolate_headers(
-    headers: Mapping[str, str], variables: Mapping[str, str]
-) -> Dict[str, str]:
+def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> Dict[str, str]:
     """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
     return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
 

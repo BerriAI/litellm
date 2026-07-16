@@ -39,6 +39,11 @@ async function globalSetup() {
       if (await dismiss.isVisible({ timeout: 1_500 }).catch(() => false)) {
         await dismiss.click();
       }
+      // The login flow stores a post-login return URL in the litellm_return_url
+      // cookie. If the snapshot captures it before the app consumes it, every
+      // test inheriting this storageState gets yanked to that stale URL the
+      // first time it mounts a page (the e2e suite's main flake source).
+      await page.context().clearCookies({ name: "litellm_return_url" });
       await page.context().storageState({ path: storagePath });
     } catch (e) {
       fs.mkdirSync("test-results", { recursive: true });

@@ -228,6 +228,25 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
 
 
+def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
+    """A raw s3:// file id must be rejected on the proxy content endpoint.
+
+    Such an id is not a managed unified id, so it would otherwise skip the
+    owner/team access check and let a caller read another tenant's batch output
+    object by its key. Callers must use the managed unified file id.
+    """
+    from urllib.parse import quote
+
+    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    response = client.get(
+        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    assert "managed file id" in response.json()["error"]["message"].lower()
+
+
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
     Asserts 'create_file' is called with the correct arguments
@@ -375,6 +394,83 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
                 openai_call_found = True
                 break
         assert openai_call_found, "OpenAI call not found with expected parameters"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_create_file_batch_streams_from_upload_spool(monkeypatch, llm_router: Router):
+    """
+    Batch uploads must be passed downstream as the upload's streamable file handle
+    (Starlette's already-spooled file), not read into an in-memory bytes object, so
+    the proxy never buffers the whole payload. Non-batch uploads keep the bytes path.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    captured: dict = {}
+
+    async def fake_route_create_file(*, _create_file_request, **kwargs):
+        file_elem = _create_file_request["file"][1]
+        captured["file_elem"] = file_elem
+        if hasattr(file_elem, "read") and hasattr(file_elem, "seek"):
+            file_elem.seek(0)
+            captured["streamed_content"] = file_elem.read()
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    content = (
+        b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"hi"}]}}\n'
+    )
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        file_elem = captured["file_elem"]
+        assert not isinstance(
+            file_elem, (bytes, bytearray)
+        ), "batch upload must be a streamable handle, not in-memory bytes"
+        assert hasattr(file_elem, "read") and hasattr(
+            file_elem, "seek"
+        ), "batch upload must be a seekable file handle"
+        assert (
+            captured["streamed_content"] == content
+        ), "the handle must stream the uploaded bytes"
+
+        captured.clear()
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("data.jsonl", content, "application/jsonl")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert isinstance(
+            captured["file_elem"], (bytes, bytearray)
+        ), "non-batch upload must stay in-memory bytes"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

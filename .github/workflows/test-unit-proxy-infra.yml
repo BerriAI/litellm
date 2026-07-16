@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -29,6 +29,7 @@ jobs:
         tests/test_litellm/proxy/_experimental
         tests/test_litellm/proxy/experimental
         tests/test_litellm/proxy/common_utils
+        tests/test_litellm/proxy/logging_endpoints
         tests/test_litellm/proxy/test_*.py
       workers: 2
       reruns: 2

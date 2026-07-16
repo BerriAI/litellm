@@ -174,7 +174,9 @@ class TestBedrockMantleResponsesURL:
 
 
 class TestBedrockMantleGetLlmProviderRegion:
-    def test_get_llm_provider_uses_supplemental_litellm_params(self, monkeypatch):
+    def test_get_llm_provider_uses_supplemental_litellm_params(
+        self, monkeypatch, local_cost_map
+    ):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
@@ -187,9 +189,13 @@ class TestBedrockMantleGetLlmProviderRegion:
             litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
         )
         assert provider == "bedrock_mantle"
-        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+        # gpt-5.x carries use_openai_responses_path, so its whole surface (incl.
+        # the resolved chat base) is on the /openai/v1 base per the AWS card.
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
-    def test_get_llm_provider_uses_aws_region_from_litellm_params(self, monkeypatch):
+    def test_get_llm_provider_uses_aws_region_from_litellm_params(
+        self, monkeypatch, local_cost_map
+    ):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
@@ -205,7 +211,7 @@ class TestBedrockMantleGetLlmProviderRegion:
             litellm_params=params,
         )
         assert provider == "bedrock_mantle"
-        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
 
 class TestBedrockMantleResponsesAuth:
@@ -368,7 +374,10 @@ class TestBedrockMantleResponsesTools:
 
 
 class TestBedrockMantleResponsesRegistry:
-    def test_registry_returns_config_for_gpt_5_5(self):
+    def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):
+        # gpt-5.x advertises /v1/responses in supported_endpoints (capability)
+        # and use_openai_responses_path (wire path), so it gets the native config
+        # on the /openai/v1/responses path. local_cost_map loads the entry.
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
@@ -378,7 +387,7 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
-    def test_registry_returns_config_for_gpt_5_4_enum(self):
+    def test_registry_returns_config_for_gpt_5_4_enum(self, local_cost_map):
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
@@ -388,39 +397,105 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
-    def test_registry_returns_none_for_gpt_oss(self):
-        # Regression guard: gpt-oss must NOT get the native Responses config; it
-        # keeps the chat-completions emulation path (responses/main.py ~line 1109).
+    @pytest.mark.parametrize(
+        "model",
+        ["openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"],
+    )
+    def test_registry_returns_config_for_gpt_5_6_family(self, local_cost_map, model):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model,
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
+
+    def test_registry_returns_native_config_for_gpt_oss(self, local_cost_map):
+        # Core regression: gpt-oss-120b supports the native Responses API (AWS
+        # model card), so it must get a BedrockMantleResponsesAPIConfig on the
+        # STANDARD /v1/responses path -- NOT fall through to None / chat-completions
+        # emulation. Driven by /v1/responses in its price-map supported_endpoints.
+        # Fails on the old gate, which had no responses entry for gpt-oss.
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
             provider="bedrock_mantle",
             model="openai.gpt-oss-120b",
         )
-        assert cfg is None
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is False
 
-    def test_registry_returns_none_for_gpt_oss_safeguard(self):
+    def test_registry_returns_native_config_for_gpt_oss_20b(self, local_cost_map):
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
             provider="bedrock_mantle",
-            model="openai.gpt-oss-safeguard-20b",
+            model="openai.gpt-oss-20b",
         )
-        assert cfg is None
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is False
 
-    def test_registry_returns_config_for_future_frontier_model(self):
-        # Forward-compatibility: an unseen OpenAI gpt frontier model (e.g. gpt-6),
-        # not yet in the price map, must get the openai-path Responses config with
-        # no code or JSON change. The name-convention fallback (openai.gpt- minus
-        # gpt-oss) catches it before any price-map entry exists.
+    def test_registry_returns_none_for_gpt_oss_safeguard(self, local_cost_map):
+        # Key discriminator: gpt-oss-safeguard shares the "gpt-oss" substring with
+        # gpt-oss-120b but does NOT support Responses (AWS card), so it must return
+        # None. Proves the gate is per-model (supported_endpoints) and not a naive
+        # gpt-oss substring match. local_cost_map loads the chat-only entry.
         from litellm.utils import ProviderConfigManager
 
+        for model in ("openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b"):
+            cfg = ProviderConfigManager.get_provider_responses_api_config(
+                provider="bedrock_mantle",
+                model=model,
+            )
+            assert cfg is None, model
+
+    @pytest.mark.parametrize(
+        "model",
+        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
+    )
+    def test_registry_returns_native_config_for_gemma_4(self, local_cost_map, model):
+        # All three gemma-4 models support Responses (AWS cards) on the /openai/v1
+        # base, so each must get the native config with the openai path.
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model,
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
+
+    def test_registry_returns_native_config_for_xai_grok(self, local_cost_map):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="xai.grok-4.3",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        # grok-4.3 is a third-party frontier model on Bedrock Mantle, served on the
+        # /openai/v1 base (like gpt-5.x / gemma-4), not the standard /v1 path used by
+        # open-weights models such as gpt-oss. The standard /v1 base returns
+        # "Berm is not enabled for this account", so the price-map entry carries
+        # use_openai_responses_path=true.
+        assert cfg.use_openai_path is True
+
+    def test_unmapped_frontier_model_falls_through_to_none(self, restore_model_cost):
+        # The gate is data-driven, not name-based: an unseen model not yet in the
+        # price map (e.g. a future gpt-6) has no capability signal, so it falls
+        # through to None (chat-completions emulation) rather than being routed
+        # natively by a model-name guess. Onboarding it is a JSON / register_model
+        # change, never a code change (see the register_model tests below).
+        from litellm.utils import ProviderConfigManager
+
+        litellm.model_cost.pop("bedrock_mantle/openai.gpt-6", None)
+        litellm.get_model_info.cache_clear()
         cfg = ProviderConfigManager.get_provider_responses_api_config(
             provider="bedrock_mantle",
             model="openai.gpt-6",
         )
-        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
-        assert cfg.use_openai_path is True
+        assert cfg is None
 
     def test_price_map_flag_routes_non_gpt_name_to_openai_path(
         self, restore_model_cost
@@ -542,8 +617,8 @@ class TestBedrockMantleResponsesRegistry:
         assert cfg.use_openai_path is False
 
     def test_unmapped_model_degrades_to_none_without_crashing(self, restore_model_cost):
-        # A non-frontier model that is not in model_cost makes get_model_info
-        # raise; the gate must swallow it and return None rather than crash.
+        # A model absent from model_cost has no capability signal, so the gate
+        # returns None (chat-completions emulation) rather than crashing.
         from litellm.utils import ProviderConfigManager
 
         litellm.model_cost.pop("bedrock_mantle/somelab.unmapped-model", None)
@@ -560,6 +635,9 @@ class TestBedrockMantleResponsesRegistry:
         # place, so the snapshot must be a deepcopy: a shallow dict() copy would
         # share that nested dict and leave mode=responses after restore, making
         # the final assertion fail. The in-place clear+update mirrors the fixture.
+        # gpt-oss-safeguard is the right vehicle here: it is chat-only, so without
+        # the registered mode=responses it resolves to None, isolating the effect
+        # of the register/restore from the model's own (lack of) capability.
         from litellm.utils import ProviderConfigManager, register_model
 
         snapshot = copy.deepcopy(litellm.model_cost)
@@ -567,14 +645,14 @@ class TestBedrockMantleResponsesRegistry:
         try:
             register_model(
                 {
-                    "bedrock_mantle/openai.gpt-oss-120b": {
+                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
                         "litellm_provider": "bedrock_mantle",
                         "mode": "responses",
                     }
                 }
             )
             during = ProviderConfigManager.get_provider_responses_api_config(
-                provider="bedrock_mantle", model="openai.gpt-oss-120b"
+                provider="bedrock_mantle", model="openai.gpt-oss-safeguard-120b"
             )
             assert isinstance(during, BedrockMantleResponsesAPIConfig)
         finally:
@@ -582,9 +660,149 @@ class TestBedrockMantleResponsesRegistry:
             litellm.model_cost.update(snapshot)
             litellm.get_model_info.cache_clear()
         after = ProviderConfigManager.get_provider_responses_api_config(
-            provider="bedrock_mantle", model="openai.gpt-oss-120b"
+            provider="bedrock_mantle", model="openai.gpt-oss-safeguard-120b"
         )
         assert after is None
+
+
+class TestMantleBaseSegment:
+    """The wire-path helper is data-driven from the price-map
+    use_openai_responses_path flag (NOT a model-name match): flagged models are on
+    the /openai/v1 base, everything else on /v1. An unmapped model defaults to /v1.
+    """
+
+    @pytest.mark.parametrize(
+        "model,model_cost,expected",
+        [
+            (
+                "openai.gpt-5.5",
+                {"bedrock_mantle/openai.gpt-5.5": {"use_openai_responses_path": True}},
+                "openai/v1",
+            ),
+            (
+                "google.gemma-4-31b",
+                {
+                    "bedrock_mantle/google.gemma-4-31b": {
+                        "use_openai_responses_path": True
+                    }
+                },
+                "openai/v1",
+            ),
+            (
+                "openai.gpt-oss-120b",
+                {"bedrock_mantle/openai.gpt-oss-120b": {}},
+                "v1",
+            ),
+            ("openai.gpt-oss-120b", {}, "v1"),
+            (None, {}, "v1"),
+        ],
+    )
+    def test_base_segment(self, model, model_cost, expected):
+        from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
+
+        assert mantle_base_segment(model, model_cost) == expected
+
+
+class TestMantleSupportsResponses:
+    """The capability helper is data-driven (supported_endpoints / mode), with no
+    model-name match: per-model, so gpt-oss-120b is supported but the safeguard
+    variant is not despite the shared substring."""
+
+    @pytest.mark.parametrize(
+        "model,model_cost,expected",
+        [
+            # supported_endpoints lists responses -> supported
+            (
+                "openai.gpt-oss-120b",
+                {
+                    "bedrock_mantle/openai.gpt-oss-120b": {
+                        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+                    }
+                },
+                True,
+            ),
+            # chat-only supported_endpoints -> not supported (the discriminator)
+            (
+                "openai.gpt-oss-safeguard-120b",
+                {
+                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
+                        "supported_endpoints": ["/v1/chat/completions"]
+                    }
+                },
+                False,
+            ),
+            # mode=responses (no supported_endpoints) -> supported
+            (
+                "somelab.future-model",
+                {"bedrock_mantle/somelab.future-model": {"mode": "responses"}},
+                True,
+            ),
+            # mode=chat, no responses endpoint -> not supported
+            (
+                "google.gemma-3-27b-it",
+                {"bedrock_mantle/google.gemma-3-27b-it": {"mode": "chat"}},
+                False,
+            ),
+            # absent from model_cost -> no signal -> not supported
+            ("somelab.unmapped", {}, False),
+            (None, {}, False),
+        ],
+    )
+    def test_supports_responses(self, model, model_cost, expected):
+        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
+
+        assert mantle_supports_responses(model, model_cost) is expected
+
+
+class TestBedrockMantlePerModelResponsesURL:
+    """End-to-end: the registry-selected config must build the correct wire URL
+    per model. gpt-oss on /v1/responses, gpt-5.x and gemma-4 on
+    /openai/v1/responses."""
+
+    def _url_for(self, model, region="us-east-2"):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model,
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        return cfg.get_complete_url(
+            api_base=None, litellm_params={"aws_region_name": region}
+        )
+
+    def test_gpt_oss_uses_standard_responses_path(self, local_cost_map):
+        url = self._url_for("openai.gpt-oss-120b")
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
+        assert "/openai/v1/responses" not in url
+
+    def test_gpt_5_5_uses_openai_responses_path(self, local_cost_map):
+        url = self._url_for("openai.gpt-5.5")
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    @pytest.mark.parametrize(
+        "model",
+        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
+    )
+    def test_gemma_4_uses_openai_responses_path(self, local_cost_map, model):
+        url = self._url_for(model)
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+
+class TestBedrockMantleEndpointHonoring:
+    def test_plain_chat_call_to_gpt_oss_is_not_bridged(self, local_cost_map):
+        # Adding native Responses support to gpt-oss must NOT reroute its plain
+        # chat-completions traffic. responses_api_bridge_check keys off mode, and
+        # gpt-oss stays mode=chat, so a completion() call is not flipped to the
+        # Responses API. Guards the dual-capability contract.
+        from litellm.main import responses_api_bridge_check
+
+        model_info, resolved_model = responses_api_bridge_check(
+            model="openai.gpt-oss-120b",
+            custom_llm_provider="bedrock_mantle",
+        )
+        assert model_info.get("mode") != "responses"
+        assert resolved_model == "openai.gpt-oss-120b"
 
 
 @pytest.fixture
@@ -1036,6 +1254,25 @@ class TestBedrockMantleResponsesPricing:
         assert info["input_cost_per_token"] == pytest.approx(2.75e-06)
         assert info["output_cost_per_token"] == pytest.approx(1.65e-05)
         assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
+        assert info["max_input_tokens"] == 272000
+
+    @pytest.mark.parametrize(
+        "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
+        [
+            ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
+            ("openai.gpt-5.6-terra", 2.75e-06, 3.4375e-06, 2.75e-07, 1.65e-05),
+            ("openai.gpt-5.6-luna", 1.1e-06, 1.375e-06, 1.1e-07, 6.6e-06),
+        ],
+    )
+    def test_gpt_5_6_pricing_and_mode(
+        self, local_cost_map, model, input_cost, cache_creation_cost, cache_read_cost, output_cost
+    ):
+        info = litellm.get_model_info(f"bedrock_mantle/{model}")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(input_cost)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
+        assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
+        assert info["output_cost_per_token"] == pytest.approx(output_cost)
         assert info["max_input_tokens"] == 272000
 
     def test_models_registered(self, local_cost_map):

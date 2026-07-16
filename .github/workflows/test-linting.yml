@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -48,13 +48,27 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --frozen
+          uv sync --frozen --group proxy-dev --group e2e-dev
 
-      - name: Check Black formatting
+      # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
+      # only after `prisma generate` writes prisma/client.py et al. Without this the
+      # DB wrappers typed against the generated client would degrade to Unknown.
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
-          cd litellm
-          uv run --no-sync black --check --exclude '/enterprise/' .
-          cd ..
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Check ruff format
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
+            echo "No changed litellm Python files to check with ruff format."
+            exit 0
+          fi
+          xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
         run: |
@@ -87,9 +101,21 @@ jobs:
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-      - name: Run basedpyright type checking
+      - name: Check basedpyright budget (delta vs base)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
+
+      - name: Check tests/e2e basedpyright (zero errors)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only --diff-filter=ACMRD "$BASE_SHA"...HEAD -- 'tests/e2e/**/*.py' | grep -q .; then
+            uv run --no-sync basedpyright tests/e2e
+          else
+            echo "No changed tests/e2e Python files; skipping."
+          fi
 
       - name: Check for circular imports
         run: |
@@ -146,7 +172,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 

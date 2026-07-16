@@ -63,15 +63,9 @@ class MCPUpstreamAuthError(Exception):
         if challenge is None and self.status_code == 401 and base_url:
             prefix = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"{self.server_name}/mcp"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"mcp/{self.server_name}"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
         detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
@@ -79,3 +73,18 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPToolResultError(Exception):
+    """An MCP tool call completed with ``isError=True`` in its result.
+
+    Never raised on the wire path: streamable HTTP MCP correctly returns tool
+    failures as HTTP 200 with ``result.isError: true`` per the MCP spec. This
+    exception only drives the standard failure logging (``status="failure"``
+    payload, OTel ERROR span) for such results.
+
+    Lives here rather than ``utils.py`` deliberately: tests reload ``utils``
+    to re-read its env-derived constants, and a reload would fork this class
+    into two identities, breaking ``isinstance`` checks against instances
+    created before the reload.
+    """

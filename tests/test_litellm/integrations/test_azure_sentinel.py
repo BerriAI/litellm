@@ -263,3 +263,36 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     ]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
+
+
+@pytest.mark.asyncio
+async def test_azure_sentinel_audit_stream_name_from_env_var(monkeypatch):
+    """Audit stream resolves from AZURE_SENTINEL_AUDIT_STREAM_NAME when the string
+    callback constructs the logger with no audit_stream_name argument."""
+    monkeypatch.setenv("AZURE_SENTINEL_STREAM_NAME", "Custom-LiteLLM-Standard")
+    monkeypatch.setenv("AZURE_SENTINEL_AUDIT_STREAM_NAME", "Custom-LiteLLM-Audit")
+
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        logger = AzureSentinelLogger(
+            dcr_immutable_id="dcr-test123456789",
+            endpoint="https://test-dce.eastus-1.ingest.monitor.azure.com",
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+        )
+
+    assert logger.audit_stream_name == "Custom-LiteLLM-Audit"
+    assert "streams/Custom-LiteLLM-Audit" in logger.audit_api_endpoint
+    assert "streams/Custom-LiteLLM-Standard" in logger.api_endpoint
+
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        explicit_logger = AzureSentinelLogger(
+            dcr_immutable_id="dcr-test123456789",
+            endpoint="https://test-dce.eastus-1.ingest.monitor.azure.com",
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            audit_stream_name="Custom-LiteLLM-Explicit",
+        )
+
+    assert explicit_logger.audit_stream_name == "Custom-LiteLLM-Explicit"

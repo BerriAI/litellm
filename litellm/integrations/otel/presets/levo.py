@@ -1,7 +1,11 @@
 """Levo preset — OTLP/HTTP to a Levo collector with org+workspace headers."""
 
 from litellm.integrations.levo.levo import LevoLogger as _V1Levo
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 
 
 def levo_preset(
@@ -18,6 +22,7 @@ def levo_preset(
                     kind="otlp_http",
                     endpoint=cfg.endpoint,
                     headers=cfg.otlp_auth_headers,
+                    owner=ExporterOwner.LEVO,
                 ),
             ],
         }

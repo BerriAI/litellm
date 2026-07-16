@@ -36,9 +36,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
-            litellm_params.api_key
-            or get_secret_str("HOSTED_VLLM_API_KEY")
-            or "fake-api-key"
+            litellm_params.api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         )  # vllm does not require an api key
         headers.update(
             {

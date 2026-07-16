@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str
+from litellm.integrations.otel.model.utils import as_str, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -73,26 +73,17 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
-        metadata = {
-            key: str(value)
-            for key, value in raw_meta.items()
-            if isinstance(value, (str, bool, int, float))
-        }
+        metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
             # the bare ``team_id`` is a legacy alias and is often empty, so prefer
             # the canonical key and fall back to the alias.
-            team_id=as_str(raw_meta.get("user_api_key_team_id"))
-            or as_str(raw_meta.get("team_id")),
-            team_alias=as_str(raw_meta.get("user_api_key_team_alias"))
-            or as_str(raw_meta.get("team_alias")),
-            team_metadata=_team_metadata_dict(
-                raw_meta.get("user_api_key_team_metadata")
-            ),
+            team_id=as_str(raw_meta.get("user_api_key_team_id")) or as_str(raw_meta.get("team_id")),
+            team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
+            team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=as_str(payload.get("end_user"))
-            or as_str(raw_meta.get("user_api_key_end_user_id")),
+            end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
             provider_model=resolve_provider_model(payload),
             metadata=metadata,
         )
@@ -153,18 +144,12 @@ class RequestContext:
         return self.identity.provider_model
 
     @classmethod
-    def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload"
-    ) -> "RequestContext":
+    def from_standard_logging_payload(cls, payload: "StandardLoggingPayload") -> "RequestContext":
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
         raw_response = payload.get("response")
-        response = cast(
-            Mapping[str, object], raw_response if isinstance(raw_response, dict) else {}
-        )
-        model_group = as_str(payload.get("model_group")) or as_str(
-            raw_meta.get("model_group")
-        )
+        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
+        model_group = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
         return cls(
             # The user asked for the group; fall back to the call model on the SDK
             # path, which has no group. Empty string (never None) so the span name
@@ -172,8 +157,7 @@ class RequestContext:
             request_model=model_group or as_str(payload.get("model")) or "",
             response_model=as_str(response.get("model")),
             model_group=model_group,
-            model_id=as_str(payload.get("model_id"))
-            or _model_info_id(raw_meta.get("model_info")),
+            model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
             identity=RequestIdentity.from_payload(payload),
         )
@@ -217,6 +201,7 @@ class LLMCallEvent:
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
+    time_to_first_chunk_seconds: float | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> "LLMCallEvent":
@@ -230,12 +215,26 @@ class LLMCallEvent:
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
         )
 
 
-def _call_id(
-    payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]
-) -> str | None:
+def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
+    """Seconds from the upstream request being issued (``api_call_start_time``)
+    to the first streamed chunk (``completion_start_time``); ``None`` for
+    non-streaming calls, where ``completion_start_time`` is backfilled with the
+    end time and would not measure first-chunk latency."""
+    optional_params = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
+    if not optional_params.get("stream"):
+        return None
+    api_call_start = to_seconds(kwargs.get("api_call_start_time"))
+    completion_start = to_seconds(kwargs.get("completion_start_time"))
+    if api_call_start is None or completion_start is None:
+        return None
+    return completion_start - api_call_start
+
+
+def _call_id(payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]) -> str | None:
     """The call id from the payload (when closed) or the bare kwargs (at pre_call)."""
     if payload is not None:
         call_id = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
@@ -268,9 +267,7 @@ def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
     return (
         # ``deployment`` survives only on paths that don't strip it from metadata;
         # harmless (and most precise) to prefer it when present.
-        as_str(raw_meta.get("deployment"))
-        or as_str(hidden.get("litellm_model_name"))
-        or as_str(payload.get("model"))
+        as_str(raw_meta.get("deployment")) or as_str(hidden.get("litellm_model_name")) or as_str(payload.get("model"))
     )
 
 

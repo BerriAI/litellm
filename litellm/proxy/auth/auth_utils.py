@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
@@ -18,9 +18,7 @@ from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
-def _get_request_ip_address(
-    request: Request, use_x_forwarded_for: Optional[bool] = False
-) -> Optional[str]:
+def _get_request_ip_address(request: Request, use_x_forwarded_for: Optional[bool] = False) -> Optional[str]:
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
@@ -44,9 +42,7 @@ def _check_valid_ip(
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = _get_request_ip_address(
-        request=request, use_x_forwarded_for=use_x_forwarded_for
-    )
+    client_ip = _get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for)
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
@@ -97,8 +93,7 @@ def check_complete_credentials(request_body: dict) -> bool:
                 validate_url(url_value)
             except SSRFError as e:
                 raise ValueError(
-                    f"Rejected request: client-side {url_field}={url_value!r} "
-                    f"is rejected by the SSRF guard ({e})."
+                    f"Rejected request: client-side {url_field}={url_value!r} is rejected by the SSRF guard ({e})."
                 )
 
     return True
@@ -153,9 +148,7 @@ def _allow_model_level_clientside_configurable_parameters(
     if model_info is None:
         # check if wildcard model is set
         if model.split("/", 1)[0] in provider_list:
-            model_info = llm_router.get_model_group_info(
-                model_group=model.split("/", 1)[0]
-            )
+            model_info = llm_router.get_model_group_info(model_group=model.split("/", 1)[0])
 
     if model_info is None:
         return False
@@ -285,6 +278,14 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # NVIDIA Riva fields consumed by the audio-transcription handler
+    # via ``optional_params``. Banned for the same reason as the
+    # provider-specific entries above: a caller-supplied value retargets
+    # the request away from the admin's pinned configuration.
+    "nvcf_function_id",
+    "use_ssl",
+    # SDK-only field; also rejected outright in is_request_body_safe.
+    "model_list",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -337,9 +338,7 @@ def _check_banned_params(
         )
 
 
-def is_request_body_safe(
-    request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
-) -> bool:
+def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str) -> bool:
     """
     Check if the request body is safe.
 
@@ -365,6 +364,8 @@ def is_request_body_safe(
     ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
     recursion-depth DoS surface.
     """
+    if "model_list" in request_body:
+        raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -374,6 +375,16 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    litellm_params = _coerce_metadata_to_dict(request_body.get("litellm_params"))
+    if litellm_params is not None:
+        litellm_params_metadata = _coerce_metadata_to_dict(litellm_params.get("metadata"))
+        if litellm_params_metadata is not None:
+            _check_banned_params(
+                litellm_params_metadata,
+                general_settings,
+                llm_router,
+                model,
+            )
     return True
 
 
@@ -424,9 +435,7 @@ async def pre_db_read_auth_checks(
         request_body=request_data,
         general_settings=general_settings,
         llm_router=llm_router,
-        model=request_data.get(
-            "model", ""
-        ),  # [TODO] use model passed in url as well (azure openai routes)
+        model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
     )
 
     # Check 3. Check if IP address is allowed
@@ -450,9 +459,7 @@ async def pre_db_read_auth_checks(
                 f"Trying to set allowed_routes. This is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
             )
         if route not in _allowed_routes:
-            verbose_proxy_logger.error(
-                f"Route {route} not in allowed_routes={_allowed_routes}"
-            )
+            verbose_proxy_logger.error(f"Route {route} not in allowed_routes={_allowed_routes}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access forbidden: Route {route} not allowed",
@@ -497,9 +504,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         # Check wildcard patterns
         for route_pattern in routes_defined:
-            if RouteChecks._route_matches_wildcard_pattern(
-                route=current_route, pattern=route_pattern
-            ):
+            if RouteChecks._route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
                 return True
 
         return False
@@ -528,18 +533,14 @@ def get_request_route(request: Request) -> str:
         if not isinstance(scope, dict):
             return str(request.url.path)
         raw_path: str = str(scope.get("path", request.url.path))
-        root_path: str = str(
-            scope.get("app_root_path", scope.get("root_path", ""))
-        ).rstrip("/")
+        root_path: str = str(scope.get("app_root_path", scope.get("root_path", ""))).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
         # Strip root_path only when it matches whole path segments — guarding
         # against sibling paths like "/apifoo" being truncated under
         # root_path="/api". Trailing slashes on root_path are stripped above,
         # so bare "/" or "/prefix/" still leave the leading "/" intact.
-        if root_path and (
-            raw_path == root_path or raw_path.startswith(root_path + "/")
-        ):
+        if root_path and (raw_path == root_path or raw_path.startswith(root_path + "/")):
             stripped = raw_path[len(root_path) :]
             return stripped or "/"
         return raw_path
@@ -717,9 +718,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         if content_length:
             header_size = int(content_length)
             header_size_mb = bytes_to_mb(bytes_value=header_size)
-            verbose_proxy_logger.debug(
-                f"content_length request size in MB={header_size_mb}"
-            )
+            verbose_proxy_logger.debug(f"content_length request size in MB={header_size_mb}")
 
             if header_size_mb > max_request_size_mb:
                 raise ProxyException(
@@ -734,9 +733,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
             body_size = len(body)
             request_size_mb = bytes_to_mb(bytes_value=body_size)
 
-            verbose_proxy_logger.debug(
-                f"request body request size in MB={request_size_mb}"
-            )
+            verbose_proxy_logger.debug(f"request body request size in MB={request_size_mb}")
             if request_size_mb > max_request_size_mb:
                 raise ProxyException(
                     message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_request_size_mb} MB",
@@ -920,9 +917,7 @@ def get_key_model_tpm_limit(
 
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    metadata_accessor_key: Literal[
-        "team_metadata", "organization_metadata", "project_metadata"
-    ],
+    metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
 ) -> Optional[Dict[str, int]]:
     if getattr(user_api_key_dict, metadata_accessor_key):
@@ -977,6 +972,20 @@ def get_team_mcp_rpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("mcp_rpm_limit")
+    return None
+
+
+def get_key_tag_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[dict[str, int]]:
+    """
+    Get the per-request-tag rpm limit configured on a given api key.
+
+    The returned dict is keyed by request tag, so each tag/group tracked on
+    the key gets its own independent RPM counter.
+    """
+    if user_api_key_dict.metadata:
+        return user_api_key_dict.metadata.get("tag_rpm_limit")
     return None
 
 
@@ -1057,11 +1066,7 @@ def _has_user_setup_sso():
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
-    sso_setup = (
-        (microsoft_client_id is not None)
-        or (google_client_id is not None)
-        or (generic_client_id is not None)
-    )
+    sso_setup = (microsoft_client_id is not None) or (google_client_id is not None) or (generic_client_id is not None)
 
     return sso_setup
 
@@ -1150,17 +1155,13 @@ def _coerce_user_id_to_str(value: Any) -> Optional[str]:
     return None
 
 
-def get_end_user_id_from_request_body(
-    request_body: dict, request_headers: Optional[dict] = None
-) -> Optional[str]:
+def get_end_user_id_from_request_body(request_body: dict, request_headers: Optional[dict] = None) -> Optional[str]:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
     # Check 1: Standard customer ID headers (always checked, no configuration required)
-    customer_id = _get_customer_id_from_standard_headers(
-        request_headers=request_headers
-    )
+    customer_id = _get_customer_id_from_standard_headers(request_headers=request_headers)
     if customer_id is not None:
         return customer_id
 
@@ -1173,9 +1174,7 @@ def get_end_user_id_from_request_body(
         # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
         if user_id_mapping:
-            custom_header_name_to_check = get_customer_user_header_from_mapping(
-                user_id_mapping
-            )
+            custom_header_name_to_check = get_customer_user_header_from_mapping(user_id_mapping)
 
         # Fallback to deprecated user_header_name if mapping did not specify
         if not custom_header_name_to_check:
@@ -1313,9 +1312,7 @@ def _dedupe_model_candidates(candidates: List[str]) -> List[str]:
     return deduped
 
 
-def _get_case_insensitive_mapping_value(
-    mapping: Optional[Mapping[str, Any]], key: str
-) -> Any:
+def _get_case_insensitive_mapping_value(mapping: Optional[Mapping[str, Any]], key: str) -> Any:
     if not mapping:
         return None
     if key in mapping:
@@ -1354,9 +1351,7 @@ def _extract_models_from_managed_resource_id(
             get_models_from_unified_file_id,
         )
 
-        _append_model_candidates(
-            candidates=candidates, value=decode_model_from_file_id(resource_id)
-        )
+        _append_model_candidates(candidates=candidates, value=decode_model_from_file_id(resource_id))
         unified_file_id = _is_base64_encoded_unified_file_id(resource_id)
         if unified_file_id:
             _append_model_candidates(
@@ -1368,25 +1363,17 @@ def _extract_models_from_managed_resource_id(
                 value=get_model_id_from_unified_batch_id(unified_file_id),
             )
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unable to extract model from managed file/batch ID: %s", str(e)
-        )
+        verbose_proxy_logger.debug("Unable to extract model from managed file/batch ID: %s", str(e))
 
     try:
         from litellm.llms.base_llm.managed_resources.utils import parse_unified_id
 
         parsed_id = parse_unified_id(resource_id)
         if parsed_id:
-            _append_model_candidates(
-                candidates=candidates, value=parsed_id.get("model_id")
-            )
-            _append_model_candidates(
-                candidates=candidates, value=parsed_id.get("target_model_names")
-            )
+            _append_model_candidates(candidates=candidates, value=parsed_id.get("model_id"))
+            _append_model_candidates(candidates=candidates, value=parsed_id.get("target_model_names"))
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unable to extract model from unified managed resource ID: %s", str(e)
-        )
+        verbose_proxy_logger.debug("Unable to extract model from unified managed resource ID: %s", str(e))
 
     if resource_id_field in ("video_id", "character_id"):
         try:
@@ -1402,32 +1389,24 @@ def _extract_models_from_managed_resource_id(
                     value=_resolve_model_id_with_router(model_id, llm_router),
                 )
             else:
-                model_id = decode_character_id_with_provider(resource_id).get(
-                    "model_id"
-                )
+                model_id = decode_character_id_with_provider(resource_id).get("model_id")
                 _append_model_candidates(
                     candidates=candidates,
                     value=_resolve_model_id_with_router(model_id, llm_router),
                 )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                "Unable to extract model from managed video/character ID: %s", str(e)
-            )
+            verbose_proxy_logger.debug("Unable to extract model from managed video/character ID: %s", str(e))
 
     return _dedupe_model_candidates(candidates)
 
 
-def _resolve_model_id_with_router(
-    model_id: Optional[str], llm_router: Optional[Router]
-) -> Optional[str]:
+def _resolve_model_id_with_router(model_id: Optional[str], llm_router: Optional[Router]) -> Optional[str]:
     if model_id is None or llm_router is None:
         return model_id
     try:
         return llm_router.resolve_model_name_from_model_id(model_id) or model_id
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unable to resolve model_id from managed resource ID: %s", str(e)
-        )
+        verbose_proxy_logger.debug("Unable to resolve model_id from managed resource ID: %s", str(e))
         return model_id
 
 
@@ -1457,15 +1436,11 @@ def _extract_model_candidates_from_request(
     _append_model_candidates(candidates, body_model)
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
-    if _route_matches_any_marker(
-        route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS
-    ):
+    if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session = request_data.get("session")
         if isinstance(session, dict):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(
-        request_data.get("completion"), dict
-    ):
+    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
 
     if uses_model_routing_sources:
@@ -1476,16 +1451,12 @@ def _extract_model_candidates_from_request(
             )
             _append_model_candidates(
                 candidates,
-                _get_case_insensitive_mapping_value(
-                    request_headers, MODEL_ROUTING_HEADER_NAME
-                ),
+                _get_case_insensitive_mapping_value(request_headers, MODEL_ROUTING_HEADER_NAME),
             )
         if uses_query_target_model_sources:
             _append_model_candidates(
                 candidates,
-                _get_case_insensitive_mapping_value(
-                    request_query_params, "target_model_names"
-                ),
+                _get_case_insensitive_mapping_value(request_query_params, "target_model_names"),
             )
 
         for field in _MODEL_ROUTING_ID_FIELDS:
@@ -1562,4 +1533,6 @@ def get_model_from_request(
 
 
 def abbreviate_api_key(api_key: str) -> str:
+    if len(api_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        return "sk-..."
     return f"sk-...{api_key[-4:]}"

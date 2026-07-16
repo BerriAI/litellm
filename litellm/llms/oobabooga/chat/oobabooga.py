@@ -113,9 +113,7 @@ def embedding(
 
     # Logging before API call
     if logging_obj:
-        logging_obj.pre_call(
-            input=input, api_key=api_key, additional_args={"complete_input_dict": data}
-        )
+        logging_obj.pre_call(input=input, api_key=api_key, additional_args={"complete_input_dict": data})
 
     # Send POST request
     headers = oobabooga_config.validate_environment(
@@ -126,9 +124,7 @@ def embedding(
         optional_params=optional_params,
         litellm_params={},
     )
-    response = litellm.module_level_client.post(
-        embeddings_url, headers=headers, json=data
-    )
+    response = litellm.module_level_client.post(embeddings_url, headers=headers, json=data)
     completion_response = response.json()
 
     # Check for errors in response

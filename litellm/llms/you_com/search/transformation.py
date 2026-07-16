@@ -64,7 +64,13 @@ class YouComSearchConfig(BaseSearchConfig):
         endpoint with the `X-API-Key` header. Otherwise fall through to the
         keyless free tier; no auth header is required.
         """
-        api_key = api_key or get_secret_str("YOUCOM_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("YOUCOM_API_KEY",),
+            base_env_var="YOUCOM_API_BASE",
+            default_api_base=self.YOU_COM_API_BASE,
+        )
         headers["Content-Type"] = "application/json"
         # Pin Accept-Encoding to identity: the keyless `api.you.com/v1/agents/search`
         # endpoint advertises gzip content-encoding but returns body bytes the
@@ -102,9 +108,7 @@ class YouComSearchConfig(BaseSearchConfig):
 
         api_base = api_base.rstrip("/")
 
-        if not api_base.endswith("/v1/search") and not api_base.endswith(
-            "/v1/agents/search"
-        ):
+        if not api_base.endswith("/v1/search") and not api_base.endswith("/v1/agents/search"):
             api_base = f"{api_base}/v1/search"
 
         return api_base
@@ -144,10 +148,7 @@ class YouComSearchConfig(BaseSearchConfig):
         result_data = dict(request_data)
 
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         return result_data

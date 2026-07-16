@@ -96,6 +96,20 @@ class TestGetMetadataVariableName:
         request = self._make_request("/v1/embeddings")
         assert _get_metadata_variable_name(request) == "metadata"
 
+    def test_returns_litellm_metadata_for_bedrock_invoke(self):
+        # GH#30629: bedrock passthrough must use litellm_metadata
+        # to prevent key-level tags from leaking into provider body
+        request = self._make_request(
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke"
+        )
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_bedrock_converse(self):
+        request = self._make_request(
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/converse"
+        )
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
 
 def test_get_enforced_params_for_service_account_settings():
     """
@@ -718,7 +732,18 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "control_field",
-    ["callbacks", "service_callback", "logger_fn", "litellm_disabled_callbacks"],
+    [
+        "callbacks",
+        "service_callback",
+        "logger_fn",
+        "litellm_disabled_callbacks",
+        "_agentic_loop_depth",
+        "_agentic_loop_fingerprints",
+        "_code_interpreter_interception_active",
+        "_code_interpreter_interception_converted_stream",
+        "_code_interpreter_interception_sandbox_key",
+        "max_agentic_loops",
+    ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
     control_field,
@@ -741,12 +766,19 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
 
-    sample_value = (
-        ["langfuse"]
-        if control_field
-        in ("callbacks", "service_callback", "litellm_disabled_callbacks")
-        else "module.func"
-    )
+    sample_values = {
+        "callbacks": ["langfuse"],
+        "service_callback": ["langfuse"],
+        "litellm_disabled_callbacks": ["langfuse"],
+        "logger_fn": "module.func",
+        "_agentic_loop_depth": 5,
+        "_agentic_loop_fingerprints": ["forged"],
+        "_code_interpreter_interception_active": True,
+        "_code_interpreter_interception_converted_stream": True,
+        "_code_interpreter_interception_sandbox_key": "forged-key",
+        "max_agentic_loops": 9999,
+    }
+    sample_value = sample_values[control_field]
 
     updated = await add_litellm_data_to_request(
         data={
@@ -824,10 +856,19 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
-                    {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
+                    {
+                        "headers": {"LiteLLM-Disable-Message-Redaction": "true"},
+                        "turn_off_message_logging": "false",
+                    }
                 ),
+                "litellm_params": {
+                    "metadata": {"turn_off_message_logging": False},
+                },
             },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
@@ -839,6 +880,9 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert "turn_off_message_logging" not in updated
+    assert "turn_off_message_logging" not in (updated.get("litellm_params") or {}).get("metadata", {})
+    assert "turn_off_message_logging" not in updated["metadata"]
+    assert "turn_off_message_logging" not in (updated.get("litellm_metadata") or {})
     assert "litellm-disable-message-redaction" not in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -857,6 +901,158 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         header.lower()
         for header in (updated.get("litellm_metadata") or {}).get("headers", {})
     }
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_overrides_global(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = True
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "False"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "False"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is False
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_enables_redaction_when_global_off(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = False
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "True"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "True"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is True
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
 
 
 @pytest.mark.parametrize(
@@ -891,7 +1087,10 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
                     {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
                 ),
@@ -906,6 +1105,7 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert updated["turn_off_message_logging"] is False
+    assert updated["metadata"]["turn_off_message_logging"] is False
     assert "litellm-disable-message-redaction" in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -4150,7 +4350,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:paid":
                 return 0.50
             return fallback_spend
@@ -4207,7 +4409,9 @@ class TestApplyClientTagPolicyPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:tenant:acme":
                 return 0.50
             return fallback_spend
@@ -4233,6 +4437,99 @@ class TestApplyClientTagPolicyPreAuth:
                 )
             assert exc_info.value.current_cost == 0.50
             assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+            "/v1/messages",
+        ],
+    )
+    async def test_header_tags_visible_to_tag_max_budget_check_on_metadata_route(
+        self, route
+    ):
+        """Regression: on LITELLM_METADATA_ROUTES (bedrock, /v1/messages, ...),
+        common_checks pre-seeds ``litellm_metadata`` and writes key tags there
+        before ``_tag_max_budget_check`` reads from the same key. The auth wrapper
+        calls ``apply_client_tag_policy_pre_auth`` first, so without an earlier
+        pre-seed header tags land in ``metadata`` and the budget check (now
+        resolving to ``litellm_metadata``) silently ignores them. This test mirrors
+        the actual auth-time call order and verifies that an over-budget
+        header-supplied tag still trips ``_tag_max_budget_check``.
+        """
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {"model": "us.anthropic.claude-sonnet-4-6"}
+        valid_token = UserAPIKeyAuth(
+            token="test-token",
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+            request_data=data,
+            route=route,
+        )
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=valid_token,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:acme",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:tenant:acme":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await common_checks(
+                    request_body=data,
+                    team_object=None,
+                    user_object=None,
+                    end_user_object=None,
+                    global_proxy_spend=None,
+                    general_settings={},
+                    route=route,
+                    llm_router=None,
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=valid_token,
+                    request=request_mock,
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+        assert "metadata" not in data
+        assert data["litellm_metadata"]["tags"] == ["tenant:acme"]
 
 
 class TestApplyKeyTagsPreAuth:
@@ -4362,7 +4659,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.50
             return fallback_spend
@@ -4413,7 +4712,9 @@ class TestApplyKeyTagsPreAuth:
             litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
         )
 
-        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
             if counter_key == "spend:tag:engineering":
                 return 0.05
             return fallback_spend
@@ -4665,3 +4966,91 @@ async def test_add_litellm_data_to_request_claude_code_drop_params(
     )
 
     assert updated.get("drop_params") == expected_drop_params
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_merges_metadata_tags_on_responses_route():
+    """Regression for #31584: user-supplied metadata.tags must be merged into
+    litellm_metadata.tags on /v1/responses so they reach SpendLogs.request_tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["cost-center-1", "team-alpha"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "cost-center-1" in updated["litellm_metadata"]["tags"]
+    assert "team-alpha" in updated["litellm_metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags_on_responses_route():
+    """On /v1/responses, tags from metadata.tags AND x-litellm-tags header
+    must both appear in litellm_metadata.tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "header-tag",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["body-tag"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    tags = updated["litellm_metadata"]["tags"]
+    assert "header-tag" in tags
+    assert "body-tag" in tags

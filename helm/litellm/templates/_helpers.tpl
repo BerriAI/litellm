@@ -35,6 +35,57 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{/*
+Enterprise billable-request metering. Wired into gateway and backend, not the
+migrations job. The gateway serves nearly all billable traffic, but the backend
+keeps the named-server MCP transport (/{mcp_server_name}/mcp), which writes a
+SpendLogs row, so metering only the gateway would silently drop that traffic.
+The client certificate identifies the deployment to LiteLLM's collector, so it is
+mounted read-only from an existing Secret rather than passed through the
+environment.
+*/}}
+{{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
+{{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
+
+{{- define "litellm.billingMetricsEnv" -}}
+- name: LITELLM_BILLING_METRICS_ENDPOINT
+  value: {{ required "billingMetrics.endpoint is required when billingMetrics.enabled is true" .Values.billingMetrics.endpoint | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_CERT
+  value: {{ printf "%s/tls.crt" (include "litellm.billingMetrics.certDir" .) | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_KEY
+  value: {{ printf "%s/tls.key" (include "litellm.billingMetrics.certDir" .) | quote }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: LITELLM_BILLING_METRICS_CA_CERT
+  value: {{ printf "%s/ca.crt" (include "litellm.billingMetrics.caDir" .) | quote }}
+{{- end }}
+{{- with .Values.billingMetrics.exportIntervalMs }}
+- name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumes" -}}
+- name: billing-metrics-mtls
+  secret:
+    secretName: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)" .Values.billingMetrics.secretName }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  secret:
+    secretName: {{ .Values.billingMetrics.caSecretName }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumeMounts" -}}
+- name: billing-metrics-mtls
+  mountPath: {{ include "litellm.billingMetrics.certDir" . }}
+  readOnly: true
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  mountPath: {{ include "litellm.billingMetrics.caDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
 Per-component selector labels — used in both Service selectors and Deployment matchLabels.
 */}}
 {{- define "litellm.gateway.selectorLabels" -}}
@@ -213,6 +264,10 @@ harmless no-op for the Job and authoritative for the app pods.
 */}}
 - name: DISABLE_SCHEMA_UPDATE
   value: "true"
+{{/* These feed the proxy's coordination Redis (cross-pod rate limits, spend
+     tracking, pod lock manager) via its REDIS_* env fallback. An explicit
+     `general_settings.coordination_redis` block in proxy_config takes
+     precedence over anything emitted here. */}}
 {{- if $root.Values.redis.host }}
 - name: REDIS_HOST
   value: {{ $root.Values.redis.host | quote }}
@@ -226,10 +281,11 @@ harmless no-op for the Job and authoritative for the app pods.
       key: {{ $root.Values.redis.passwordSecret.passwordKey | default "password" }}
 {{- end }}
 {{- if $root.Values.redis.cluster }}
-{{/* The proxy's Cache() reads REDIS_CLUSTER_NODES as JSON and constructs a
-     RedisClusterCache when it's set (litellm/caching/caching.py:169-192).
-     We seed with the single configured endpoint — the cluster client
-     discovers the remaining nodes from CLUSTER SLOTS at startup. */}}
+{{/* The proxy falls back to REDIS_CLUSTER_NODES (JSON) to build a cluster-mode
+     coordination client when `general_settings.coordination_redis` is absent
+     and no plain-Redis response cache is configured. We seed with the single
+     configured endpoint; the cluster client discovers the remaining nodes from
+     CLUSTER SLOTS at startup. */}}
 - name: REDIS_CLUSTER_NODES
   value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
 {{- end }}

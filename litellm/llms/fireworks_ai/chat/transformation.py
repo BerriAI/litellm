@@ -1,5 +1,15 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
@@ -15,7 +25,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionImageObject,
     ChatCompletionToolParam,
     OpenAIChatCompletionToolParam,
 )
@@ -25,6 +34,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    ModelResponseStream,
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
@@ -34,8 +44,30 @@ from litellm.utils import (
     supports_tool_choice,
 )
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from ..common_utils import FireworksAIException
+
+
+def _extract_fireworks_hidden_params(payload: dict) -> dict:
+    """
+    Collect Fireworks-specific response fields (perf_metrics, prompt_token_ids,
+    per-choice raw_output and token_ids) from a non-streaming completion payload
+    or a single streaming chunk, so the same data lands in ``_hidden_params`` on
+    both response paths.
+    """
+    choices = [c for c in (payload.get("choices") or []) if isinstance(c, dict)]
+    top_level = {
+        f"fireworks_{field}": payload[field] for field in ("perf_metrics", "prompt_token_ids") if field in payload
+    }
+    per_choice = {
+        f"fireworks_{dest}": [c[field] for c in choices if field in c]
+        for field, dest in (("raw_output", "raw_outputs"), ("token_ids", "token_ids"))
+        if any(field in c for c in choices)
+    }
+    return {**top_level, **per_choice}
 
 
 class FireworksAIConfig(OpenAIGPTConfig):
@@ -60,8 +92,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
     logprobs: Optional[int] = None
     reasoning_effort: Optional[str] = None
 
-    # Non OpenAI parameters - Fireworks AI only params
-    prompt_truncate_length: Optional[int] = None
+    prompt_truncate_len: Optional[int] = None
     context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None
 
     def __init__(
@@ -80,7 +111,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         user: Optional[str] = None,
         logprobs: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
-        prompt_truncate_length: Optional[int] = None,
+        prompt_truncate_len: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
         locals_ = locals().copy()
@@ -108,8 +139,30 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "response_format",
             "user",
             "logprobs",
-            "prompt_truncate_length",
+            "prompt_truncate_len",
             "context_length_exceeded_behavior",
+            "seed",
+            "top_logprobs",
+            "min_p",
+            "typical_p",
+            "repetition_penalty",
+            "mirostat_target",
+            "mirostat_lr",
+            "logit_bias",
+            "echo",
+            "echo_last",
+            "ignore_eos",
+            "prompt_cache_key",
+            "prompt_cache_isolation_key",
+            "raw_output",
+            "perf_metrics_in_response",
+            "return_token_ids",
+            "safe_tokenization",
+            "service_tier",
+            "speculation",
+            "prediction",
+            "stream_options",
+            "sampling_mask",
         ]
 
         # Only add tools for models that support function calling
@@ -133,9 +186,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
 
-        # Only add reasoning_effort for models that support it
+        # Only add reasoning params for models that support it
         if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("reasoning_effort")
+            supported_params.append("reasoning_history")
+            supported_params.append("thinking")
 
         return supported_params
 
@@ -147,10 +202,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
-        is_tools_set = any(
-            param == "tools" and value is not None
-            for param, value in non_default_params.items()
-        )
+        is_tools_set = any(param == "tools" and value is not None for param, value in non_default_params.items())
+        if non_default_params.get("thinking") is not None and non_default_params.get("reasoning_effort") is not None:
+            raise litellm.BadRequestError(
+                message=(
+                    "Fireworks AI chat completions does not support specifying both "
+                    "`thinking` and `reasoning_effort` in the same request."
+                ),
+                model=model,
+                llm_provider="fireworks_ai",
+            )
 
         for param, value in non_default_params.items():
             if param == "tool_choice":
@@ -161,9 +222,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
             elif param == "response_format":
-                if (
-                    is_tools_set
-                ):  # fireworks ai doesn't support tools and response_format together
+                if is_tools_set:  # fireworks ai doesn't support tools and response_format together
                     optional_params = self._add_response_format_to_tools(
                         optional_params=optional_params,
                         value=value,
@@ -174,43 +233,20 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     optional_params["response_format"] = value
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
+            elif param == "reasoning_effort":
+                if value is True:
+                    optional_params["reasoning_effort"] = "medium"
+                elif value is False:
+                    optional_params["reasoning_effort"] = "none"
+                else:
+                    optional_params["reasoning_effort"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
 
         return optional_params
 
-    def _add_transform_inline_image_block(
-        self,
-        content: ChatCompletionImageObject,
-        model: str,
-        disable_add_transform_inline_image_block: Optional[bool],
-    ) -> ChatCompletionImageObject:
-        """
-        Add transform_inline to the image_url (allows non-vision models to parse documents/images/etc.)
-        - ignore if model is a vision model
-        - ignore if user has disabled this feature
-        """
-        if (
-            "vision" in model or disable_add_transform_inline_image_block
-        ):  # allow user to toggle this feature.
-            return content
-        if isinstance(content["image_url"], str):
-            # Skip base64 data URLs — appending #transform=inline corrupts the
-            # base64 payload and causes an "Incorrect padding" decode error on
-            # the Fireworks side.  Data URLs are already inlined by definition.
-            # Lower-case before checking: URI schemes are case-insensitive (RFC 3986).
-            if not content["image_url"].lower().startswith("data:"):
-                content["image_url"] = f"{content['image_url']}#transform=inline"
-        elif isinstance(content["image_url"], dict):
-            url = content["image_url"]["url"]
-            if not url.lower().startswith("data:"):
-                content["image_url"]["url"] = f"{url}#transform=inline"
-        return content
-
-    def _transform_tools(
-        self, tools: List[OpenAIChatCompletionToolParam]
-    ) -> List[OpenAIChatCompletionToolParam]:
+    def _transform_tools(self, tools: List[OpenAIChatCompletionToolParam]) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
             if tool.get("type") != "function":
                 continue
@@ -225,36 +261,41 @@ class FireworksAIConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, litellm_params: dict
     ) -> List[AllMessageValues]:
         """
-        Add 'transform=inline' to the url of the image_url
+        Strip fields not permitted by FireworksAI from messages.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             filter_value_from_dict,
-            migrate_file_to_image_url,
         )
 
-        disable_add_transform_inline_image_block = cast(
-            Optional[bool],
-            litellm_params.get("disable_add_transform_inline_image_block")
-            or litellm.disable_add_transform_inline_image_block,
-        )
-        ## For any 'file' message type with pdf content, move to 'image_url' message type
-        for message in messages:
-            if message["role"] == "user":
-                _message_content = message.get("content")
-                if _message_content is not None and isinstance(_message_content, list):
-                    for idx, content in enumerate(_message_content):
-                        if content["type"] == "file":
-                            _message_content[idx] = migrate_file_to_image_url(content)
+        supports_vision_value = self._get_model_cost_capability_exact(model=model, capability="supports_vision")
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
                 if _message_content is not None and isinstance(_message_content, list):
                     for content in _message_content:
-                        if content["type"] == "image_url":
-                            content = self._add_transform_inline_image_block(
-                                content=content,
+                        if not isinstance(content, dict):
+                            continue
+                        if content.get("type") == "file":
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "Fireworks AI chat completions does not support "
+                                    "file content blocks. For PDFs, convert pages to "
+                                    "images and send image_url blocks to a Fireworks "
+                                    "vision model, or extract text before calling a "
+                                    "text-only model."
+                                ),
                                 model=model,
-                                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+                                llm_provider="fireworks_ai",
+                            )
+                        if content.get("type") == "image_url" and supports_vision_value is False:
+                            raise litellm.BadRequestError(
+                                message=(
+                                    f"Fireworks AI model {model} does not support "
+                                    "image inputs. Use a Fireworks vision model or "
+                                    "remove image_url content blocks."
+                                ),
+                                model=model,
+                                llm_provider="fireworks_ai",
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
             # Remove fields not permitted by FireworksAI (additionalProperties: false
@@ -280,11 +321,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         model_cost = litellm.model_cost
         signature = (id(model_cost), get_model_cost_mutation_generation())
         cached = cls._fireworks_index_cache
-        if (
-            cached is not None
-            and cached[0] == signature[0]
-            and cached[1] == signature[1]
-        ):
+        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
             return cached[2]
 
         index: List[Tuple[str, dict]] = []
@@ -317,69 +354,76 @@ class FireworksAIConfig(OpenAIGPTConfig):
             return True
         return ("-" + key_short + "-") in short_name
 
-    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+    @staticmethod
+    def _short_model_name(model: str) -> str:
         short_name = model
         if short_name.startswith("fireworks_ai/"):
             short_name = short_name[len("fireworks_ai/") :]
         if short_name.startswith("accounts/fireworks/models/"):
             short_name = short_name[len("accounts/fireworks/models/") :]
+        return short_name
 
-        candidate_keys = [
+    def _get_model_cost_capability_exact(self, model: str, capability: str) -> Optional[bool]:
+        short_name = self._short_model_name(model)
+        candidate_keys = (
             model,
             f"fireworks_ai/{short_name}",
             f"fireworks_ai/accounts/fireworks/models/{short_name}",
-        ]
-
+        )
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
             if model_info is not None and model_info.get(capability) is not None:
                 return cast(Optional[bool], model_info.get(capability))
+        return None
 
-        # Fallback: preserve historical substring matching for model name
-        # variants (e.g. fine-tuned or regionally-suffixed versions of a
-        # known model). Pick the *longest* matching entry so a more specific
-        # known model (e.g. "qwen3-8b-instruct") wins over a less specific
-        # one (e.g. "qwen3-8b") when the query model is more specific still.
-        # Use hyphen-aligned matching to avoid false positives where a short
-        # known model name is an unrelated substring of a longer one.
-        best_match_short: Optional[str] = None
-        best_match_value: Optional[bool] = None
-        for key_short, model_info in self._get_fireworks_index():
-            if model_info.get(capability) is None:
-                continue
-            if not self._matches_on_hyphen_boundary(short_name, key_short):
-                continue
-            if best_match_short is None or len(key_short) > len(best_match_short):
-                best_match_short = key_short
-                best_match_value = cast(Optional[bool], model_info.get(capability))
+    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+        exact = self._get_model_cost_capability_exact(model=model, capability=capability)
+        if exact is not None:
+            return exact
 
-        return best_match_value
+        # Fallback: substring matching for model name variants (e.g. fine-tuned
+        # or regionally-suffixed versions of a known model). Pick the *longest*
+        # matching entry so a more specific known model (e.g. "qwen3-8b-instruct")
+        # wins over a less specific one (e.g. "qwen3-8b"). Hyphen-aligned matching
+        # avoids false positives where a short known name is an unrelated
+        # substring of a longer one. This stays a soft signal: capability-gated
+        # hard rejections use the exact lookup so a fuzzy match never blocks a
+        # custom deployment.
+        short_name = self._short_model_name(model)
+        matches = [
+            (key_short, cast(Optional[bool], model_info.get(capability)))
+            for key_short, model_info in self._get_fireworks_index()
+            if model_info.get(capability) is not None and self._matches_on_hyphen_boundary(short_name, key_short)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda match: len(match[0]))[1]
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
         supports_function_calling_value = self._get_model_cost_capability(
             model=model, capability="supports_function_calling"
         )
-        supports_reasoning_value = self._get_model_cost_capability(
-            model=model, capability="supports_reasoning"
-        )
+        supports_reasoning_value = self._get_model_cost_capability(model=model, capability="supports_reasoning")
+        supports_vision_value = self._get_model_cost_capability(model=model, capability="supports_vision")
+        supports_pdf_input_value = self._get_model_cost_capability(model=model, capability="supports_pdf_input")
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
-            "supports_pdf_input": True,  # via document inlining
-            "supports_vision": True,  # via document inlining
         }
 
         if supports_function_calling_value is not None:
-            provider_specific_model_info["supports_function_calling"] = (
-                supports_function_calling_value
-            )
+            provider_specific_model_info["supports_function_calling"] = supports_function_calling_value
 
         # Only include supports_reasoning if True
         if supports_reasoning_value:
-            provider_specific_model_info["supports_reasoning"] = (
-                supports_reasoning_value
-            )
+            provider_specific_model_info["supports_reasoning"] = supports_reasoning_value
+
+        if supports_vision_value is not None:
+            provider_specific_model_info["supports_vision"] = supports_vision_value
+
+        if supports_pdf_input_value is not None:
+            provider_specific_model_info["supports_pdf_input"] = supports_pdf_input_value
 
         return provider_specific_model_info
 
@@ -396,12 +440,19 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 model = f"accounts/fireworks/routers/{model}"
             else:
                 model = f"accounts/fireworks/models/{model}"
-        messages = self._transform_messages_helper(
-            messages=messages, model=model, litellm_params=litellm_params
-        )
+        messages = self._transform_messages_helper(messages=messages, model=model, litellm_params=litellm_params)
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
+        if optional_params.get("stream"):
+            stream_options = optional_params.get("stream_options")
+            if stream_options is None:
+                optional_params["stream_options"] = {"include_usage": True}
+            elif stream_options.get("include_usage") is not False:
+                optional_params["stream_options"] = {
+                    **stream_options,
+                    "include_usage": True,
+                }
         return super().transform_request(
             model=model,
             messages=messages,
@@ -420,19 +471,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/7209#issuecomment-2813208780
         """
-        if (
-            tool_calls is not None
-            and message.content is not None
-            and message.tool_calls is None
-        ):
+        if tool_calls is not None and message.content is not None and message.tool_calls is None:
             try:
                 function = Function(**json.loads(message.content))
                 if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
                     tool["function"]["name"] for tool in tool_calls
                 ]:
-                    tool_call = ChatCompletionMessageToolCall(
-                        function=function, id=str(uuid.uuid4()), type="function"
-                    )
+                    tool_call = ChatCompletionMessageToolCall(function=function, id=str(uuid.uuid4()), type="function")
                     message.tool_calls = [tool_call]
 
                     message.content = None
@@ -469,9 +514,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise FireworksAIException(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
+                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -487,25 +530,34 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(Choices, choice).message = (
-                self._handle_message_content_with_tool_calls(
-                    message=cast(Choices, choice).message,
-                    tool_calls=optional_params.get("tools", None),
-                )
+            cast(Choices, choice).message = self._handle_message_content_with_tool_calls(
+                message=cast(Choices, choice).message,
+                tool_calls=optional_params.get("tools", None),
             )
 
-        response._hidden_params = {"additional_headers": additional_headers}
+        response._hidden_params = {
+            "additional_headers": additional_headers,
+            **_extract_fireworks_hidden_params(completion_response),
+        }
 
         return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return FireworksAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base
-            or get_secret_str("FIREWORKS_API_BASE")
-            or "https://api.fireworks.ai/inference/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"  # type: ignore
         dynamic_api_key = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")
@@ -515,9 +567,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
-        api_base, api_key = self._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
+        api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:
             raise ValueError(
                 "FIREWORKS_API_BASE or FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
@@ -554,3 +604,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
+
+
+class FireworksAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        parsed = super().chunk_parser(chunk)
+        fireworks_fields = _extract_fireworks_hidden_params(chunk)
+        if fireworks_fields:
+            parsed.provider_specific_fields = {
+                **(getattr(parsed, "provider_specific_fields", None) or {}),
+                **fireworks_fields,
+            }
+        return parsed

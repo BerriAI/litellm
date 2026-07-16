@@ -115,6 +115,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "darkbloom": {
+    "base_url": "https://api.darkbloom.dev/v1",
+    "api_key_env": "DARKBLOOM_API_KEY",
+    "api_base_env": "DARKBLOOM_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "neosantara": {
     "base_url": "https://api.neosantara.xyz/v1",
     "api_key_env": "NEOSANTARA_API_KEY",
@@ -159,5 +167,21 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "meta": {
+    "base_url": "https://api.meta.ai/v1",
+    "api_key_env": "META_API_KEY",
+    "api_base_env": "META_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "pinstripes": {
+    "base_url": "https://pinstripes.io/v1",
+    "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   }
 }

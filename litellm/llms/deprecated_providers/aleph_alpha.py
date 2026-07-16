@@ -13,13 +13,9 @@ class AlephAlphaError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.aleph-alpha.com/complete"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.aleph-alpha.com/complete")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class AlephAlphaConfig:
@@ -77,9 +73,7 @@ class AlephAlphaConfig:
     - `control_log_additive` (boolean; default value: true): Method of applying control to attention scores.
     """
 
-    maximum_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # aleph alpha requires max tokens
+    maximum_tokens: Optional[int] = litellm.max_tokens  # aleph alpha requires max tokens
     minimum_tokens: Optional[int] = None
     echo: Optional[bool] = None
     temperature: Optional[int] = None
@@ -209,9 +203,7 @@ def completion(
     if "control" in model:  # follow the ###Instruction / ###Response format
         for idx, message in enumerate(messages):
             if "role" in message:
-                if (
-                    idx == 0
-                ):  # set first message as instruction (required), let later user messages be input
+                if idx == 0:  # set first message as instruction (required), let later user messages be input
                     prompt += f"###Instruction: {message['content']}"
                 else:
                     if message["role"] == "system":

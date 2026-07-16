@@ -41,9 +41,7 @@ def _extract_job_id_from_arn(arn: str) -> Optional[str]:
     return arn.rsplit("/", 1)[-1] or None
 
 
-def _predict_output_file_uri(
-    output_prefix: str, input_uri: str, job_id: Optional[str]
-) -> Optional[str]:
+def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: Optional[str]) -> Optional[str]:
     """
     Compute the deterministic per-job result file URI Bedrock writes to.
 
@@ -85,9 +83,7 @@ class BedrockBatchesHandler:
     """
 
     @staticmethod
-    def _handle_async_invoke_status(
-        batch_id: str, aws_region_name: str, logging_obj=None, **kwargs
-    ) -> "LiteLLMBatch":
+    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -121,9 +117,7 @@ class BedrockBatchesHandler:
             from litellm.types.utils import LiteLLMBatch
 
             openai_batch_metadata: OpenAIBatchMetadata = {
-                "output_file_id": status_response["outputDataConfig"][
-                    "s3OutputDataConfig"
-                ]["s3Uri"],
+                "output_file_id": status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"],
                 "failure_message": status_response.get("failureMessage") or "",
                 "model_arn": status_response["modelArn"],
             }
@@ -135,11 +129,7 @@ class BedrockBatchesHandler:
                 created_at=status_response["submitTime"],
                 in_progress_at=status_response["lastModifiedTime"],
                 completed_at=status_response.get("endTime"),
-                failed_at=(
-                    status_response.get("endTime")
-                    if status_response["status"] == "failed"
-                    else None
-                ),
+                failed_at=(status_response.get("endTime") if status_response["status"] == "failed" else None),
                 request_counts=BatchRequestCounts(
                     total=1,
                     completed=1 if status_response["status"] == "completed" else 0,
@@ -210,14 +200,10 @@ class BedrockBatchesHandler:
         try:
             import boto3
         except ImportError as exc:
-            raise ImportError(
-                "Missing boto3 to call bedrock. Run 'pip install boto3'."
-            ) from exc
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from exc
 
         # Resolve region: explicit > parsed-from-ARN > us-east-1 (boto3 default).
-        region = (
-            aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
-        )
+        region = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
 
         # Resolve credentials through the same path the rest of the bedrock
         # provider uses, so model_list / env / role-assumption configs are
@@ -257,10 +243,7 @@ class BedrockBatchesHandler:
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (
-                        f"https://bedrock.{region}.amazonaws.com/"
-                        f"model-invocation-job/{url_path_id}"
-                    ),
+                    "api_base": (f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{url_path_id}"),
                 },
             )
 
@@ -280,16 +263,8 @@ class BedrockBatchesHandler:
             _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress"),
         )
 
-        input_uri = (
-            response.get("inputDataConfig", {})
-            .get("s3InputDataConfig", {})
-            .get("s3Uri", "")
-        )
-        output_prefix = (
-            response.get("outputDataConfig", {})
-            .get("s3OutputDataConfig", {})
-            .get("s3Uri", "")
-        )
+        input_uri = response.get("inputDataConfig", {}).get("s3InputDataConfig", {}).get("s3Uri", "")
+        output_prefix = response.get("outputDataConfig", {}).get("s3OutputDataConfig", {}).get("s3Uri", "")
 
         # Bedrock returns the output *prefix* the user supplied at job creation.
         # Actual results land at <prefix>/<job-id>/<basename(input)>.out — we
