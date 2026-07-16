@@ -9,10 +9,15 @@ use std::time::Duration;
 
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::{
-    OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
+    OcrAuth, OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
+};
+use litellm_core::providers::vertex_ai::ocr::transformation::{
+    classify_vertex_bearer, VertexTokenSource,
 };
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
+
+use crate::io::vertex_auth;
 
 mod common_utils;
 
@@ -40,6 +45,23 @@ fn http_client() -> &'static reqwest::Client {
             .build()
             .expect("failed to build reqwest client")
     })
+}
+
+/// The caller-supplied Vertex credentials: inline service-account JSON (as a
+/// string or object) or a path to a credentials file. Absent/empty means fall
+/// back to Application Default Credentials.
+fn vertex_credentials(optional_params: &Map<String, Value>) -> Option<String> {
+    ["vertex_credentials", "vertex_ai_credentials"]
+        .iter()
+        .find_map(|key| optional_params.get(*key))
+        .and_then(|value| match value {
+            Value::String(raw) => {
+                let trimmed = raw.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Value::Object(_) => serde_json::to_string(value).ok(),
+            _ => None,
+        })
 }
 
 fn upstream_headers(
@@ -80,9 +102,22 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
 
     let headers = string_headers(request.extra_headers)?;
     let auth_strategy = config.auth_strategy();
-    let api_key = (!has_header(&headers, auth_strategy.header_name()))
-        .then(|| config.resolve_api_key(request.api_key, &env_lookup))
-        .transpose()?;
+    let api_key = if has_header(&headers, auth_strategy.header_name()) {
+        None
+    } else {
+        Some(match config.ocr_auth() {
+            OcrAuth::ProviderKey => config.resolve_api_key(request.api_key, &env_lookup)?,
+            // Classify synchronously so the non-`Send` `env_lookup` closure is
+            // not held across the mint await (keeps the returned future `Send`).
+            OcrAuth::VertexOauth => match classify_vertex_bearer(request.api_key, &env_lookup)? {
+                VertexTokenSource::Explicit(token) => token,
+                VertexTokenSource::Mint => {
+                    let credentials = vertex_credentials(&request.optional_params);
+                    vertex_auth::mint_vertex_bearer(credentials.as_deref()).await?
+                }
+            },
+        })
+    };
     let url = config.complete_url(
         request.api_base,
         model,
@@ -326,6 +361,137 @@ mod tests {
                 || request.contains("Authorization: Bearer sk-from-python"),
             "{request}"
         );
+    }
+
+    #[test]
+    fn vertex_credentials_reads_string_object_and_treats_blank_as_absent() {
+        let mut inline = Map::new();
+        inline.insert(
+            "vertex_credentials".to_string(),
+            Value::String("  /path/to/sa.json  ".into()),
+        );
+        assert_eq!(
+            vertex_credentials(&inline).as_deref(),
+            Some("/path/to/sa.json")
+        );
+
+        let mut object = Map::new();
+        object.insert(
+            "vertex_credentials".to_string(),
+            json!({"type": "service_account"}),
+        );
+        assert_eq!(
+            vertex_credentials(&object).as_deref(),
+            Some("{\"type\":\"service_account\"}")
+        );
+
+        let mut blank = Map::new();
+        blank.insert(
+            "vertex_credentials".to_string(),
+            Value::String("   ".into()),
+        );
+        assert_eq!(vertex_credentials(&blank), None);
+
+        assert_eq!(vertex_credentials(&Map::new()), None);
+    }
+
+    #[tokio::test]
+    async fn vertex_ocr_sends_explicit_oauth_bearer_to_raw_predict_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let request = read_http_headers(&mut socket).await;
+            let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-maas","usage_info":{"pages_processed":1}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            request
+        });
+
+        let mut optional_params = Map::new();
+        optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+        optional_params.insert(
+            "vertex_location".to_string(),
+            Value::String("global".into()),
+        );
+
+        let response = ocr(OcrRequest {
+            model: "mistral-ocr-maas",
+            document: json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,abc"
+            }),
+            api_key: Some("ya29.explicit-oauth-token"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: "vertex_ai",
+            extra_headers: None,
+            optional_params,
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect("vertex ocr request succeeds");
+
+        assert_eq!(response["pages"][0]["markdown"], "ok");
+
+        let request = server.await.expect("server task completes");
+        let request_line = request.lines().next().unwrap_or_default();
+        assert!(
+            request_line
+                .contains("/v1/projects/proj-1/locations/global/publishers/mistralai/models/mistral-ocr-maas:rawPredict"),
+            "{request}"
+        );
+        let authorization_count = request
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .count();
+        assert_eq!(authorization_count, 1, "{request}");
+        assert!(
+            request.contains("authorization: Bearer ya29.explicit-oauth-token")
+                || request.contains("Authorization: Bearer ya29.explicit-oauth-token"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vertex_ocr_rejects_google_api_key_shaped_token_before_calling_upstream() {
+        let mut optional_params = Map::new();
+        optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+        optional_params.insert(
+            "vertex_location".to_string(),
+            Value::String("global".into()),
+        );
+
+        let err = ocr(OcrRequest {
+            model: "mistral-ocr-maas",
+            document: json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,abc"
+            }),
+            api_key: Some("AIzaSyExampleApiKeyValue000000000000000"),
+            // An unroutable base: the test proves we fail before any network call.
+            api_base: Some("http://192.0.2.1:9"),
+            custom_llm_provider: "vertex_ai",
+            extra_headers: None,
+            optional_params,
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("google api key is rejected");
+
+        match err {
+            CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

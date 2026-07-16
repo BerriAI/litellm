@@ -24,6 +24,10 @@ tokio-tungstenite.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
 base64.workspace = true
+# Vertex host-layer auth: mint/refresh Google OAuth tokens; rustls installs the
+# ring CryptoProvider google-cloud-auth needs (see io::vertex_auth).
+google-cloud-auth.workspace = true
+rustls.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }
 serde = { workspace = true, optional = true }
 subtle = { workspace = true, optional = true }
