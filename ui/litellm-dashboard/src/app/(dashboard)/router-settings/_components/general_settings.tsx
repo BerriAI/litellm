@@ -14,7 +14,7 @@ import {
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
-import { InputNumber } from "antd";
+import { InputNumber, Select as AntdSelect } from "antd";
 import { TrashIcon } from "@heroicons/react/outline";
 import { StatusBadge } from "@/components/shared/table_cells";
 
@@ -33,6 +33,7 @@ interface generalSettingsItem {
   field_value: any;
   field_description: string;
   stored_in_db: boolean | null;
+  field_options?: string[] | null;
 }
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
@@ -168,6 +169,18 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               step={0.05}
                               value={value.field_value}
                               onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                            />
+                          ) : value.field_type == "Select" ? (
+                            <AntdSelect
+                              allowClear
+                              style={{ minWidth: "8rem" }}
+                              placeholder="Default"
+                              value={value.field_value || undefined}
+                              options={(value.field_options ?? []).map((option) => ({
+                                label: option,
+                                value: option,
+                              }))}
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue ?? "")}
                             />
                           ) : null}
                         </TableCell>

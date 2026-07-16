@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypedDict,
     Union,
     cast,
     get_args,
@@ -39,6 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
+from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -363,14 +365,14 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
-    get_persisted_coordination_redis_settings,
-    router as coordination_redis_settings_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
+    get_persisted_coordination_redis_settings,
+    router as coordination_redis_settings_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -14800,7 +14802,16 @@ async def get_config_general_settings(
             )
 
 
-_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
+GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+
+
+class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
+    type: Literal["Float", "Boolean", "Select"]
+    description: str
+    options: NotRequired[tuple[str, ...]]
+
+
+_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
     "budget_exceeded_throttle_percentage": {
         "type": "Float",
         "description": (
@@ -14809,18 +14820,64 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
             "over-budget keys."
         ),
     },
+    "enable_anthropic_prompt_caching": {
+        "type": "Boolean",
+        "description": (
+            "Automatically add Anthropic cache_control breakpoints to the system prompt and the "
+            "trailing turn, for Anthropic and Bedrock Claude models that support prompt caching. "
+            "Lets clients that never set cache_control themselves still get cached prompts. "
+            "Requests that already carry their own cache_control are left untouched."
+        ),
+    },
+    "anthropic_prompt_caching_ttl": {
+        "type": "Select",
+        "options": ("5m", "1h"),
+        "description": (
+            "Cache lifetime for the breakpoints added by 'enable_anthropic_prompt_caching'. "
+            "Leave empty for Anthropic's 5m default. 1h suits long agentic sessions but doubles "
+            "the cache write premium."
+        ),
+    },
 }
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> Optional[float]:
+def _general_settings_ui_litellm_default(
+    field_type: Literal["Float", "Boolean", "Select"],
+) -> GeneralSettingsUILiteLLMValue:
+    """The value a field falls back to when it is cleared or reset."""
+    return False if field_type == "Boolean" else None
+
+
+def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+    spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
+    field_type = spec["type"]
     if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
-        )
-    return float(value)
+        return _general_settings_ui_litellm_default(field_type)
+    match field_type:
+        case "Boolean":
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be true or false"},
+                )
+            return value
+        case "Select":
+            options = spec.get("options", ())
+            if value not in options:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be one of: {', '.join(options)}, or empty"},
+                )
+            return cast(str, value)  # cast-ok: membership in options proves it is one of the option strings
+        case "Float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case _:
+            assert_never(field_type)
 
 
 async def _persist_general_settings_ui_litellm_field(
@@ -14841,11 +14898,12 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    setattr(litellm, field_name, None)
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, None, user_api_key_dict))
+    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 
@@ -15013,11 +15071,12 @@ async def get_config_list(
         else {}
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
-        current_value: Optional[float] = getattr(litellm, litellm_field_name, None)
+        current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
+        default_value = _general_settings_ui_litellm_default(spec["type"])
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
-        elif current_value is not None:
+        elif current_value != default_value:
             stored_in_db_litellm = False
         else:
             stored_in_db_litellm = None
@@ -15028,7 +15087,8 @@ async def get_config_list(
                 field_description=spec["description"],
                 field_value=current_value,
                 stored_in_db=stored_in_db_litellm,
-                field_default_value=None,
+                field_default_value=default_value,
+                field_options=list(spec.get("options", ())) or None,
                 nested_fields=None,
             )
         )
