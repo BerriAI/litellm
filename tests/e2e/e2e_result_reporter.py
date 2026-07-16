@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-Outcome = Literal["passed", "failed", "error", "skipped", "xfailed", "xpassed"]
+Outcome = Literal["passed", "failed", "error", "skipped"]
 
 
 @dataclass(frozen=True, slots=True)
