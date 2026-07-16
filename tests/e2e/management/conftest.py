@@ -56,7 +56,7 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
         username.wait_for(state="visible", timeout=30_000)
         username.fill(UI_USERNAME)
         page.get_by_placeholder("Enter your password").fill(UI_PASSWORD)
-        page.get_by_role("button", name="Login").click()
+        page.get_by_role("button", name="Login", exact=True).click()
         page.wait_for_function("() => document.cookie.includes('token=')")
         yield page
     finally:
