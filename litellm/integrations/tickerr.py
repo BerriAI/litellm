@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 _REPORT_URL = "https://tickerr.ai/api/v1/report"
 _UA = "litellm-tickerr/1.0"
+_MAX_INFLIGHT = threading.Semaphore(10)
 
 
 class TickerrLogger(CustomLogger):
@@ -124,6 +125,8 @@ class TickerrLogger(CustomLogger):
         }
 
         def _send() -> None:
+            if not _MAX_INFLIGHT.acquire(blocking=False):
+                return
             try:
                 client = _get_httpx_client()
                 client.post(
@@ -134,5 +137,7 @@ class TickerrLogger(CustomLogger):
                 )
             except Exception:
                 pass
+            finally:
+                _MAX_INFLIGHT.release()
 
         threading.Thread(target=_send, daemon=True).start()
