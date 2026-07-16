@@ -431,6 +431,7 @@ class LiteLLMParamsBody(BaseModel):
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
+    use_in_pass_through: bool | None = None
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None

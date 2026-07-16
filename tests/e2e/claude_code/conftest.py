@@ -43,6 +43,8 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 import pytest
 import yaml
 
+from claude_code._compat_models import CompatDeployment, load_all_deployments
+
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
 DEFAULT_ARTIFACT_PATH = "compat-results.json"
@@ -548,3 +550,69 @@ def pytest_sessionfinish(session, exitstatus):
     )
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     _print_rate_limit_summary(summary)
+
+
+def _proxy_env_configured() -> bool:
+    has_url = bool(os.environ.get("LITELLM_PROXY_URL") or os.environ.get("LITELLM_PROXY_BASE_URL"))
+    has_key = bool(os.environ.get("LITELLM_MASTER_KEY") or os.environ.get("LITELLM_PROXY_API_KEY"))
+    return has_url and has_key
+
+
+def _build_control_gateway():
+    from e2e_gateway import build_gateway
+
+    return build_gateway()
+
+
+def _register_deployment(gateway: Any, deployment: CompatDeployment) -> str:
+    return gateway.create_model(deployment.model_name, deployment.litellm_params)
+
+
+def _try_register(
+    gateway: Any, deployment: CompatDeployment
+) -> tuple[str | None, tuple[str, str] | None]:
+    from requests import RequestException
+
+    try:
+        return _register_deployment(gateway, deployment), None
+    except (AssertionError, RequestException) as exc:
+        return None, (deployment.model_name, str(exc))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _compat_models_registered() -> Any:
+    """POST /model/new for every deployment in test_config.yaml; delete on exit.
+
+    No-ops when proxy env is unset so unit-test trees stay hermetic.
+    Per-deployment register failures are printed and skipped: cells that need
+    that alias fail with Invalid model name, which is the right signal when
+    the proxy lacks that provider's credentials.
+    """
+    if not _proxy_env_configured():
+        yield
+        return
+
+    from requests import RequestException
+
+    gateway = _build_control_gateway()
+    outcomes = tuple(_try_register(gateway, d) for d in load_all_deployments())
+    registered_ids = tuple(model_id for model_id, err in outcomes if model_id is not None)
+    failures = tuple(err for _model_id, err in outcomes if err is not None)
+    if failures:
+        summary = "\n".join(f"  - {name}: {reason}" for name, reason in failures)
+        print(
+            f"[compat fixture] {len(failures)} of "
+            f"{len(failures) + len(registered_ids)} deployments "
+            f"failed to register (proxy likely missing that provider's "
+            f"credentials); cells that target them will fail loudly:\n"
+            f"{summary}",
+            flush=True,
+        )
+    try:
+        yield
+    finally:
+        for model_id in registered_ids:
+            try:
+                gateway.delete_model(model_id)
+            except (AssertionError, RequestException):
+                pass
