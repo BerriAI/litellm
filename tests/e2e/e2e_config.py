@@ -32,9 +32,14 @@ CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 # read exported spans back through it.
 OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
 
-# Query URL of the compose stack's DataDog logs-intake sink (the `dd-sink`
-# service records every intake POST and replays them on GET /requests).
-DD_SINK_URL = os.environ.get("E2E_DD_SINK_URL", "http://localhost:9915").rstrip("/")
+# Real-DataDog read-back (no local sink - destination fakes cannot be deployed
+# on the cluster): the proxy delivers with DD_API_KEY as in production, and the
+# tests read ingested events back through the DataDog Logs Search API, which
+# additionally needs an application key. On the cluster the secret manager
+# injects both; locally tests/e2e/.env provides them.
+DD_SITE = os.environ.get("DD_SITE", "datadoghq.com").strip()
+DD_API_KEY = os.environ.get("DD_API_KEY", "").strip()
+DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
 
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.

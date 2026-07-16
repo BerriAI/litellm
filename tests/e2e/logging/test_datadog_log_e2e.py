@@ -3,10 +3,11 @@
 Covers logging.datadog.success.exports_metric: one successful call on each
 route must reach the DataDog logs intake as EXACTLY ONE log event whose
 message (the StandardLoggingPayload) carries the model, the token counts, and
-the response cost. Delivery is judged on what the intake actually received:
-the compose stack's dd-sink service records every batch the datadog callback
-ships (DD_BASE_URL override) and the tests read it back, so a dropped event, a
-duplicated event, or a payload missing the cost all fail here.
+the response cost. Delivery is judged on what DataDog itself ingested: the
+proxy ships with DD_API_KEY exactly as in production, and the tests search the
+events back through the DataDog Logs Search API (DD_APP_KEY, keys from the
+secret manager on the cluster), so a dropped event, a duplicated event, or a
+payload missing the cost all fail here.
 
 Both halves of the contract are asserted: the recorded state (the proxy
 reports the DataDogLogger callback active via /health/readiness/details) and
@@ -20,7 +21,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from datadog_sink import DdLogEvent, DdSinkReader
+from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import NoBody, StreamingResponse
 from lifecycle import ResourceManager
@@ -71,10 +72,12 @@ def _assert_exactly_one_event(
         "for the currently known /v1/messages instance)"
     )
     event = events[0]
-    assert event.ddsource == "litellm", f"event ddsource must be litellm, got {event.ddsource!r}"
+    assert "source:litellm" in event.tags, (
+        f"the ingested event must carry the litellm source (shipped as ddsource), got tags {event.tags!r}"
+    )
     assert event.status == "info", f"success events ship at status info, got {event.status!r}"
 
-    payload = _DdMessagePayload.model_validate_json(event.message)
+    payload = _DdMessagePayload.model_validate(event.attributes)
     assert payload.status == "success", f"payload status must be success, got {payload.status!r}"
     assert payload.model_group == model_group, (
         f"payload model_group must be {model_group!r}, got {payload.model_group!r}"
@@ -95,7 +98,7 @@ def _assert_exactly_one_event(
 class TestDataDogLogDelivery:
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["chat_completions"])
     def test_chat_completions_emits_one_log_event(
-        self, client: LoggingClient, dd_sink: DdSinkReader, resources: ResourceManager
+        self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
         """One successful non-streaming /chat/completions call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
@@ -110,14 +113,14 @@ class TestDataDogLogDelivery:
             client,
             lambda: client.chat_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16),
         )
-        events = dd_sink.poll_events_for_marker(marker)
+        events = dd_logs.poll_events_for_marker(marker)
         _assert_exactly_one_event(
             events, model_group=CHEAP_ANTHROPIC_MODEL, call_type="acompletion", outcome=outcome
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["messages"])
     def test_messages_emits_one_log_event(
-        self, client: LoggingClient, dd_sink: DdSinkReader, resources: ResourceManager
+        self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
         """One successful non-streaming /v1/messages call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
@@ -134,14 +137,14 @@ class TestDataDogLogDelivery:
             client,
             lambda: client.messages_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16),
         )
-        events = dd_sink.poll_events_for_marker(marker)
+        events = dd_logs.poll_events_for_marker(marker)
         _assert_exactly_one_event(
             events, model_group=CHEAP_ANTHROPIC_MODEL, call_type="anthropic_messages", outcome=outcome
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["responses"])
     def test_responses_emits_one_log_event(
-        self, client: LoggingClient, dd_sink: DdSinkReader, resources: ResourceManager
+        self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
     ) -> None:
         """One successful non-streaming /v1/responses call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
@@ -156,7 +159,7 @@ class TestDataDogLogDelivery:
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
         )
-        events = dd_sink.poll_events_for_marker(marker)
+        events = dd_logs.poll_events_for_marker(marker)
         _assert_exactly_one_event(
             events, model_group=CHEAP_OPENAI_MODEL, call_type="aresponses", outcome=outcome
         )
