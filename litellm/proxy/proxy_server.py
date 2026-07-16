@@ -2814,21 +2814,6 @@ async def update_cache(
             )
             # set cooldown on alert
 
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_spend", None) is not None:
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_member_spend", None) is not None:
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = existing_team_member_spend + response_cost
-
-        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
-        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
-
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
@@ -3032,13 +3017,27 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
-        user_api_key_cache.async_set_cache_pipeline(
-            cache_list=values_to_update_in_cache,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            litellm_parent_otel_span=parent_otel_span,
+    global_proxy_spend_key = "{}:spend".format(litellm_proxy_admin_name)
+    local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
+    shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
+
+    if local_object_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(local_object_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
         )
-    )
+    if shared_scalar_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(shared_scalar_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+            )
+        )
 
 
 def run_ollama_serve():
@@ -5793,6 +5792,13 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -14907,6 +14913,7 @@ async def get_config_list(
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []
