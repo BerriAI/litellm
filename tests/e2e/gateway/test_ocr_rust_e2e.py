@@ -214,7 +214,7 @@ class TestRustOcrGateway:
 class _CaptureHandler(BaseHTTPRequestHandler):
     captured_body: dict[str, Any] | None = None
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         length = int(self.headers.get("content-length", "0"))
         type(self).captured_body = json.loads(self.rfile.read(length))
         body = json.dumps(

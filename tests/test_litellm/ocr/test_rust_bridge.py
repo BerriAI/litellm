@@ -381,9 +381,6 @@ def test_ocr_filters_internal_litellm_params_before_rust(fake_bridge):
 
 
 def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
-    """`id` is a public Mistral OCR field that collides with LiteLLM's generic
-    internal-parameter name, so it must survive the filter and reach Rust, while
-    genuine internal params must not."""
     litellm.ocr(
         model=MODEL,
         document=DOCUMENT,
