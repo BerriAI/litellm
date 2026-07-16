@@ -5,12 +5,6 @@
     "logo": "tickerr.png",
     "supports_key_team_logging": false,
     "dynamic_params": {
-      "TICKERR_CLIENT_TIER": {
-        "type": "text",
-        "ui_name": "Client Tier",
-        "description": "Optional. Your LLM plan tier: free, pro, team, enterprise, or api_pay_as_you_go. Used to correlate signals by tier.",
-        "required": false
-      },
       "TICKERR_REGION": {
         "type": "text",
         "ui_name": "Region",

@@ -8,20 +8,18 @@ Usage:
     litellm.callbacks = ["tickerr"]
 
 No API key. No account. Failure-only by default. Success sampling is opt-in.
-Zero dependencies beyond stdlib.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import random
 import threading
-import urllib.request
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 _REPORT_URL = "https://tickerr.ai/api/v1/report"
 _UA = "litellm-tickerr/1.0"
@@ -127,13 +125,11 @@ class TickerrLogger(CustomLogger):
 
         def _send() -> None:
             try:
-                urllib.request.urlopen(
-                    urllib.request.Request(
-                        _REPORT_URL,
-                        data=json.dumps(payload).encode(),
-                        headers={"Content-Type": "application/json", "User-Agent": _UA},
-                        method="POST",
-                    ),
+                client = _get_httpx_client()
+                client.post(
+                    _REPORT_URL,
+                    json=payload,
+                    headers={"User-Agent": _UA},
                     timeout=2,
                 )
             except Exception:
