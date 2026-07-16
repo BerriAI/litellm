@@ -151,6 +151,39 @@ def test_require_proxy_returns_config_when_only_legacy_env_supplied() -> None:
     assert cfg == ProxyConfig("http://legacy:4000", "sk-legacy")
 
 
+class TestControlGatewayFollowsResolvedProxy:
+    """The session fixture that registers the compat deployments must talk
+    to the *same* proxy the cells do.
+
+    It turns on whenever ``resolve_proxy()`` succeeds, which includes the
+    legacy-only spelling. Building its Gateway off ``e2e_config``'s own env
+    read instead would send ``/model/new`` to http://localhost:4000 with
+    sk-1234 (that module only knows the primary names), while the cells drive
+    the legacy host — so registration silently lands somewhere else and every
+    cell 400s with "Invalid model name" against a proxy that looks configured.
+    """
+
+    LEGACY = ProxyConfig("http://legacy-alb.internal:4000", "sk-legacy")
+
+    def _gateway(self):
+        from claude_code.conftest import _build_control_gateway
+
+        return _build_control_gateway(self.LEGACY)
+
+    def test_management_calls_go_to_the_resolved_host_and_key(self) -> None:
+        control = self._gateway().transport.control
+        assert control.base_url == self.LEGACY.base_url
+        assert control.master_key == self.LEGACY.api_key
+
+    def test_both_planes_share_the_one_address_the_cells_use(self) -> None:
+        """The deployment is fronted by a single address that routes
+        management and LLM paths itself, so a resolved proxy pins both."""
+        transport = self._gateway().transport
+        assert transport.data.base_url == self.LEGACY.base_url
+        assert transport.data.master_key == self.LEGACY.api_key
+        assert transport.control.base_url == transport.data.base_url
+
+
 def test_require_proxy_leaves_compat_result_untouched_on_success() -> None:
     """A successful resolution must NOT append a spurious fail entry.
     Would have silently poisoned every compat cell's result rows."""

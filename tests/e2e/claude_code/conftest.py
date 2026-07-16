@@ -570,21 +570,33 @@ def pytest_sessionfinish(session, exitstatus):
 # pay only one skipped-liveness check.
 # ---------------------------------------------------------------------------
 
-from claude_code._env import resolve_proxy  # noqa: E402
+from claude_code._env import ProxyConfig, resolve_proxy  # noqa: E402
 from claude_code._compat_models import (  # noqa: E402
     CompatDeployment,
     load_all_deployments,
 )
 
 
-def _build_control_gateway():
+def _build_control_gateway(proxy: ProxyConfig):
     """Local import of the shared harness so the pure-unit-test tree
     under ``_driver_unit_tests/`` etc. never has to pull it in. The
     control plane transport is what /model/new lives on; SplitTransport
-    routes it correctly for both monolithic and split deployments."""
+    routes it correctly for both monolithic and split deployments.
+
+    The endpoints come from the *resolved* proxy, not from ``e2e_config``'s
+    own env read: this suite also accepts the legacy ``LITELLM_PROXY_BASE_URL``
+    / ``LITELLM_PROXY_API_KEY`` spelling, and under that spelling
+    ``e2e_config`` sees nothing and falls back to http://localhost:4000 with
+    sk-1234 — registering models on a different host and key than the cells
+    then call. Both planes get the one URL the cells use; the deployment is
+    fronted by a single address that routes management and LLM paths itself."""
     from e2e_gateway import build_gateway
 
-    return build_gateway()
+    return build_gateway(
+        base_url=proxy.base_url,
+        master_key=proxy.api_key,
+        control_plane_base_url=proxy.base_url,
+    )
 
 
 def _register_deployment(gateway, deployment: CompatDeployment) -> str:
@@ -614,13 +626,14 @@ def _compat_models_registered() -> Any:
     but do not abort the session: the cells that need that specific
     deployment will 400 with "Invalid model name" and fail loudly,
     which is the right signal (missing cred on the proxy side)."""
-    if resolve_proxy() is None:
+    proxy = resolve_proxy()
+    if proxy is None:
         yield
         return
 
     from requests import RequestException
 
-    gateway = _build_control_gateway()
+    gateway = _build_control_gateway(proxy)
     registered_ids: list[str] = []
     failures: list[tuple[str, str]] = []
     try:
