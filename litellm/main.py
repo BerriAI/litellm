@@ -510,6 +510,19 @@ async def acompletion(
     #########################################################
     #########################################################
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=kwargs,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
@@ -5054,6 +5067,18 @@ def completion(  # type: ignore
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=non_default_params,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+    )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
