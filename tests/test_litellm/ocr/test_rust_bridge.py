@@ -380,6 +380,38 @@ def test_ocr_filters_internal_litellm_params_before_rust(fake_bridge):
     assert fake_bridge.calls[0]["optional_params"] == {"include_image_base64": True}
 
 
+def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
+    """`id` is a public Mistral OCR field that collides with LiteLLM's generic
+    internal-parameter name, so it must survive the filter and reach Rust, while
+    genuine internal params must not."""
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id="ocr-req-9",
+        pages=[0, 1],
+        include_image_base64=True,
+        table_format="html",
+        metadata={"trace": "internal"},
+        litellm_metadata={"trace": "internal"},
+        num_retries=3,
+        original_generic_function=lambda: None,
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert optional_params["id"] == "ocr-req-9"
+    assert optional_params["pages"] == [0, 1]
+    assert optional_params["include_image_base64"] is True
+    assert optional_params["table_format"] == "html"
+    for internal in (
+        "metadata",
+        "litellm_metadata",
+        "num_retries",
+        "original_generic_function",
+    ):
+        assert internal not in optional_params
+
+
 def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
     response = litellm.ocr(
         model="azure_ai/pixtral-12b-2409",

@@ -184,6 +184,41 @@ mod tests {
         String::from_utf8(request).expect("request is utf8")
     }
 
+    async fn read_http_request(socket: &mut TcpStream) -> (String, Value) {
+        let mut raw = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let n = socket.read(&mut buffer).await.expect("reads request");
+            if n == 0 {
+                break;
+            }
+            raw.extend_from_slice(&buffer[..n]);
+            let header_end = raw
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|pos| pos + 4);
+            if let Some(body_start) = header_end {
+                let text = String::from_utf8(raw.clone()).expect("request is utf8");
+                let content_length = text
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse::<usize>().expect("content-length"))
+                    })
+                    .unwrap_or(0);
+                if raw.len() >= body_start + content_length {
+                    let headers = text[..body_start].to_string();
+                    let body: Value =
+                        serde_json::from_slice(&raw[body_start..body_start + content_length])
+                            .expect("request body is json");
+                    return (headers, body);
+                }
+            }
+        }
+        panic!("did not receive a complete request");
+    }
+
     #[test]
     fn truncate_error_body_passes_short_strings_through() {
         let body = "Unauthorized";
@@ -325,6 +360,93 @@ mod tests {
             request.contains("authorization: Bearer sk-from-python")
                 || request.contains("Authorization: Bearer sk-from-python"),
             "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ocr_forwards_full_mistral_contract_and_filters_internal_params() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let (_headers, body) = read_http_request(&mut socket).await;
+
+            let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            body
+        });
+
+        let document = json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        });
+        let optional_params = json!({
+            "pages": [0, 2, 5],
+            "include_image_base64": true,
+            "image_limit": 10,
+            "image_min_size": 64,
+            "bbox_annotation_format": {"type": "text"},
+            "document_annotation_format": {"type": "json_schema"},
+            "document_annotation_prompt": "extract title",
+            "extract_header": true,
+            "extract_footer": false,
+            "table_format": "html",
+            "confidence_scores_granularity": "word",
+            "include_blocks": true,
+            "id": "ocr-req-9",
+            "litellm_metadata": {"trace": "internal"},
+            "metadata": {"trace": "internal"},
+            "num_retries": 3
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: document.clone(),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: "mistral",
+            extra_headers: None,
+            optional_params,
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect("ocr request succeeds");
+
+        let body = server.await.expect("server task completes");
+
+        assert_eq!(
+            body,
+            json!({
+                "model": "mistral-ocr-latest",
+                "document": document,
+                "pages": [0, 2, 5],
+                "include_image_base64": true,
+                "image_limit": 10,
+                "image_min_size": 64,
+                "bbox_annotation_format": {"type": "text"},
+                "document_annotation_format": {"type": "json_schema"},
+                "document_annotation_prompt": "extract title",
+                "extract_header": true,
+                "extract_footer": false,
+                "table_format": "html",
+                "confidence_scores_granularity": "word",
+                "include_blocks": true,
+                "id": "ocr-req-9"
+            })
         );
     }
 
