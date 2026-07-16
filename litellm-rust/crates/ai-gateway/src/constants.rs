@@ -28,17 +28,10 @@ pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 /// Provider attributed to realtime sessions in the logging payload.
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
 
-/// MIME type used when an OCR upload declares none and its filename extension is
-/// unrecognized. Mirrors the Python proxy's `_build_document_from_upload`.
 pub(crate) const DEFAULT_UPLOAD_MIME_TYPE: &str = "application/octet-stream";
 
-/// Upper bound on an OCR request body (JSON or multipart). Base64-encoded PDFs
-/// inflate roughly 1.33x over the raw bytes, so this stays well above the
-/// default 50MB document download cap while still rejecting absurd payloads.
 pub(crate) const MAX_OCR_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 
-/// Filename-extension to MIME map for OCR uploads whose transport declares no
-/// usable content type. Mirrors `litellm.ocr.main.get_mime_type`'s explicit map.
 pub(crate) const OCR_UPLOAD_MIME_BY_EXTENSION: &[(&str, &str)] = &[
     ("pdf", "application/pdf"),
     ("png", "image/png"),
