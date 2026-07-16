@@ -494,11 +494,21 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     if not file_bytes:
         raise ValueError("File is empty or could not be read")
 
-    if mime_type == "application/octet-stream":
-        mime_type = sniff_mime_type_from_bytes(file_bytes) or mime_type
-
-    if "mime_type" in document:
-        mime_type = document["mime_type"]
+    explicit_mime = document.get("mime_type")
+    explicit_mime = explicit_mime if isinstance(explicit_mime, str) else None
+    resolved_mime = next(
+        (
+            candidate
+            for candidate in (explicit_mime, mime_type)
+            if candidate and candidate != "application/octet-stream"
+        ),
+        None,
+    )
+    mime_type = (
+        resolved_mime
+        or sniff_mime_type_from_bytes(file_bytes)
+        or "application/octet-stream"
+    )
 
     if not _MIME_PATTERN.match(mime_type):
         raise ValueError(f"Invalid MIME type: {mime_type}")

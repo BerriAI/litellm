@@ -77,7 +77,9 @@ class TestSniffMimeTypeFromBytes:
         assert sniff_mime_type_from_bytes(b"GIF89a rest") == "image/gif"
 
     def test_should_detect_webp_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
+        assert (
+            sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
+        )
 
     def test_should_detect_tiff_from_magic_bytes(self):
         assert sniff_mime_type_from_bytes(b"II*\x00 rest") == "image/tiff"
@@ -226,6 +228,31 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
 
+    def test_should_sniff_when_explicit_mime_is_octet_stream(self):
+        """The proxy multipart path always passes an explicit mime_type, using
+        application/octet-stream as its unknown-type fallback. That placeholder must
+        not defeat content sniffing, otherwise uploaded PDFs regress to octet-stream."""
+        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
+
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": content, "mime_type": "application/octet-stream"}
+        )
+
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_prefer_named_extension_over_sniffed_magic_number(self):
+        """A file-like object's name extension stays authoritative over sniffing."""
+        file_obj = BytesIO(b"\x89PNG\r\n\x1a\n not really a png")
+        file_obj.name = "report.pdf"
+
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": file_obj}
+        )
+
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
     def test_should_fallback_to_octet_stream_for_unrecognized_raw_bytes(self):
         """Bytes matching no known signature stay octet-stream so behavior is unchanged."""
         content = b"totally unrecognized payload"
@@ -235,7 +262,9 @@ class TestConvertFileDocumentToUrlDocument:
         )
 
         assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/octet-stream;base64,")
+        assert result["document_url"].startswith(
+            "data:application/octet-stream;base64,"
+        )
 
     def test_should_convert_raw_bytes_with_explicit_mime_type(self):
         """Raw bytes with explicit mime_type should use the specified MIME type."""
