@@ -570,6 +570,8 @@ Adaptive mode's learned state does not persist across `lite autoroute up` sessio
 
 A session that outlives `up` (or is still running the moment you stop it) keeps sending requests, master key included, to that now-freed loopback port until you restart it. Once the ephemeral proxy process exits, nothing stops another local account on the same machine from binding that same port and receiving those requests instead -- unlike `lite up`'s `apiKeyHelper`, which is re-resolved per request, `autoroute`'s master key is a static value, so whoever receives them gets a live-looking token along with the prompt content. Restart any Claude Code session before you consider the machine clean, run `lite autoroute down` promptly rather than leaving a stopped session's settings patched, and do not run `lite autoroute up` on a shared or multi-tenant host.
 
+Do not run `lite up` and `lite autoroute up` at the same time. Each patches `~/.claude/settings.json` and keeps its own separate backup, with no coordination between them: whichever one you stop or crash out of last is the one whose backup gets restored, which can silently leave the *other* mode's settings (a static master key and a now-dead loopback URL, or a stale `apiKeyHelper`) active. Run `lite down` or `lite autoroute down` (whichever applies) before switching to the other mode.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:
