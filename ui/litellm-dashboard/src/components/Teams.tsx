@@ -733,7 +733,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                 <NumericalInput step={1} width={400} />
               </Form.Item>
-              <Form.Item label="Metadata" help="Additional team metadata. Values may be plain text or JSON.">
+              <Form.Item
+                label="Metadata"
+                help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+              >
                 <MetadataKeyValueFields form={form} />
               </Form.Item>
 

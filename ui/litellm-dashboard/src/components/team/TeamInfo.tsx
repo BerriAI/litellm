@@ -1154,7 +1154,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <NumericalInput step={1} style={{ width: "100%" }} />
                     </Form.Item>
 
-                    <Form.Item label="Metadata" help="Additional team metadata. Values may be plain text or JSON.">
+                    <Form.Item
+                      label="Metadata"
+                      help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+                    >
                       <MetadataKeyValueFields form={form} />
                     </Form.Item>
 
