@@ -25,6 +25,16 @@ UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
+CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+
+# Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
+# service in docker-compose.yml maps it to host 16686). Trace-completeness tests
+# read exported spans back through it.
+OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
+
+# Query URL of the compose stack's DataDog logs-intake sink (the `dd-sink`
+# service records every intake POST and replays them on GET /requests).
+DD_SINK_URL = os.environ.get("E2E_DD_SINK_URL", "http://localhost:9915").rstrip("/")
 
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.

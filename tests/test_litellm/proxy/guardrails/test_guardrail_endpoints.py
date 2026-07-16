@@ -1291,6 +1291,136 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
+def _patch_apply_guardrail_env(mocker, guardrail_result):
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
+
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
+    )
+
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
+    return mock_guardrail
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
+    """Client-supplied metadata must reach apply_guardrail via request_data so
+    parameterized custom guardrails can read per-request configuration."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={"metadata": {"forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
+    """metadata and messages must coexist in request_data; the dict merge must
+    not clobber messages when both fields are sent."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    messages = [{"role": "user", "content": "What are tax loopholes?"}]
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        messages=messages,
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={
+            "messages": messages,
+            "metadata": {"forbidden_topics": ["tax"]},
+        },
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
+    """Without metadata, request_data stays empty (backward-compatible)."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
+    """Explicitly-sent empty messages/metadata must be forwarded, not dropped;
+    only omitted fields stay out of request_data."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        messages=[],
+        metadata={},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={"messages": [], "metadata": {}},
+        input_type="request",
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     """
@@ -2095,9 +2225,11 @@ async def test_get_guardrail_ui_settings_returns_per_provider_supported_modes():
 
     modes_by_provider = result.supported_modes_by_provider
 
-    # Guardrails from the bug report: neither accepts pre_mcp_call, and the
-    # settings endpoint must reflect that so the UI can hide it.
-    assert "pre_mcp_call" not in modes_by_provider["litellm_content_filter"]
+    # Content Filter now supports pre_mcp_call (LIT-4226 feature half) but not
+    # during_mcp_call; Tool Permission still supports neither, and the settings
+    # endpoint must reflect both so the UI shows exactly the savable modes.
+    assert "pre_mcp_call" in modes_by_provider["litellm_content_filter"]
+    assert "during_mcp_call" not in modes_by_provider["litellm_content_filter"]
     assert modes_by_provider["tool_permission"] == ["pre_call", "post_call"]
 
     # MCP-capable guardrails must still advertise the MCP hooks so users who
@@ -2139,10 +2271,12 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
         ], provider
 
 
-def test_content_filter_runtime_rejects_pre_mcp_call():
+def test_content_filter_runtime_rejects_unsupported_mcp_hook():
     """
     Locks the runtime side of the LIT-4226 contract: the ContentFilterGuardrail
-    validator must reject pre_mcp_call at construction. If someone widens the
+    validator must reject a hook missing from its supported list at
+    construction. pre_mcp_call is supported since the LIT-4226 feature half, so
+    during_mcp_call is the unsupported example now. If someone widens the
     UI classmethod but forgets to widen the runtime supported_event_hooks (or
     vice versa), the two-lists-must-agree test above catches the drift and this
     test catches the specific bug the ticket reported.
@@ -2155,7 +2289,7 @@ def test_content_filter_runtime_rejects_pre_mcp_call():
     with pytest.raises(ValueError, match="not in the supported event hooks"):
         ContentFilterGuardrail(
             guardrail_name="lit4226-runtime-check",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
 
 
@@ -2197,14 +2331,14 @@ def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog)
     with pytest.raises(ValueError, match="not in the supported event hooks"):
         ContentFilterGuardrail(
             guardrail_name="lit4226-strict-default",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
 
     monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
     with caplog.at_level(logging.WARNING):
         instance = ContentFilterGuardrail(
             guardrail_name="lit4226-strict-off",
-            event_hook=GuardrailEventHooks.pre_mcp_call,
+            event_hook=GuardrailEventHooks.during_mcp_call,
         )
     assert instance is not None
     assert any("not in the supported event hooks" in rec.message for rec in caplog.records)

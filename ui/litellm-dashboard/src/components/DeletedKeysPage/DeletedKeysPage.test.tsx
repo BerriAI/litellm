@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
@@ -13,6 +14,9 @@ const mockUseDeletedKeys = useDeletedKeys as MockedFunction<typeof useDeletedKey
 const mockDeletedKey: DeletedKeyResponse = {
   token: "sk-1234567890abcdef",
   token_id: "key-1",
+  key_type: "llm_api",
+  project_id: null,
+  last_active: null,
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
@@ -78,9 +82,8 @@ beforeEach(() => {
       current_page: 1,
       total_pages: 1,
     },
-    isPending: false,
-    isFetching: false,
-  } as any);
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
 });
 
 it("should render DeletedKeysPage component", () => {
@@ -89,14 +92,32 @@ it("should render DeletedKeysPage component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
-it("should handle loading state", () => {
+it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedKeys.mockReturnValue({
     data: undefined,
-    isPending: true,
-    isFetching: false,
-  } as any);
+    isLoading: true,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
 
   renderWithProviders(<DeletedKeysPage />);
 
-  expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
+  expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+});
+
+it("should request the next page from the hook when the pagination next button is clicked", async () => {
+  const user = userEvent.setup();
+  mockUseDeletedKeys.mockReturnValue({
+    data: {
+      keys: [mockDeletedKey],
+      total_count: 120,
+      current_page: 1,
+      total_pages: 3,
+    },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
+
+  renderWithProviders(<DeletedKeysPage />);
+
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(1, 50);
+  await user.click(screen.getByTestId("pagination-next"));
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(2, 50);
 });

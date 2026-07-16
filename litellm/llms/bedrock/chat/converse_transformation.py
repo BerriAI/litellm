@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     make_valid_bedrock_tool_name,
 )
 from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
@@ -899,7 +900,28 @@ class AmazonConverseConfig(BaseConfig):
                     "tool_choice": {"disable_parallel_tool_use": disable_parallel}
                 }
             if param == "thinking":
-                optional_params["thinking"] = value
+                if (
+                    isinstance(value, dict)
+                    and value.get("type") == "adaptive"
+                    and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                ):
+                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    legacy_thinking = AnthropicConfig._map_reasoning_effort(
+                        reasoning_effort="medium",
+                        model=model,
+                        custom_llm_provider="bedrock",
+                    )
+                    capped = (
+                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        if legacy_thinking is not None
+                        else None
+                    )
+                    if capped is not None:
+                        optional_params["thinking"] = capped
+                    else:
+                        litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
+                else:
+                    optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params

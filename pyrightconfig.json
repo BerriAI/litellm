@@ -1,7 +1,7 @@
 {
     "include": ["litellm"],
     "ignore": [],
-    "exclude": ["**/node_modules", "**/__pycache__", "litellm/types/utils.py", "litellm/proxy/_types.py"],
+    "exclude": ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "litellm/types/utils.py", "litellm/proxy/_types.py"],
     "pythonVersion": "3.12",
     "typeCheckingMode": "strict",
     "enableTypeIgnoreComments": false,

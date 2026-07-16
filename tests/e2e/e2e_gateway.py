@@ -12,6 +12,7 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from e2e_http import (
     NoBody,
@@ -50,6 +51,8 @@ from models import (
     OcrResponse,
     SpendLogRow,
     SpendLogs,
+    SpendLogsPage,
+    SpendLogsPageParams,
     SpendLogsParams,
 )
 from e2e_config import (
@@ -255,6 +258,28 @@ class Gateway:
             case _:
                 return []
 
+    def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
+        def fetch(page: int) -> SpendLogsPage:
+            return unwrap(
+                self.transport.get(
+                    "/spend/logs/v2",
+                    headers=self.transport.master,
+                    params=SpendLogsPageParams(
+                        start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
+                        end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+                        page=page,
+                        page_size=100,
+                    ),
+                    response_type=SpendLogsPage,
+                )
+            )
+
+        first = fetch(1)
+        return [
+            *first.data,
+            *(row for page in range(2, first.total_pages + 1) for row in fetch(page).data),
+        ]
+
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
@@ -294,21 +319,31 @@ class Gateway:
         return self.transport.probe(path, params=params)
 
 
-def build_gateway() -> Gateway:
+def build_gateway(
+    *,
+    base_url: str = PROXY_BASE_URL,
+    master_key: str = MASTER_KEY,
+    control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
+) -> Gateway:
     """The Gateway every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
-    base URLs are the same for a monolithic proxy, so routing is then a no-op."""
+    base URLs are the same for a monolithic proxy, so routing is then a no-op.
+
+    The endpoints are injectable for callers that resolve the proxy some other
+    way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
+    pass all three together, since a caller that overrides only the data plane
+    would leave management calls pointed at the env default."""
     return Gateway(
         transport=SplitTransport(
             data=HttpTransport(
-                base_url=PROXY_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
             control=HttpTransport(
-                base_url=CONTROL_PLANE_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=control_plane_base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
         ),

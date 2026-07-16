@@ -6544,7 +6544,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - The user id of the key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -6765,7 +6765,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -6834,7 +6834,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -7024,7 +7024,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -13810,6 +13810,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -20658,6 +20659,10 @@ export interface components {
             messages?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Text */
             text: string;
         };
@@ -22620,6 +22625,11 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Skip User Budget On Team Key
+             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
+             */
+            skip_user_budget_on_team_key?: boolean | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */
@@ -24026,6 +24036,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -25026,6 +25038,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -25697,6 +25711,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -25778,6 +25794,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -26414,6 +26432,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -28376,6 +28396,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -32810,6 +32832,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Refreshed At */
@@ -33521,6 +33545,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -33602,6 +33628,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -42428,6 +42456,8 @@ export interface operations {
                 agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
+                /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
+                expires?: string | null;
             };
             header?: never;
             path?: never;
