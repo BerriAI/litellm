@@ -1079,7 +1079,7 @@
   },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 2
