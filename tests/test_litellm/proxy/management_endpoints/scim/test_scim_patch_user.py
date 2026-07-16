@@ -1,9 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_UserTable
-from litellm.proxy.management_endpoints.scim.scim_v2 import patch_user
+from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
     SCIMPatchOperation,
@@ -329,3 +330,138 @@ async def test_patch_user_multiple_fields_without_path():
     assert update_data["user_alias"] == "New Display Name"
     assert "" not in metadata  # Ensure no empty string key
     assert result.active is False
+
+
+def _user_with_metadata(metadata):
+    return LiteLLM_UserTable(
+        user_id="user-mva",
+        user_email="mva@example.com",
+        user_alias=None,
+        teams=[],
+        metadata=metadata,
+    )
+
+
+def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
+    """A PATCH on path=entitlements must persist under scim_entitlements, not
+    fall through to the generic handler's raw path key"""
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                path="entitlements",
+                value=[{"value": "jira-software", "display": "Jira Software"}],
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({}), patch_ops=patch_ops
+    )
+
+    metadata = update_data["metadata"]
+    assert metadata["scim_entitlements"] == [
+        {"value": "jira-software", "display": "Jira Software"}
+    ]
+    assert "entitlements" not in metadata
+
+
+def test_apply_patch_ops_add_roles_appends_to_existing():
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="add", path="roles", value=[{"value": "admin"}])
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({"scim_roles": [{"value": "viewer"}]}),
+        patch_ops=patch_ops,
+    )
+
+    assert update_data["metadata"]["scim_roles"] == [
+        {"value": "viewer"},
+        {"value": "admin"},
+    ]
+
+
+def test_apply_patch_ops_remove_entitlements_clears_canonical_key():
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="remove", path="entitlements")]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(
+            {"scim_entitlements": [{"value": "jira-software"}]}
+        ),
+        patch_ops=patch_ops,
+    )
+
+    assert "scim_entitlements" not in update_data["metadata"]
+
+
+def test_apply_patch_ops_pathless_value_dict_handles_roles():
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={"roles": [{"value": "engineering-admin", "primary": True}]},
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({}), patch_ops=patch_ops
+    )
+
+    assert update_data["metadata"]["scim_roles"] == [
+        {"value": "engineering-admin", "primary": True}
+    ]
+
+
+def test_apply_patch_ops_invalid_entitlements_value_raises_400():
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace", path="entitlements", value=[{"display": "no value"}]
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="add", path="entitlements")]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+
+    assert exc_info.value.status_code == 400
+    assert "value" in str(exc_info.value.detail)
+
+
+def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
+    """A filtered path must fail loudly rather than fall through to the generic
+    handler, which would write a junk metadata key while reporting success"""
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove", path='roles[value eq "engineering-admin"]'
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(
+            existing_user=_user_with_metadata(
+                {"scim_roles": [{"value": "engineering-admin"}]}
+            ),
+            patch_ops=patch_ops,
+        )
+
+    assert exc_info.value.status_code == 400

@@ -7,7 +7,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 
 import os
 import sys
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -293,6 +293,81 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
+
+
+class ToolAppendingGuardrail(CustomGuardrail):
+    """Guardrail that appends a new OpenAI-format function tool, mimicking a
+    guardrail that injects a retrieval/recovery tool the model can later call."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_tool",
+                    "description": "injected by guardrail",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
+class TestAnthropicMessagesHandlerToolInjection:
+    """A tool a guardrail injects in OpenAI format must survive the write-back
+    to Anthropic format alongside the request's original tools."""
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_survives_when_request_already_has_tools(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-opus-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather at a specific location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+        }
+
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        names = [t.get("name") for t in result["tools"]]
+        assert "get_weather" in names
+        assert "injected_tool" in names
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_survives_when_request_has_no_tools(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-opus-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        assert [t.get("name") for t in result["tools"]] == ["injected_tool"]
 
 
 if __name__ == "__main__":

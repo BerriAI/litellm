@@ -186,6 +186,104 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
 )
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    """Collapse an absent, empty, or whitespace-only string to ``None``.
+
+    OAuth endpoint fields are consumed by truthiness-based merges (``row or discovered``) and by the
+    corroboration gate. A whitespace-only value is truthy to ``or`` but is not a usable endpoint, so
+    without this the merge would keep the blank value for redirects while the gate treats it as
+    unpinned and backfills the other fields, yielding a broken half-discovered config. Normalizing
+    the pinned fields once, at each build entry point, gives every downstream consumer a single
+    notion of "blank" so those code paths cannot disagree.
+    """
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool) -> bool:
+    """Whether the endpoints are authoritatively anchored to an admin-pinned issuer (RFC 8414 §3.3).
+
+    This is the trust/provenance property, distinct from whether the ``issuer`` field is merely
+    populated: a trust-on-first-use discovered issuer sets ``issuer`` for token identity but is NOT
+    anchored, so its endpoints stay resource-rooted. Anchoring holds only when the issuer was pinned
+    (present on the row/config) on a discovery auth type. Every consumer of "is this anchored" reads
+    this one definition, so the answer cannot diverge across build paths.
+    """
+    return _blank_to_none(manual_issuer) is not None and is_discovery_auth_type
+
+
+def _endpoints_yield_to_issuer(
+    issuer: str | None,
+    is_discovery_auth_type: bool,
+    authorization_url: str | None,
+    token_url: str | None,
+    registration_url: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """The single rule that makes an admin-configured ``issuer`` the sole authoritative endpoint
+    source (RFC 8414 §3.3): when it is set for a discovery auth type, the stored/manual
+    ``authorization_url``/``token_url``/``registration_url`` do not apply. They neither anchor nor
+    short-circuit discovery, never override the issuer document in the merge, and never substitute for
+    it when the issuer fetch fails (fail-closed). Returns the endpoint values that remain in force,
+    i.e. all ``None`` when issuer-anchored, else the inputs unchanged. Called at every resolution site
+    so the invariant holds in one place instead of being re-derived per merge.
+    """
+    if issuer is not None and is_discovery_auth_type:
+        return None, None, None
+    return authorization_url, token_url, registration_url
+
+
+def _normalized_authorize_endpoint(url: str) -> str:
+    """Compare authorize endpoints on scheme, host, and path only. The default port is elided and
+    the host is lowercased so ``https://IDP.example.com:443/authorize/`` and
+    ``https://idp.example.com/authorize`` are the same identity; query and trailing slash are not."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    default_port = {"https": 443, "http": 80}.get(scheme)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    authority = host if port is None or port == default_port else f"{host}:{port}"
+    return f"{scheme}://{authority}{parsed.path.rstrip('/')}"
+
+
+def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
+    """RFC 8414 §3.3 issuer equality between the metadata document's self-attested ``issuer`` and the
+    admin-configured issuer, tolerant only of URL-insignificant differences (scheme/host case, the
+    default port, a trailing slash). A non-string or empty claimed issuer never matches, so a
+    document that omits ``issuer`` fails closed under issuer-anchored discovery.
+    """
+    if not isinstance(claimed_issuer, str) or not claimed_issuer:
+        return False
+    return _normalized_authorize_endpoint(claimed_issuer) == _normalized_authorize_endpoint(configured_issuer)
+
+
+def _endpoints_corroborate_authorization_url(
+    source_authorization_url: str | None,
+    trusted_authorization_url: str | None,
+) -> bool:
+    """Whether a source's ``token_url``/``registration_url`` may be paired with a trusted authorize
+    endpoint. This is the single trust rule for adopting OAuth endpoints from any non-manual source.
+
+    Discovery is rooted at the MCP resource (RFC 9728), so a compromised upstream can advertise an
+    attacker-run authorization server. When ``authorization_url`` is admin-pinned, pairing it with a
+    ``token_url`` from a different source is the RFC 9700 authorization-server mix-up: the user signs
+    in at the trusted authorize endpoint while the gateway redeems the code, with the stored client
+    secret and PKCE verifier, at the attacker's token endpoint. Endpoints are trustworthy together
+    only when they share an authorization server, so a source's endpoints are adopted only when the
+    same source advertised an ``authorization_endpoint`` matching the pinned value. With no pinned
+    value (``trusted_authorization_url is None``) there is nothing to protect: the authorize endpoint
+    comes from the same source as the token endpoint, so they corroborate each other by construction.
+    """
+    if not (trusted_authorization_url and trusted_authorization_url.strip()):
+        return True
+    return bool(source_authorization_url) and _normalized_authorize_endpoint(
+        source_authorization_url
+    ) == _normalized_authorize_endpoint(trusted_authorization_url)
+
+
 def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_server: MCPServer | None) -> None:
     """Keep the last known good OAuth endpoints when a rebuild's re-discovery comes back empty.
 
@@ -193,24 +291,96 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     during re-discovery downgrades a working server (``authorization_url`` set) to a broken one
     (``None``, /authorize 400s) with no configuration change. Mirrors the ``short_prefix``
     carry-forward. Skipped when the server's ``url`` or ``auth_type`` changed, since the previous
-    endpoints may then belong to a different upstream. ``registration_url`` IS carried here even
-    though ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only
-    restores the same in-memory value the previous build already ran with, while persisting it
-    would flip ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for
-    dcr_bridge servers that never had one configured.
+    endpoints may then belong to a different upstream. ``registration_url`` IS carried even though
+    ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only restores
+    the same in-memory value the previous build already ran with, while persisting it would flip
+    ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for dcr_bridge
+    servers that never had one configured.
+
+    Carry-forward is a non-manual endpoint source, so the same trust rule as discovery applies: the
+    previous ``token_url``/``registration_url``/``scopes`` are carried only when the previous
+    ``authorization_url`` corroborates the authorize endpoint this build will use, i.e. when the
+    incoming build has no pinned authorize endpoint (``None`` -> we adopt the previous one too, a
+    consistent group) or pins the same one. An admin re-pointing ``authorization_url`` to a different
+    server must not keep serving the old server's token endpoint or granted scopes.
+
+    When the server is issuer-anchored (``issuer_is_anchored`` -- a pinned issuer on a discovery auth
+    type), the endpoints come solely from the §3.3-validated issuer document, so carry-forward is
+    skipped entirely for its endpoints: a failed issuer fetch leaves them ``None`` and must stay
+    ``None`` (fail-closed), never resurrected from the previous registry entry. A merely discovered
+    (trust-on-first-use) issuer is NOT anchored -- ``issuer`` is set for token identity but the
+    endpoints are resource-rooted, so they still carry forward as last-known-good, gated by the
+    corroboration check below like any other resource-rooted server. Scopes stay resource-driven and
+    can carry either way.
     """
     if previous_server is None:
         return
     if previous_server.url != new_server.url or previous_server.auth_type != new_server.auth_type:
         return
+    if new_server.issuer_is_anchored:
+        # Endpoints come solely from the §3.3-validated issuer document; a failed fetch stays
+        # fail-closed and must not be resurrected from the previous entry. Only the resource-driven
+        # scopes carry as last-known-good.
+        if not new_server.scopes and previous_server.scopes:
+            new_server.scopes = previous_server.scopes
+        return
+    may_carry = _endpoints_corroborate_authorization_url(
+        previous_server.authorization_url, new_server.authorization_url
+    )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
-    if new_server.token_url is None and previous_server.token_url:
+    if may_carry and new_server.token_url is None and previous_server.token_url:
         new_server.token_url = previous_server.token_url
-    if new_server.registration_url is None and previous_server.registration_url:
+    if may_carry and new_server.registration_url is None and previous_server.registration_url:
         new_server.registration_url = previous_server.registration_url
-    if not new_server.scopes and previous_server.scopes:
+    if may_carry and not new_server.scopes and previous_server.scopes:
         new_server.scopes = previous_server.scopes
+
+
+def _restrict_discovery_to_corroborated_authorization_server(
+    metadata: MCPOAuthMetadata | None,
+    manual_authorization_url: str | None,
+    server_identifier: str,
+    is_dcr_bridge: bool,
+) -> MCPOAuthMetadata | None:
+    """Reject discovered token/registration endpoints a manually pinned authorize endpoint cannot
+    vouch for (the RFC 9700 authorization-server mix-up).
+
+    Discovery is rooted at the MCP resource, so a compromised upstream can advertise an attacker
+    ``token_endpoint``: with ``authorization_url`` admin-pinned but ``token_url`` blank, the merge
+    would pair the trusted authorize endpoint with that attacker token endpoint, and the gateway would
+    post the authorization code and client secret there. So the discovered ``token_url`` and
+    ``registration_url`` are kept only if the document corroborates the pin (its
+    ``authorization_endpoint`` matches). ``scopes`` are deliberately NOT gated here: per the MCP
+    authorization spec Scope Selection Strategy and RFC 9700 §2.3, the scopes a client requests are
+    resource-driven (the WWW-Authenticate challenge or the RFC 9728 protected-resource
+    ``scopes_supported``), and scope inflation by a compromised resource is bounded by the
+    authorization server and user consent (RFC 6749 §3.3), not by the client second-guessing the
+    request. With no pin there is no trust anchor to protect, so discovery is returned as-is.
+    """
+    if metadata is None or not (manual_authorization_url and manual_authorization_url.strip()):
+        return metadata
+    if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
+        return metadata
+    if not metadata.token_url and not metadata.registration_url:
+        return metadata
+    bridge_note = (
+        " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
+        " short-circuit registration arm."
+        if is_dcr_bridge and metadata.registration_url
+        else ""
+    )
+    verbose_logger.warning(
+        "MCP OAuth discovery for server %s advertised authorization_endpoint %s, which does not match the "
+        "manually configured authorization_url %s; rejecting the discovered token_url/registration_url so "
+        "authorization codes and client credentials only follow the configured authorization server. "
+        "Configure Token URL manually if the mismatch is intentional.%s",
+        server_identifier,
+        _normalized_authorize_endpoint(metadata.authorization_url) if metadata.authorization_url else "<absent>",
+        _normalized_authorize_endpoint(manual_authorization_url),
+        bridge_note,
+    )
+    return metadata.model_copy(update={"token_url": None, "registration_url": None})
 
 
 def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
@@ -1026,36 +1196,68 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            if server_url and (
-                auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+            manual_issuer = _blank_to_none(server_config.get("issuer"))
+            manual_authorization_url = _blank_to_none(server_config.get("authorization_url"))
+            manual_token_url = _blank_to_none(server_config.get("token_url"))
+            manual_registration_url = _blank_to_none(server_config.get("registration_url"))
+            is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
+            manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
+                manual_issuer,
+                is_discovery_auth_type,
+                manual_authorization_url,
+                manual_token_url,
+                manual_registration_url,
+            )
+            should_discover = bool(server_url) and (
+                is_discovery_auth_type
                 or self._obo_needs_endpoint_discovery(
                     auth_type,
                     server_config.get("token_exchange_endpoint"),
-                    server_config.get("token_url"),
+                    manual_token_url,
                 )
-            ):
+            )
+            if not should_discover:
+                mcp_oauth_metadata = None
+            elif manual_issuer is not None and is_discovery_auth_type:
+                mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
+            else:
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
-                    allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+                    allow_origin_fallback=is_discovery_auth_type,
+                )
+
+            if use_issuer_anchor:
+                gated_oauth_metadata = mcp_oauth_metadata
+            elif is_discovery_auth_type:
+                gated_oauth_metadata = _restrict_discovery_to_corroborated_authorization_server(
+                    mcp_oauth_metadata,
+                    manual_authorization_url,
+                    server_name or server_id,
+                    bool(server_config.get("dcr_bridge")),
                 )
             else:
-                mcp_oauth_metadata = None
+                gated_oauth_metadata = mcp_oauth_metadata
 
             # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
             # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
             # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
             resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
-                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+                gated_oauth_metadata.scopes if gated_oauth_metadata else None
             )
-            resolved_authorization_url = server_config.get("authorization_url") or (
-                mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
+            resolved_authorization_url = manual_authorization_url or (
+                gated_oauth_metadata.authorization_url if gated_oauth_metadata else None
             )
-            resolved_token_url = server_config.get("token_url") or (
-                mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
+            resolved_token_url = manual_token_url or (gated_oauth_metadata.token_url if gated_oauth_metadata else None)
+            resolved_registration_url = manual_registration_url or (
+                gated_oauth_metadata.registration_url if gated_oauth_metadata else None
             )
-            resolved_registration_url = server_config.get("registration_url") or (
-                mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
+            discovered_issuer = (
+                gated_oauth_metadata.discovered_issuer
+                if gated_oauth_metadata and not gated_oauth_metadata.from_origin_fallback
+                else None
             )
+            effective_issuer = manual_issuer or discovered_issuer
 
             config_oauth2_flow = server_config.get("oauth2_flow", None)
             if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
@@ -1104,6 +1306,8 @@ class MCPServerManager:
                 client_secret=server_config.get("client_secret", None),
                 oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
+                issuer=effective_issuer,
+                issuer_is_anchored=use_issuer_anchor,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
@@ -1364,6 +1568,52 @@ class MCPServerManager:
             decrypt_global_env_var_values(env_vars_list)
         return env_vars_list
 
+    async def _resolve_table_oauth_metadata(
+        self,
+        *,
+        mcp_server: LiteLLM_MCPServerTable,
+        auth_type: MCPAuthType,
+        server_url: Optional[str],
+        manual_issuer: Optional[str],
+        manual_authorization_url: Optional[str],
+        manual_token_url: Optional[str],
+        is_discovery_auth_type: bool,
+        use_issuer_anchor: bool,
+        scopes: Optional[list[str]],
+        token_exchange_endpoint: Optional[str],
+    ) -> Optional[MCPOAuthMetadata]:
+        has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
+        needs_discovery = bool(server_url) and (
+            (is_discovery_auth_type and not has_all_upstream_oauth_fields)
+            or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url)
+        )
+        if not needs_discovery:
+            mcp_oauth_metadata: Optional[MCPOAuthMetadata] = None
+        elif use_issuer_anchor and manual_issuer is not None:
+            mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
+        else:
+            mcp_oauth_metadata = await self._descovery_metadata(
+                server_url=server_url,  # type: ignore[arg-type]
+                allow_origin_fallback=is_discovery_auth_type,
+            )
+        if needs_discovery and not use_issuer_anchor and mcp_oauth_metadata is None:
+            verbose_logger.warning(
+                "MCP OAuth discovery yielded no metadata for server %s (%s); "
+                "OAuth endpoints/scopes stay unresolved until a rebuild succeeds",
+                mcp_server.server_id,
+                server_url,
+            )
+        if use_issuer_anchor:
+            return mcp_oauth_metadata
+        if is_discovery_auth_type:
+            return _restrict_discovery_to_corroborated_authorization_server(
+                mcp_oauth_metadata,
+                manual_authorization_url,
+                mcp_server.server_id,
+                bool(getattr(mcp_server, "dcr_bridge", None)),
+            )
+        return mcp_oauth_metadata
+
     async def build_mcp_server_from_table(
         self,
         mcp_server: LiteLLM_MCPServerTable,
@@ -1447,32 +1697,38 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        needs_discovery = bool(server_url) and (
-            (auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and not mcp_server.authorization_url)
-            or self._obo_needs_endpoint_discovery(
-                auth_type,
-                mcp_server.token_exchange_endpoint
-                or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-                mcp_server.token_url,
-            )
+        manual_issuer = _blank_to_none(mcp_server.issuer)
+        manual_authorization_url = _blank_to_none(mcp_server.authorization_url)
+        manual_token_url = _blank_to_none(mcp_server.token_url)
+        manual_registration_url = _blank_to_none(mcp_server.registration_url)
+        is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+        use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
+        manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
+            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
         )
-        mcp_oauth_metadata = (
-            await self._descovery_metadata(
-                server_url=server_url,  # type: ignore[arg-type]
-                allow_origin_fallback=auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
-            )
-            if needs_discovery
+        token_exchange_endpoint = mcp_server.token_exchange_endpoint or (
+            credentials_dict.get("token_exchange_endpoint") if credentials_dict else None
+        )
+        gated_oauth_metadata = await self._resolve_table_oauth_metadata(
+            mcp_server=mcp_server,
+            auth_type=auth_type,
+            server_url=server_url,
+            manual_issuer=manual_issuer,
+            manual_authorization_url=manual_authorization_url,
+            manual_token_url=manual_token_url,
+            is_discovery_auth_type=is_discovery_auth_type,
+            use_issuer_anchor=use_issuer_anchor,
+            scopes=scopes,
+            token_exchange_endpoint=token_exchange_endpoint,
+        )
+
+        resolved_scopes = scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
+        discovered_issuer = (
+            gated_oauth_metadata.discovered_issuer
+            if gated_oauth_metadata and not gated_oauth_metadata.from_origin_fallback
             else None
         )
-        if needs_discovery and mcp_oauth_metadata is None:
-            verbose_logger.warning(
-                "MCP OAuth discovery yielded no metadata for server %s (%s); "
-                "OAuth endpoints stay unresolved until a rebuild succeeds",
-                mcp_server.server_id,
-                server_url,
-            )
-
-        resolved_scopes = scopes or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+        effective_issuer = manual_issuer or discovered_issuer
 
         new_server = MCPServer(
             server_id=mcp_server.server_id,
@@ -1492,9 +1748,11 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
-            authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
-            token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
-            registration_url=mcp_server.registration_url or getattr(mcp_oauth_metadata, "registration_url", None),
+            issuer=effective_issuer,
+            issuer_is_anchored=use_issuer_anchor,
+            authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
+            token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
+            registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),
             token_endpoint_auth_method=(
                 credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
             ),
@@ -1545,16 +1803,18 @@ class MCPServerManager:
             await self._persist_discovered_obo_token_url(
                 server_id=mcp_server.server_id,
                 auth_type=auth_type,
-                existing_token_url=mcp_server.token_url,
+                existing_token_url=manual_token_url,
                 discovered_token_url=new_server.token_url,
             )
             await self._persist_discovered_oauth_endpoints(
                 server_id=mcp_server.server_id,
                 auth_type=auth_type,
-                existing_authorization_url=mcp_server.authorization_url,
-                existing_token_url=mcp_server.token_url,
+                existing_issuer=manual_issuer,
+                existing_authorization_url=manual_authorization_url,
+                existing_token_url=manual_token_url,
                 existing_scopes=scopes,
-                metadata=mcp_oauth_metadata,
+                metadata=gated_oauth_metadata,
+                is_issuer_anchored=use_issuer_anchor,
             )
         return new_server
 
@@ -1598,10 +1858,12 @@ class MCPServerManager:
         *,
         server_id: str,
         auth_type: MCPAuthType | None,
+        existing_issuer: str | None,
         existing_authorization_url: str | None,
         existing_token_url: str | None,
         existing_scopes: list[str] | None,
         metadata: MCPOAuthMetadata | None,
+        is_issuer_anchored: bool = False,
     ) -> None:
         """Write freshly discovered OAuth endpoints back onto the DB row.
 
@@ -1615,19 +1877,37 @@ class MCPServerManager:
         because ``_dcr_bridge_relays_client_registration`` keys off that column. Best-effort: a
         failed write re-discovers on the next build. Scopes go through ``update_mcp_server`` so
         they merge into the credentials blob without touching the stored client credentials.
+
+        For an issuer-anchored server (``is_issuer_anchored``) the endpoints are re-derived from the
+        §3.3-validated issuer document on every build, so they are NOT persisted into the endpoint
+        columns: persisting them would make the next build see populated endpoints and treat them as
+        authoritative stored values, defeating the "endpoints come solely from the issuer" invariant.
+        Only the resource-driven scopes are persisted for such servers.
         """
         if auth_type not in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
             return
         if metadata is None or metadata.from_origin_fallback:
             return
+        issuer_update = (
+            {"issuer": metadata.discovered_issuer} if metadata.discovered_issuer and not existing_issuer else {}
+        )
         authorization_url_update = (
             {"authorization_url": metadata.authorization_url}
-            if metadata.authorization_url and not existing_authorization_url
+            if metadata.authorization_url and not existing_authorization_url and not is_issuer_anchored
             else {}
         )
-        token_url_update = {"token_url": metadata.token_url} if metadata.token_url and not existing_token_url else {}
+        token_url_update = (
+            {"token_url": metadata.token_url}
+            if metadata.token_url and not existing_token_url and not is_issuer_anchored
+            else {}
+        )
         scopes_update = {"credentials": {"scopes": metadata.scopes}} if metadata.scopes and not existing_scopes else {}
-        updates: dict[str, object] = {**authorization_url_update, **token_url_update, **scopes_update}
+        updates: dict[str, object] = {
+            **issuer_update,
+            **authorization_url_update,
+            **token_url_update,
+            **scopes_update,
+        }
         if not updates:
             return
         from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # db.py imports this module at load
@@ -3200,8 +3480,41 @@ class MCPServerManager:
                 return metadata
         return None
 
+    async def _fetch_issuer_anchored_oauth_metadata(
+        self, issuer: str, server_url: Optional[str]
+    ) -> Optional[MCPOAuthMetadata]:
+        """RFC 8414 issuer-anchored discovery for the OAuth endpoints, with resource-driven scopes.
+
+        Fetch authorization-server metadata from the admin-configured issuer's own origin and adopt
+        its ``token_endpoint``/``registration_endpoint`` only when the document self-attests that same
+        issuer (RFC 8414 §3.3). Because the trust anchor is the pinned issuer rather than anything the
+        MCP resource advertises, the endpoints are authoritative for that issuer and cannot be
+        substituted by a compromised resource. Fails closed (returns None) on a §3.3 mismatch or a
+        fetch failure. The issuer is passed as its own ``server_url`` so the endpoint fetch is treated
+        as same-authority and is not subject to the resource-scoped SSRF shortcut.
+
+        Scopes are NOT taken from the issuer document. Per the MCP authorization spec Scope Selection
+        Strategy and RFC 9728, the scopes a client requests are resource-driven (the WWW-Authenticate
+        challenge or the protected-resource ``scopes_supported``), so the resource's advertised scopes
+        are fetched separately and used; the resource can influence only the requested scope, which
+        the authorization server and user consent bound (RFC 6749 §3.3), never the token endpoint.
+        """
+        metadata = await self._fetch_single_authorization_server_metadata(issuer, issuer, require_issuer=issuer)
+        if metadata is None:
+            verbose_logger.warning(
+                "MCP OAuth issuer-anchored discovery for issuer %s yielded no metadata whose issuer "
+                "matched (RFC 8414 §3.3); OAuth endpoints stay unresolved until a rebuild succeeds",
+                issuer,
+            )
+            return None
+        resource_metadata = (
+            await self._descovery_metadata(server_url, allow_origin_fallback=False) if server_url else None
+        )
+        resource_scopes = resource_metadata.scopes if resource_metadata else None
+        return metadata.model_copy(update={"scopes": resource_scopes})
+
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str, server_url: str
+        self, issuer_url: str, server_url: str, require_issuer: Optional[str] = None
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)
@@ -3245,20 +3558,33 @@ class MCPServerManager:
                 )
                 continue
 
-            scopes = self._extract_scopes(data.get("scopes_supported"))
+            claimed_issuer = data.get("issuer")
             verbose_logger.debug(
                 "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
                 "token_endpoint_auth_methods_supported=%s",
                 url,
-                data.get("issuer"),
+                claimed_issuer,
                 data.get("grant_types_supported"),
                 data.get("token_endpoint_auth_methods_supported"),
             )
+            if require_issuer is not None and not _issuer_matches(claimed_issuer, require_issuer):
+                verbose_logger.warning(
+                    "MCP OAuth issuer-anchored discovery: metadata at %s self-attests issuer %r, which "
+                    "does not match the configured issuer %r (RFC 8414 §3.3); rejecting so a compromised "
+                    "resource cannot substitute an attacker authorization server",
+                    url,
+                    claimed_issuer,
+                    require_issuer,
+                )
+                continue
+
+            scopes = self._extract_scopes(data.get("scopes_supported"))
             metadata = MCPOAuthMetadata(
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
+                discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
             )
 
             if any(
@@ -4979,6 +5305,7 @@ class MCPServerManager:
             command=getattr(server, "command", None),
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
+            issuer=server.issuer,
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
@@ -5088,6 +5415,7 @@ class MCPServerManager:
             command=getattr(server, "command", None),
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
+            issuer=server.issuer,
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,

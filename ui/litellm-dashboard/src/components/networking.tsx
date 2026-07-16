@@ -179,7 +179,7 @@ export interface PromptSpec {
 export interface PromptTemplateBase {
   litellm_prompt_id: string;
   content: string;
-  metadata?: Record<string, any> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface PromptInfoResponse {
@@ -6244,6 +6244,7 @@ export const applyGuardrail = async (
   text: string,
   language?: string | null,
   entities?: string[] | null,
+  metadata?: Record<string, unknown> | null,
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
@@ -6259,6 +6260,10 @@ export const applyGuardrail = async (
 
     if (entities && entities.length > 0) {
       requestBody.entities = entities;
+    }
+
+    if (metadata != null) {
+      requestBody.metadata = metadata;
     }
 
     const response = await fetch(url, {

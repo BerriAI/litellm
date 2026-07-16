@@ -438,10 +438,30 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableRequestMetricsMiddleware,
+    BillingRecorder,
+)
 from litellm.proxy.plugin_routes import (
-    router as plugin_router,
     register_plugins_from_config,
 )
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+)
+
+try:
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        build_billing_metrics_recorder as _build_billing_metrics_recorder,
+    )
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
+    )
+
+    build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Optional[Callable[[], None]] = _shutdown_billing_metrics_recorder
+except ImportError:
+    build_billing_metrics_recorder = None
+    shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -461,12 +481,10 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
+    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -552,22 +570,19 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
-)
-from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (
     RouterGeneralSettings,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
 )
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
+from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -767,6 +782,11 @@ async def proxy_shutdown_event():
 
     if db_writer_client is not None:
         await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
+
+    # final flush of billable-request counts: without it, up to one export
+    # interval of enterprise billing data is dropped on every restart
+    if shutdown_billing_metrics_recorder is not None:
+        shutdown_billing_metrics_recorder()
 
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
@@ -973,11 +993,11 @@ async def proxy_startup_event(app: FastAPI):
         if is_otel_v2_enabled():
             from opentelemetry import trace as _otel_trace
 
-            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(
@@ -1781,6 +1801,31 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+# Added before InFlightRequestsMiddleware so it nests *inside* it: Starlette
+# makes the last-added middleware outermost. The billable count is recorded
+# after the inner app returns, so if this sat outside the in-flight tracker a
+# request could be counted as drained while its record() had not yet run, and
+# proxy_shutdown_event could flush and stop the exporter underneath it.
+app.add_middleware(
+    BillableRequestMetricsMiddleware,
+    # Factory, not an instance: the recorder is resolved on the first request so
+    # it sees premium_user and the billing env vars AFTER proxy_startup_event has
+    # loaded the YAML config's environment_variables. Building it here at import
+    # time would permanently capture recorder=None for YAML-configured
+    # deployments. The lambda reads the module globals at call time.
+    recorder_factory=lambda: (
+        build_billing_metrics_recorder(
+            premium=premium_user,
+            # Read from the license check, not the premium_user_data module
+            # global: that global is bound once at import and goes stale when
+            # the license arrives via the YAML config's environment_variables.
+            license_data=_license_check.airgapped_license_data,
+            litellm_version=version,
+        )
+        if build_billing_metrics_recorder is not None
+        else None
+    ),
+)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -2769,21 +2814,6 @@ async def update_cache(
             )
             # set cooldown on alert
 
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_spend", None) is not None:
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_member_spend", None) is not None:
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = existing_team_member_spend + response_cost
-
-        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
-        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
-
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
@@ -2987,13 +3017,27 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
-        user_api_key_cache.async_set_cache_pipeline(
-            cache_list=values_to_update_in_cache,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            litellm_parent_otel_span=parent_otel_span,
+    global_proxy_spend_key = "{}:spend".format(litellm_proxy_admin_name)
+    local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
+    shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
+
+    if local_object_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(local_object_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
         )
-    )
+    if shared_scalar_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(shared_scalar_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+            )
+        )
 
 
 def run_ollama_serve():
@@ -4380,6 +4424,15 @@ class ProxyConfig:
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = litellm.default_max_internal_user_budget
+                elif key == "default_internal_user_params" and isinstance(value, dict):
+                    litellm.default_internal_user_params = (
+                        {**value, "max_budget": float(value["max_budget"])}
+                        if value.get("max_budget") is not None
+                        else value
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, litellm.default_internal_user_params, is_full_admin=False)}{reset_color_code}"
+                    )
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
@@ -5739,6 +5792,13 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -14853,6 +14913,7 @@ async def get_config_list(
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []

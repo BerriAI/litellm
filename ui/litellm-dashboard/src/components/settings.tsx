@@ -231,6 +231,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
+  const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
@@ -379,29 +380,35 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   };
 
   useEffect(() => {
-    if (!accessToken || !userRole || !userID) {
-      return;
-    }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
-
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
-        }
+    const fetchCallbacks = async () => {
+      if (!accessToken || !userRole || !userID) {
+        setIsLoadingCallbacks(false);
+        return;
       }
+      try {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+        setAllCallbacks(data.available_callbacks);
 
-      setAlerts(alerts_data);
-    });
+        let alerts_data = data.alerts;
+        if (alerts_data) {
+          if (alerts_data.length > 0) {
+            let _alert_info = alerts_data[0];
+            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+
+            let active_alerts = _alert_info.active_alerts;
+            setActiveAlerts(active_alerts);
+            setCatchAllWebhookURL(catch_all_webhook);
+            setAlertToWebhooks(_alert_info.alerts_to_webhook);
+          }
+        }
+
+        setAlerts(alerts_data);
+      } finally {
+        setIsLoadingCallbacks(false);
+      }
+    };
+    fetchCallbacks();
   }, [accessToken, userRole, userID]);
 
   const isAlertOn = (alertName: string) => {
@@ -696,6 +703,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <LoggingCallbacksTable
                 callbacks={[...callbacks.filter((c) => !NON_CALLBACK_LOGGING_IDS.has(c.name)), ...destinationRows]}
                 availableCallbacks={allCallbacks}
+                isLoading={isLoadingCallbacks}
                 onAdd={() => setShowAddCallbacksModal(true)}
                 onEdit={(cb) => {
                   setSelectedEditCallback(cb);

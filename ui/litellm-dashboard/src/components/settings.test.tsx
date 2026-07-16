@@ -1,16 +1,24 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings from "./settings";
 
+type SettingsTestProps = {
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+  premiumUser: boolean;
+};
+
 // Settings (and its CloudZero cost-tracking child) renders react-query hooks, so
 // every render must sit under a QueryClientProvider. Retries off so a failed
 // query surfaces immediately instead of hanging the test.
-const renderSettings = (props: Record<string, unknown>) =>
+const renderSettings = (props: SettingsTestProps) =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <Settings {...(props as any)} />
+      <Settings {...props} />
     </QueryClientProvider>,
   );
 
@@ -49,9 +57,6 @@ vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   default: () => <div>Mock CloudZero Cost Tracking</div>,
 }));
 
-// Settings now pulls logging-destination credentials via the useCredentials
-// react-query hook; the test renders <Settings> without a QueryClientProvider,
-// so stub the hook to a stable empty result instead of standing up a client.
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => ({ data: { credentials: [] }, refetch: vi.fn() }),
 }));
@@ -174,7 +179,8 @@ describe("Settings", () => {
 
     mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
 
-    const { getByText, container } = renderSettings(defaultProps);
+    const user = userEvent.setup();
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -184,18 +190,8 @@ describe("Settings", () => {
       expect(getByText("Datadog")).toBeInTheDocument();
     });
 
-    const actionsCell = container.querySelector('[class*="flex justify-end gap-2"]');
-    expect(actionsCell).toBeTruthy();
-
-    const icons = actionsCell?.querySelectorAll("svg");
-    expect(icons?.length).toBeGreaterThanOrEqual(2);
-
-    const editIconParent = icons?.[1]?.closest('[class*="cursor-pointer"]');
-    expect(editIconParent).toBeTruthy();
-
-    act(() => {
-      fireEvent.click(editIconParent!);
-    });
+    await user.click(screen.getByTestId("callback-actions-datadog-success"));
+    await user.click(await screen.findByTestId("callback-action-edit"));
 
     await waitFor(() => {
       expect(getByText("Edit Callback Settings")).toBeInTheDocument();
@@ -205,6 +201,42 @@ describe("Settings", () => {
       expect(getByText("API Key")).toBeInTheDocument();
       expect(getByText("Site")).toBeInTheDocument();
     });
+  });
+
+  it("should hold the callbacks table in loading state until the fetch settles", async () => {
+    let resolveCallbacks: (value: {
+      callbacks: never[];
+      available_callbacks: never[];
+      alerts: never[];
+    }) => void = () => {};
+    mockGetCallbacksCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCallbacks = resolve;
+      }),
+    );
+
+    renderSettings(defaultProps);
+
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveCallbacks({ callbacks: [], available_callbacks: [], alerts: [] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
+  });
+
+  it("should resolve loading without fetching when the user id is missing", async () => {
+    renderSettings({ ...defaultProps, userID: null });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(mockGetCallbacksCall).not.toHaveBeenCalled();
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
