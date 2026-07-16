@@ -2,7 +2,6 @@
 Unit tests for the Tickerr LiteLLM callback.
 """
 
-import json
 import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -65,6 +64,16 @@ def test_disabled_skips_report():
 # -- Payload -------------------------------------------------------------------
 
 
+def _run_report(logger, kwargs, start, end, is_success=False):
+    """Helper: run _report synchronously and return the payload sent via httpx."""
+    mock_client = MagicMock()
+    with patch("litellm.integrations.tickerr._get_httpx_client", return_value=mock_client):
+        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
+            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
+            logger._report(kwargs, start, end, is_success=is_success)
+    return mock_client.post.call_args
+
+
 def test_failure_payload():
     logger = TickerrLogger()
 
@@ -78,13 +87,8 @@ def test_failure_payload():
         "litellm_params": {"custom_llm_provider": "anthropic"},
     }
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report(kwargs, start, end)
-
-    sent = mock_urlopen.call_args[0][0]
-    payload = json.loads(sent.data)
+    call = _run_report(logger, kwargs, start, end)
+    payload = call.kwargs["json"]
     assert payload["provider"] == "anthropic"
     assert payload["model"] == "claude-haiku-4-5"
     assert payload["status_code"] == 429
@@ -97,12 +101,8 @@ def test_model_passed_as_is():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=100)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "openai/gpt-4o-mini", "exception": None}, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "openai/gpt-4o-mini", "exception": None}, start, end)
+    payload = call.kwargs["json"]
     assert payload["model"] == "openai/gpt-4o-mini"
 
 
@@ -111,12 +111,8 @@ def test_no_exception_omits_status_code():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=200)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "gpt-4o", "exception": None}, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "gpt-4o", "exception": None}, start, end)
+    payload = call.kwargs["json"]
     assert "status_code" not in payload
 
 
@@ -127,24 +123,16 @@ def test_region_included():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=100)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "gpt-4o", "exception": None}, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "gpt-4o", "exception": None}, start, end)
+    payload = call.kwargs["json"]
     assert payload["region"] == "eu-west-1"
 
 
 def test_latency_from_floats():
     logger = TickerrLogger()
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "gpt-4o", "exception": None}, 1000.0, 1001.5)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "gpt-4o", "exception": None}, 1000.0, 1001.5)
+    payload = call.kwargs["json"]
     assert payload["latency_ms"] == 1500
 
 
@@ -153,12 +141,8 @@ def test_provider_from_top_level_kwarg():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=100)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "gpt-4o", "exception": None, "custom_llm_provider": "openai"}, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "gpt-4o", "exception": None, "custom_llm_provider": "openai"}, start, end)
+    payload = call.kwargs["json"]
     assert payload["provider"] == "openai"
 
 
@@ -167,12 +151,8 @@ def test_no_provider_omits_field():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=100)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger._report({"model": "gpt-4o", "exception": None}, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(logger, {"model": "gpt-4o", "exception": None}, start, end)
+    payload = call.kwargs["json"]
     assert "provider" not in payload
 
 
@@ -220,12 +200,12 @@ def test_success_reported_when_sampled():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=200)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
-        with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
-            mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            logger.log_success_event({"model": "gpt-4o", "exception": None, "litellm_params": {"custom_llm_provider": "openai"}}, None, start, end)
-
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    call = _run_report(
+        logger,
+        {"model": "gpt-4o", "exception": None, "litellm_params": {"custom_llm_provider": "openai"}},
+        start, end, is_success=True,
+    )
+    payload = call.kwargs["json"]
     assert payload["event_type"] == "success"
     assert payload["provider"] == "openai"
 
@@ -238,12 +218,16 @@ async def test_async_success_reported_when_sampled():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=150)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen") as mock_urlopen:
+    mock_client = MagicMock()
+    with patch("litellm.integrations.tickerr._get_httpx_client", return_value=mock_client):
         with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
             mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
-            await logger.async_log_success_event({"model": "gpt-4o-mini", "exception": None, "litellm_params": {"custom_llm_provider": "openai"}}, None, start, end)
+            await logger.async_log_success_event(
+                {"model": "gpt-4o-mini", "exception": None, "litellm_params": {"custom_llm_provider": "openai"}},
+                None, start, end,
+            )
 
-    payload = json.loads(mock_urlopen.call_args[0][0].data)
+    payload = mock_client.post.call_args.kwargs["json"]
     assert payload["event_type"] == "success"
 
 
@@ -255,7 +239,9 @@ def test_silent_on_network_error():
     start = datetime(2024, 1, 1)
     end = start + timedelta(milliseconds=100)
 
-    with patch("litellm.integrations.tickerr.urllib.request.urlopen", side_effect=OSError("refused")):
+    mock_client = MagicMock()
+    mock_client.post.side_effect = OSError("refused")
+    with patch("litellm.integrations.tickerr._get_httpx_client", return_value=mock_client):
         with patch("litellm.integrations.tickerr.threading.Thread") as mock_thread:
             mock_thread.return_value.start = lambda: mock_thread.call_args[1]["target"]()
             logger._report({"model": "gpt-4o", "exception": None}, start, end)
