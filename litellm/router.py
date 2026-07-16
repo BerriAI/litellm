@@ -10380,6 +10380,11 @@ class Router:
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+            # Authorized candidate set before cooldown filtering. Used so a tag
+            # match that exists but is only cooled down is treated as retryable,
+            # without inspecting deployments the request isn't authorized to route
+            # to. https://github.com/BerriAI/litellm/issues/15016
+            routing_candidates=_pre_cooldown_deployments,
         )
 
         # narrow to whatever `self.routing_plugins` left in candidate_models
