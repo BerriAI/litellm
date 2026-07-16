@@ -55,8 +55,8 @@ impl CoreError {
                 "OCR provider returned an invalid response".to_string()
             }
             CoreError::Routing(_) => "OCR request could not be routed".to_string(),
+            CoreError::Auth(_) => "OCR request failed provider authentication".to_string(),
             CoreError::Timeout
-            | CoreError::Auth(_)
             | CoreError::NotFound(_)
             | CoreError::InvalidType { .. }
             | CoreError::MissingField(_)
@@ -163,6 +163,19 @@ mod tests {
             invalid.public_message(),
             "OCR provider returned an invalid response"
         );
+    }
+
+    #[test]
+    fn public_message_hides_auth_detail() {
+        let err = CoreError::Auth(
+            "google auth: failed to load service account key /secrets/sa.json token=ya29.abc123"
+                .to_string(),
+        );
+        let message = err.public_message();
+        assert_eq!(message, "OCR request failed provider authentication");
+        assert!(!message.contains("sa.json"));
+        assert!(!message.contains("ya29"));
+        assert!(!message.contains("token"));
     }
 
     #[test]

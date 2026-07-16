@@ -592,6 +592,28 @@ async def test_aocr_raises_typed_exception_from_rust_error(
     assert exc_info.value.llm_provider == "mistral"
 
 
+UNKNOWN_STATUS_CASES = [
+    pytest.param(409, id="409_conflict"),
+    pytest.param(451, id="451_legal_reasons"),
+    pytest.param(504, id="504_gateway_timeout"),
+    pytest.param(418, id="418_teapot"),
+]
+
+
+@pytest.mark.parametrize("status_code", UNKNOWN_STATUS_CASES)
+def test_rust_ocr_error_unknown_status_preserves_exact_status(status_code):
+    exc = ocr_main._rust_ocr_error_to_public_exception(
+        RustOcrError("upstream boom", status_code),
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+    )
+
+    assert type(exc) is litellm.APIError
+    assert exc.status_code == status_code
+    assert exc.llm_provider == "mistral"
+    assert exc.model == "mistral-ocr-latest"
+
+
 def test_rust_ocr_error_message_is_preserved_bounded():
     bounded = "x" * 256 + "... (truncated)"
     exc = ocr_main._rust_ocr_error_to_public_exception(
@@ -628,7 +650,7 @@ async def test_aocr_invalid_input_raises_bad_request(document):
 
 def test_map_ocr_exception_maps_input_error_to_bad_request():
     result = ocr_main._map_ocr_exception(
-        ocr_main.OCRInputError("Invalid document type: bogus"),
+        ocr_main._OCRInputError("Invalid document type: bogus"),
         model="mistral-ocr-latest",
         custom_llm_provider="mistral",
         completion_kwargs={},
