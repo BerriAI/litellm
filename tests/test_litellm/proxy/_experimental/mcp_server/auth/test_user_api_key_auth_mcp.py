@@ -376,6 +376,35 @@ class TestMCPRequestHandler:
 
         assert result == ["server-a"]
 
+    async def test_toolset_servers_stay_capped_by_team_ceiling(self):
+        """Toolset grants expand the KEY's scope, which the team ceiling still
+        intersects; a toolset must never grant a server the team does not allow.
+        Pins that toolset expansion lives in the intersected key scope, not the
+        additive access-group path"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets(
+            {"server-in-team": ["lookup_status"], "server-outside-team": ["other_tool"]}
+        )
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                AsyncMock(return_value=["server-in-team", "server-unrelated"]),
+            ),
+            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["server-in-team"]
+
     async def test_get_allowed_tools_for_server_unions_toolset_and_direct_tools(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
         key_object_permission = self._toolset_only_object_permission(["toolset-1"])
