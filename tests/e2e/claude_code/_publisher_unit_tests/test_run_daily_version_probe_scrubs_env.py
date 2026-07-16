@@ -17,14 +17,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 RUN_DAILY = REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "run_daily.sh"
 
 
+def _anchor(text: str, needle: str, start: int = 0) -> int:
+    found = text.find(needle, start)
+    if found == -1:
+        pytest.fail(f"run_daily.sh anchor not found: {needle!r}")
+    return found
+
+
 def _version_probe_block() -> str:
     body = RUN_DAILY.read_text()
-    start = body.index("PROBED_CLAUDE_VERSION=")
-    end = body.index('[[ -n "${PROBED_CLAUDE_VERSION}" ]]', start)
+    start = _anchor(body, "PROBED_CLAUDE_VERSION=")
+    end = _anchor(body, '[[ -n "${PROBED_CLAUDE_VERSION}" ]]', start)
     return body[start:end]
 
 

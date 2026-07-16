@@ -17,6 +17,9 @@ flow in run_daily.sh:
      the supply-chain vector the 3-day buffer exists for.
   3. The `claude --version` probe verifies the binary now on PATH
      reports exactly the resolved version and dies on a mismatch.
+  4. The install's bin dir reaches PATH only inside the two `env -i`
+     blocks that spawn `claude` (probe and pytest), never at script
+     scope where later git/gh/curl/uv steps run with the token env.
 
 The resolve/install/probe block is extracted out of run_daily.sh and
 executed with a stub resolver and a fake `npm`, mirroring the fake-curl
@@ -31,6 +34,8 @@ import subprocess
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 RUN_DAILY = REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "run_daily.sh"
@@ -52,11 +57,25 @@ _SECRET_ENV = {
 }
 
 
+def _anchor(text: str, needle: str, start: int = 0) -> int:
+    found = text.find(needle, start)
+    if found == -1:
+        pytest.fail(f"run_daily.sh anchor not found: {needle!r}")
+    return found
+
+
+def _extract_block(text: str, start_marker: str, end_marker: str) -> str:
+    start = _anchor(text, start_marker)
+    end = _anchor(text, end_marker, start)
+    return text[start:end]
+
+
 def _extract_pin_snippet() -> str:
-    body = RUN_DAILY.read_text()
-    start = body.index('CLAUDE_PROBE_HOME="${WORKDIR}/claude-probe-home"')
-    end = body.index('log "pinned claude code:')
-    return body[start:end]
+    return _extract_block(
+        RUN_DAILY.read_text(),
+        'CLAUDE_PROBE_HOME="${WORKDIR}/claude-probe-home"',
+        'log "pinned claude code:',
+    )
 
 
 def _executable_lines(block: str) -> str:
@@ -233,11 +252,11 @@ def test_probe_dies_when_installed_version_mismatches_resolved(
 def test_static_resolver_and_install_are_env_i_wrapped() -> None:
     body = RUN_DAILY.read_text()
     lines = _executable_lines(_extract_pin_snippet())
-    resolver_call = lines.index("pr_gate_version_resolver.py")
+    resolver_call = _anchor(lines, "pr_gate_version_resolver.py")
     assert "env -i" in lines[:resolver_call], (
         "run_daily.sh must run pr_gate_version_resolver.py under `env -i`"
     )
-    install_call = lines.index('@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}')
+    install_call = _anchor(lines, "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}")
     assert "env -i" in lines[resolver_call:install_call], (
         "run_daily.sh must run the npm install under its own `env -i`"
     )
@@ -249,8 +268,33 @@ def test_static_resolver_and_install_are_env_i_wrapped() -> None:
         assert required in _required_commands(body)
 
 
+def test_static_npm_bin_dir_scoped_to_probe_and_pytest_env_blocks() -> None:
+    body = RUN_DAILY.read_text()
+    _anchor(body, 'CLAUDE_CLI_BIN="${CLAUDE_CLI_PREFIX}/node_modules/.bin"')
+    prepend = 'PATH="${CLAUDE_CLI_BIN}:${PATH}"'
+    assert body.count(prepend) == 2, (
+        "run_daily.sh must prepend the npm install's bin dir in exactly "
+        "the two `env -i` blocks that spawn claude (version probe and "
+        "pytest); every other step (git, gh, curl, uv, docs publish) "
+        "must not see package-controlled binaries on PATH."
+    )
+    probe_block = _extract_block(
+        body, "PROBED_CLAUDE_VERSION=", '[[ -n "${PROBED_CLAUDE_VERSION}" ]]'
+    )
+    pytest_block = _extract_block(body, 'log "running pytest"', "PYTEST_EXIT=$?")
+    assert prepend in probe_block
+    assert prepend in pytest_block
+    for line in body.splitlines():
+        assert not line.startswith(("PATH=", "export PATH=")), (
+            f"run_daily.sh reassigns PATH at script scope: {line!r}. A "
+            f"compromised npm dependency shipping a bin named `git` or "
+            f"`gh` would then execute in later steps with the full "
+            f"systemd-injected token environment."
+        )
+
+
 def _required_commands(body: str) -> tuple[str, ...]:
     marker = "for cmd in "
-    start = body.index(marker) + len(marker)
-    end = body.index(";", start)
+    start = _anchor(body, marker) + len(marker)
+    end = _anchor(body, ";", start)
     return tuple(body[start:end].split())

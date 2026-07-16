@@ -208,10 +208,10 @@ env -i \
   TMPDIR="${TMPDIR:-/tmp}" \
   npm install --prefix "${CLAUDE_CLI_PREFIX}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
   || die "npm install of @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} failed"
-PATH="${CLAUDE_CLI_PREFIX}/node_modules/.bin:${PATH}"
+CLAUDE_CLI_BIN="${CLAUDE_CLI_PREFIX}/node_modules/.bin"
 
 PROBED_CLAUDE_VERSION="$(env -i \
-  PATH="${PATH}" \
+  PATH="${CLAUDE_CLI_BIN}:${PATH}" \
   HOME="${CLAUDE_PROBE_HOME}" \
   USER="${USER:-mateo}" \
   TERM="${TERM:-dumb}" \
@@ -422,7 +422,7 @@ set +e
 (
   cd "${WORKTREE}" \
     && env -i \
-       PATH="${PATH}" \
+       PATH="${CLAUDE_CLI_BIN}:${PATH}" \
        HOME="${HOME}" \
        USER="${USER:-mateo}" \
        TERM="${TERM:-dumb}" \
