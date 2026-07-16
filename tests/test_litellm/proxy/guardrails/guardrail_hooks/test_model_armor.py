@@ -2376,6 +2376,134 @@ async def test_pre_call_blocks_when_attachment_count_exceeds_cap():
 
 
 @pytest.mark.asyncio
+async def test_over_cap_scans_all_attachments_when_fail_open():
+    """fail_on_error=False must scan every attachment over the cap, never silently drop the overflow."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+        MAX_FILE_ATTACHMENTS_PER_REQUEST,
+    )
+
+    guardrail = _make_guardrail(fail_on_error=False)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    over_cap = MAX_FILE_ATTACHMENTS_PER_REQUEST + 1
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block] * over_cap}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    mock_post = AsyncMock(return_value=_armor_response(blocked=False))
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert len(_byte_items_sent(mock_post)) == over_cap
+
+
+@pytest.mark.asyncio
+async def test_configurable_max_file_attachments_raises_cap():
+    """A raised max_file_attachments lets a request that exceeds the default cap scan every attachment."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+        MAX_FILE_ATTACHMENTS_PER_REQUEST,
+    )
+
+    count = MAX_FILE_ATTACHMENTS_PER_REQUEST + 2
+    guardrail = _make_guardrail(max_file_attachments=count)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block] * count}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    mock_post = AsyncMock(return_value=_armor_response(blocked=False))
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert len(_byte_items_sent(mock_post)) == count
+
+
+@pytest.mark.asyncio
+async def test_configurable_max_file_attachments_lowers_cap_blocks():
+    """A lowered max_file_attachments blocks a request that would pass under the default cap."""
+    guardrail = _make_guardrail(max_file_attachments=2)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block] * 3}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "per-request scan limit of 2" in str(exc_info.value.detail)
+
+
+def test_initialize_guardrail_forwards_max_file_attachments():
+    """max_file_attachments configured in litellm_params reaches the guardrail instance."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+        max_file_attachments=25,
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor"),
+    )
+
+    assert guardrail.optional_params.get("max_file_attachments") == 25
+    assert guardrail._max_file_attachments() == 25
+
+
+def test_max_file_attachments_defaults_to_constant_when_unset():
+    """Omitting max_file_attachments keeps the default per-request cap."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+        MAX_FILE_ATTACHMENTS_PER_REQUEST,
+    )
+
+    guardrail = _make_guardrail()
+
+    assert guardrail._max_file_attachments() == MAX_FILE_ATTACHMENTS_PER_REQUEST
+
+
+@pytest.mark.asyncio
 async def test_file_scan_error_isolated_when_fail_open():
     """A transient error on one attachment does not skip the remaining attachments (fail_on_error=False)."""
     guardrail = _make_guardrail(fail_on_error=False)
