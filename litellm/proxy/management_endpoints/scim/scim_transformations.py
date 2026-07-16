@@ -1,5 +1,8 @@
-from typing import List, Union
+from typing import Callable, List, TypeVar, Union
 
+from pydantic import ValidationError
+
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -8,6 +11,8 @@ from litellm.proxy._types import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
+
+T = TypeVar("T")
 
 
 class ScimTransformations:
@@ -47,16 +52,18 @@ class ScimTransformations:
         active = True if scim_active is None else bool(scim_active)
 
         schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
-        enterprise_user = None
-        if metadata.get(SCIM_ENTERPRISE_METADATA_KEY):
-            enterprise_user = SCIMEnterpriseUser.model_validate(metadata[SCIM_ENTERPRISE_METADATA_KEY])
+        enterprise_user = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTERPRISE_METADATA_KEY, SCIMEnterpriseUser.model_validate
+        )
+        if enterprise_user is not None:
             schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
 
-        raw_entitlements = metadata.get(SCIM_ENTITLEMENTS_METADATA_KEY)
-        entitlements = SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python(raw_entitlements) if raw_entitlements else None
-
-        raw_roles = metadata.get(SCIM_ROLES_METADATA_KEY)
-        roles = SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python(raw_roles) if raw_roles else None
+        entitlements = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+        roles = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
 
         return SCIMUser(
             schemas=schemas,
@@ -79,6 +86,31 @@ class ScimTransformations:
                 "lastModified": user_updated_at,
             },
         )
+
+    @staticmethod
+    def _parse_directory_metadata(
+        user: Union[LiteLLM_UserTable, NewUserResponse],
+        key: str,
+        validate: Callable[[object], T],
+    ) -> T | None:
+        """A SCIM directory attribute parsed from user metadata, or None when absent or malformed.
+
+        Metadata is writable outside the SCIM surface, so a malformed value on one user must not
+        fail the whole directory response; the attribute is omitted and the corruption logged.
+        """
+        metadata = user.metadata or {}
+        raw = metadata.get(key)
+        if not raw:
+            return None
+        try:
+            return validate(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Skipping malformed %s metadata on user %s in SCIM response",
+                key,
+                user.user_id,
+            )
+            return None
 
     @staticmethod
     def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:

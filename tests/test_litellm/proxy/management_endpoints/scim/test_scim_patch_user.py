@@ -431,3 +431,37 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
         _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="add", path="entitlements")]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+
+    assert exc_info.value.status_code == 400
+    assert "value" in str(exc_info.value.detail)
+
+
+def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
+    """A filtered path must fail loudly rather than fall through to the generic
+    handler, which would write a junk metadata key while reporting success"""
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="remove", path='roles[value eq "engineering-admin"]'
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(
+            existing_user=_user_with_metadata(
+                {"scim_roles": [{"value": "engineering-admin"}]}
+            ),
+            patch_ops=patch_ops,
+        )
+
+    assert exc_info.value.status_code == 400
