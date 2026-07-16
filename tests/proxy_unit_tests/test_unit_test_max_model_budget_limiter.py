@@ -160,6 +160,153 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
         assert call_kwargs["response_cost"] == 0.05
 
 
+@pytest.mark.asyncio
+async def test_async_log_success_event_virtual_key_start_time_key_is_per_model_and_duration(
+    budget_limiter,
+):
+    """
+    Regression for #33326: the budget-window start_time_key must include the
+    model and budget_duration, just like the spend_key. Otherwise every
+    per-model window for a virtual key shares one start time, so resetting one
+    model's window (or a model with a different duration) resets the others.
+    """
+    virtual_key = "test-key-hash"
+    model = "gpt-4"
+    budget_duration = "1d"
+    user_api_key_model_max_budget = {
+        model: {"budget_limit": 100.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.05,
+            "model": model,
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": user_api_key_model_max_budget
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        start_time_key = mock_increment.call_args.kwargs["start_time_key"]
+        assert start_time_key == (
+            f"virtual_key_budget_start_time:{virtual_key}:{model}:{budget_duration}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_end_user_start_time_key_is_per_model_and_duration(
+    budget_limiter,
+):
+    """
+    Regression for #33326: end-user budget-window start_time_key must also
+    include the model and budget_duration so per-model windows stay independent.
+    """
+    end_user_id = "test-user"
+    model = "gpt-4"
+    budget_duration = "1d"
+    user_api_key_end_user_model_max_budget = {
+        model: {"budget_limit": 100.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.05,
+            "model": model,
+            "end_user": end_user_id,
+            "metadata": {"user_api_key_end_user_id": end_user_id},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_end_user_model_max_budget": user_api_key_end_user_model_max_budget
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        start_time_key = mock_increment.call_args.kwargs["start_time_key"]
+        assert start_time_key == (
+            f"end_user_budget_start_time:{end_user_id}:{model}:{budget_duration}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_expired_window_for_one_model_does_not_reset_another_models_window(
+    budget_limiter,
+):
+    """
+    Regression for #33326: exercise the real increment/reset logic (no mock)
+    to prove per-model windows are isolated. Model A's window is expired while
+    model B's is fresh; logging spend on A must reset only A's start time and
+    spend, leaving B's untouched.
+    """
+    import time
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    virtual_key = "vk-hash"
+    duration = "1d"
+    ttl = 86400  # 1d in seconds
+    now = time.time()
+
+    a_start_key = f"virtual_key_budget_start_time:{virtual_key}:model-a:{duration}"
+    a_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:model-a:{duration}"
+    b_start_key = f"virtual_key_budget_start_time:{virtual_key}:model-b:{duration}"
+    b_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:model-b:{duration}"
+
+    # model-a window expired (started > ttl ago), model-b window fresh
+    expired_start = now - ttl - 100
+    fresh_start = now - 10
+    await budget_limiter.dual_cache.async_set_cache(a_start_key, expired_start)
+    await budget_limiter.dual_cache.async_set_cache(a_spend_key, 99.0)
+    await budget_limiter.dual_cache.async_set_cache(b_start_key, fresh_start)
+    await budget_limiter.dual_cache.async_set_cache(b_spend_key, 40.0)
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 1.0,
+            "model": "model-a",
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {
+                    "model-a": {"budget_limit": 100.0, "time_period": duration},
+                    "model-b": {"budget_limit": 100.0, "time_period": duration},
+                },
+            },
+        },
+    }
+    await budget_limiter.async_log_success_event(
+        kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    # model-a window reset: spend replaced with just this request's cost
+    assert await budget_limiter.dual_cache.async_get_cache(a_spend_key) == 1.0
+    assert await budget_limiter.dual_cache.async_get_cache(a_start_key) > expired_start
+
+    # model-b window untouched
+    assert await budget_limiter.dual_cache.async_get_cache(b_spend_key) == 40.0
+    assert await budget_limiter.dual_cache.async_get_cache(b_start_key) == fresh_start
+
+
 # Test is_end_user_within_model_budget
 @pytest.mark.asyncio
 async def test_is_end_user_within_model_budget(budget_limiter):
