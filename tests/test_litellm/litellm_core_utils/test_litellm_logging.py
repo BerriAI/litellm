@@ -946,11 +946,24 @@ async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
     """An async entrypoint that internally invokes a sync @client function with the
     shared logging object (e.g. agenerate_content delegating to generate_content) must
     keep is_async_entrypoint=True; the inner sync wrapper must not overwrite the
-    entrypoint's stamp. Regression guard for LIT-4475 (gemini /generate_content kept
+    entrypoint's stamp, and the nested request must reach a CustomLogger exactly once,
+    via the async hook. Regression guard for LIT-4475 (gemini /generate_content kept
     double-logging because the inner sync wrapper flipped the bit back to sync)."""
+    from litellm.litellm_core_utils.thread_pool_executor import executor
     from litellm.utils import client
 
     observed = {}
+    events = []
+
+    class Rec(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("sync")
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("async")
+
+    def _gate_opener(kwargs, completion_response, start_time, end_time):
+        pass
 
     @client
     def fake_inner_sync(model: str, messages=None, **kwargs):
@@ -967,9 +980,24 @@ async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
         observed["outer_bit_after_inner"] = kwargs["litellm_logging_obj"].is_async_entrypoint
         return result
 
-    await fake_outer_async(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+    rec = Rec()
+    original_success = litellm.success_callback
+    original_async = litellm._async_success_callback
+    litellm.success_callback = [rec, _gate_opener]
+    litellm._async_success_callback = [rec]
+    try:
+        await fake_outer_async(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+        for _ in range(50):
+            if events:
+                break
+            await asyncio.sleep(0.1)
+        executor.submit(lambda: None).result()
+    finally:
+        litellm.success_callback = original_success
+        litellm._async_success_callback = original_async
 
     assert observed == {"inner_bit": True, "outer_bit_after_inner": True}
+    assert events == ["async"]
 
     fake_inner_sync(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
 
