@@ -78,7 +78,7 @@ class TestPollingErrorSurfacing:
             result = CliRunner().invoke(login, obj=mock_context.obj)
 
         assert result.exit_code == 0
-        assert "❌ Authentication failed:" in result.output
+        assert "Authentication failed:" in result.output
         assert "CLI login session not found or expired." in result.output
         assert "Authentication timed out" not in result.output
 
@@ -414,7 +414,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
             assert "Automatically assigned to team: team-1" in result.output
 
             # Verify browser was opened with correct URL
@@ -456,7 +456,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_http_error(self):
         """Test login with HTTP error"""
@@ -476,7 +476,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_request_exception(self):
         """Test login with request exception"""
@@ -497,7 +497,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_keyboard_interrupt(self):
         """Test login cancelled by user"""
@@ -512,7 +512,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication cancelled by user" in result.output
+            assert "Authentication cancelled by user" in result.output
 
     def test_login_no_api_key_in_response(self):
         """Test login when response doesn't contain API key"""
@@ -536,7 +536,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_general_exception(self):
         """Test login with general exception (not requests exception)"""
@@ -551,7 +551,7 @@ class TestLoginCommand:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication failed: Invalid value" in result.output
+            assert "Authentication failed: Invalid value" in result.output
 
 
 class TestLogoutCommand:
@@ -567,7 +567,7 @@ class TestLogoutCommand:
             result = self.runner.invoke(logout)
 
             assert result.exit_code == 0
-            assert "✅ Logged out successfully" in result.output
+            assert "Logged out successfully" in result.output
             mock_clear.assert_called_once()
 
 
@@ -591,7 +591,7 @@ class TestWhoamiCommand:
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
+            assert "Authenticated" in result.output
             assert "test@example.com" in result.output
             assert "test-user-123" in result.output
             assert "admin" in result.output
@@ -603,7 +603,7 @@ class TestWhoamiCommand:
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "❌ Not authenticated" in result.output
+            assert "Not authenticated" in result.output
             assert "Run 'lite login'" in result.output
 
     def test_whoami_old_token(self):
@@ -619,8 +619,8 @@ class TestWhoamiCommand:
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
-            assert "⚠️ Warning: Token is more than 24 hours old" in result.output
+            assert "Authenticated" in result.output
+            assert "Warning: Token is more than 24 hours old" in result.output
 
     def test_whoami_missing_fields(self):
         """Test whoami with token missing some fields"""
@@ -633,7 +633,7 @@ class TestWhoamiCommand:
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
+            assert "Authenticated" in result.output
             assert "Unknown" in result.output  # Should show "Unknown" for missing fields
 
     def test_whoami_no_timestamp(self):
@@ -655,7 +655,7 @@ class TestWhoamiCommand:
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
+            assert "Authenticated" in result.output
             # Should calculate age based on timestamp=0
             assert "Token age:" in result.output
 
@@ -714,7 +714,7 @@ class TestCLIKeyRegenerationFlow:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
             assert "team-beta" in result.output
             # Ensure we surface the human-readable team alias to the user
             assert "Beta Team" in result.output
@@ -774,7 +774,7 @@ class TestCLIKeyRegenerationFlow:
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
 
             # Verify browser was opened
             mock_browser.assert_called_once()
