@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - litellm_internal_staging
   pull_request:
     branches:
       - main
+      - litellm_internal_staging
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:

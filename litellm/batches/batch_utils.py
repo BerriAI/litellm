@@ -364,7 +364,7 @@ def _count_entry_tokens(
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
-    model_name: str | None = None,
+    model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
