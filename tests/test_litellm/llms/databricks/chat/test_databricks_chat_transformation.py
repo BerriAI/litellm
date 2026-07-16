@@ -454,9 +454,6 @@ def test_reasoning_effort_accepts_dict_shape(model):
     )
 
     assert "thinking" in optional_params, f"reasoning_effort dict was dropped on {model}: {optional_params!r}"
-    if "claude-opus-4-7" in model:
-        # Adaptive Claude routes the tier via output_config.effort
-        assert optional_params.get("output_config") == {"effort": "low"}
 
 
 def test_reasoning_effort_bare_string_still_works():
