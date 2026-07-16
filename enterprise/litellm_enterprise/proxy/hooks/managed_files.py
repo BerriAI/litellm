@@ -30,10 +30,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    decode_model_from_file_id,
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
+    get_original_file_id,
     normalize_mime_type_for_provider,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
@@ -165,7 +167,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_object_id: str,
         file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
+        update_only: bool = False,
     ) -> None:
+        """Persist a managed object row.
+
+        With ``update_only=True`` an existing row is refreshed but a missing
+        row is NOT created: sync operations (retrieve/cancel) must never mint
+        an ownership row attributed to whoever happened to call them first.
+        """
         verbose_logger.info(
             f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache"
         )
@@ -175,6 +184,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             file_purpose=file_purpose,
             file_object=file_object,
         )
+
+        if update_only:
+            updated_count = (
+                await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                    where={"unified_object_id": unified_object_id},
+                    data={
+                        "file_object": file_object.model_dump_json(),
+                        "status": file_object.status,
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            )
+            if updated_count == 0:
+                return
+            await self.internal_usage_cache.async_set_cache(
+                key=unified_object_id,
+                value=litellm_managed_object.model_dump(),
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
+            return
+
         await self.internal_usage_cache.async_set_cache(
             key=unified_object_id,
             value=litellm_managed_object.model_dump(),
@@ -283,6 +313,103 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             status_code=404,
             detail=f"Object not found: {unified_object_id}",
         )
+
+    async def enforce_batch_object_access(
+        self, object_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """Deny access to a provider-format batch id owned by another caller.
+
+        Ids with no ownership row (batches created before ownership tracking,
+        or directly on the provider account) stay accessible so pass-through
+        reads keep working.
+        """
+        if self.prisma_client is None:
+            return
+        managed_object = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": object_id}
+            )
+        )
+        if managed_object is None:
+            return
+        if not can_access_resource(
+            user_api_key_dict=user_api_key_dict,
+            created_by=managed_object.created_by,
+            resource_team_id=managed_object.team_id,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the object {object_id}",
+            )
+
+    async def enforce_provider_file_access(
+        self, file_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """Deny access to a provider-format file id owned by another caller.
+
+        Ownership rows for provider-format ids are written when a managed
+        batch's output/error files are first synced; ids with no row stay
+        accessible so pass-through reads keep working.
+        """
+        if self.prisma_client is None:
+            return
+        managed_file = (
+            await self.prisma_client.db.litellm_managedfiletable.find_first(
+                where={"unified_file_id": file_id}
+            )
+        )
+        if managed_file is None:
+            return
+        if not can_access_resource(
+            user_api_key_dict=user_api_key_dict,
+            created_by=managed_file.created_by,
+            resource_team_id=managed_file.team_id,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
+
+    async def store_batch_output_file_ownership(
+        self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
+    ) -> None:
+        """Record ownership rows for a batch's provider-format output/error
+        file ids, inherited from the owning batch row (never the caller), so
+        file reads can be isolation-checked."""
+        provider_file_ids = tuple(
+            file_id
+            for file_id in (
+                getattr(response, "output_file_id", None),
+                getattr(response, "error_file_id", None),
+            )
+            if file_id and not _is_base64_encoded_unified_file_id(file_id)
+        )
+        if not provider_file_ids:
+            return
+        if self.prisma_client is None:
+            return
+        batch_row = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": response.id}
+            )
+        )
+        if batch_row is None or (
+            batch_row.created_by is None and batch_row.team_id is None
+        ):
+            return
+        owner_identity = UserAPIKeyAuth(
+            user_id=batch_row.created_by, team_id=batch_row.team_id
+        )
+        for file_id in provider_file_ids:
+            model_name = decode_model_from_file_id(file_id)
+            raw_file_id = get_original_file_id(file_id)
+            await self.store_unified_file_id(
+                file_id=file_id,
+                file_object=None,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                model_mappings={model_name: raw_file_id} if model_name else {},
+                user_api_key_dict=owner_identity,
+            )
 
     async def list_user_batches(
         self,
@@ -397,6 +524,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     status_code=403,
                     detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
                 )
+        if retrieve_file_id:
+            await self.enforce_provider_file_access(
+                retrieve_file_id, user_api_key_dict
+            )
         return False
 
     async def check_file_ids_access(
@@ -579,6 +710,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data["model"] = potential_model_id
                 data[accessor_key] = get_batch_id_from_unified_batch_id(
                     potential_llm_object_id
+                )
+            elif retrieve_object_id and accessor_key == "batch_id":
+                await self.enforce_batch_object_access(
+                    retrieve_object_id, user_api_key_dict
                 )
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             input_file_id = cast(Optional[str], data.get("training_file"))
@@ -1183,6 +1318,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
+            is_batch_create = "completion_window" in data or "input_file_id" in data
             await self.store_unified_object_id(
                 unified_object_id=response.id,
                 file_object=response,
@@ -1190,7 +1326,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_object_id=original_response_id,
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
+                update_only=not is_batch_create,
             )
+            if not is_batch_create:
+                await self.store_batch_output_file_ownership(
+                    response=response,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
 
             # Only record batch creation metric on actual create (not retrieve/cancel).
             # unified_file_id in _hidden_params is only set by the create_batch endpoint.
