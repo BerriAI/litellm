@@ -491,6 +491,16 @@ async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
 
     result = await mock_prisma.get_all_latest_health_checks()
 
+    mock_prisma.db.litellm_healthchecktable.find_many.assert_awaited_once_with(
+        distinct=["model_id", "model_name"],
+        order=[
+            {"model_id": "asc"},
+            {"model_name": "asc"},
+            {"checked_at": "desc"},
+            {"health_check_id": "desc"},
+        ],
+    )
+
     # Should return 2 unique models (by model_id)
     assert len(result) == 2
 

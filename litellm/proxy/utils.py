@@ -4689,8 +4689,9 @@ class PrismaClient:
         """
         Get the latest health check for each model.
 
-        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
-        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
+        Uses DB-level DISTINCT ON (model_id, model_name) with deterministic
+        checked_at/health_check_id ordering (via Prisma ``distinct`` + ``order``)
+        so we never load the full history into memory.
         """
         try:
             return await self.db.litellm_healthchecktable.find_many(
@@ -4699,6 +4700,7 @@ class PrismaClient:
                     {"model_id": "asc"},
                     {"model_name": "asc"},
                     {"checked_at": "desc"},
+                    {"health_check_id": "desc"},
                 ],
             )
         except Exception as e:
