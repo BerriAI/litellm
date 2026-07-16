@@ -288,15 +288,33 @@ class TestVertexAIVideoConfig:
         assert "resolution" not in mapped
 
     @pytest.mark.parametrize(
-        ("size", "expected_resolution"),
-        (("1280x720", "720p"), ("1920x1080", "1080p")),
+        ("model", "size", "expected_resolution"),
+        (
+            (VEO_31_LITE_VERTEX_MODEL, "1280x720", "720p"),
+            (
+                VEO_31_LITE_VERTEX_MODEL.removeprefix("vertex_ai/"),
+                "1920x1080",
+                "1080p",
+            ),
+        ),
     )
-    def test_map_openai_size_to_resolution_for_veo_3(
-        self, size: str, expected_resolution: str
+    def test_map_openai_size_to_resolution_for_resolution_tier_model(
+        self,
+        model: str,
+        size: str,
+        expected_resolution: str,
+        monkeypatch: pytest.MonkeyPatch,
     ):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        monkeypatch.setitem(
+            litellm.model_cost,
+            VEO_31_LITE_VERTEX_MODEL,
+            dict(model_cost[VEO_31_LITE_VERTEX_MODEL]),
+        )
+
         mapped = self.config.map_openai_params(
             video_create_optional_params={"size": size},
-            model=VEO_31_LITE_VERTEX_MODEL,
+            model=model,
             drop_params=False,
         )
 
@@ -307,6 +325,23 @@ class TestVertexAIVideoConfig:
         mapped = self.config.map_openai_params(
             video_create_optional_params={"size": "1920x1080"},
             model="vertex_ai/veo-2.0-generate-001",
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+
+    def test_map_openai_size_does_not_infer_resolution_for_existing_veo_3(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        model = "veo-3.1-generate-001"
+        model_key = f"vertex_ai/{model}"
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        monkeypatch.setitem(litellm.model_cost, model_key, dict(model_cost[model_key]))
+
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": "1920x1080"},
+            model=model,
             drop_params=False,
         )
 
