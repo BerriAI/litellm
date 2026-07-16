@@ -659,7 +659,16 @@ def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
 
 
 def test_abbreviate_api_key():
-    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
+    assert abbreviate_api_key("sk-test-1234-abcdefgh") == "sk-...efgh"
+    assert abbreviate_api_key("sk-abcdefghijklm") == "sk-...jklm"
+
+
+def test_abbreviate_api_key_short_key_is_fully_masked():
+    """Regression test for LIT-4355: for keys shorter than the enforced minimum,
+    showing the last 4 characters can reveal the entire key (sk-1234 -> sk-...1234)."""
+    assert abbreviate_api_key("sk-1234") == "sk-..."
+    assert abbreviate_api_key("sk-test-1234") == "sk-..."
+    assert abbreviate_api_key("") == "sk-..."
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():

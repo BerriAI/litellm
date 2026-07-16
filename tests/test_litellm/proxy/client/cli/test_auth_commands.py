@@ -797,14 +797,18 @@ class TestPrintTokenCommand:
     verbatim as the bearer token, so any diagnostic text on stdout would
     corrupt authentication.
 
-    apiKeyHelper is configured as a bare command (managed-settings.json sets
-    just `"apiKeyHelper": "lite auth print-token"`, no --base-url flag) --
-    so in the common case ctx.obj has no explicit base_url at all, and the
-    command must resolve the server from whatever `lite login` stored in
-    token.json, not from a CLI default. `--base-url`/`LITELLM_PROXY_URL`
-    only matters when a caller explicitly overrides it (tracked via
-    ctx.obj["base_url_explicit"], set by the `cli` group from
-    click's ParameterSource).
+    `lite up` now writes `apiKeyHelper` with an explicit `--base-url` bound
+    to whatever proxy it was pointed at (resolve_api_key_helper), so
+    print-token enforces that the cached token was actually issued for that
+    server -- a token minted for a different, previously-logged-into proxy
+    must never be handed to whichever server the helper is invoked for.
+    Settings patched by an older `lite up`, or a manually-configured
+    apiKeyHelper, can still invoke this bare (no --base-url at all); that
+    case falls back to trusting whatever `lite login` stored in token.json,
+    since there is no explicit target to check it against. `--base-url`/
+    `LITELLM_PROXY_URL` only enforces the match when a caller explicitly
+    passes it (tracked via ctx.obj["base_url_explicit"], set by the `cli`
+    group from click's ParameterSource).
     """
 
     def setup_method(self):
@@ -818,8 +822,9 @@ class TestPrintTokenCommand:
         assert "Not authenticated" in result.output
 
     def test_bare_invocation_resolves_server_from_stored_token(self):
-        """The apiKeyHelper's real invocation shape: no --base-url given at
-        all. Must use token.json's own base_url, not a hardcoded default."""
+        """The legacy/manual invocation shape: no --base-url given at all
+        (e.g. settings patched before resolve_api_key_helper started binding
+        one). Must use token.json's own base_url, not a hardcoded default."""
         with (
             patch(
                 "litellm.proxy.client.cli.commands.auth.load_token",
@@ -839,7 +844,10 @@ class TestPrintTokenCommand:
 
     def test_explicit_base_url_mismatch_fails_cleanly(self):
         """When the caller *does* explicitly pass --base-url, a token issued
-        for a different server must never be printed."""
+        for a different server must never be printed. This is the exact
+        scenario `lite up`'s own bound --base-url now guards against: a
+        token minted for proxy A must not reach a helper invocation aimed
+        at proxy B, even though the token itself is otherwise fresh."""
         with patch(
             "litellm.proxy.client.cli.commands.auth.load_token",
             return_value={
@@ -855,6 +863,25 @@ class TestPrintTokenCommand:
 
         assert result.exit_code != 0
         assert "sk-should-not-print" not in result.output
+
+    def test_explicit_base_url_match_prints_token(self):
+        """`lite up`'s own bound invocation shape: --base-url matching the token's origin
+        must succeed exactly like the bare/legacy invocation does."""
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_token",
+            return_value={
+                "base_url": "http://localhost:4000",
+                "key": "sk-matches",
+                "timestamp": time.time(),
+            },
+        ):
+            result = self.runner.invoke(
+                print_token,
+                obj={"base_url": "http://localhost:4000", "base_url_explicit": True},
+            )
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-matches"
 
     def test_fresh_cached_key_printed_without_network_call(self):
         """A recently-issued key should be printed straight from cache -- no
