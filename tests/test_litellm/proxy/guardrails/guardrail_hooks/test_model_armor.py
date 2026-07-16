@@ -2205,6 +2205,102 @@ async def test_pre_call_file_id_reference_skipped_when_fail_open():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_file_id_reference_passthrough_when_skip_unscannable_enabled():
+    """skip_unscannable_attachments lets a file_id reference through even with fail_on_error=True."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+    assert _text_payloads_sent(mock_post) == ["summarize this"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_gs_uri_reference_passthrough_when_skip_unscannable_enabled():
+    """A gs:// document reference passes through when skip_unscannable_attachments is enabled."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"file_data": "gs://my-bucket/report.pdf", "filename": "report.pdf"},
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+
+
+@pytest.mark.asyncio
+async def test_skip_unscannable_still_fails_closed_on_api_error():
+    """skip_unscannable_attachments only affects references; a real API error still fails closed."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True, fail_on_error=True)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(side_effect=Exception("model armor upstream 500")),
+    ):
+        with pytest.raises(Exception) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert "model armor upstream 500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_pre_call_blocks_when_attachment_count_exceeds_cap():
     """More attachments than the per-request cap fail closed by default to bound scan fan-out."""
     from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
