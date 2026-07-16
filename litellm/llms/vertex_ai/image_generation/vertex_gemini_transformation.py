@@ -328,9 +328,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 raise_if_image_gen_flagged,
             )
 
-            raise_if_image_gen_flagged(
-                response_data, model, raw_response, llm_provider="vertex_ai"
-            )
+            raise_if_image_gen_flagged(response_data, model, raw_response, llm_provider="vertex_ai")
 
         if usage_metadata := response_data.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(usage_metadata)

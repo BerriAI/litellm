@@ -443,21 +443,15 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert result.usage.web_search_requests == 2
 
-    @pytest.mark.parametrize(
-        "finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"]
-    )
-    def test_transform_image_generation_response_raises_on_safety_block(
-        self, finish_reason
-    ):
+    @pytest.mark.parametrize("finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"])
+    def test_transform_image_generation_response_raises_on_safety_block(self, finish_reason):
         """A safety/prohibited block returns a candidate with finishReason and no
         inlineData; it must raise ContentPolicyViolationError, not return empty data."""
         from litellm.exceptions import ContentPolicyViolationError
 
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]
-        }
+        mock_response.json.return_value = {"candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]}
         mock_response.headers = {}
 
         from litellm.types.utils import ImageResponse

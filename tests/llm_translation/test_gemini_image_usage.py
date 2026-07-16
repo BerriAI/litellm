@@ -1,7 +1,7 @@
 """
 Test for Gemini image generation usage metadata extraction.
 
-This test verifies the fix for issue #18323 where image_generation() 
+This test verifies the fix for issue #18323 where image_generation()
 was returning usage=0 while completion() returned proper token usage.
 """
 
@@ -57,9 +57,7 @@ def test_gemini_image_generation_usage_metadata(model_name: str):
         },
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         # Mock successful HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_data
@@ -87,56 +85,38 @@ def test_gemini_image_generation_usage_metadata(model_name: str):
         # but it should still have the ImageUsage fields (input_tokens, output_tokens, etc.)
 
         # Validate token counts match the mock response
-        assert hasattr(
-            response.usage, "input_tokens"
-        ), "Usage should have input_tokens attribute"
-        assert hasattr(
-            response.usage, "output_tokens"
-        ), "Usage should have output_tokens attribute"
-        assert hasattr(
-            response.usage, "total_tokens"
-        ), "Usage should have total_tokens attribute"
+        assert hasattr(response.usage, "input_tokens"), "Usage should have input_tokens attribute"
+        assert hasattr(response.usage, "output_tokens"), "Usage should have output_tokens attribute"
+        assert hasattr(response.usage, "total_tokens"), "Usage should have total_tokens attribute"
 
-        assert (
-            response.usage.input_tokens == 35
-        ), f"Expected input_tokens=35, got {response.usage.input_tokens}"
-        assert (
-            response.usage.output_tokens == 1716
-        ), f"Expected output_tokens=1716, got {response.usage.output_tokens}"
-        assert (
-            response.usage.total_tokens == 1751
-        ), f"Expected total_tokens=1751, got {response.usage.total_tokens}"
+        assert response.usage.input_tokens == 35, f"Expected input_tokens=35, got {response.usage.input_tokens}"
+        assert response.usage.output_tokens == 1716, f"Expected output_tokens=1716, got {response.usage.output_tokens}"
+        assert response.usage.total_tokens == 1751, f"Expected total_tokens=1751, got {response.usage.total_tokens}"
 
         # Validate input tokens details
-        assert hasattr(
-            response.usage, "input_tokens_details"
-        ), "Usage should have input_tokens_details attribute"
-        assert (
-            response.usage.input_tokens_details is not None
-        ), "Input tokens details should not be None"
+        assert hasattr(response.usage, "input_tokens_details"), "Usage should have input_tokens_details attribute"
+        assert response.usage.input_tokens_details is not None, "Input tokens details should not be None"
 
         # input_tokens_details might be a dict or an object
         if isinstance(response.usage.input_tokens_details, dict):
-            assert (
-                response.usage.input_tokens_details["text_tokens"] == 35
-            ), f"Expected text_tokens=35, got {response.usage.input_tokens_details['text_tokens']}"
-            assert (
-                response.usage.input_tokens_details["image_tokens"] == 0
-            ), f"Expected image_tokens=0, got {response.usage.input_tokens_details['image_tokens']}"
+            assert response.usage.input_tokens_details["text_tokens"] == 35, (
+                f"Expected text_tokens=35, got {response.usage.input_tokens_details['text_tokens']}"
+            )
+            assert response.usage.input_tokens_details["image_tokens"] == 0, (
+                f"Expected image_tokens=0, got {response.usage.input_tokens_details['image_tokens']}"
+            )
         else:
-            assert (
-                response.usage.input_tokens_details.text_tokens == 35
-            ), f"Expected text_tokens=35, got {response.usage.input_tokens_details.text_tokens}"
-            assert (
-                response.usage.input_tokens_details.image_tokens == 0
-            ), f"Expected image_tokens=0, got {response.usage.input_tokens_details.image_tokens}"
+            assert response.usage.input_tokens_details.text_tokens == 35, (
+                f"Expected text_tokens=35, got {response.usage.input_tokens_details.text_tokens}"
+            )
+            assert response.usage.input_tokens_details.image_tokens == 0, (
+                f"Expected image_tokens=0, got {response.usage.input_tokens_details.image_tokens}"
+            )
 
         # Verify the usage is not all zeros (the bug we're fixing)
         assert response.usage.total_tokens > 0, "Total tokens should be greater than 0"
         assert response.usage.input_tokens > 0, "Input tokens should be greater than 0"
-        assert (
-            response.usage.output_tokens > 0
-        ), "Output tokens should be greater than 0"
+        assert response.usage.output_tokens > 0, "Output tokens should be greater than 0"
 
 
 def test_gemini_image_generation_without_usage_metadata():
@@ -162,9 +142,7 @@ def test_gemini_image_generation_without_usage_metadata():
         ]
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         # Mock successful HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_data
@@ -197,13 +175,9 @@ def test_gemini_imagen_models_no_usage_extraction():
     """
 
     # Mock response data for Imagen models (different format)
-    mock_response_data = {
-        "predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]
-    }
+    mock_response_data = {"predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]}
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         # Mock successful HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_data
@@ -267,9 +241,7 @@ def test_gemini_image_generation_accumulates_multiple_image_prompt_token_details
         model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
         expected_image_tokens = 190
         expected_total_prompt_tokens = 200
-        expected_prompt_cost = (
-            expected_total_prompt_tokens * model_info["input_cost_per_token"]
-        )
+        expected_prompt_cost = expected_total_prompt_tokens * model_info["input_cost_per_token"]
 
         assert parsed_usage.input_tokens_details.image_tokens == expected_image_tokens
         assert parsed_usage.input_tokens_details.text_tokens == 10
@@ -282,9 +254,7 @@ def test_gemini_image_generation_accumulates_multiple_image_prompt_token_details
         litellm.model_cost = previous_model_cost
 
 
-@pytest.mark.parametrize(
-    "finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"]
-)
+@pytest.mark.parametrize("finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"])
 def test_gemini_image_generation_raises_on_safety_block(finish_reason):
     """A safety/prohibited block returns a candidate with finishReason and no
     inlineData; GoogleImageGenConfig must raise ContentPolicyViolationError, not
@@ -295,9 +265,7 @@ def test_gemini_image_generation_raises_on_safety_block(finish_reason):
 
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]
-    }
+    mock_response.json.return_value = {"candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]}
     mock_response.headers = {}
 
     config = GoogleImageGenConfig()
