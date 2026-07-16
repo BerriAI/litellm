@@ -146,26 +146,39 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     async def _get_shared_model_spend(self, cache_key: str) -> Optional[float]:
         """
-        Read the shared, cross-replica spend for a model budget cache key.
+        Read the cross-replica spend for a model budget cache key.
 
-        Redis-first so multi-replica admission decisions use the total spend
-        accumulated across all pods instead of a stale pod-local in-memory value
-        (DualCache.async_get_cache returns an in-memory hit before consulting
-        Redis). Falls back to the local in-memory value only when Redis is
-        unavailable.
+        Spend is tracked in two places: a pod-local in-memory counter (this
+        replica's own increments) and a shared Redis counter (the running total
+        flushed across every replica). Admission must not trust the pod-local
+        value alone, otherwise N replicas each admit off their own partial spend
+        and the combined spend blows past the cap (issue #33325).
+
+        Return the larger of the two so the cap is enforced against the true
+        accumulated spend: Redis dominates once other replicas have flushed,
+        while the local value still guards the window between this pod's own
+        increment and its next Redis flush. Redis failures (including an open
+        circuit breaker) degrade to the local value instead of failing the
+        request.
         """
-        if self.dual_cache.redis_cache is not None:
-            try:
-                result = await self.dual_cache.redis_cache.async_get_cache(key=cache_key)
-                return float(result) if result is not None else None
-            except Exception as e:  # noqa: BLE001  # redis (incl. open circuit breaker) failures are non-fatal; fall back to in-memory
-                verbose_proxy_logger.warning(
-                    "_PROXY_VirtualKeyModelMaxBudgetLimiter: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
-                )
+        local_spend = await self.dual_cache.async_get_cache(key=cache_key, local_only=True)
+        local_value = float(local_spend) if local_spend is not None else None
 
-        result = await self.dual_cache.async_get_cache(key=cache_key, local_only=True)
-        return float(result) if result is not None else None
+        if self.dual_cache.redis_cache is None:
+            return local_value
+
+        try:
+            redis_spend = await self.dual_cache.redis_cache.async_get_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # redis (incl. open circuit breaker) failures are non-fatal; fall back to in-memory
+            verbose_proxy_logger.warning(
+                "_PROXY_VirtualKeyModelMaxBudgetLimiter: Redis GET failed, falling back to in-memory: %s",
+                str(e),
+            )
+            return local_value
+
+        redis_value = float(redis_spend) if redis_spend is not None else None
+        candidates = tuple(value for value in (local_value, redis_value) if value is not None)
+        return max(candidates) if candidates else None
 
     async def _get_end_user_spend_for_model(
         self,

@@ -528,6 +528,67 @@ async def test_get_shared_model_spend_falls_back_to_in_memory_without_redis(
 
 
 @pytest.mark.asyncio
+async def test_get_shared_model_spend_falls_back_to_local_when_redis_key_missing():
+    """
+    Redis is attached but has not seen this key yet (e.g. this replica served
+    the only requests so far and its flush is still in flight). Admission must
+    fall back to the pod-local value instead of treating a Redis miss as zero
+    spend, otherwise a single replica stops enforcing its own budget the moment
+    Redis is wired in.
+    """
+    cache_key = "virtual_key_spend:test-key:gpt-4:1d"
+    dual_cache = DualCache()
+    dual_cache.redis_cache = _SharedRedisCache(store={})  # shared store has no entry
+    await dual_cache.in_memory_cache.async_set_cache(key=cache_key, value=7.0)
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+
+    assert await limiter._get_shared_model_spend(cache_key=cache_key) == 7.0
+    assert dual_cache.redis_cache.get_calls > 0
+
+
+@pytest.mark.asyncio
+async def test_get_shared_model_spend_returns_max_of_local_and_redis():
+    """
+    Local (this pod) and Redis (cross-replica total) can disagree. Admission
+    must enforce against the larger value so the cap holds whether the local
+    increment or another replica's flush is ahead.
+    """
+    cache_key = "virtual_key_spend:test-key:gpt-4:1d"
+
+    # Redis ahead of local (other replicas already flushed a higher total).
+    dual_cache = DualCache()
+    dual_cache.redis_cache = _SharedRedisCache(store={cache_key: 90.0})
+    await dual_cache.in_memory_cache.async_set_cache(key=cache_key, value=10.0)
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    assert await limiter._get_shared_model_spend(cache_key=cache_key) == 90.0
+
+    # Local ahead of Redis (this pod incremented but has not flushed yet).
+    dual_cache = DualCache()
+    dual_cache.redis_cache = _SharedRedisCache(store={cache_key: 10.0})
+    await dual_cache.in_memory_cache.async_set_cache(key=cache_key, value=90.0)
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    assert await limiter._get_shared_model_spend(cache_key=cache_key) == 90.0
+
+
+@pytest.mark.asyncio
+async def test_get_shared_model_spend_falls_back_to_local_when_redis_raises():
+    """A Redis failure (including an open circuit breaker) must degrade to the
+    local value rather than failing the admission check."""
+    cache_key = "virtual_key_spend:test-key:gpt-4:1d"
+
+    class _RaisingRedisCache:
+        async def async_get_cache(self, key, parent_otel_span=None, **kwargs):
+            raise ConnectionError("redis down")
+
+    dual_cache = DualCache()
+    dual_cache.redis_cache = _RaisingRedisCache()
+    await dual_cache.in_memory_cache.async_set_cache(key=cache_key, value=5.0)
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+
+    assert await limiter._get_shared_model_spend(cache_key=cache_key) == 5.0
+
+
+@pytest.mark.asyncio
 async def test_get_fallback_model_within_budget_returns_none_without_fallbacks(
     budget_limiter,
 ):
