@@ -4569,6 +4569,128 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
 
 
 @pytest.mark.asyncio
+async def test_spend_tracking_never_writes_the_auth_object_back():
+    """Spend tracking must never write the auth object back into the cache.
+
+    Writing the mutated auth object back after every priced request let a
+    stale copy be re-published with a fresh TTL: to shared Redis it defeated
+    /key/update and /key/delete across replicas, and even a local-only write
+    could race an invalidation and resurrect a revoked key on this worker.
+    Spend is tracked through the spend:key:* counters, so the auth object is
+    only ever written by the DB-load paths.
+    """
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    original_cache = litellm.proxy.proxy_server.user_api_key_cache
+    cache = UserApiKeyCache()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    try:
+        hashed_token = "spend-tracking-no-writeback-token"
+        await cache.async_set_cache(
+            key=hashed_token,
+            value=UserAPIKeyAuth(token=hashed_token, spend=1.0),
+            model_type=UserAPIKeyAuth,
+        )
+        with (
+            patch.object(
+                cache, "async_set_cache_pipeline", new=AsyncMock()
+            ) as mock_pipeline,
+            patch.object(cache, "async_set_cache", new=AsyncMock()) as mock_set,
+        ):
+            await litellm.proxy.proxy_server.update_cache(
+                token=hashed_token,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+            )
+            pending = [
+                t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.wait(pending, timeout=5)
+
+        key_pipeline_writes = [
+            call
+            for call in mock_pipeline.call_args_list
+            if any(k == hashed_token for k, _ in call.kwargs["cache_list"])
+        ]
+        assert key_pipeline_writes == []
+        mock_set.assert_not_called()
+    finally:
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_scalar_stays_shared():
+    """
+    The proxy-wide spend estimate must keep flowing to Redis when the spend
+    writeback goes per-pod: the global max_budget check reads the
+    ``{litellm_proxy_admin_name}:spend`` cache entry between authoritative DB
+    reloads, so keeping it pod-local would let traffic spread across replicas
+    exceed the proxy budget by roughly a factor of the replica count within a
+    cache TTL. Sharing this scalar is safe because it carries no limits or
+    permissions, so it cannot resurrect an invalidated auth blob.
+    """
+    from litellm.caching.caching import DualCache
+
+    admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
+    global_key = "{}:spend".format(admin_name)
+
+    async def fake_get(key, **kwargs):
+        if key == "user-lit":
+            return {"user_id": "user-lit", "spend": 1.0}
+        if key == global_key:
+            return 10.0
+        return None
+
+    original_cache = litellm.proxy.proxy_server.user_api_key_cache
+    cache = DualCache(default_in_memory_ttl=300)
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    try:
+        with patch.object(
+            cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)
+        ):
+            with patch.object(
+                cache, "async_set_cache_pipeline", new=AsyncMock()
+            ) as mock_set_cache:
+                await litellm.proxy.proxy_server.update_cache(
+                    token=None,
+                    user_id="user-lit",
+                    end_user_id=None,
+                    team_id=None,
+                    response_cost=5.0,
+                    parent_otel_span=None,
+                )
+
+                pending = [
+                    t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+                ]
+                if pending:
+                    await asyncio.wait(pending, timeout=5)
+
+                calls = mock_set_cache.await_args_list
+                local_keys = [
+                    k
+                    for c in calls
+                    if c.kwargs.get("local_only") is True
+                    for k, _ in c.kwargs["cache_list"]
+                ]
+                shared_keys = [
+                    k
+                    for c in calls
+                    if c.kwargs.get("local_only") is not True
+                    for k, _ in c.kwargs["cache_list"]
+                ]
+                assert "user-lit" in local_keys
+                assert global_key not in local_keys
+                assert shared_keys == [global_key]
+    finally:
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+
+
+@pytest.mark.asyncio
 async def test_init_sso_settings_in_db():
     """
     Test that _init_sso_settings_in_db properly loads SSO settings from database,
