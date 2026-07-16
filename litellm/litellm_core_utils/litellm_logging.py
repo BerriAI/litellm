@@ -344,6 +344,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
+        self.is_async_entrypoint: Optional[bool] = None
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
         self.function_id = function_id
@@ -1520,15 +1521,15 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
-    @staticmethod
-    def _is_sync_litellm_request(litellm_params: dict, call_type: Optional[str]) -> bool:
+    def _is_sync_litellm_request(self, litellm_params: dict) -> bool:
         """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.).
 
-        ``call_type`` marks async-only entrypoints that set no ``a*`` flag in
-        ``litellm_params``; ``anthropic_messages`` always classifies as async.
+        ``is_async_entrypoint`` is stamped by the ``@client`` wrapper that ran the request
+        and is authoritative; the ``a*`` flag heuristic covers logging objects constructed
+        outside ``@client`` (proxy passthrough endpoints, realtime, MCP).
         """
-        if call_type == CallTypes.anthropic_messages.value:
-            return False
+        if self.is_async_entrypoint is not None:
+            return not self.is_async_entrypoint
         return (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
             and litellm_params.get(CallTypes.aresponses.value, False) is not True
@@ -1579,7 +1580,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["has_dispatched_final_stream_success"] = True
 
         litellm_params = self.model_call_details.get("litellm_params", {}) or {}
-        sync_sdk = self._is_sync_litellm_request(litellm_params, call_type=self.call_type)
+        sync_sdk = self._is_sync_litellm_request(litellm_params)
         passthrough = self.call_type == CallTypes.pass_through.value
         if sync_sdk and not prefer_async_handlers and not passthrough:
             self.success_handler(
@@ -1973,7 +1974,7 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = self._is_sync_litellm_request(litellm_params, call_type=self.call_type)
+        is_sync_request = self._is_sync_litellm_request(litellm_params)
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -2764,7 +2765,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = self._is_sync_litellm_request(litellm_params, call_type=self.call_type)
+        is_sync_request = self._is_sync_litellm_request(litellm_params)
 
         try:
             start_time, end_time = self._failure_handler_helper_fn(
