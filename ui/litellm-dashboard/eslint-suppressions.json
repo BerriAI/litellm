@@ -950,19 +950,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/policy_table.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/policy_table.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/policy_test_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -995,11 +982,6 @@
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/projects/_components/ProjectsPage.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
@@ -1098,14 +1080,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
       "count": 3
@@ -1149,14 +1123,6 @@
     }
   },
   "src/app/(dashboard)/skills/_components/add_plugin_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/skills/_components/plugin_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -1320,11 +1286,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1448,22 +1409,6 @@
       "count": 1
     }
   },
-  "src/components/DeletedKeysPage/DeletedKeysTable/DeletedKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedTeamsPage/DeletedTeamsTable/DeletedTeamsTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/EntityUsageExport/ExportSummary.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1575,14 +1520,6 @@
   },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2141,11 +2078,6 @@
     }
   },
   "src/components/pass_through_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/pass_through_settings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }

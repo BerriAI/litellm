@@ -18,15 +18,14 @@ destination's own query API - never proxy-side "export succeeded" logs).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody, StreamingResponse, require_successful_call
+from e2e_http import NoBody
 from lifecycle import ResourceManager
-from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok
 from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
 
@@ -58,22 +57,6 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
         f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
     )
-
-
-def _first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
-    """First successful call on a fresh key. A fresh key may briefly 401 until
-    the data plane's auth cache picks it up, so retry on 401 to a deadline; a
-    401 is rejected before the LLM call so it exports no gen-AI span and cannot
-    contaminate the trace assertions. Any other failure is behavior under test
-    and fails hard."""
-    deadline = time.monotonic() + client.gateway.poll_timeout
-    while True:
-        outcome = send()
-        if outcome.ok:
-            return outcome
-        if outcome.status_code != 401 or time.monotonic() >= deadline:
-            require_successful_call(outcome)
-        time.sleep(client.gateway.poll_interval)
 
 
 def _parent_ids(span_id: str, trace: JaegerTrace) -> list[str]:
@@ -253,7 +236,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
@@ -286,7 +269,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
@@ -319,7 +302,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
         )
@@ -360,7 +343,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
         )
@@ -416,7 +399,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
         )
@@ -474,7 +457,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}", stream=True),
         )

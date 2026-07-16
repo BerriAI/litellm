@@ -33,6 +33,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -108,12 +109,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        router.replace(`${getProxyBaseUrl()}/ui/login`);
+        window.location.replace(getLoginUrl(getProxyBaseUrl()));
         return;
       }
     }
     // If require_auth_for_public_ai_hub is false, allow public access (no change)
-  }, [isUISettingsLoading, publicPage, uiSettings, router]);
+  }, [isUISettingsLoading, publicPage, uiSettings]);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {

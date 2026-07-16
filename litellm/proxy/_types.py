@@ -1265,6 +1265,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1370,6 +1371,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -2368,6 +2370,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: Optional[bool] = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
