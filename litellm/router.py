@@ -9194,11 +9194,11 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def _deployment_model_name(self, deployment: dict) -> Optional[str]:
+    def _deployment_model_name(self, deployment: dict) -> str | None:
         model_name = deployment.get("model_name")
         return model_name if model_name else None
 
-    def _non_wildcard_actual_model(self, deployment: dict) -> Optional[str]:
+    def _non_wildcard_actual_model(self, deployment: dict) -> str | None:
         litellm_params = deployment.get("litellm_params", {})
         actual_model = litellm_params.get("model")
         if actual_model and actual_model.endswith("/*"):
@@ -9207,7 +9207,7 @@ class Router:
 
     def _match_provider_qualified_model(
         self, all_models: list, model_id: str, custom_llm_provider: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Prefer litellm_params.model == provider/model_id over suffix matches."""
         qualified_model = f"{custom_llm_provider}/{model_id}"
         for deployment in all_models:
@@ -9216,7 +9216,7 @@ class Router:
                 return self._deployment_model_name(deployment)
         return None
 
-    def _match_model_id_suffix(self, all_models: list, model_id: str) -> Optional[str]:
+    def _match_model_id_suffix(self, all_models: list, model_id: str) -> str | None:
         """Provider-agnostic exact or suffix match on litellm_params.model."""
         for deployment in all_models:
             actual_model = self._non_wildcard_actual_model(deployment)
@@ -9233,7 +9233,7 @@ class Router:
 
     def _match_wildcard_model(
         self, model_id: str, custom_llm_provider: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Match provider/model_id against wildcard deployments via PatternMatchRouter."""
         full_model_name = f"{custom_llm_provider}/{model_id}"
         pattern_deployments = self.pattern_router.route(full_model_name)
@@ -9246,8 +9246,8 @@ class Router:
         return None
 
     def resolve_model_name_from_model_id(
-        self, model_id: Optional[str], custom_llm_provider: Optional[str] = None
-    ) -> Optional[str]:
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Resolve model_name from model_id.
 
