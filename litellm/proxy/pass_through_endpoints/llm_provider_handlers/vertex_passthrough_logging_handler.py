@@ -368,14 +368,8 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _is_audio_predict_response(model: str, json_response: dict) -> bool:
         return (
-            VertexPassthroughLoggingHandler._get_audio_prediction_count(
-                json_response=json_response
-            )
-            > 0
-            and VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(
-                model=model
-            )
-            is not None
+            VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
+            and VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) is not None
         )
 
     @staticmethod
@@ -397,7 +391,7 @@ class VertexPassthroughLoggingHandler:
         return sum(
             1
             for prediction in predictions
-            if isinstance(prediction, dict) and prediction.get("audioContent")
+            if isinstance(prediction, dict) and (prediction.get("audioContent") or prediction.get("bytesBase64Encoded"))
         )
 
     @staticmethod

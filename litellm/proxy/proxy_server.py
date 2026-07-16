@@ -11176,9 +11176,14 @@ async def audio_speech(
         upstream_content_type: Final = (
             response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
         )
-        media_type: Final = resolve_speech_media_type(
-            upstream_content_type=upstream_content_type,
-            response_format=requested_format if isinstance(requested_format, str) else None,
+        hidden_audio_mime_type: Final = hidden_params.get("audio_mime_type")
+        media_type: Final = (
+            hidden_audio_mime_type
+            if isinstance(hidden_audio_mime_type, str)
+            else resolve_speech_media_type(
+                upstream_content_type=upstream_content_type,
+                response_format=requested_format if isinstance(requested_format, str) else None,
+            )
         )
 
         return StreamingResponse(
