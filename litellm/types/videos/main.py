@@ -76,6 +76,7 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     image: Any | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
     parameters: dict[str, Any] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
+    resolution: str | None
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None

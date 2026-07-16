@@ -285,17 +285,33 @@ class TestVertexAIVideoConfig:
 
         assert mapped["durationSeconds"] == 8
         assert mapped["aspectRatio"] == "16:9"
-        assert mapped["resolution"] == "720p"
+        assert "resolution" not in mapped
 
-    def test_map_openai_size_to_1080p_resolution(self):
+    @pytest.mark.parametrize(
+        ("size", "expected_resolution"),
+        (("1280x720", "720p"), ("1920x1080", "1080p")),
+    )
+    def test_map_openai_size_to_resolution_for_veo_3(
+        self, size: str, expected_resolution: str
+    ):
         mapped = self.config.map_openai_params(
-            video_create_optional_params={"size": "1920x1080"},
+            video_create_optional_params={"size": size},
             model=VEO_31_LITE_VERTEX_MODEL,
             drop_params=False,
         )
 
         assert mapped["aspectRatio"] == "16:9"
-        assert mapped["resolution"] == "1080p"
+        assert mapped["resolution"] == expected_resolution
+
+    def test_map_openai_size_does_not_infer_resolution_for_veo_2(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": "1920x1080"},
+            model="vertex_ai/veo-2.0-generate-001",
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
 
     def test_map_openai_size_does_not_override_provider_resolution(self):
         mapped = self.config.map_openai_params(
