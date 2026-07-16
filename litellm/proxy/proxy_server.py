@@ -934,6 +934,9 @@ async def proxy_startup_event(app: FastAPI):
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
+        from litellm.proxy.db.db_connection_pool import apply_pool_params_to_db_urls
+
+        apply_pool_params_to_db_urls(general_settings)
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
         prisma_client = await ProxyStartupEvent._setup_prisma_client(
             database_url=_db_url,

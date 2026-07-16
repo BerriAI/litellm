@@ -501,7 +501,7 @@ def test_parse_iam_endpoint_from_url_extracts_all_fields():
     assert ep.port == "6543"
     assert ep.user == "litellm_user"
     assert ep.name == "litellm"
-    assert ep.schema == "public"
+    assert ep.query == "schema=public"
 
 
 def test_parse_iam_endpoint_defaults_port_to_5432_and_skips_schema():
@@ -512,7 +512,7 @@ def test_parse_iam_endpoint_defaults_port_to_5432_and_skips_schema():
     assert ep.port == "5432"
     assert ep.user == "u"
     assert ep.name == "dbname"
-    assert ep.schema is None
+    assert ep.query == ""
 
 
 def test_parse_iam_endpoint_rejects_url_without_user_or_dbname():
@@ -530,7 +530,7 @@ def test_iam_endpoint_build_url_inserts_token_verbatim():
     # `generate_iam_auth_token` already URL-encodes the presigned token, so
     # `build_url` must NOT encode again — double-encoding turned `%3D` into
     # `%253D` and broke RDS auth on the reader path.
-    ep = IAMEndpoint(host="h", port="5432", user="u", name="db", schema="public")
+    ep = IAMEndpoint(host="h", port="5432", user="u", name="db", query="schema=public")
     pre_encoded_token = "token%2Fwith%3Fweird%26chars%3Dyes"
     url = ep.build_url(pre_encoded_token)
     assert url == f"postgresql://u:{pre_encoded_token}@h:5432/db?schema=public"
@@ -704,6 +704,71 @@ def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch, unset
     assert os.environ["DATABASE_URL"] == new_url
 
 
+def test_writer_iam_refresh_preserves_pool_params_from_live_url(monkeypatch):
+    """Regression for #33021: a writer IAM refresh must keep the full query
+    string (pool_timeout, connection_limit, sslmode, custom params) already on
+    the live DATABASE_URL, replacing only the credential. Previously it rebuilt
+    the URL with just `schema`, resetting every Prisma pool knob to the engine
+    default on each ~15-minute rotation."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://litellm:stale-token@writer.aurora.local:5432/litellm"
+        "?schema=public&connection_limit=10&pool_timeout=60&sslmode=require&pgbouncer=true",
+    )
+    monkeypatch.setenv("DATABASE_HOST", "writer.aurora.local")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+
+    fake_module = MagicMock()
+    fake_module.generate_iam_auth_token = lambda db_host=None, db_port=None, db_user=None: "FRESH-TOKEN"
+    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_module)
+
+    writer = PrismaWrapper(original_prisma=MagicMock(), iam_token_db_auth=True)
+    new_url = writer.get_rds_iam_token()
+
+    assert new_url is not None
+    assert "stale-token" not in new_url
+    assert new_url.startswith("postgresql://litellm:FRESH-TOKEN@writer.aurora.local:5432/litellm?")
+    for param in ("schema=public", "connection_limit=10", "pool_timeout=60", "sslmode=require", "pgbouncer=true"):
+        assert param in new_url
+    assert os.environ["DATABASE_URL"] == new_url
+
+
+def test_reader_iam_refresh_preserves_pool_params(monkeypatch):
+    """Regression for #33021: the reader IAM refresh must preserve the full
+    query string parsed from DATABASE_URL_READ_REPLICA, not collapse it to
+    `schema` alone."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper, parse_iam_endpoint_from_url
+
+    reader_url = (
+        "postgresql://lit:stale@reader.aurora.local:6543/litellm"
+        "?schema=public&connection_limit=5&pool_timeout=30&sslmode=require"
+    )
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", reader_url)
+
+    fake_module = MagicMock()
+    fake_module.generate_iam_auth_token = lambda db_host=None, db_port=None, db_user=None: "READER-TOKEN"
+    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_module)
+
+    reader = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        db_url_env_var="DATABASE_URL_READ_REPLICA",
+        iam_endpoint=parse_iam_endpoint_from_url(reader_url),
+        recreate_uses_datasource=True,
+    )
+    new_url = reader.get_rds_iam_token()
+
+    assert new_url is not None
+    assert new_url.startswith("postgresql://lit:READER-TOKEN@reader.aurora.local:6543/litellm?")
+    for param in ("schema=public", "connection_limit=5", "pool_timeout=30", "sslmode=require"):
+        assert param in new_url
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == new_url
+
+
 def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
     """The reader generates fresh tokens against its parsed endpoint and
     writes the new URL to DATABASE_URL_READ_REPLICA — not DATABASE_URL."""
@@ -730,7 +795,7 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
         port="5432",
         user="lit",
         name="litellm",
-        schema=None,
+        query="",
     )
     reader = PrismaWrapper(
         original_prisma=MagicMock(),

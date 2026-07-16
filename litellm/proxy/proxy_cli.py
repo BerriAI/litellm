@@ -5,7 +5,6 @@ import os
 import random
 import subprocess
 import sys
-import urllib.parse as urlparse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
@@ -15,6 +14,14 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.db_connection_pool import (
+    DEFAULT_DB_CONNECTION_POOL_LIMIT,
+    DEFAULT_DB_CONNECTION_POOL_TIMEOUT,
+    append_query_params,
+)
+from litellm.proxy.db.db_connection_pool import (
+    build_db_connection_url_params as _build_db_connection_url_params,
+)
 from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
@@ -35,61 +42,8 @@ telemetry = None
 
 
 class LiteLLMDatabaseConnectionPool(Enum):
-    database_connection_pool_limit = 10
-    database_connection_pool_timeout = 60
-
-
-def _build_db_connection_url_params(
-    connection_limit: int,
-    pool_timeout: Optional[Union[int, float]],
-    connect_timeout: Optional[Union[int, float]] = None,
-    socket_timeout: Optional[Union[int, float]] = None,
-    disable_prepared_statements: bool = False,
-    extra_params: Optional[dict] = None,
-) -> dict:
-    """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
-
-    `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
-    name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
-    omitted when None so Prisma's defaults apply. `disable_prepared_statements`
-    sets `pgbouncer=true`, which makes Prisma stop using server-side prepared
-    statements (pgbouncer transaction-pool compatible; also sidesteps the
-    "cached plan must not change result type" error during rolling migrations).
-    `extra_params` is an untyped passthrough — keys it provides win over the
-    named arguments above, so it can be used to override any default we set here.
-    """
-    params: dict = {
-        "connection_limit": connection_limit,
-    }
-    if pool_timeout is not None:
-        params["pool_timeout"] = pool_timeout
-    if connect_timeout is not None:
-        params["connect_timeout"] = connect_timeout
-    if socket_timeout is not None:
-        params["socket_timeout"] = socket_timeout
-    if disable_prepared_statements:
-        params["pgbouncer"] = "true"
-    if extra_params:
-        params.update(extra_params)
-    return params
-
-
-def append_query_params(url: Optional[str], params: dict) -> str:
-    from litellm._logging import verbose_proxy_logger
-
-    verbose_proxy_logger.debug(f"url: {url}")
-    verbose_proxy_logger.debug(f"params: {params}")
-    if not isinstance(url, str) or url == "":
-        # Preserve previous startup behavior when DATABASE_URL is absent.
-        # Returning an empty string avoids urlparse type errors in test/dev flows.
-        verbose_proxy_logger.warning("append_query_params received empty or non-string URL, returning empty string")
-        return ""
-    parsed_url = urlparse.urlparse(url)
-    parsed_query = urlparse.parse_qs(parsed_url.query)
-    parsed_query.update(params)
-    encoded_query = urlparse.urlencode(parsed_query, doseq=True)
-    modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
-    return modified_url  # type: ignore
+    database_connection_pool_limit = DEFAULT_DB_CONNECTION_POOL_LIMIT
+    database_connection_pool_timeout = DEFAULT_DB_CONNECTION_POOL_TIMEOUT
 
 
 class ProxyInitializationHelpers:
