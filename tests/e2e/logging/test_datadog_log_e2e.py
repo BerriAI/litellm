@@ -37,7 +37,6 @@ class _DdMessagePayload(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    litellm_call_id: str
     model_group: str
     total_tokens: int
     response_cost: float
@@ -60,38 +59,17 @@ def _assert_datadog_configured(client: LoggingClient) -> None:
 
 
 def _assert_exactly_one_event(
-    events: list[DdLogEvent],
-    *,
-    model_group: str,
-    call_type: str,
-    outcome: StreamingResponse,
-    allow_identical_duplicates: bool = False,
+    events: list[DdLogEvent], *, model_group: str, call_type: str, outcome: StreamingResponse
 ) -> None:
     """The enforced behavior: the intake holds exactly one event for the call,
     sourced from litellm, whose payload names the model group and call type,
-    counts real tokens, and carries the same cost the response header reported.
-
-    allow_identical_duplicates tolerates duplicate deliveries of the ONE
-    logical event (the /v1/messages double-log, LIT-4447): every duplicate
-    must share the same litellm_call_id and identical substantive fields.
-    The duplicated payload is built twice and can mint a fresh synthetic
-    completion id per emission, so byte-identity is deliberately not the
-    criterion. A second DIFFERING event still fails; tighten to exactly one
-    when LIT-4447 lands."""
+    counts real tokens, and carries the same cost the response header reported."""
     assert events, "no DataDog log event for this call reached the intake within the deadline"
-    if allow_identical_duplicates and len(events) > 1:
-        payloads = [_DdMessagePayload.model_validate_json(event.message) for event in events]
-        first = payloads[0]
-        assert all(
-            (p.litellm_call_id, p.call_type, p.model_group, p.total_tokens, p.response_cost)
-            == (first.litellm_call_id, first.call_type, first.model_group, first.total_tokens, first.response_cost)
-            for p in payloads[1:]
-        ), f"multiple DIFFERING DataDog events for one call: {payloads}"
-    else:
-        assert len(events) == 1, (
-            f"expected exactly ONE DataDog log event for the call, got {len(events)} - "
-            "more than one event for one call is the duplicate-delivery bug"
-        )
+    assert len(events) == 1, (
+        f"expected exactly ONE DataDog log event for the call, got {len(events)} - "
+        "more than one event for one call is the duplicate-delivery bug (see LIT-4447 "
+        "for the currently known /v1/messages instance)"
+    )
     event = events[0]
     assert event.ddsource == "litellm", f"event ddsource must be litellm, got {event.ddsource!r}"
     assert event.status == "info", f"success events ship at status info, got {event.status!r}"
@@ -143,15 +121,12 @@ class TestDataDogLogDelivery:
         self, client: LoggingClient, dd_sink: DdSinkReader, resources: ResourceManager
     ) -> None:
         """One successful non-streaming /v1/messages call must reach the
-        DataDog logs intake as one log event whose payload carries the model,
-        the token counts, and the response cost (cost cross-checked against
-        the x-litellm-response-cost header of the same response).
+        DataDog logs intake as exactly one log event whose payload carries the
+        model, the token counts, and the response cost (cost cross-checked
+        against the x-litellm-response-cost header of the same response).
 
-        Knowingly relaxed on this surface, tracked in LIT-4447: the messages
-        route currently double-logs, so duplicate deliveries of the one
-        logical event (same litellm_call_id and substantive fields) are
-        tolerated; a second DIFFERING event still fails. Tighten to exactly
-        one when LIT-4447 lands."""
+        This currently fails on the known /v1/messages double-log (LIT-4447)
+        and serves as its regression pin; it goes green when the fix lands."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-messages-{unique_marker()}", models=[CHEAP_ANTHROPIC_MODEL])
@@ -164,11 +139,7 @@ class TestDataDogLogDelivery:
         )
         events = dd_sink.poll_events_for_marker(marker)
         _assert_exactly_one_event(
-            events,
-            model_group=CHEAP_ANTHROPIC_MODEL,
-            call_type="anthropic_messages",
-            outcome=outcome,
-            allow_identical_duplicates=True,
+            events, model_group=CHEAP_ANTHROPIC_MODEL, call_type="anthropic_messages", outcome=outcome
         )
 
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["responses"])
