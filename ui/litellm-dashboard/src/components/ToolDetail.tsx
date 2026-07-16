@@ -5,8 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Select, Spin } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import TeamDropdown from "@/components/common_components/team_dropdown";
-import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
-import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
+import { LogViewer, type LogViewerEntry } from "@/components/GuardrailsMonitor/LogViewer";
 import { PolicySelect } from "@/components/ToolPolicies/PolicySelect";
 import {
   deleteToolPolicyOverride,
@@ -96,7 +95,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     enabled: !!accessToken && !!toolName,
   });
 
-  const logs: LogEntry[] = useMemo(() => {
+  const logs: LogViewerEntry[] = useMemo(() => {
     const list = logsData?.logs ?? [];
     return list.map((l) => ({
       id: l.id,

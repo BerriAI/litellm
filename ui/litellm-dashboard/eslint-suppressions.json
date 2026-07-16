@@ -2098,7 +2098,7 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 154
+      "count": 151
     }
   },
   "src/components/object_permissions_view.tsx": {
