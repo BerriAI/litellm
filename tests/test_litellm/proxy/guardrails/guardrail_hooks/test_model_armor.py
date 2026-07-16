@@ -2273,6 +2273,45 @@ async def test_pre_call_gs_uri_reference_passthrough_when_skip_unscannable_enabl
     assert _byte_items_sent(mock_post) == []
 
 
+def test_initialize_guardrail_forwards_skip_unscannable_attachments():
+    """skip_unscannable_attachments configured in litellm_params reaches the guardrail instance."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+        skip_unscannable_attachments=True,
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-test"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is True
+
+
+def test_initialize_guardrail_skip_unscannable_defaults_false():
+    """A config that omits skip_unscannable_attachments keeps the secure default (block)."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-default"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is False
+
+
 @pytest.mark.asyncio
 async def test_skip_unscannable_still_fails_closed_on_api_error():
     """skip_unscannable_attachments only affects references; a real API error still fails closed."""
