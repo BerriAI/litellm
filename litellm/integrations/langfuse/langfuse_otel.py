@@ -4,7 +4,6 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
@@ -253,6 +252,22 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         return os.environ.get("LANGFUSE_OTEL_HOST") or os.environ.get("LANGFUSE_HOST")
 
+    @staticmethod
+    def get_langfuse_otel_endpoint(host: Optional[str] = None) -> str:
+        """
+        Resolves the Langfuse OTLP traces endpoint from a host.
+
+        ``host`` takes precedence (a per-request/team langfuse_host); otherwise the
+        proxy env host is used, falling back to the US cloud endpoint. A host without
+        a scheme is assumed https.
+        """
+        langfuse_host = host or LangfuseOtelLogger._get_langfuse_otel_host()
+        if not langfuse_host:
+            return LANGFUSE_CLOUD_US_ENDPOINT
+        if not langfuse_host.startswith("http"):
+            langfuse_host = "https://" + langfuse_host
+        return f"{langfuse_host.rstrip('/')}/api/public/otel"
+
     def _create_open_telemetry_config_from_langfuse_env(self) -> OpenTelemetryConfig:
         """
         Creates OpenTelemetryConfig from Langfuse environment variables.
@@ -267,20 +282,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             # If no keys, return default from env (likely logging to console or something else)
             return OpenTelemetryConfig.from_env()
 
-        # Determine endpoint - default to US cloud
-        langfuse_host = LangfuseOtelLogger._get_langfuse_otel_host()
-
-        if langfuse_host:
-            # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
-            if not langfuse_host.startswith("http"):
-                langfuse_host = "https://" + langfuse_host
-            endpoint = f"{langfuse_host.rstrip('/')}/api/public/otel"
-            verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
-        else:
-            # Default to US cloud endpoint
-            endpoint = LANGFUSE_CLOUD_US_ENDPOINT
-            verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
-
+        endpoint = LangfuseOtelLogger.get_langfuse_otel_endpoint()
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
@@ -316,20 +318,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set for Langfuse OpenTelemetry integration."
             )
 
-        # Determine endpoint - default to US cloud
-        langfuse_host = LangfuseOtelLogger._get_langfuse_otel_host()
-
-        if langfuse_host:
-            # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
-            if not langfuse_host.startswith("http"):
-                langfuse_host = "https://" + langfuse_host
-            endpoint = f"{langfuse_host.rstrip('/')}/api/public/otel"
-            verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
-        else:
-            # Default to US cloud endpoint
-            endpoint = LANGFUSE_CLOUD_US_ENDPOINT
-            verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
-
+        endpoint = LangfuseOtelLogger.get_langfuse_otel_endpoint()
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )

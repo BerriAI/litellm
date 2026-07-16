@@ -40,6 +40,38 @@ class TestLangfuseOtelIntegration:
             # assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://us.cloud.langfuse.com/api/public/otel"
             # assert "Authorization=Basic" in os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
 
+    def test_get_langfuse_otel_endpoint_defaults_to_us_cloud(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                LangfuseOtelLogger.get_langfuse_otel_endpoint()
+                == "https://us.cloud.langfuse.com/api/public/otel"
+            )
+
+    def test_get_langfuse_otel_endpoint_from_host_arg(self):
+        assert (
+            LangfuseOtelLogger.get_langfuse_otel_endpoint("https://cloud.langfuse.com")
+            == "https://cloud.langfuse.com/api/public/otel"
+        )
+
+    def test_get_langfuse_otel_endpoint_adds_https_when_scheme_missing(self):
+        assert (
+            LangfuseOtelLogger.get_langfuse_otel_endpoint("my-langfuse.com")
+            == "https://my-langfuse.com/api/public/otel"
+        )
+
+    def test_get_langfuse_otel_endpoint_arg_overrides_env(self):
+        with patch.dict(
+            os.environ, {"LANGFUSE_HOST": "https://env-host.com"}, clear=True
+        ):
+            assert (
+                LangfuseOtelLogger.get_langfuse_otel_endpoint("https://arg-host.com")
+                == "https://arg-host.com/api/public/otel"
+            )
+            assert (
+                LangfuseOtelLogger.get_langfuse_otel_endpoint()
+                == "https://env-host.com/api/public/otel"
+            )
+
     def test_get_langfuse_otel_config_missing_keys(self):
         """Test that ValueError is raised when required keys are missing."""
         with patch.dict(os.environ, {}, clear=True):

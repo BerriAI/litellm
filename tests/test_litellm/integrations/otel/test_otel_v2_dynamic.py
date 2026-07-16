@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 from opentelemetry.trace import NoOpTracer
 
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.presets import dynamic_otlp_headers
+from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 
 
@@ -173,3 +173,95 @@ def test_dynamic_headers_do_not_leak_to_other_owners_exporter():
     assert by_owner["arize"] == "arize-space-id=TEAMX,api_key=TEAMX_KEY"
     assert by_owner[None] == "x=base-collector"
     assert by_owner["langfuse_otel"] == "Authorization=Basic base-langfuse"
+
+
+# --- Langfuse routes a tenant to its own OTLP endpoint, not just auth --- #
+
+
+def test_langfuse_dynamic_endpoint_from_host():
+    assert (
+        dynamic_otlp_endpoint(
+            "langfuse_otel", {"langfuse_host": "https://cloud.langfuse.com"}
+        )
+        == "https://cloud.langfuse.com/api/public/otel"
+    )
+
+
+def test_langfuse_dynamic_endpoint_absent_without_host():
+    """Auth alone must not force an endpoint override; the exporter keeps its
+    configured (proxy env / default) host."""
+    assert (
+        dynamic_otlp_endpoint(
+            "langfuse_otel",
+            {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+        )
+        is None
+    )
+
+
+def test_only_langfuse_participates_in_dynamic_endpoint():
+    assert dynamic_otlp_endpoint("arize", {"langfuse_host": "https://x"}) is None
+    assert dynamic_otlp_endpoint("weave_otel", {"langfuse_host": "https://x"}) is None
+    assert dynamic_otlp_endpoint(None, {"langfuse_host": "https://x"}) is None
+    assert dynamic_otlp_endpoint("langfuse_otel", None) is None
+
+
+def test_langfuse_endpoint_and_auth_stamped_on_owned_exporter_only():
+    """A tenant's ``langfuse_host`` rewrites the endpoint (and auth) of the
+    Langfuse exporter alone. Regression for dynamic Langfuse spans being exported
+    to the static/console destination instead of the team's own Langfuse host."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="https://us.cloud.langfuse.com/api/public/otel",
+                headers="Authorization=Basic base",
+                owner="langfuse_otel",
+            ),
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="http://self-hosted-collector:4318",
+                headers="x=base-collector",
+                owner=None,
+            ),
+            ExporterSpec(kind="console", owner="langfuse_otel"),
+        ],
+    )
+    new_cfg = cache._config_with_overrides(
+        {"Authorization": "Basic TENANT"},
+        "https://cloud.langfuse.com/api/public/otel",
+    )
+    langfuse_otlp = next(
+        e
+        for e in new_cfg.exporters
+        if e.owner == "langfuse_otel" and e.kind == "otlp_http"
+    )
+    assert langfuse_otlp.endpoint == "https://cloud.langfuse.com/api/public/otel"
+    assert langfuse_otlp.headers == "Authorization=Basic TENANT"
+
+    collector = next(e for e in new_cfg.exporters if e.owner is None)
+    assert collector.endpoint == "http://self-hosted-collector:4318"
+    assert collector.headers == "x=base-collector"
+
+    console = next(e for e in new_cfg.exporters if e.kind == "console")
+    assert console.endpoint is None and console.headers is None
+
+
+def test_provider_cached_per_endpoint_for_same_auth():
+    """Two tenants sharing keys but on different Langfuse regions must not share a
+    provider, or the second tenant's spans export to the first's endpoint."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[ExporterSpec(kind="in_memory", owner="langfuse_otel")],
+    )
+    default = NoOpTracer()
+    base = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+    eu = {**base, "langfuse_host": "https://cloud.langfuse.com"}
+    us = {**base, "langfuse_host": "https://us.cloud.langfuse.com"}
+
+    cache.tracer_for(default, eu)
+    cache.tracer_for(default, eu)
+    assert len(cache._providers) == 1
+    cache.tracer_for(default, us)
+    assert len(cache._providers) == 2

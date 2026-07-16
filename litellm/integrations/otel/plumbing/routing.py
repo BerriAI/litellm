@@ -16,13 +16,16 @@ from opentelemetry.trace import Tracer
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.presets import dynamic_otlp_headers
+from litellm.integrations.otel.presets import (
+    dynamic_otlp_endpoint,
+    dynamic_otlp_headers,
+)
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
     get_tracer,
 )
 
-# Exporter kinds that ignore headers — never rewritten with dynamic credentials.
+# Exporter kinds that ignore endpoint/headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 
 # Cap on distinct credential-scoped providers held at once. ``dynamic_params``
@@ -60,25 +63,29 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: "OrderedDict[tuple[tuple[str, str], ...], TracerProvider]" = OrderedDict()
+        self._providers: "OrderedDict[tuple[object, ...], TracerProvider]" = OrderedDict()
 
     def tracer_for(self, default: Tracer, dynamic_params: Any) -> Tracer:
         """Return the tracer for this request.
 
         Use ``default`` unless the request's dynamic credentials require a
-        credential-scoped tracer, in which case build (or reuse) one. The cache
-        is a bounded LRU: the least-recently-used provider is flushed and shut
-        down on overflow so its exporter threads don't accumulate.
+        credential-scoped tracer, in which case build (or reuse) one. A tenant can
+        override the exporter's auth headers (all dynamic backends) and its
+        endpoint (backends whose host is tenant-scoped, e.g. Langfuse regions), so
+        both feed the cache key. The cache is a bounded LRU: the least-recently-used
+        provider is flushed and shut down on overflow so its exporter threads don't
+        accumulate.
         """
         headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
-        if not headers:
+        endpoint = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
+        if not headers and not endpoint:
             return default
-        cache_key = tuple(sorted(headers.items()))
+        cache_key = (tuple(sorted((headers or {}).items())), endpoint)
         provider = self._providers.get(cache_key)
         if provider is not None:
             self._providers.move_to_end(cache_key)
         else:
-            provider = build_tracer_provider(self._config_with_headers(headers))
+            provider = build_tracer_provider(self._config_with_overrides(headers, endpoint))
             self._providers[cache_key] = provider
             if len(self._providers) > _MAX_CACHED_PROVIDERS:
                 _, evicted = self._providers.popitem(last=False)
@@ -86,21 +93,26 @@ class TenantTracerCache:
         return get_tracer(provider, self._tracer_name)
 
     def _config_with_headers(self, headers: Mapping[str, str]) -> OpenTelemetryV2Config:
-        """Clone the config, stamping ``headers`` onto the credential's own exporter.
+        return self._config_with_overrides(dict(headers), None)
 
-        ``headers`` are the per-request credentials of ``self._callback_name`` (the
+    def _config_with_overrides(self, headers: Mapping[str, str] | None, endpoint: str | None) -> OpenTelemetryV2Config:
+        """Clone the config, stamping ``headers``/``endpoint`` onto the credential's own exporter.
+
+        The overrides are the per-request credentials of ``self._callback_name`` (the
         integration that built this cache), so they apply only to the exporter that
         integration contributed (``spec.owner``). A request that carries one
         tenant's Arize key must never rewrite the headers of a co-configured
         Langfuse or self-hosted collector exporter, which would leak that key to a
         different backend.
         """
-        header_str = ",".join(f"{key}={value}" for key, value in headers.items())
-        header_update: dict[str, str] = {"headers": header_str}
+        update: dict[str, str] = {
+            **({"headers": ",".join(f"{key}={value}" for key, value in headers.items())} if headers else {}),
+            **({"endpoint": endpoint} if endpoint else {}),
+        }
         exporters = [
             (
-                spec.model_copy(update=header_update)
-                if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
+                spec.model_copy(update=update)
+                if update and spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
                 else spec
             )
             for spec in self._config.exporters

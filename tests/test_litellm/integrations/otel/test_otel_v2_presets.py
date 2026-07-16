@@ -75,6 +75,52 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
         )
 
 
+def test_langfuse_preset_builds_otlp_exporter_without_env_creds(monkeypatch):
+    """Regression: dynamic team/key/org Langfuse (no proxy ``LANGFUSE_*`` env)
+    must still yield an ``otlp_http`` exporter so per-request credentials have an
+    OTLP destination to be stamped onto. The preset previously required env creds
+    (it raised without them), so the logger fell back to the console exporter and
+    dynamic Langfuse spans were printed to the proxy instead of delivered."""
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.langfuse import langfuse_preset
+
+    for var in (
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "LANGFUSE_OTEL_HOST",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    cfg = langfuse_preset()
+    langfuse_exporters = [
+        e for e in cfg.exporters if e.owner == ExporterOwner.LANGFUSE_OTEL
+    ]
+    assert len(langfuse_exporters) == 1
+    spec = langfuse_exporters[0]
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+    assert spec.headers is None
+
+
+def test_langfuse_preset_uses_env_creds_for_static_headers(monkeypatch):
+    """The static/global path (proxy ``LANGFUSE_*`` env) keeps working: the
+    exporter carries the env-derived endpoint and Basic auth header."""
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.langfuse import langfuse_preset
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.delenv("LANGFUSE_OTEL_HOST", raising=False)
+
+    cfg = langfuse_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.LANGFUSE_OTEL)
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://cloud.langfuse.com/api/public/otel"
+    assert spec.headers is not None and spec.headers.startswith("Authorization=Basic ")
+
+
 def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
     monkeypatch.setattr(

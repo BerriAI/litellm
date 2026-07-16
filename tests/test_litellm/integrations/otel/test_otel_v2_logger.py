@@ -292,21 +292,39 @@ def test_missing_standard_logging_object_is_noop():
     assert exporter.get_finished_spans() == ()
 
 
-def test_no_span_when_pre_call_never_ran():
+def test_no_span_when_gate_rejection_marks_no_upstream_call():
     """A request rejected before the upstream call — at the auth/budget gate, or
-    blocked by a pre-call guardrail — never reaches ``pre_call``, so there is no
-    carrier and the failure log produces no phantom CLIENT span. This replaces the
-    old post-hoc heuristics: "did pre_call run?" is the only signal needed."""
+    blocked by a pre-call guardrail — is tagged ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL``
+    (see ``ProxyLogging._handle_logging_proxy_only_error``), so the failure log
+    opens no carrier and produces no phantom CLIENT span."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
     logger, exporter = _logger()
     payload = _payload(
         status="failure",
         error_information={"error_class": "ProxyException", "error_code": "401"},
     )
+    kwargs = _kwargs(payload=payload)
+    kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
     # No log_pre_api_call: the call never started.
-    asyncio.run(
-        logger.async_log_failure_event(_kwargs(payload=payload), None, None, None)
-    )
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
+
+
+def test_dynamic_callback_emits_deferred_span_without_pre_call():
+    """A per-request dynamic callback (team/key/org langfuse_otel and friends)
+    registers on the success/failure hooks only, so ``pre_call`` never reaches it
+    and no carrier is opened. A real upstream call still happened (payload present,
+    no ``no_upstream`` marker), so the span must be created deferred at close rather
+    than dropped — otherwise the tenant's Langfuse receives nothing."""
+    logger, exporter = _logger()
+    # No log_pre_api_call for this logger: the pre_call hook was dispatched to the
+    # globally-registered loggers, not this per-request one.
+    asyncio.run(logger.async_log_success_event(_kwargs(), None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+    assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    assert span.status.status_code is StatusCode.UNSET
 
 
 def test_real_llm_failure_still_emitted():

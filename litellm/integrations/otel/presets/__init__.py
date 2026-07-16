@@ -14,6 +14,7 @@ from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
 from litellm.integrations.otel.presets.base import Preset
 from litellm.integrations.otel.presets.langfuse import (
+    langfuse_dynamic_endpoint,
     langfuse_dynamic_headers,
     langfuse_preset,
 )
@@ -45,6 +46,14 @@ DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams],
     "weave_otel": weave_dynamic_headers,
 }
 
+#: Callback name → per-request OTLP endpoint builder. Only backends whose
+#: destination host is tenant-scoped appear here — Langfuse routes a team/key to
+#: its own regional/self-hosted host, so the endpoint (not just the auth header)
+#: must be resolved per request.
+DYNAMIC_ENDPOINT_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], str | None]] = {
+    "langfuse_otel": langfuse_dynamic_endpoint,
+}
+
 
 def dynamic_otlp_headers(
     callback_name: str | None,
@@ -61,11 +70,27 @@ def dynamic_otlp_headers(
     return headers or None
 
 
+def dynamic_otlp_endpoint(
+    callback_name: str | None,
+    dynamic_params: StandardCallbackDynamicParams | None,
+) -> str | None:
+    """Per-request OTLP endpoint for ``callback_name``, or ``None`` if N/A.
+
+    ``None`` means the exporter's configured endpoint is kept as-is.
+    """
+    builder = DYNAMIC_ENDPOINT_BY_CALLBACK.get(callback_name or "")
+    if builder is None or not dynamic_params:
+        return None
+    return builder(dynamic_params)
+
+
 __all__ = [
     "PRESET_BY_CALLBACK",
     "DYNAMIC_HEADERS_BY_CALLBACK",
+    "DYNAMIC_ENDPOINT_BY_CALLBACK",
     "Preset",
     "dynamic_otlp_headers",
+    "dynamic_otlp_endpoint",
     "agentops_preset",
     "arize_preset",
     "langfuse_preset",

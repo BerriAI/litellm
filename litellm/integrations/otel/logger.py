@@ -375,23 +375,26 @@ class OpenTelemetryV2(CustomLogger):
     ) -> Span | None:
         """Finish the LLM-call span opened at ``pre_call`` (or create it deferred).
 
-        No carrier for this call id means ``pre_call`` never ran — the request was
-        rejected at the gate or blocked by a pre-call guardrail before any upstream
-        call — so there is nothing to record and no phantom span.
+        No carrier for a genuine gate rejection (``is_no_upstream_call``) means
+        ``pre_call`` intentionally skipped it, so nothing is recorded. A missing
+        carrier for a real call means ``pre_call`` never reached this logger — it
+        happens for per-request dynamic callbacks (team/key/org), which register on
+        the success hooks only, not on ``input_callback`` — so the span is created
+        deferred here from the payload rather than dropped.
         """
         call = LLMCallEvent.from_dict(kwargs)
         call_id = call.call_id
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
         carrier = self._open_llm_calls.pop(call_id, None) if call_id else None
-        if carrier is None:
-            return None
         payload = call.payload
         if payload is None:
-            if carrier.span is not None:
+            if carrier is not None and carrier.span is not None:
                 # Opened at the boundary but the payload never materialized — end
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
+            return None
+        if carrier is None and call.is_no_upstream_call:
             return None
         data = LLMCallSpanData.from_standard_logging_payload(
             payload,
@@ -399,23 +402,24 @@ class OpenTelemetryV2(CustomLogger):
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
         )
         end_time_ns = to_ns(end_time)
-        if carrier.span is not None:
+        if carrier is not None and carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
             # status, and end it. Its parent (the server span) was captured at
             # creation from real ambient context.
             self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
             return carrier.span
-        # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
-        # The worker copied the request task's context, which carries the anchored
-        # root span — parent to it (ambient fallback on the SDK path). Seed identity
-        # Baggage so the span — and the SDK path, which has none — is labeled
-        # consistently.
+        # Deferred: ``pre_call`` either saw no recordable parent or never reached
+        # this logger. The worker copied the request task's context, which carries
+        # the anchored root span — parent to it (ambient fallback on the SDK path).
+        # Seed identity Baggage so the span — and the SDK path, which has none — is
+        # labeled consistently.
+        start_time_ns = carrier.start_time_ns if carrier is not None else to_ns(start_time)
         parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
         return self._emitter.emit(
             SpanRole.LLM_CALL,
             data,
             parent_context=parent_ctx,
-            start_time_ns=carrier.start_time_ns,
+            start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
         )
