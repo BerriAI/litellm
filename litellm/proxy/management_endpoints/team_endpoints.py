@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -894,6 +894,17 @@ def _check_team_budget_update_authority(
         )
 
 
+def _should_auto_add_team_creator(
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> bool:
+    if user_api_key_dict.user_id is None:
+        return False
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        return True
+    return general_settings.get("disable_auto_add_proxy_admin_to_teams") is not True
+
+
 #### TEAM MANAGEMENT ####
 @router.post(
     "/team/new",
@@ -997,6 +1008,7 @@ async def new_team(
         from litellm.proxy.proxy_server import (
             _license_check,
             create_audit_log_for_update,
+            general_settings,
             litellm_proxy_admin_name,
             prisma_client,
             user_api_key_cache,
@@ -1123,13 +1135,11 @@ async def new_team(
                     user_api_key_cache=user_api_key_cache,
                 )
 
-        if user_api_key_dict.user_id is not None:
-            creating_user_in_list = False
-            for member in data.members_with_roles:
-                if member.user_id == user_api_key_dict.user_id:
-                    creating_user_in_list = True
-
-            if creating_user_in_list is False:
+        if _should_auto_add_team_creator(user_api_key_dict, general_settings):
+            creating_user_in_list = any(
+                member.user_id == user_api_key_dict.user_id for member in data.members_with_roles
+            )
+            if not creating_user_in_list:
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")

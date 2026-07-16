@@ -2369,6 +2369,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
