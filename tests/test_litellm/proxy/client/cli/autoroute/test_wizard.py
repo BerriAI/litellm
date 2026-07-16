@@ -156,7 +156,7 @@ class TestRunConfigureWizardSemanticMatching:
             tmp_path,
             CHAT_AND_EMBEDDING_GROUPS,
             _SIMPLE_TIER_PICKS,
-            input_str="n\ny\nn\n",
+            input_str="n\ny\n\n\n\n\nn\n",
             embedding_pick="text-embedding-3-small",
         )
 
@@ -164,6 +164,42 @@ class TestRunConfigureWizardSemanticMatching:
         router_config = _router_config(config_path)
         assert router_config["semantic_keyword_matching"] is True
         assert router_config["embedding_model"] == "text-embedding-3-small"
+
+    def test_blank_keyword_answers_keep_the_builtin_defaults(self, tmp_path):
+        result, config_path = _run(
+            tmp_path,
+            CHAT_AND_EMBEDDING_GROUPS,
+            _SIMPLE_TIER_PICKS,
+            input_str="n\ny\n\n\n\n\nn\n",
+            embedding_pick="text-embedding-3-small",
+        )
+
+        assert result.exit_code == 0, result.output
+        router_config = _router_config(config_path)
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": ["hi", "hello", "thanks"], "tier": "SIMPLE"},
+            {"keywords": ["explain", "how does"], "tier": "MEDIUM"},
+            {"keywords": ["refactor", "implement", "debug"], "tier": "COMPLEX"},
+            {"keywords": ["step by step", "think through", "prove"], "tier": "REASONING"},
+        ]
+
+    def test_custom_keyword_answers_are_recorded_per_tier(self, tmp_path):
+        result, config_path = _run(
+            tmp_path,
+            CHAT_AND_EMBEDDING_GROUPS,
+            _SIMPLE_TIER_PICKS,
+            input_str="n\ny\nyo, sup\n\nbuild a service, migrate\nderive, prove rigorously\nn\n",
+            embedding_pick="text-embedding-3-small",
+        )
+
+        assert result.exit_code == 0, result.output
+        router_config = _router_config(config_path)
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": ["yo", "sup"], "tier": "SIMPLE"},
+            {"keywords": ["explain", "how does"], "tier": "MEDIUM"},
+            {"keywords": ["build a service", "migrate"], "tier": "COMPLEX"},
+            {"keywords": ["derive", "prove rigorously"], "tier": "REASONING"},
+        ]
 
 
 class TestRunConfigureWizardAdaptive:

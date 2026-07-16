@@ -8,11 +8,13 @@ from InquirerPy.base.control import Choice
 
 from .... import Client
 from .config import (
+    DEFAULT_KEYWORD_TIER_RULES,
     TIER_NAMES,
     AutorouteConfig,
     ConfigGenerationError,
     DiscoveredModel,
     HeuristicClassifier,
+    KeywordTierRule,
     LLMClassifier,
     NoSemanticMatching,
     SemanticMatching,
@@ -63,6 +65,25 @@ def _render_and_prompt_for_models(models: tuple[DiscoveredModel, ...], prompt_la
     return tuple(_fuzzy_pick(models, prompt_label, multiselect=True))
 
 
+def _parse_keywords(raw: str) -> tuple[str, ...]:
+    return tuple(keyword.strip() for keyword in raw.split(",") if keyword.strip())
+
+
+def _prompt_for_keyword_tier_rules() -> tuple[KeywordTierRule, ...]:
+    """Let the user supply the semantic-matching keywords per tier, since matching those
+    keywords against the request is the whole point of enabling it. Each prompt is prefilled
+    with the built-in default, so pressing enter keeps it."""
+    click.echo("\nEnter example keywords/phrases per tier (comma-separated); press enter to keep the default:")
+    defaults = {rule.tier: rule.keywords for rule in DEFAULT_KEYWORD_TIER_RULES}
+
+    def _rule_for(tier: str) -> KeywordTierRule:
+        default_keywords = defaults.get(tier, ())
+        raw = click.prompt(f"  {tier} keywords", default=", ".join(default_keywords), show_default=True)
+        return KeywordTierRule(keywords=_parse_keywords(raw) or default_keywords, tier=tier)
+
+    return tuple(_rule_for(tier) for tier in TIER_NAMES)
+
+
 def run_configure_wizard(ctx: click.Context) -> Path:
     """Discover the caller's accessible models, walk them through tier assignment, write config."""
     base_url = ctx.obj["base_url"]
@@ -96,7 +117,8 @@ def run_configure_wizard(ctx: click.Context) -> Path:
     semantic_matching = NoSemanticMatching()
     if embedding_pool and click.confirm("\nEnable semantic keyword matching?", default=False):
         embedding_model = _render_and_prompt_for_model(embedding_pool, "semantic embeddings")
-        semantic_matching = SemanticMatching(embedding_model=embedding_model)
+        keyword_tier_rules = _prompt_for_keyword_tier_rules()
+        semantic_matching = SemanticMatching(embedding_model=embedding_model, keyword_tier_rules=keyword_tier_rules)
 
     adaptive = click.confirm("\nEnable adaptive (bandit) selection on top of tiering?", default=False)
 

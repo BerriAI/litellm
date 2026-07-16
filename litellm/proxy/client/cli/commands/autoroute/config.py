@@ -80,23 +80,31 @@ class NoSemanticMatching(BaseModel):
     kind: Literal["none"] = "none"
 
 
+class KeywordTierRule(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    keywords: tuple[str, ...]
+    tier: str
+
+
+# Satisfies complexity_router's "semantic matching requires non-empty keyword_tier_rules"
+# invariant with a sane starting point; the wizard lets the user override these per tier.
+DEFAULT_KEYWORD_TIER_RULES: tuple[KeywordTierRule, ...] = (
+    KeywordTierRule(keywords=("hi", "hello", "thanks"), tier="SIMPLE"),
+    KeywordTierRule(keywords=("explain", "how does"), tier="MEDIUM"),
+    KeywordTierRule(keywords=("refactor", "implement", "debug"), tier="COMPLEX"),
+    KeywordTierRule(keywords=("step by step", "think through", "prove"), tier="REASONING"),
+)
+
+
 class SemanticMatching(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["semantic"] = "semantic"
     embedding_model: str
     match_threshold: float = 0.5
+    keyword_tier_rules: tuple[KeywordTierRule, ...] = DEFAULT_KEYWORD_TIER_RULES
 
 
 SemanticMatchingChoice = Union[NoSemanticMatching, SemanticMatching]
-
-# Satisfies complexity_router's "semantic matching requires non-empty keyword_tier_rules"
-# invariant with a sane starting point; the generated config.yaml can be hand-edited afterward.
-_DEFAULT_KEYWORD_TIER_RULES: tuple[dict[str, JsonValue], ...] = (
-    {"keywords": ["hi", "hello", "thanks"], "tier": "SIMPLE"},
-    {"keywords": ["explain", "how does"], "tier": "MEDIUM"},
-    {"keywords": ["refactor", "implement", "debug"], "tier": "COMPLEX"},
-    {"keywords": ["step by step", "think through", "prove"], "tier": "REASONING"},
-)
 
 
 class AutorouteConfig(BaseModel):
@@ -181,7 +189,9 @@ def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
         complexity_router_config["semantic_keyword_matching"] = True
         complexity_router_config["embedding_model"] = config.semantic_matching.embedding_model
         complexity_router_config["match_threshold"] = config.semantic_matching.match_threshold
-        complexity_router_config["keyword_tier_rules"] = list(_DEFAULT_KEYWORD_TIER_RULES)
+        complexity_router_config["keyword_tier_rules"] = [
+            {"keywords": list(rule.keywords), "tier": rule.tier} for rule in config.semantic_matching.keyword_tier_rules
+        ]
     if config.adaptive:
         complexity_router_config["adaptive"] = True
 
@@ -222,8 +232,10 @@ __all__ = [
     "AutorouteConfig",
     "ClassifierChoice",
     "ConfigGenerationError",
+    "DEFAULT_KEYWORD_TIER_RULES",
     "DiscoveredModel",
     "HeuristicClassifier",
+    "KeywordTierRule",
     "LLMClassifier",
     "NoSemanticMatching",
     "SemanticMatching",
