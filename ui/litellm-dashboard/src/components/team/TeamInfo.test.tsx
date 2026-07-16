@@ -869,6 +869,93 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("metadata key-value editing", () => {
+    const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+    };
+
+    it("prefills pairs from team metadata, hides UI-managed keys, and round-trips typed values on save", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            department: "research",
+            tier: 3,
+            beta: true,
+            config: { region: "us" },
+            logging: [{ callback_name: "langfuse", callback_type: "success", callback_vars: {} }],
+            guardrails: ["g1"],
+            disable_global_guardrails: false,
+            model_tpm_limit: { "gpt-4": 100 },
+          },
+          models: ["gpt-4"],
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      const keyValues = screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value);
+      expect(keyValues).toEqual(["department", "tier", "beta", "config"]);
+      const valueValues = screen.getAllByPlaceholderText("Value").map((input) => (input as HTMLInputElement).value);
+      expect(valueValues).toEqual(["research", "3", "true", '{"region":"us"}']);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.metadata).toMatchObject({
+        department: "research",
+        tier: 3,
+        beta: true,
+        config: { region: "us" },
+        logging: [{ callback_name: "langfuse", callback_type: "success", callback_vars: {} }],
+      });
+      expect(updateArg.metadata).not.toHaveProperty("model_tpm_limit");
+      expect(updateArg.model_tpm_limit).toEqual({ "gpt-4": 100 });
+    });
+
+    it("includes a newly added pair in the team update", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
+      await user.type(screen.getByPlaceholderText("Key"), "cost_center");
+      await user.type(screen.getByPlaceholderText("Value"), "eng-1");
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({ cost_center: "eng-1" });
+    });
+  });
+
   describe("model aliases", () => {
     const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
       await waitFor(() => {

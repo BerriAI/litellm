@@ -14,6 +14,7 @@ import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
@@ -321,25 +322,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
         NotificationsManager.info("Creating Team");
 
-        // Handle logging settings in metadata
-        if (loggingSettings.length > 0) {
-          let metadata = {};
-          if (formValues.metadata) {
-            try {
-              metadata = JSON.parse(formValues.metadata);
-            } catch (e) {
-              console.warn("Invalid JSON in metadata field, starting with empty object");
-            }
-          }
-
-          // Add logging settings to metadata
-          metadata = {
-            ...metadata,
-            logging: loggingSettings.filter((config) => config.callback_name), // Only include configs with callback_name
-          };
-
-          formValues.metadata = JSON.stringify(metadata);
-        }
+        const metadataObject = {
+          ...metadataPairsToObject(formValues.metadata),
+          ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
+        };
+        formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -746,6 +733,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                 <NumericalInput step={1} width={400} />
               </Form.Item>
+              <Form.Item label="Metadata" help="Additional team metadata. Values may be plain text or JSON.">
+                <MetadataKeyValueFields form={form} />
+              </Form.Item>
 
               <Accordion
                 className="mt-20 mb-8"
@@ -799,13 +789,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     tooltip="The TPM (Tokens Per Minute) limit for individual team members"
                   >
                     <NumericalInput step={1} width={400} />
-                  </Form.Item>
-                  <Form.Item
-                    label="Metadata"
-                    name="metadata"
-                    help="Additional team metadata. Enter metadata as JSON object."
-                  >
-                    <Input.TextArea rows={4} />
                   </Form.Item>
                   <Form.Item
                     label="Secret Manager Settings"
