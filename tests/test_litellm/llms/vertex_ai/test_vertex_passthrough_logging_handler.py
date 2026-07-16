@@ -110,3 +110,36 @@ def test_audio_predict_response_uses_model_map_metadata(
     assert result["kwargs"]["model"] == "music-audio-preview"
     assert result["kwargs"]["response_cost"] == pytest.approx(6.0)
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(6.0)
+
+
+def test_audio_predict_response_supports_bytes_base64_encoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/lyria-002",
+        {
+            "audio_seconds_per_prediction": 30,
+            "output_cost_per_second": 0.002,
+        },
+    )
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    response = httpx.Response(
+        status_code=200,
+        json={"predictions": [{"bytesBase64Encoded": "clip"}]},
+    )
+
+    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route="/v1/projects/test/locations/us-central1/publishers/google/models/lyria-002:predict",
+        result=response.text,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"instances": [{"prompt": "ambient piano"}]},
+    )
+
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)

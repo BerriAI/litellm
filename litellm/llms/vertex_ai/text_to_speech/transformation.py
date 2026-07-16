@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
     speech_media_type_from_audio_bytes,
 )
@@ -471,3 +473,161 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         # Initialize the HttpxBinaryResponseContent instance
         return HttpxBinaryResponseContent(response)
+
+
+class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
+    LYRIA_MODELS = {
+        "lyria-002",
+        "lyria-3-clip-preview",
+        "lyria-3-pro-preview",
+    }
+
+    @classmethod
+    def is_lyria_model(cls, model: str) -> bool:
+        return model.removeprefix("vertex_ai/") in cls.LYRIA_MODELS
+
+    def get_supported_openai_params(self, model: str) -> list:
+        return ["response_format"]
+
+    def map_openai_params(
+        self,
+        model: str,
+        optional_params: dict,
+        voice: str | dict | None = None,
+        drop_params: bool = False,
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
+        mapped_params = dict(optional_params)
+        base_model = model.removeprefix("vertex_ai/")
+        unsupported_params = [param for param in ("speed", "instructions") if mapped_params.get(param) is not None]
+        if unsupported_params:
+            if drop_params or litellm.drop_params:
+                for param in unsupported_params:
+                    mapped_params.pop(param, None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=400,
+                    message=(
+                        f"Vertex AI {base_model} does not support the OpenAI parameters: "
+                        f"{', '.join(unsupported_params)}. To drop unsupported openai params "
+                        "from the call, set `litellm.drop_params = True`"
+                    ),
+                )
+        response_format = mapped_params.get("response_format")
+        supported_formats = (
+            {"wav"} if base_model == "lyria-002" else {"mp3", "wav"} if base_model == "lyria-3-pro-preview" else {"mp3"}
+        )
+        if response_format is not None and response_format not in supported_formats:
+            if drop_params or litellm.drop_params:
+                mapped_params.pop("response_format", None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=400,
+                    message=(
+                        f"Vertex AI {base_model} does not support response_format={response_format!r}. "
+                        f"Supported values: {', '.join(sorted(supported_formats))}. "
+                        "To drop unsupported openai params from the call, set `litellm.drop_params = True`"
+                    ),
+                )
+        return voice if isinstance(voice, str) else None, mapped_params
+
+    def get_complete_url(
+        self,
+        model: str,
+        api_base: str | None,
+        litellm_params: dict,
+    ) -> str:
+        base_model = model.removeprefix("vertex_ai/")
+        project = self.safe_get_vertex_ai_project(litellm_params)
+        if project is None:
+            _, project = self._ensure_access_token(
+                credentials=self.safe_get_vertex_ai_credentials(litellm_params),
+                project_id=None,
+                custom_llm_provider="vertex_ai",
+            )
+        if base_model.startswith("lyria-3-"):
+            from litellm.llms.vertex_ai.interactions.transformation import (
+                VertexAIInteractionsConfig,
+            )
+
+            return VertexAIInteractionsConfig().get_complete_url(
+                api_base=api_base,
+                model=base_model,
+                litellm_params={**litellm_params, "vertex_project": project},
+            )
+        location = self.safe_get_vertex_ai_location(litellm_params) or self.get_default_vertex_location()
+        base_url = self.get_api_base(api_base=api_base, vertex_location=location).rstrip("/")
+        return f"{base_url}/v1/projects/{project}/locations/{location}/publishers/google/models/{base_model}:predict"
+
+    def transform_text_to_speech_request(
+        self,
+        model: str,
+        input: str,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> TextToSpeechRequestData:
+        access_token, project = self._ensure_access_token(
+            credentials=self.safe_get_vertex_ai_credentials(litellm_params),
+            project_id=self.safe_get_vertex_ai_project(litellm_params),
+            custom_llm_provider="vertex_ai",
+        )
+        headers.update(
+            {
+                "Authorization": f"Bearer {access_token}",
+                "x-goog-user-project": project,
+                "Content-Type": "application/json",
+            }
+        )
+        base_model = model.removeprefix("vertex_ai/")
+        if base_model == "lyria-002":
+            request_body = {
+                "instances": [{"prompt": input}],
+                "parameters": {"sample_count": 1},
+            }
+        else:
+            request_body = {"model": base_model, "input": input}
+            if optional_params.get("response_format") == "wav":
+                request_body["response_format"] = {
+                    "type": "audio",
+                    "mime_type": "audio/wav",
+                }
+        return TextToSpeechRequestData(dict_body=request_body, headers=headers)
+
+    def transform_text_to_speech_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "HttpxBinaryResponseContent":
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+        response_json = raw_response.json()
+        base_model = model.removeprefix("vertex_ai/")
+        audio_data: str | None = None
+        mime_type: str | None = None
+        if base_model == "lyria-002":
+            predictions = response_json.get("predictions") or []
+            if predictions:
+                audio_data = predictions[0].get("audioContent") or predictions[0].get("bytesBase64Encoded")
+                mime_type = predictions[0].get("mimeType")
+        else:
+            for step in response_json.get("steps") or response_json.get("outputs") or []:
+                content_items = step.get("content") or [] if step.get("type") == "model_output" else [step]
+                for content in content_items:
+                    if content.get("type") == "audio" and content.get("data"):
+                        audio_data = content["data"]
+                        mime_type = content.get("mime_type")
+        if audio_data is None:
+            raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
+        mime_type = mime_type or ("audio/wav" if base_model == "lyria-002" else "audio/mpeg")
+        response = HttpxBinaryResponseContent(
+            httpx.Response(
+                status_code=raw_response.status_code,
+                content=base64.b64decode(audio_data),
+                headers={"content-type": mime_type},
+            )
+        )
+        response._hidden_params = {"audio_mime_type": mime_type}
+        return response

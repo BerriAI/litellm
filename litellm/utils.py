@@ -5880,6 +5880,9 @@ def _get_model_info_helper(
                     "output_cost_per_token_above_512k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                audio_seconds_per_prediction=_model_info.get("audio_seconds_per_prediction", None),
+                max_audio_length_hours=_model_info.get("max_audio_length_hours", None),
+                max_audio_per_prompt=_model_info.get("max_audio_per_prompt", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
@@ -9415,9 +9418,12 @@ class ProviderConfigManager:
                 # mapping would drop response_format before the bridge sees it (LIT-6501)
                 return None
             from litellm.llms.vertex_ai.text_to_speech.transformation import (
+                VertexAILyriaTextToSpeechConfig,
                 VertexAITextToSpeechConfig,
             )
 
+            if VertexAILyriaTextToSpeechConfig.is_lyria_model(model):
+                return VertexAILyriaTextToSpeechConfig()
             return VertexAITextToSpeechConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.text_to_speech.transformation import (
