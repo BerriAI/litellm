@@ -94,3 +94,77 @@ async def test_async_embedding_latency_is_json_serializable():
     ), f"raw timedelta leaked into latency list: {latencies}"
     assert latencies[-1] == pytest.approx(3.0)
     json.dumps({"latency": latencies})
+
+
+def _chat_response(completion_tokens: int):
+    return litellm.ModelResponse(
+        model="gpt-4o-mini",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(content="hi", role="assistant"),
+            )
+        ],
+        usage=litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=completion_tokens,
+            total_tokens=10 + completion_tokens,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_chat_latency_normalized_per_token():
+    """Chat responses go through the per-token normalization branch — with the
+    up-front timedelta conversion the stored value must be seconds/token."""
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache)
+
+    await handler.async_log_success_event(
+        response_obj=_chat_response(completion_tokens=4),
+        kwargs=KWARGS,
+        start_time=datetime(2026, 1, 1, 12, 0, 0),
+        end_time=datetime(2026, 1, 1, 12, 0, 2),
+    )
+
+    latencies = _recorded_latencies(cache)
+    assert latencies and latencies[-1] == pytest.approx(0.5)  # 2s / 4 tokens
+    json.dumps({"latency": latencies})
+
+
+@pytest.mark.asyncio
+async def test_async_chat_zero_completion_tokens_falls_back_to_seconds():
+    """safe_divide_seconds returns None for zero tokens — the fallback branch
+    must store plain float seconds, not a timedelta."""
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache)
+
+    await handler.async_log_success_event(
+        response_obj=_chat_response(completion_tokens=0),
+        kwargs=KWARGS,
+        start_time=datetime(2026, 1, 1, 12, 0, 0),
+        end_time=datetime(2026, 1, 1, 12, 0, 3),
+    )
+
+    latencies = _recorded_latencies(cache)
+    assert latencies and latencies[-1] == pytest.approx(3.0)
+    assert not isinstance(latencies[-1], timedelta)
+    json.dumps({"latency": latencies})
+
+
+def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache)
+
+    handler.log_success_event(
+        response_obj=_chat_response(completion_tokens=0),
+        kwargs=KWARGS,
+        start_time=datetime(2026, 1, 1, 12, 0, 0),
+        end_time=datetime(2026, 1, 1, 12, 0, 2),
+    )
+
+    latencies = _recorded_latencies(cache)
+    assert latencies and latencies[-1] == pytest.approx(2.0)
+    assert not isinstance(latencies[-1], timedelta)
+    json.dumps({"latency": latencies})
