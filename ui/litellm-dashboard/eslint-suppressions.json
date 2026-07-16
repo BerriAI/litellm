@@ -950,19 +950,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/policy_table.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/policy_table.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/policy_test_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1445,22 +1432,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedKeysPage/DeletedKeysTable/DeletedKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedTeamsPage/DeletedTeamsTable/DeletedTeamsTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
