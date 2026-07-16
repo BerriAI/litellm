@@ -7847,7 +7847,7 @@ class Router:
             len(config.available_models),
         )
 
-    def _remove_deployment_from_strategy_registries(self, model_name: str, litellm_model: Optional[str]) -> None:
+    def _remove_deployment_from_strategy_registries(self, model_name: str, litellm_model: str | None) -> None:
         """
         Drop a model_name's strategy-router registration (auto / complexity /
         adaptive / quality) when its deployment is removed from the router.
