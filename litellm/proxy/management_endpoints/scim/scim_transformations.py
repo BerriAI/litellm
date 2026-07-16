@@ -52,6 +52,12 @@ class ScimTransformations:
             enterprise_user = SCIMEnterpriseUser.model_validate(metadata[SCIM_ENTERPRISE_METADATA_KEY])
             schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
 
+        raw_entitlements = metadata.get(SCIM_ENTITLEMENTS_METADATA_KEY)
+        entitlements = SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python(raw_entitlements) if raw_entitlements else None
+
+        raw_roles = metadata.get(SCIM_ROLES_METADATA_KEY)
+        roles = SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python(raw_roles) if raw_roles else None
+
         return SCIMUser(
             schemas=schemas,
             id=user.user_id,
@@ -64,6 +70,8 @@ class ScimTransformations:
             emails=emails,
             groups=groups,
             active=active,
+            entitlements=entitlements,
+            roles=roles,
             enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
