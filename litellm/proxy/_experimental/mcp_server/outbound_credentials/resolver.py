@@ -244,12 +244,18 @@ class UpstreamCredentialProvider:
         """Drop any cached credential the resolver owns for this `(subject, server)`.
 
         Used after an upstream rejects the injected credential, so the next resolve re-mints rather
-        than serving the same rejected token until TTL. Only `token_exchange` holds a re-mintable
-        cached credential here; other modes are a no-op.
+        than serving the same rejected token until TTL. `token_exchange` and `id_jag` hold a
+        re-mintable cached credential here; other modes are a no-op.
         """
-        if isinstance(server.config, TokenExchangeConfig) and subject.inbound_token is not None:
+        if subject.inbound_token is None:
+            return
+        if isinstance(server.config, TokenExchangeConfig):
             await self._token_exchanger.invalidate(
                 subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
+            )
+        if isinstance(server.config, IdJagConfig):
+            self._exchanged_tokens.invalidate(
+                _id_jag_cache_key(subject.inbound_token.get_secret_value(), server.server_id, server.config)
             )
 
     async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:

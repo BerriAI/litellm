@@ -325,6 +325,44 @@ async def test_cache_single_flights_concurrent_misses():
 
 
 @pytest.mark.asyncio
+async def test_cache_invalidate_forces_the_next_compute():
+    cache = ExchangedTokenCache()
+    calls = 0
+
+    async def compute():
+        nonlocal calls
+        calls += 1
+        return _ok_token(f"tok-{calls}")
+
+    first = await cache.get_or_compute("k", compute)
+    cache.invalidate("k")
+    second = await cache.get_or_compute("k", compute)
+
+    assert isinstance(first, Ok) and first.ok == "tok-1"
+    assert isinstance(second, Ok) and second.ok == "tok-2"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidate_only_evicts_the_named_key():
+    cache = ExchangedTokenCache()
+    calls = 0
+
+    async def compute():
+        nonlocal calls
+        calls += 1
+        return _ok_token(f"tok-{calls}")
+
+    await cache.get_or_compute("keep", compute)
+    await cache.get_or_compute("evict", compute)
+    cache.invalidate("evict")
+    kept = await cache.get_or_compute("keep", compute)
+
+    assert isinstance(kept, Ok) and kept.ok == "tok-1"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_cache_does_not_store_a_failed_compute():
     cache = ExchangedTokenCache()
     calls = 0

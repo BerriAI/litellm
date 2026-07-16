@@ -144,6 +144,10 @@ class ExchangedTokenCache:
                 case Error(err):
                     return Error(err)
 
+    def invalidate(self, cache_key: str) -> None:
+        """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401)."""
+        self._cache.delete_cache(cache_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+
     def _get(self, cache_key: str) -> str | None:
         value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; narrowed by isinstance below
         return value if isinstance(value, str) else None

@@ -4274,10 +4274,10 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange and subject_token:
-            # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
-            # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
-            # single call below.
+        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+            # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
+            # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
+            # all others keep the plain single call below.
             async def _obo_call_tool_limited():
                 async with self._limit_outbound_concurrency(mcp_server):
                     return await self._obo_call_tool_with_retry(

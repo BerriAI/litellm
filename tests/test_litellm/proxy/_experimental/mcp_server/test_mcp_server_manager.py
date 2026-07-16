@@ -7610,6 +7610,86 @@ class TestOBOCallToolRetry:
         assert first.attempts == 1 and retry.attempts == 1
 
     @pytest.mark.asyncio
+    async def test_upstream_401_on_id_jag_evicts_the_cached_bearer_and_retries(self):
+        """The retry path must invalidate the ID-JAG leg-2 bearer too: without eviction the rebuilt
+        client resolves the same rejected token from the cache and the retry 401s identically."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            IdJagConfig,
+        )
+
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=server,
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-id-token",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        invalidated_spec = manager._cred_provider.invalidate_credentials.await_args.args[1]
+        assert isinstance(invalidated_spec.config, IdJagConfig)
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_call_regular_routes_id_jag_through_the_retry_path(self):
+        """An oauth2_id_jag tool call with a subject token must take the invalidate-and-retry branch
+        of _call_regular_mcp_tool, not the plain single call, so an upstream 401 re-exchanges."""
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(side_effect=[first, retry])
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-id-token"},
+            raw_headers=None,
+            proxy_logging_obj=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
     async def test_non_auth_error_does_not_retry(self):
         manager = self._manager()
         first = _RetryFakeClient(raises=ValueError("tool blew up"))

@@ -487,3 +487,33 @@ async def test_id_jag_does_not_share_the_cached_bearer_across_caller_tokens():
     assert isinstance(alice, Ok) and isinstance(bob, Ok)
     assert _emitted(bob.ok)["Authorization"] == "Bearer bob-bearer"
     assert len(endpoint.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_invalidate_credentials_evicts_the_id_jag_bearer_so_the_next_resolve_re_exchanges():
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("rejected-bearer") + _two_leg_ok("fresh-bearer"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    subject = _with_inbound("user-id-token")
+
+    first = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
+    await provider.invalidate_credentials(subject, _spec(_id_jag_config()))
+    second = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
+
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert _emitted(second.ok)["Authorization"] == "Bearer fresh-bearer"
+    assert len(endpoint.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_invalidate_credentials_for_id_jag_is_a_noop_without_a_caller_token():
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("cached-bearer"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    subject = _with_inbound("user-id-token")
+
+    first = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
+    await provider.invalidate_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
+    second = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
+
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert _emitted(second.ok)["Authorization"] == "Bearer cached-bearer"
+    assert len(endpoint.calls) == 2
