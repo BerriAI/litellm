@@ -26,13 +26,16 @@ completed the code exchange rather than forwarding anything it already had;
 the recorded_headers read-back makes the injected token explicit and adds the
 leak check.
 
-The two header styles are deliberately separate, explicitly named tests, and
-they assert the same contract: which header carries the key must not change
-what the OAuth flow does. Once the dance completes, the SDK carries the
-gateway-minted OAuth token in `Authorization` on MCP traffic (overwriting a
-key placed there), which is why the x-litellm-api-key form is what production
-hosts configure; the Authorization form pins that a key presented the other
-documented way is still challenged into the same working flow.
+The two documented header placements are covered by two deliberately separate
+tests that assert different, achievable contracts. The x-litellm-api-key form
+runs the full round-trip, because that header stays free for the LiteLLM key
+while the SDK owns `Authorization` for the minted OAuth token. The
+Authorization form is a challenge-guard only: putting the LiteLLM key in the
+same header the OAuth token must occupy cannot complete the dance (the token
+evicts the key on the post-dance retry, so the gateway loses the identity it
+needs to resolve the per-user token), so the contract there is that the
+gateway fails closed and loudly with the 401 challenge rather than silently
+masking the session as an empty tool list.
 """
 
 from __future__ import annotations
@@ -59,9 +62,11 @@ GUARDED_STUB_TOOLS = ("echo", "recorded_headers")
 
 
 class TestMcpOauthAuthorizationCode:
-    """A scoped internal-user key on an authorization_code server is
-    challenged, completes the interactive dance, and lists and calls tools
-    with the per-user token the gateway obtained from the IdP."""
+    """A scoped internal-user key on an authorization_code server: the
+    x-litellm-api-key form is challenged, completes the interactive dance, and
+    lists and calls tools with the per-user token the gateway obtained; the
+    Authorization form is challenged (not masked) but cannot complete the
+    round-trip, since the OAuth token claims the Authorization slot."""
 
     @pytest.mark.covers("mcp.list_tools.api_key.succeeds")
     @pytest.mark.covers("mcp.call_tool.api_key.succeeds")
@@ -137,15 +142,25 @@ class TestMcpOauthAuthorizationCode:
         leaked = sorted(name for name, value in upstream_headers.items() if key in value)
         assert leaked == [], f"caller's virtual key crossed the gateway boundary in header(s) {leaked}"
 
-    @pytest.mark.covers("mcp.list_tools.bearer.succeeds")
-    @pytest.mark.covers("mcp.call_tool.bearer.succeeds")
-    def test_list_and_call_tools_with_authorization_bearer_header(
+    @pytest.mark.covers("mcp.list_tools.oauth.challenges_bearer_key_not_masked")
+    def test_key_in_authorization_header_is_challenged_not_masked(
         self, client: McpClient, resources: ResourceManager
     ) -> None:
-        """The identical contract with the key presented as
-        `Authorization: Bearer <key>` instead: the gateway must challenge the
-        pre-dance session with 401 exactly like the x-litellm-api-key form,
-        and the completed dance must serve the same tools."""
+        """A virtual key presented in `Authorization: Bearer <key>` on a
+        gateway-managed authorization_code server, with no stored per-user
+        token, must get the 401 OAuth challenge, not a masked empty tool list.
+
+        This is deliberately a challenge-guard, not a full list-and-call: the
+        full interactive round-trip is unreachable via this header, because
+        once the host completes the OAuth dance the SDK carries the minted
+        upstream token in `Authorization`, evicting the LiteLLM key the gateway
+        needs to resolve the per-user token. So the only supported way to
+        complete the flow is the x-litellm-api-key form (covered above); the
+        contract this pins is that the Authorization form fails closed and
+        loudly (challenge) rather than silently (200 + empty tools). Before the
+        gateway classified the challenge per oauth2 sub-mode, a bearer in
+        Authorization suppressed the challenge and the session opened masked;
+        this test is the regression guard for that."""
         marker = unique_marker()
         alias = f"e2emcpauthcodez{marker}"
         created = client.create_server(
@@ -188,16 +203,6 @@ class TestMcpOauthAuthorizationCode:
 
         challenged = client.list_tools_once(alias, headers)
         assert isinstance(challenged, McpDenied), (
-            f"session without a user token was served tools instead of the OAuth challenge: {challenged}"
+            f"key in Authorization was served a (masked) tool list instead of the OAuth challenge: {challenged}"
         )
         assert challenged.status_code == 401, f"expected the 401 OAuth challenge, got {challenged}"
-
-        storage = InMemoryTokenStorage()
-        names = client.poll_oauth_tool_names(alias, headers, storage)
-        expected = tuple(sorted(f"{alias}-{tool}" for tool in GUARDED_STUB_TOOLS))
-        assert names == expected, f"post-dance listing was {names}, expected exactly {expected}"
-
-        payload = f"e2e-{marker}"
-        result = client.oauth_call_tool(alias, headers, storage, f"{alias}-echo", {"text": payload})
-        assert result.is_error is False, f"echo through the user-token upstream errored: {result.text[:300]}"
-        assert result.text == payload

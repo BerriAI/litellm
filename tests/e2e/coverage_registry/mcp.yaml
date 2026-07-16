@@ -159,3 +159,11 @@
   assertions: [passes_official_conformance]
   source: "@modelcontextprotocol/conformance server scenarios via tests/e2e/mcp/test_mcp_conformance_e2e.py"
   rationale: The gateway re-serves the MCP protocol to hosts, so it must stay spec-conformant as a server; the official suite catches lifecycle/error-shape regressions our behavior tests do not encode
+- id: mcp.list_tools.oauth.challenges_bearer_key_not_masked
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: oauth
+  assertions: [challenges_bearer_key_not_masked]
+  source: "server.py _raise_preemptive_401_for_unauthenticated_servers (mode-aware oauth2 gate)"
+  rationale: A virtual key in the Authorization header on a gateway-managed authorization_code server must get the 401 OAuth challenge, not a masked 200+empty tool list; the full round-trip is unreachable via this header (the OAuth token claims the slot) so the challenge is the guardable contract, and the masking regression (fixed by the mode-aware gate) is the bug it pins
