@@ -3,6 +3,7 @@ import { Badge, Text } from "@tremor/react";
 import { Tooltip } from "antd";
 import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
 import { Plugin } from "./claude_code_plugins/types";
+import { getSourceLink } from "./claude_code_plugins/helpers";
 import { StatusBadge } from "@/components/shared/table_cells";
 
 export const skillHubColumns = (
@@ -79,8 +80,8 @@ export const skillHubColumns = (
         url = `https://github.com/${src.repo}`;
         label = src.repo;
       } else if (src?.source === "git-subdir" && src.url) {
-        url = src.path ? `${src.url}/tree/main/${src.path}` : src.url;
-        label = url.replace("https://github.com/", "");
+        url = getSourceLink(src);
+        label = (url ?? src.url).replace("https://github.com/", "");
       } else if (src?.source === "url" && src.url) {
         url = src.url;
         label = src.url.replace(/^https?:\/\//, "");
