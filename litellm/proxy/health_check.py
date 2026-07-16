@@ -211,7 +211,7 @@ async def _perform_health_check(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     if instrumentation_enabled:
-        logger.debug(
+        logger.info(
             "health_check_dispatch_summary source=%s cycle_id=%s mode=%s model_count=%d max_concurrency=%s peak_in_flight=%d thread_count=%d rss_mb=%s",
             source,
             cycle_id,

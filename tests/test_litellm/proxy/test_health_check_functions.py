@@ -17,6 +17,9 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
 )
+from litellm.proxy.proxy_server import (
+    _get_background_health_check_concurrency,
+)
 from litellm.proxy.utils import PrismaClient
 
 
@@ -125,6 +128,18 @@ async def test_save_health_check_to_db_no_client():
 
 
 # Tests for background health check functions
+
+
+@pytest.mark.parametrize(
+    "general_settings,expected",
+    [
+        ({}, 10),
+        ({"health_check_concurrency": None}, 10),
+        ({"health_check_concurrency": 7}, 7),
+    ],
+)
+def test_get_background_health_check_concurrency(general_settings, expected):
+    assert _get_background_health_check_concurrency(general_settings) == expected
 
 
 def test_build_model_param_to_info_mapping():
