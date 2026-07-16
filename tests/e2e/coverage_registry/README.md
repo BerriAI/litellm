@@ -53,6 +53,11 @@ in `MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from
 `LOKI_MODULE_LABELS` (`core_llms`, `management_ui`, etc.) so existing JSON and
 Prometheus consumers keep their human-readable module names unchanged.
 
+Live pass/fail is separate: each finished pytest node prints an `E2E_RESULT`
+logfmt line (see `tests/e2e/e2e_result_reporter.py` and
+`tests/e2e/grafana/status_history_panels.md`). Coverage answers "is there a
+test for this cell?"; `E2E_RESULT` answers "did that run pass?"
+
 The headline is overall coverage. The collector also lists markers that point at ids
 not in the registry, so a typo or an unenumerated behavior surfaces instead of being
 silently dropped.
