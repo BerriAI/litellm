@@ -800,4 +800,4 @@ def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj(
         result.close()
 
     assert captured_litellm_params.get("allm_passthrough_route") is True
-    assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False
+    assert LitellmLogging._is_sync_litellm_request(captured_litellm_params, call_type=None) is False

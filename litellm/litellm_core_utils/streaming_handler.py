@@ -1668,7 +1668,7 @@ class CustomStreamWrapper:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
         litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
-        if self.logging_obj._is_sync_litellm_request(litellm_params):
+        if self.logging_obj._is_sync_litellm_request(litellm_params, call_type=self.logging_obj.call_type):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):

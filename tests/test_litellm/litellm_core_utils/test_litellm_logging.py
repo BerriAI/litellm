@@ -799,12 +799,102 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 
 
 def test_is_sync_litellm_request():
-    assert LitellmLogging._is_sync_litellm_request({}) is True
-    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+    assert LitellmLogging._is_sync_litellm_request({}, call_type=None) is True
     assert (
-        LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True})
+        LitellmLogging._is_sync_litellm_request({"acompletion": True}, call_type=None)
         is False
     )
+    assert (
+        LitellmLogging._is_sync_litellm_request(
+            {"allm_passthrough_route": True}, call_type=None
+        )
+        is False
+    )
+    assert LitellmLogging._is_sync_litellm_request({}, call_type="completion") is True
+    assert (
+        LitellmLogging._is_sync_litellm_request({}, call_type="anthropic_messages")
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_success_logs_custom_logger_exactly_once(logging_obj):
+    """anthropic_messages success must reach a CustomLogger exactly once, via the async
+    hook only; the sync success_handler skips CustomLogger hooks for this call type.
+    Regression guard for LIT-4447."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+
+    model_response = ModelResponse(
+        id="resp-anthropic-123",
+        model="claude-sonnet-5",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with (
+        patch.object(dummy_logger, "async_log_success_event", new_callable=AsyncMock) as mock_async_log,
+        patch.object(dummy_logger, "log_success_event") as mock_sync_log,
+        patch.object(
+            logging_obj,
+            "get_combined_callback_list",
+            return_value=[dummy_logger],
+        ),
+    ):
+        await logging_obj.async_success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response)
+
+    mock_async_log.assert_awaited_once()
+    mock_sync_log.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(logging_obj):
+    """anthropic_messages failure must reach a CustomLogger exactly once, via the async
+    hook only; the sync failure_handler skips CustomLogger hooks for this call type.
+    Regression guard for LIT-4447."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    exception = ValueError("provider blew up")
+
+    with (
+        patch.object(dummy_logger, "async_log_failure_event", new_callable=AsyncMock) as mock_async_log,
+        patch.object(dummy_logger, "log_failure_event") as mock_sync_log,
+        patch.object(
+            logging_obj,
+            "get_combined_callback_list",
+            return_value=[dummy_logger],
+        ),
+    ):
+        await logging_obj.async_failure_handler(exception, "traceback")
+        logging_obj.failure_handler(exception, "traceback")
+
+    mock_async_log.assert_awaited_once()
+    mock_sync_log.assert_not_called()
 
 
 def test_get_litellm_params_propagates_allm_passthrough_route():
@@ -815,7 +905,7 @@ def test_get_litellm_params_propagates_allm_passthrough_route():
 
     params = get_litellm_params(allm_passthrough_route=True)
     assert params.get("allm_passthrough_route") is True
-    assert LitellmLogging._is_sync_litellm_request(params) is False
+    assert LitellmLogging._is_sync_litellm_request(params, call_type=None) is False
 
 
 @pytest.mark.asyncio
