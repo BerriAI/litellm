@@ -9194,102 +9194,102 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
+    def _deployment_model_name(self, deployment: dict) -> Optional[str]:
+        model_name = deployment.get("model_name")
+        return model_name if model_name else None
+
+    def _non_wildcard_actual_model(self, deployment: dict) -> Optional[str]:
+        litellm_params = deployment.get("litellm_params", {})
+        actual_model = litellm_params.get("model")
+        if actual_model and actual_model.endswith("/*"):
+            return None
+        return actual_model
+
+    def _match_provider_qualified_model(
+        self, all_models: list, model_id: str, custom_llm_provider: str
+    ) -> Optional[str]:
+        """Prefer litellm_params.model == provider/model_id over suffix matches."""
+        qualified_model = f"{custom_llm_provider}/{model_id}"
+        for deployment in all_models:
+            actual_model = self._non_wildcard_actual_model(deployment)
+            if actual_model == qualified_model:
+                return self._deployment_model_name(deployment)
+        return None
+
+    def _match_model_id_suffix(self, all_models: list, model_id: str) -> Optional[str]:
+        """Provider-agnostic exact or suffix match on litellm_params.model."""
+        for deployment in all_models:
+            actual_model = self._non_wildcard_actual_model(deployment)
+            if not actual_model:
+                continue
+            matches = (
+                actual_model == model_id
+                or actual_model.endswith(f"/{model_id}")
+                or actual_model.endswith(f":{model_id}")
+            )
+            if matches:
+                return self._deployment_model_name(deployment)
+        return None
+
+    def _match_wildcard_model(
+        self, model_id: str, custom_llm_provider: str
+    ) -> Optional[str]:
+        """Match provider/model_id against wildcard deployments via PatternMatchRouter."""
+        full_model_name = f"{custom_llm_provider}/{model_id}"
+        pattern_deployments = self.pattern_router.route(full_model_name)
+        if not pattern_deployments:
+            return None
+        for pattern_deployment in pattern_deployments:
+            matched = self._deployment_model_name(pattern_deployment)
+            if matched:
+                return matched
+        return None
+
     def resolve_model_name_from_model_id(
         self, model_id: Optional[str], custom_llm_provider: Optional[str] = None
     ) -> Optional[str]:
         """
         Resolve model_name from model_id.
 
-        This method attempts to find the correct model_name to use with the router
-        so that litellm_params can be automatically injected from the model config.
+        Used by video status/content so the router can inject litellm_params
+        (credentials/project) from the matching deployment.
 
         Strategy:
-        1. First, check if model_id directly matches a model_name or deployment ID
-        2. If custom_llm_provider is provided, check with provider prefix
-        3. Prefer provider-qualified litellm_params.model exact match
-        4. Search through router's model_list to find by litellm_params.model
-        5. If custom_llm_provider is provided, try to find a wildcard pattern match
-        6. Return the model_name if found, None otherwise
-
-        Args:
-            model_id: The model_id extracted from decoded video_id
-                     (could be model_name or litellm_params.model value)
-            custom_llm_provider: The provider name (e.g., "vertex_ai") for wildcard matching
-
-        Returns:
-            model_name if found, None otherwise. If None, the request will fall through
-            to normal flow using environment variables.
+        1. Direct model_name / deployment ID match
+        2. Provider-prefixed model_name / deployment ID match
+        3. Provider-qualified litellm_params.model exact match
+        4. Provider-agnostic exact / suffix match
+        5. Wildcard pattern match via PatternMatchRouter
         """
         if not model_id:
             return None
 
-        # Strategy 1: Check if model_id directly matches a model_name or deployment ID
         if model_id in self.model_names or self.has_model_id(model_id):
             return model_id
 
-        # Strategy 2: Check with provider prefix (e.g., "vertex_ai/veo-3.0-generate-preview")
         if custom_llm_provider:
             full_model_name = f"{custom_llm_provider}/{model_id}"
             if full_model_name in self.model_names or self.has_model_id(full_model_name):
                 return full_model_name
 
-        # Strategy 3/4: Search through router's model_list to find by litellm_params.model
         all_models = self.get_model_list(model_name=None)
         if not all_models:
             return None
 
-        # First pass: provider-qualified exact match when provider is known.
-        # Prefer litellm_params.model == "{provider}/{model_id}" so a Vertex id
-        # does not resolve to a Gemini alias (or any other provider) that only
-        # shares the same model suffix.
         if custom_llm_provider:
-            qualified_model = f"{custom_llm_provider}/{model_id}"
-            for deployment in all_models:
-                litellm_params = deployment.get("litellm_params", {})
-                actual_model = litellm_params.get("model")
-                if actual_model and actual_model.endswith("/*"):
-                    continue
-                if actual_model == qualified_model:
-                    model_name = deployment.get("model_name")
-                    if model_name:
-                        return model_name
-
-        # Second pass: provider-agnostic exact / suffix matches (non-wildcard)
-        for deployment in all_models:
-            litellm_params = deployment.get("litellm_params", {})
-            actual_model = litellm_params.get("model")
-
-            # Skip wildcard patterns in first pass
-            if actual_model and actual_model.endswith("/*"):
-                continue
-
-            # Match by exact match or by checking if actual_model ends with /model_id or :model_id
-            # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
-            matches = (
-                actual_model == model_id
-                or (actual_model and actual_model.endswith(f"/{model_id}"))
-                or (actual_model and actual_model.endswith(f":{model_id}"))
+            matched = self._match_provider_qualified_model(
+                all_models, model_id, custom_llm_provider
             )
+            if matched:
+                return matched
 
-            if matches:
-                model_name = deployment.get("model_name")
-                if model_name:
-                    return model_name
+        matched = self._match_model_id_suffix(all_models, model_id)
+        if matched:
+            return matched
 
-        # Strategy 5: Wildcard patterns using PatternMatchRouter
-        # For video status/content, we need to match model_id like "veo-3.0-generate-preview"
-        # to wildcard patterns like "vertex_ai/*"
         if custom_llm_provider:
-            full_model_name = f"{custom_llm_provider}/{model_id}"
-            pattern_deployments = self.pattern_router.route(full_model_name)
-            if pattern_deployments:
-                # Return the first matching wildcard model_name
-                for pattern_deployment in pattern_deployments:
-                    matched_model_name = pattern_deployment.get("model_name")
-                    if matched_model_name:
-                        return matched_model_name
+            return self._match_wildcard_model(model_id, custom_llm_provider)
 
-        # No match found
         return None
 
     def map_team_model(self, team_model_name: Optional[str], team_id: str) -> Optional[str]:
