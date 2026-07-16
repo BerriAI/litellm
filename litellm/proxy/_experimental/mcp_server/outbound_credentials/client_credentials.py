@@ -98,10 +98,10 @@ async def post_client_credentials_grant(
     a 4xx/5xx), so the untyped boundary is contained here and every field the caller reads comes
     out of a validated ``TokenEndpointOutcome``.
     """
-    from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
+    from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
         get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler is partially typed
     )
-    from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
+    from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
     try:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
@@ -277,7 +277,7 @@ def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, Cr
         )
         return Error(CredError.of_misconfigured(f"client_credentials config is missing: {missing}"))
 
-    from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (  # noqa: PLC0415
+    from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (  # noqa: PLC0415  # keep package v1-free at import time
         build_token_endpoint_client_auth,
     )
 
