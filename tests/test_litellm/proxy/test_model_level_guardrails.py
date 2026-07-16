@@ -38,9 +38,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "openai-moderation" in result["metadata"]["guardrails"]
         mock_router.get_deployment.assert_called_once_with(model_id="model-uuid-123")
@@ -59,9 +57,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["model-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "existing-guardrail" in result["metadata"]["guardrails"]
         assert "model-guardrail" in result["metadata"]["guardrails"]
@@ -80,9 +76,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result["metadata"]["guardrails"].count("openai-moderation") == 1
 
@@ -101,9 +95,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         # finds a deployment.
         mock_router.get_deployment.return_value = None
         mock_router.get_deployment_by_model_group_name.return_value = None
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
         assert result is data
 
     def test_returns_data_unchanged_when_deployment_has_no_guardrails(self):
@@ -117,9 +109,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = None
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -132,9 +122,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_router = MagicMock()
         mock_router.get_deployment.return_value = None
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -152,9 +140,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["new-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         # Result is a different top-level dict
         assert result is not data
@@ -477,9 +463,7 @@ async def test_streaming_iterator_hook_runs_model_level_guardrail():
             )
             self.was_called = False
 
-        async def async_post_call_streaming_iterator_hook(
-            self, user_api_key_dict, response, request_data
-        ):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
             self.was_called = True
             async for chunk in response:
                 yield chunk
@@ -540,9 +524,7 @@ async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
             )
             self.was_called = False
 
-        async def async_post_call_streaming_iterator_hook(
-            self, user_api_key_dict, response, request_data
-        ):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
             self.was_called = True
             async for chunk in response:
                 yield chunk
@@ -607,9 +589,7 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     # and union guardrails across all deployments in the group.
     mock_router = MagicMock()
     mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = [
-        {"litellm_params": {"guardrails": ["my-pre-call-guardrail"]}}
-    ]
+    mock_router.get_model_list.return_value = [{"litellm_params": {"guardrails": ["my-pre-call-guardrail"]}}]
 
     processing = ProxyBaseLLMRequestProcessing(
         data={

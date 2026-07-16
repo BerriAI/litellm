@@ -5691,9 +5691,7 @@ def _check_and_merge_model_level_guardrails(
     # server-populated team id; pre_call lookup must do the same so
     # team-scoped guardrails are not silently skipped (greptile/veria-ai
     # Medium on #29654).
-    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
-        "user_api_key_team_id"
-    )
+    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
     model_level_guardrails: Optional[list] = None
     if model_id is not None:
@@ -5720,9 +5718,7 @@ def _check_and_merge_model_level_guardrails(
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments = (
-            llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
-        )
+        deployments = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
         seen: set = set()
         union: list = []
         for dep in deployments:
