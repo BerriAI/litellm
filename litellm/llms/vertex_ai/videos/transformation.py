@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -146,7 +147,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
-        - size → resolution for Veo 3 models when inferable
+        - size → resolution for models with resolution-tier pricing when inferable
           ("1280x720"/"720x1280" → "720p", "1920x1080"/"1080x1920" → "1080p");
           skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
@@ -177,7 +178,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 has_resolution = "resolution" in mapped_params or (
                     isinstance(nested_params, dict) and nested_params.get("resolution") is not None
                 )
-                supports_resolution = model.removeprefix("vertex_ai/").startswith("veo-3.")
+                supports_resolution = self._supports_resolution_inference(model)
                 if supports_resolution and not has_resolution:
                     inferred_resolution = self._convert_size_to_resolution(size)
                     if inferred_resolution is not None:
@@ -209,6 +210,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     def _convert_size_to_resolution(self, size: str) -> Optional[str]:
         return self._OPENAI_VIDEO_SIZE_TO_RESOLUTION.get(size)
+
+    @staticmethod
+    def _supports_resolution_inference(model: str) -> bool:
+        model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+        model_info = litellm.model_cost.get(model_key, {})
+        return model_info.get("output_cost_per_second_1080p") is not None
 
     def validate_environment(
         self,
