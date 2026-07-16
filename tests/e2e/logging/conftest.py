@@ -11,6 +11,7 @@ import os
 import pytest
 
 from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
+from datadog_sink import DdSinkReader, build_dd_sink_reader
 from otel_client import OtelReader, build_otel_reader
 
 
@@ -33,6 +34,12 @@ def client() -> LoggingClient:
 def otel_reader() -> OtelReader:
     """Read-back client for the compose stack's Jaeger trace destination."""
     return build_otel_reader()
+
+
+@pytest.fixture(scope="session")
+def dd_sink() -> DdSinkReader:
+    """Read-back client for the compose stack's DataDog logs-intake sink."""
+    return build_dd_sink_reader()
 
 
 @pytest.fixture
