@@ -394,7 +394,7 @@ class OpenTelemetryV2(CustomLogger):
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
             return None
-        if carrier is None and call.is_no_upstream_call:
+        if carrier is None and (call.is_no_upstream_call or call_id is None):
             return None
         data = LLMCallSpanData.from_standard_logging_payload(
             payload,

@@ -284,7 +284,8 @@ def test_sync_log_event_is_noop():
 
 
 def test_missing_standard_logging_object_is_noop():
-    """No carrier (``pre_call`` never ran) → the callback emits nothing."""
+    """With no standard_logging_object (no payload) and no carrier, there is
+    nothing to record, so the callback emits nothing."""
     logger, exporter = _logger()
     asyncio.run(
         logger.async_log_success_event({"litellm_params": {}}, None, None, None)
@@ -325,6 +326,18 @@ def test_dynamic_callback_emits_deferred_span_without_pre_call():
     assert span.name == "chat gpt-4o"
     assert span.attributes[LiteLLM.CALL_ID] == "call_1"
     assert span.status.status_code is StatusCode.UNSET
+
+
+def test_no_carrier_without_call_id_does_not_double_emit():
+    """The deferred path is deduped by popping the carrier keyed on the call id.
+    Without a call id there is nothing to dedup on, so both the success and failure
+    hooks would each emit a span for the same event; a call with no ``litellm_call_id``
+    must therefore produce no deferred span rather than a duplicated one."""
+    logger, exporter = _logger()
+    kwargs = _kwargs(_payload(litellm_call_id=None))
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    assert exporter.get_finished_spans() == ()
 
 
 def test_real_llm_failure_still_emitted():
