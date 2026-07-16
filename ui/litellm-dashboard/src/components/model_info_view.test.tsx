@@ -27,6 +27,7 @@ vi.mock("./networking", () => ({
   getGuardrailsList: vi.fn(),
   tagListCall: vi.fn(),
   testConnectionRequest: vi.fn(),
+  testModelGroupConnection: vi.fn(),
   modelPatchUpdateCall: vi.fn(),
   modelDeleteCall: vi.fn(),
   credentialCreateCall: vi.fn(),
@@ -52,6 +53,7 @@ const mockCredentialListCall = vi.mocked(networking.credentialListCall);
 const mockGetGuardrailsList = vi.mocked(networking.getGuardrailsList);
 const mockTagListCall = vi.mocked(networking.tagListCall);
 const mockTestConnectionRequest = vi.mocked(networking.testConnectionRequest);
+const mockTestModelGroupConnection = vi.mocked(networking.testModelGroupConnection);
 const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
@@ -730,6 +732,62 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
     });
+  });
+
+  it("does not offer Test Connection for semantic auto router models (no tier-based test exists yet)", async () => {
+    const semanticAutoRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        auto_router_config: {},
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [semanticAutoRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("test-connection-button")).not.toBeInTheDocument();
+  });
+
+  it("tests each complexity tier's model group instead of sending the router pseudo-model to /health/test_connection (regression: raw test previously threw 'Unmapped LLM provider... model=complexity_router')", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: [], REASONING: [] },
+        },
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
+    });
+    expect(mockTestConnectionRequest).not.toHaveBeenCalled();
   });
 
   it("should display model access groups field", async () => {

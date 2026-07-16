@@ -23,6 +23,8 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
+import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
+import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -68,6 +70,37 @@ const isMaskedSecret = (value: unknown): boolean => typeof value === "string" &&
 const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(params).filter(([, value]) => !isMaskedSecret(value)));
 
+const normalizeTierModels = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value) return [value];
+  return [];
+};
+
+// A complexity-router deployment (litellm_params.model="auto_router/complexity_router") is a
+// routing-strategy config, not a real provider endpoint -- there is nothing for a raw
+// litellm.ahealth_check() completion call to hit. "Test Connection" instead probes each
+// configured tier's underlying model group, mirroring the Add Auto Router wizard's test.
+const buildComplexityRouterTestTargets = (modelData: any): AutoRouterTestTarget[] => {
+  let config = modelData?.litellm_params?.complexity_router_config ?? {};
+  if (typeof config === "string") {
+    try {
+      config = JSON.parse(config);
+    } catch {
+      config = {};
+    }
+  }
+  return buildAutoRouterTestTargets({
+    tiers: {
+      SIMPLE: normalizeTierModels(config?.tiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(config?.tiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(config?.tiers?.COMPLEX),
+      REASONING: normalizeTierModels(config?.tiers?.REASONING),
+    },
+    semanticMatchingEnabled: Boolean(config?.semantic_keyword_matching),
+    embeddingModel: config?.embedding_model,
+  });
+};
+
 export default function ModelInfoView({
   modelId,
   onClose,
@@ -91,6 +124,9 @@ export default function ModelInfoView({
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
+  const [isAutoRouterTestModalOpen, setIsAutoRouterTestModalOpen] = useState(false);
+  const [autoRouterTestId, setAutoRouterTestId] = useState(0);
+  const [autoRouterTestTargets, setAutoRouterTestTargets] = useState<AutoRouterTestTarget[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
@@ -126,6 +162,9 @@ export default function ModelInfoView({
   const isAdmin = userRole === "Admin";
   const isAutoRouter =
     modelData?.litellm_params?.auto_router_config != null ||
+    modelData?.litellm_params?.complexity_router_config != null ||
+    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
+  const isComplexityRouter =
     modelData?.litellm_params?.complexity_router_config != null ||
     modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
 
@@ -435,6 +474,17 @@ export default function ModelInfoView({
 
   const handleTestConnection = async () => {
     if (!accessToken) return;
+    if (isComplexityRouter) {
+      const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
+      if (targets.length === 0) {
+        NotificationsManager.fromBackend("No complexity tiers are configured yet, so there is nothing to test.");
+        return;
+      }
+      setAutoRouterTestTargets(targets);
+      setAutoRouterTestId((id) => id + 1);
+      setIsAutoRouterTestModalOpen(true);
+      return;
+    }
     try {
       NotificationsManager.info("Testing connection...");
       const response = await testConnectionRequest(
@@ -536,14 +586,16 @@ export default function ModelInfoView({
           </div>
         </div>
         <div className="flex gap-2">
-          <Button
-            icon={<RefreshIcon className="h-4 w-4" />}
-            onClick={handleTestConnection}
-            className="flex items-center gap-2"
-            data-testid="test-connection-button"
-          >
-            Test Connection
-          </Button>
+          {(!isAutoRouter || isComplexityRouter) && (
+            <Button
+              icon={<RefreshIcon className="h-4 w-4" />}
+              onClick={handleTestConnection}
+              className="flex items-center gap-2"
+              data-testid="test-connection-button"
+            >
+              Test Connection
+            </Button>
+          )}
 
           <Button
             icon={<KeyIcon className="h-4 w-4" />}
@@ -1433,6 +1485,23 @@ export default function ModelInfoView({
         accessToken={accessToken || ""}
         userRole={userRole || ""}
       />
+
+      {/* Complexity Router Connection Test Modal */}
+      <Modal
+        title="Connection Test Results"
+        open={isAutoRouterTestModalOpen}
+        onCancel={() => setIsAutoRouterTestModalOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {isAutoRouterTestModalOpen && accessToken && (
+          <AutoRouterConnectionTest key={autoRouterTestId} accessToken={accessToken} targets={autoRouterTestTargets} />
+        )}
+      </Modal>
     </div>
   );
 }
