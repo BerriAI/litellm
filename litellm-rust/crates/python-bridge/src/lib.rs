@@ -31,12 +31,10 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
 
 fn core_error_to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let status_code = err.public_status_code();
-    let message = err.to_string();
+    let message = err.public_message();
     build_rust_ocr_error(py, &message, status_code).unwrap_or_else(|import_err| import_err)
 }
 
-/// Raise the typed `litellm.ocr.rust_bridge.RustOcrError` carrying the public
-/// status so the Python host can map it to the matching public exception.
 fn build_rust_ocr_error(
     py: Python<'_>,
     message: &str,

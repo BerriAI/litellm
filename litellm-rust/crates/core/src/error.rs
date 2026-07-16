@@ -27,21 +27,16 @@ pub enum CoreError {
     Network(String),
     #[error("routing error: {0}")]
     Routing(String),
+    #[error("{0}")]
+    NotFound(String),
 }
 
 impl CoreError {
-    /// Public HTTP status this error maps to, or `None` for connection-level
-    /// failures that have no upstream status (surfaced as a connection error).
-    ///
-    /// This is the single source of truth for turning a typed core error into
-    /// a public status/exception contract; hosts (the Python bridge, a future
-    /// axum route) build their exception or HTTP response from it. The match is
-    /// exhaustive with no wildcard so a new variant fails to compile until it
-    /// is classified here.
     pub fn public_status_code(&self) -> Option<u16> {
         match self {
             CoreError::Http { status, .. } => Some(*status),
             CoreError::Auth(_) => Some(401),
+            CoreError::NotFound(_) => Some(404),
             CoreError::InvalidType { .. }
             | CoreError::MissingField(_)
             | CoreError::InvalidProvider(_)
@@ -49,6 +44,24 @@ impl CoreError {
             CoreError::Timeout => Some(408),
             CoreError::InvalidResponse(_) | CoreError::Routing(_) => Some(500),
             CoreError::Network(_) => None,
+        }
+    }
+
+    pub fn public_message(&self) -> String {
+        match self {
+            CoreError::Http { status, .. } => format!("OCR request failed with status {status}"),
+            CoreError::Network(_) => "OCR request could not reach the provider".to_string(),
+            CoreError::InvalidResponse(_) => {
+                "OCR provider returned an invalid response".to_string()
+            }
+            CoreError::Routing(_) => "OCR request could not be routed".to_string(),
+            CoreError::Timeout
+            | CoreError::Auth(_)
+            | CoreError::NotFound(_)
+            | CoreError::InvalidType { .. }
+            | CoreError::MissingField(_)
+            | CoreError::InvalidProvider(_)
+            | CoreError::InvalidRequest(_) => self.to_string(),
         }
     }
 }
@@ -111,10 +124,56 @@ mod tests {
             CoreError::Network("dns".to_string()).public_status_code(),
             None
         );
+        assert_eq!(
+            CoreError::NotFound("model 'x' not found".to_string()).public_status_code(),
+            Some(404)
+        );
     }
 
     #[test]
     fn timeout_message_is_data_minimized() {
         assert_eq!(CoreError::Timeout.to_string(), "OCR request timed out");
+    }
+
+    #[test]
+    fn public_message_hides_upstream_body() {
+        let err = CoreError::Http {
+            status: 500,
+            body: "signed-url=https://secret.example/token=abc123 leaked".to_string(),
+        };
+        let message = err.public_message();
+        assert_eq!(message, "OCR request failed with status 500");
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("abc123"));
+    }
+
+    #[test]
+    fn public_message_hides_network_and_response_detail() {
+        let network = CoreError::Network(
+            "error sending request for url (https://signed.example/token=xyz)".to_string(),
+        );
+        assert_eq!(
+            network.public_message(),
+            "OCR request could not reach the provider"
+        );
+        assert!(!network.public_message().contains("token=xyz"));
+
+        let invalid = CoreError::InvalidResponse("expected value at line 1 column 2".to_string());
+        assert_eq!(
+            invalid.public_message(),
+            "OCR provider returned an invalid response"
+        );
+    }
+
+    #[test]
+    fn public_message_keeps_caller_facing_detail() {
+        assert_eq!(
+            CoreError::NotFound("model 'gpt-8' not found".to_string()).public_message(),
+            "model 'gpt-8' not found"
+        );
+        assert_eq!(
+            CoreError::Routing("model_list parse failed".to_string()).public_message(),
+            "OCR request could not be routed"
+        );
     }
 }

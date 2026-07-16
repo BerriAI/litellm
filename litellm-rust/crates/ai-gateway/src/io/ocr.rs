@@ -74,8 +74,12 @@ pub struct OcrRequest<'a> {
 /// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let model = request.model;
-    let config = ocr_provider_config(request.custom_llm_provider, model)
-        .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.to_string()))?;
+    let config = ocr_provider_config(request.custom_llm_provider, model).ok_or_else(|| {
+        CoreError::NotFound(format!(
+            "no OCR provider '{}' registered for model '{model}'",
+            request.custom_llm_provider
+        ))
+    })?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers = string_headers(request.extra_headers)?;
@@ -532,5 +536,26 @@ mod tests {
             .expect_err("timeout surfaces");
         assert_eq!(err, CoreError::Timeout);
         assert_eq!(err.public_status_code(), Some(408));
+    }
+
+    #[tokio::test]
+    async fn ocr_maps_unregistered_provider_to_not_found() {
+        let err = ocr(OcrRequest {
+            model: "some-model",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: None,
+            custom_llm_provider: "definitely-not-a-provider",
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("unregistered provider surfaces");
+        assert!(matches!(err, CoreError::NotFound(_)));
+        assert_eq!(err.public_status_code(), Some(404));
     }
 }

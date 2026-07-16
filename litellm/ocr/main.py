@@ -10,7 +10,6 @@ from io import IOBase
 from typing import Any, Coroutine, Union, cast
 
 import httpx
-from pydantic import ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,10 +26,20 @@ from litellm.ocr.rust_bridge import (
 from litellm.utils import client, filter_out_litellm_params
 
 
+class OCRInputError(ValueError):
+    pass
+
+
+def _ocr_error_response(status_code: int) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        request=httpx.Request(method="POST", url="https://litellm.ai"),
+    )
+
+
 def _rust_ocr_error_to_public_exception(
     err: RustOcrError, model: str, custom_llm_provider: str | None
 ) -> Exception:
-    """Map a typed Rust OCR failure onto the public exception matching its status."""
     provider = custom_llm_provider or "mistral"
     status_code = err.status_code
     message = err.message
@@ -38,9 +47,20 @@ def _rust_ocr_error_to_public_exception(
         return litellm.APIConnectionError(
             message=message, llm_provider=provider, model=model
         )
+    if status_code == 400:
+        return litellm.BadRequestError(
+            message=message, model=model, llm_provider=provider
+        )
     if status_code == 401:
         return litellm.AuthenticationError(
             message=message, llm_provider=provider, model=model
+        )
+    if status_code == 403:
+        return litellm.PermissionDeniedError(
+            message=message,
+            llm_provider=provider,
+            model=model,
+            response=_ocr_error_response(403),
         )
     if status_code == 404:
         return litellm.NotFoundError(
@@ -48,13 +68,36 @@ def _rust_ocr_error_to_public_exception(
         )
     if status_code == 408:
         return litellm.Timeout(message=message, model=model, llm_provider=provider)
+    if status_code == 422:
+        return litellm.UnprocessableEntityError(
+            message=message,
+            model=model,
+            llm_provider=provider,
+            response=_ocr_error_response(422),
+        )
+    if status_code == 429:
+        return litellm.RateLimitError(
+            message=message, llm_provider=provider, model=model
+        )
+    if status_code == 500:
+        return litellm.InternalServerError(
+            message=message, llm_provider=provider, model=model
+        )
+    if status_code == 502:
+        return litellm.BadGatewayError(
+            message=message, llm_provider=provider, model=model
+        )
+    if status_code == 503:
+        return litellm.ServiceUnavailableError(
+            message=message, llm_provider=provider, model=model
+        )
     if 400 <= status_code < 500:
         return litellm.BadRequestError(
             message=message, model=model, llm_provider=provider
         )
     if status_code >= 500:
         return litellm.InternalServerError(
-            message=message, model=model, llm_provider=provider
+            message=message, llm_provider=provider, model=model
         )
     return litellm.APIError(
         status_code=status_code, message=message, llm_provider=provider, model=model
@@ -68,15 +111,9 @@ def _map_ocr_exception(
     completion_kwargs: dict[str, object],
     kwargs: dict[str, object],
 ) -> Exception:
-    """Single host mapping for every OCR failure onto the public exception contract.
-
-    A plain ``ValueError`` is invalid client input, so it becomes a
-    ``BadRequestError``; a pydantic ``ValidationError`` is a malformed response
-    rather than client input, so it stays on the generic path.
-    """
     if isinstance(e, RustOcrError):
         return _rust_ocr_error_to_public_exception(e, model, custom_llm_provider)
-    if isinstance(e, ValueError) and not isinstance(e, ValidationError):
+    if isinstance(e, OCRInputError):
         return litellm.BadRequestError(
             message=str(e), model=model, llm_provider=custom_llm_provider or "mistral"
         )
@@ -129,7 +166,7 @@ def _resolve_ocr_call_context(
     litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
 
     if not isinstance(document, dict):
-        raise ValueError(
+        raise OCRInputError(
             f"document must be a dict with 'type' and URL/file field, got {type(document)}"
         )
 
@@ -140,7 +177,7 @@ def _resolve_ocr_call_context(
         doc_type = document.get("type")
 
     if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(
+        raise OCRInputError(
             f"Invalid document type: {doc_type}. "
             "Must be 'document_url', 'image_url', or 'file'"
         )
@@ -484,7 +521,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     """
     file_input = document.get("file")
     if file_input is None:
-        raise ValueError(
+        raise OCRInputError(
             "document with type='file' must include a 'file' field containing "
             "a pathlib.Path, file-like object, or bytes"
         )
@@ -500,7 +537,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Opening it as a path is an arbitrary local file read on the proxy
         # host, which is then base64-encoded and forwarded to the OCR
         # provider — an exfiltration primitive.
-        raise ValueError(
+        raise OCRInputError(
             "OCR file input does not accept bare str values. Pass bytes, "
             "a pathlib.Path, or a file-like object. To OCR a local file "
             "from a path, call open(path, 'rb') yourself."
@@ -526,19 +563,19 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         if isinstance(file_bytes, str):
             file_bytes = file_bytes.encode("utf-8")
     else:
-        raise ValueError(
+        raise OCRInputError(
             f"Unsupported file input type: {type(file_input)}. "
             "Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
-        raise ValueError("File is empty or could not be read")
+        raise OCRInputError("File is empty or could not be read")
 
     if "mime_type" in document:
         mime_type = document["mime_type"]
 
     if not _MIME_PATTERN.match(mime_type):
-        raise ValueError(f"Invalid MIME type: {mime_type}")
+        raise OCRInputError(f"Invalid MIME type: {mime_type}")
 
     base64_data = base64.b64encode(file_bytes).decode("utf-8")
     data_uri = f"data:{mime_type};base64,{base64_data}"

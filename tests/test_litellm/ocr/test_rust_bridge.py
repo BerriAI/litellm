@@ -133,8 +133,6 @@ class RaisingAsyncBridge:
 
 
 class RustErrorBridge:
-    """A fake ``RustOcr`` that fails with a typed ``RustOcrError`` like the native bridge."""
-
     def __init__(self, message: str, status_code: int | None) -> None:
         self.message = message
         self.status_code = status_code
@@ -525,16 +523,19 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
     assert "Rust OCR bridge is required" in str(exc_info.value)
 
 
-# Each typed RustOcrError status must map to the matching public litellm
-# exception with its canonical status_code, preserving the Python-path contract.
 RUST_OCR_ERROR_CASES = [
-    pytest.param(401, litellm.AuthenticationError, 401, id="401_authentication"),
-    pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
     pytest.param(400, litellm.BadRequestError, 400, id="400_bad_request"),
-    pytest.param(422, litellm.BadRequestError, 400, id="422_bad_request"),
+    pytest.param(401, litellm.AuthenticationError, 401, id="401_authentication"),
+    pytest.param(403, litellm.PermissionDeniedError, 403, id="403_permission_denied"),
+    pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
     pytest.param(408, litellm.Timeout, 408, id="408_timeout"),
+    pytest.param(
+        422, litellm.UnprocessableEntityError, 422, id="422_unprocessable_entity"
+    ),
+    pytest.param(429, litellm.RateLimitError, 429, id="429_rate_limit"),
     pytest.param(500, litellm.InternalServerError, 500, id="500_internal"),
-    pytest.param(503, litellm.InternalServerError, 500, id="503_internal"),
+    pytest.param(502, litellm.BadGatewayError, 502, id="502_bad_gateway"),
+    pytest.param(503, litellm.ServiceUnavailableError, 503, id="503_unavailable"),
     pytest.param(None, litellm.APIConnectionError, 500, id="none_connection"),
 ]
 
@@ -592,7 +593,6 @@ async def test_aocr_raises_typed_exception_from_rust_error(
 
 
 def test_rust_ocr_error_message_is_preserved_bounded():
-    """The host must not expand the bridge's already-bounded message."""
     bounded = "x" * 256 + "... (truncated)"
     exc = ocr_main._rust_ocr_error_to_public_exception(
         RustOcrError(bounded, 500),
@@ -603,8 +603,6 @@ def test_rust_ocr_error_message_is_preserved_bounded():
     assert bounded in str(exc)
 
 
-# Invalid caller input is caught before the Rust bridge as a plain ValueError; it
-# must surface as BadRequestError/400, not collapse to APIConnectionError/500.
 INVALID_OCR_INPUTS = [
     pytest.param({"type": "bogus", "document_url": "https://x/y.pdf"}, id="bad_type"),
     pytest.param("not-a-dict", id="non_dict_document"),
@@ -626,6 +624,42 @@ async def test_aocr_invalid_input_raises_bad_request(document):
         await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
 
     assert exc_info.value.status_code == 400
+
+
+def test_map_ocr_exception_maps_input_error_to_bad_request():
+    result = ocr_main._map_ocr_exception(
+        ocr_main.OCRInputError("Invalid document type: bogus"),
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+        completion_kwargs={},
+        kwargs={},
+    )
+
+    assert isinstance(result, litellm.BadRequestError)
+    assert result.status_code == 400
+    assert "Invalid document type" in str(result)
+
+
+def test_map_ocr_exception_keeps_plain_value_error_off_bad_request(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+
+    internal = ValueError("internal invariant broke")
+    result = ocr_main._map_ocr_exception(
+        internal,
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+        completion_kwargs={},
+        kwargs={},
+    )
+
+    assert isinstance(result, CapturedException)
+    assert captured["original_exception"] is internal
 
 
 def test_map_ocr_exception_keeps_validation_error_off_bad_request(monkeypatch):

@@ -14,14 +14,6 @@ from typing import Awaitable, Final, Protocol, cast
 
 
 class RustOcrError(Exception):
-    """Typed failure raised by the native Rust OCR bridge.
-
-    ``status_code`` is the public HTTP status the failure maps to (the source of
-    truth lives in ``CoreError::public_status_code`` on the Rust side), or
-    ``None`` for connection-level failures that have no upstream status. The OCR
-    host translates it into the matching public ``litellm`` exception.
-    """
-
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.message = message
