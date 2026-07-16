@@ -24,8 +24,9 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
 
-# Dashboard base URL. On split deployments the Next.js Admin UI is a separate
-# service (e.g. litellm-ui:3000); the data-plane gateway often 404s /ui.
+# Dashboard base URL for playwright. On split stage the ingress ALB routes
+# /ui to the litellm-ui pod; the data-plane gateway ClusterIP 404s /ui. Set
+# E2E_UI_BASE_URL to the ALB (or any host that path-routes /ui to the UI).
 # Defaults to PROXY_BASE_URL so compose/monolith (proxy-served /ui) still works.
 UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
