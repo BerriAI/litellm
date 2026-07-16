@@ -105,6 +105,42 @@ def _build_aiohttp_keepalive_socket_factory() -> Optional[Callable[[Tuple[Any, .
     return factory
 
 
+def _build_aiohttp_transport_connector_kwargs(
+    base_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Build the TCPConnector kwargs shared by every aiohttp session litellm
+    creates, so the SO_KEEPALIVE socket factory and pool tuning are applied
+    consistently across the AsyncHTTPHandler path and the OpenAI/Azure
+    aiohttp_transport fallbacks. socket_factory is only included when
+    keep-alive is enabled and aiohttp is new enough to accept it.
+    """
+    socket_factory = _build_aiohttp_keepalive_socket_factory()
+    return {
+        "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
+        "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
+        **(base_kwargs or {}),
+        **({"enable_cleanup_closed": True} if AIOHTTP_NEEDS_CLEANUP_CLOSED else {}),
+        **({"limit": AIOHTTP_CONNECTOR_LIMIT} if AIOHTTP_CONNECTOR_LIMIT > 0 else {}),
+        **({"limit_per_host": AIOHTTP_CONNECTOR_LIMIT_PER_HOST} if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0 else {}),
+        **({"socket_factory": socket_factory} if socket_factory is not None else {}),
+    }
+
+
+def build_default_aiohttp_client_session(trust_env: bool = False) -> ClientSession:
+    """
+    Create a ClientSession backed by a keep-alive-aware TCPConnector.
+
+    Used as the fallback session builder on the aiohttp_transport code path
+    (OpenAI/Azure) so recreated sessions still emit TCP keep-alive probes
+    instead of silently dropping back to a bare aiohttp.ClientSession().
+    """
+    return ClientSession(
+        connector=TCPConnector(**_build_aiohttp_transport_connector_kwargs()),
+        trust_env=trust_env,
+    )
+
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -1013,6 +1049,14 @@ class AsyncHTTPHandler:
 
         verbose_logger.debug("Creating AiohttpTransport...")
 
+        transport_connector_kwargs = _build_aiohttp_transport_connector_kwargs(connector_kwargs)
+
+        def session_factory() -> ClientSession:
+            return ClientSession(
+                connector=TCPConnector(**transport_connector_kwargs),
+                trust_env=trust_env,
+            )
+
         # Use shared session if provided and valid
         if shared_session is not None and not shared_session.closed:
             verbose_logger.debug(f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})")
@@ -1020,32 +1064,13 @@ class AsyncHTTPHandler:
                 client=shared_session,
                 ssl_verify=ssl_for_transport,
                 owns_session=False,
+                session_factory=session_factory,
             )
 
         # Create new session only if none provided or existing one is invalid
         verbose_logger.debug("NEW SESSION: Creating new ClientSession (no shared session provided)")
-        transport_connector_kwargs = {
-            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
-            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-            **connector_kwargs,
-        }
-        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
-            transport_connector_kwargs["enable_cleanup_closed"] = True
-        if AIOHTTP_CONNECTOR_LIMIT > 0:
-            transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
-        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
-        # accept socket_factory — version detection lives inside the builder.
-        socket_factory = _build_aiohttp_keepalive_socket_factory()
-        if socket_factory is not None:
-            transport_connector_kwargs["socket_factory"] = socket_factory
-
         return LiteLLMAiohttpTransport(
-            client=lambda: ClientSession(
-                connector=TCPConnector(**transport_connector_kwargs),
-                trust_env=trust_env,
-            ),
+            client=session_factory,
             ssl_verify=ssl_for_transport,
         )
 
