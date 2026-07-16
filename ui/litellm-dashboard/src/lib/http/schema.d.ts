@@ -22711,6 +22711,8 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
