@@ -5794,6 +5794,13 @@ class ProxyConfig:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
 
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
+
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
             value = _general_settings["store_model_in_db"]
@@ -14907,6 +14914,7 @@ async def get_config_list(
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []
