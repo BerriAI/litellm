@@ -44,7 +44,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
@@ -69,7 +71,7 @@ AZURE_CHARACTER_ID = encode_character_id_with_provider(
 RESOLVED_MODELS: Dict[str, str] = {VIDEO_MODEL_ID: "azure-sora"}
 
 # Sentinel propagated by base_process for the passthrough endpoints.
-SENTINEL = object()
+SENTINEL = VideoObject(id="video_raw", object="video", status="processing")
 
 
 class FakeRequest:
@@ -113,6 +115,7 @@ class Harness:
 
 @pytest.fixture
 def harness():
+    SENTINEL.id = "video_raw"
     logging = MagicMock(spec=ProxyLogging)
 
     router = MagicMock(spec=Router)
@@ -229,6 +232,26 @@ async def test_generation__route_type_data_and_no_provider_default(harness):
     # future default custom_llm_provider injection would break this row.
     assert harness.processor_data() == {"model": "sora-2", "prompt": "a sunset"}
     harness.batch_to_bytesio.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generation__reencodes_id_with_model_id(harness):
+    response = VideoObject(
+        id=encode_video_id_with_provider("video_raw", "openai", None),
+        object="video",
+        status="processing",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "model_id": VIDEO_MODEL_ID,
+    }
+    harness.base_process.return_value = response
+
+    resp = await call_generation(harness, body={"model": "sora-2"})
+
+    decoded_video_id = decode_video_id_with_provider(resp.id)
+    assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
+    assert decoded_video_id["video_id"] == "video_raw"
 
 
 @pytest.mark.asyncio
@@ -402,6 +425,28 @@ async def test_edit__extracts_nested_video_id_full_contract(harness):
 
 
 @pytest.mark.asyncio
+async def test_edit__reencodes_id_with_model_id(harness):
+    response = VideoObject(
+        id=encode_video_id_with_provider("video_raw", "openai", None),
+        object="video",
+        status="processing",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "model_id": VIDEO_MODEL_ID,
+    }
+    harness.base_process.return_value = response
+
+    resp = await call_edit(
+        harness, body={"prompt": "brighter", "video": {"id": "video_plain"}}
+    )
+
+    decoded_video_id = decode_video_id_with_provider(resp.id)
+    assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
+    assert decoded_video_id["video_id"] == "video_raw"
+
+
+@pytest.mark.asyncio
 async def test_edit__provider_from_body_data_for_plain_id(harness):
     """For a plain id, get_custom_provider_from_data (run for real) pulls the
     provider out of the request body before the 'openai' default."""
@@ -495,6 +540,26 @@ async def test_remix__model_encoded_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_remix__reencodes_id_with_model_id(harness):
+    response = VideoObject(
+        id=encode_video_id_with_provider("video_raw", "openai", None),
+        object="video",
+        status="processing",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "model_id": VIDEO_MODEL_ID,
+    }
+    harness.base_process.return_value = response
+
+    resp = await call_remix(harness, "video_plain", body={"prompt": "new colors"})
+
+    decoded_video_id = decode_video_id_with_provider(resp.id)
+    assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
+    assert decoded_video_id["video_id"] == "video_raw"
 
 
 @pytest.mark.asyncio
@@ -654,3 +719,23 @@ async def test_extension__extracts_nested_video_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_extension__reencodes_id_with_model_id(harness):
+    response = VideoObject(
+        id=encode_video_id_with_provider("video_raw", "openai", None),
+        object="video",
+        status="processing",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "model_id": VIDEO_MODEL_ID,
+    }
+    harness.base_process.return_value = response
+
+    resp = await call_extension(harness, body={"prompt": "continue"})
+
+    decoded_video_id = decode_video_id_with_provider(resp.id)
+    assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
+    assert decoded_video_id["video_id"] == "video_raw"
