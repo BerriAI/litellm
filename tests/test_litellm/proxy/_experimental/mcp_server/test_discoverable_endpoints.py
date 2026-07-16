@@ -657,6 +657,7 @@ async def test_register_client_persists_dcr_client_identity():
     update_data = mock_update.call_args.kwargs["data"]
     assert update_data.server_id == "remote_server"
     assert update_data.token_url == "https://provider.example/oauth/token"
+    assert "authorization_url" not in update_data.fields_set()
     assert update_data.credentials["client_id"] == "generated-client"
     assert update_data.credentials["client_secret"] == "generated-secret"
     assert update_data.credentials["token_endpoint_auth_method"] == "client_secret_basic"
@@ -4274,6 +4275,9 @@ async def test_register_bridge_relay_surfaces_upstream_error_not_500():
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error":"invalid_redirect_uri","error_description":"redirect_uri not allowed"}'
+    error_response.json = MagicMock(
+        return_value={"error": "invalid_redirect_uri", "error_description": "redirect_uri not allowed"}
+    )
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -4307,9 +4311,10 @@ async def test_register_bridge_relay_surfaces_upstream_error_not_500():
 
 
 @pytest.mark.asyncio
-async def test_register_non_bridge_upstream_error_still_raises_500():
-    """Non-bridge DCR keeps its pre-change behavior: raise_for_status propagates so the flag-off
-    contract is byte-identical; only the bridge relay arm relays the upstream status."""
+async def test_register_non_bridge_upstream_error_relays_status_not_500():
+    """A non-bridge DCR rejection must relay the upstream status and RFC 7591 error body just like
+    the bridge relay arm; a raw HTTPStatusError would escape to the global handler and surface as an
+    opaque 500 that hides the real reason from the create-flow UI."""
     import httpx
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -4319,6 +4324,7 @@ async def test_register_non_bridge_upstream_error_still_raises_500():
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error":"invalid_client_metadata"}'
+    error_response.json = MagicMock(return_value={"error": "invalid_client_metadata"})
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -4338,7 +4344,7 @@ async def test_register_non_bridge_upstream_error_still_raises_500():
             return_value=False,
         ),
     ):
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(HTTPException) as exc:
             await register_client_with_server(
                 request=_bridge_mock_request(),
                 mcp_server=oauth2_server,
@@ -4347,6 +4353,9 @@ async def test_register_non_bridge_upstream_error_still_raises_500():
                 response_types=None,
                 token_endpoint_auth_method=None,
             )
+
+    assert exc.value.status_code == 400
+    assert "invalid_client_metadata" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -4366,10 +4375,8 @@ _BRIDGE_MASTER_KEY = "sk-bridge-producer-master-key-0123456789abcdef"
 
 
 async def _exchange_for_bridge_server(server, upstream_body, key_hash, code="auth-code", fake_client_out=None):
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _ResolvedKey,
-        exchange_token_with_server,
-    )
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
 
     fake_http_response = MagicMock()
     fake_http_response.json.return_value = upstream_body
@@ -4389,7 +4396,7 @@ async def _exchange_for_bridge_server(server, upstream_body, key_hash, code="aut
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=key_resolver,
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -4800,7 +4807,7 @@ async def _refresh_for_bridge_server(
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=revalidate_result),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5077,7 +5084,7 @@ async def test_bridge_refresh_grant_with_deactivated_user_is_invalid_grant_befor
 async def test_revalidate_active_subject_dispatches_on_subject_type():
     """Subject re-validation routes a key_hash envelope to the key reload and a user_id envelope to the
     user reload, so revocation gates renewal for either identity source through one dispatch point."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _ResolvedKey,
         _revalidate_active_subject,
     )
@@ -5085,11 +5092,11 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=_ResolvedKey(key_hash="kh", key=MagicMock())),
         ) as key_reload,
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
             new=AsyncMock(return_value=None),
         ) as user_reload,
     ):
@@ -5099,11 +5106,11 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(),
         ) as key_reload2,
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
             new=AsyncMock(return_value="no_active_key"),
         ) as user_reload2,
     ):
@@ -5117,7 +5124,7 @@ def test_upstream_refresh_credential_expired_refresh_token_is_not_sealed():
     not be sealed: _upstream_refresh_credential returns None so the exchange degrades to an access-only
     response, mirroring how the access grant refuses an already-elapsed access token rather than capping a
     dead token to the full refresh TTL. A live or unspecified lifetime still yields a credential."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _upstream_refresh_credential
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _upstream_refresh_credential
 
     assert _upstream_refresh_credential({"access_token": "A", "refresh_token": "R", "refresh_expires_in": 0}) is None
     assert _upstream_refresh_credential({"refresh_token": "R", "refresh_expires_in": -5}) is None
@@ -5143,6 +5150,7 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error": "invalid_grant", "error_description": "refresh token expired"}'
+    error_response.json = MagicMock(return_value={"error": "invalid_grant", "error_description": "refresh token expired"})
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -5155,7 +5163,7 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5178,10 +5186,10 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
 
 @pytest.mark.asyncio
 async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring():
-    """The upstream invalid_grant detection parses the RFC 6749 5.2 error field, not a substring of the
-    body. An upstream error whose code is not invalid_grant (here invalid_client, with the string
-    invalid_grant only inside error_description) must NOT be mistaken for a dead refresh token, so it
-    propagates as the upstream error rather than triggering a spurious authorization_code re-run."""
+    """The upstream invalid_grant detection reads the classified RFC 6749 5.2 error code, not a substring
+    of the body. An upstream error whose code is not invalid_grant (here invalid_client, with the string
+    invalid_grant only inside error_description) must NOT be mistaken for a dead refresh token: it renders
+    as the classified upstream rejection rather than triggering a spurious authorization_code re-run."""
     import httpx
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
@@ -5193,6 +5201,9 @@ async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring
     error_response = MagicMock()
     error_response.status_code = 400
     error_response.text = '{"error": "invalid_client", "error_description": "this is not an invalid_grant problem"}'
+    error_response.json = MagicMock(
+        return_value={"error": "invalid_client", "error_description": "this is not an invalid_grant problem"}
+    )
     error_response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("bad", request=MagicMock(), response=error_response)
     )
@@ -5205,23 +5216,26 @@ async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._revalidate_active_subject",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
     ):
-        with pytest.raises(httpx.HTTPStatusError):
-            await exchange_token_with_server(
-                request=_bridge_mock_request(),
-                mcp_server=server,
-                grant_type="refresh_token",
-                code=None,
-                redirect_uri=None,
-                client_id="dcr-client-123",
-                client_secret=None,
-                code_verifier=None,
-                refresh_token=refresh_env,
-            )
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token=refresh_env,
+        )
+
+    assert response.status_code == 401
+    body = json.loads(response.body)
+    assert body["error"] == "invalid_client"
 
 
 @pytest.mark.asyncio
@@ -5229,7 +5243,7 @@ async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_
     """A key_hash refresh envelope whose key is still active but whose OWNING user was SCIM-deactivated must
     fail closed to no_active_key, mirroring how admission's _reject_if_admitted_owner_scim_deactivated
     revokes an offboarded owner's key. Without this, an offboarded user keeps renewing a live key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey, _revalidate_active_subject
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5239,7 +5253,7 @@ async def test_revalidate_key_subject_revoked_when_owner_scim_deactivated(proxy_
     resolved = _ResolvedKey(key_hash="kh", key=MagicMock(user_id="offboarded-owner"))
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5257,7 +5271,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
     """The key-owner SCIM gate blocks only an explicit scim_active False: an active owner renews (None), and
     a missing owner (get_user_object's wrapped ValueError) fails OPEN, since a key may outlive its owner
     record and a transient blip must not revoke a live key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _ResolvedKey, _revalidate_active_subject
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _ResolvedKey, _revalidate_active_subject
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import key_hash_identity
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -5268,7 +5282,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5280,7 +5294,7 @@ async def test_revalidate_key_subject_active_owner_renews_and_missing_owner_fail
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_key_by_hash",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_key_by_hash",
             new=AsyncMock(return_value=resolved),
         ),
         patch(
@@ -5309,7 +5323,7 @@ async def test_bridge_mint_fails_closed_before_upstream_when_master_key_unset():
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=AsyncMock(return_value="no_active_key"),
         ),
         patch("litellm.proxy.proxy_server.master_key", None),
@@ -5346,7 +5360,7 @@ async def _prepare_only_bridge_exchange(resolver_result):
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_active_litellm_key",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_active_litellm_key",
             new=AsyncMock(return_value=resolver_result),
         ),
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
@@ -5490,7 +5504,7 @@ def test_classify_upstream_lifetime():
     oversized) is "unspecified" so the envelope caps it, while a parseable non-positive value is
     "expired": the upstream reporting an already-dead token, which the mint must reject rather than
     silently give the 1h cap."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _classify_upstream_lifetime
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _classify_upstream_lifetime
 
     assert _classify_upstream_lifetime(300) == 300
     assert _classify_upstream_lifetime(300.0) == 300
@@ -5523,7 +5537,7 @@ def test_bridge_grant_honors_and_rejects_upstream_lifetime():
     """The grant validator honors a positive lifetime, leaves an unknown one None for the envelope to
     cap, and rejects an explicitly-expired one with "expired_lifetime" so a dead upstream token is
     never sealed into an hour-long envelope."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _bridge_grant_from_token_response
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _bridge_grant_from_token_response
 
     def grant(v):
         return _bridge_grant_from_token_response({"access_token": "x", "expires_in": v})
@@ -5816,7 +5830,7 @@ async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
     """The LiteLLM key arrives on x-litellm-api-key (what Claude Desktop/Code send), not
     Authorization. Reading only Authorization dropped the identity, so the per-user token was
     never stored and the egress 401'd forever. Resolution must honor x-litellm-api-key."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
@@ -5841,7 +5855,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
     """Cross-replica, async_get_cache hands back a serialized dict, not a UserAPIKeyAuth.
     Resolution must rehydrate it; the old getattr(cached, "user_id") returned None on a dict,
     which is exactly why a multi-replica gateway never found the stored token."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import hash_token
@@ -5862,7 +5876,7 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
     """A cache miss must read the key from the DB rather than returning None; the old code did a
     cache-only peek and skipped the DB, so any replica that hadn't just authenticated the key
     failed to store the token."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5884,7 +5898,7 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
 @pytest.mark.asyncio
 async def test_extract_user_id_none_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request resolves to None without consulting the resolver."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5901,7 +5915,7 @@ async def test_extract_user_id_rejects_blocked_key(proxy_globals):
     """A blocked LiteLLM key must not resolve an identity. get_key_object returns the DB row without
     checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
     so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5923,7 +5937,7 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
     """An expired LiteLLM key must not resolve an identity, for the same reason as a blocked key."""
     from datetime import datetime, timedelta, timezone
 
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5948,7 +5962,7 @@ async def test_resolve_active_litellm_key_returns_resolved_key_for_active_key(pr
     record. For an active key the resolver returns exactly hash_token(key), the same value
     get_key_object and the whole cache/DB layer key the record by, so the sealed reference resolves
     back to this key at admission."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
         _ResolvedKey,
     )
@@ -5978,10 +5992,10 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     presence wrongly rejected these keys with invalid_request; the active-state gate now checks only
     blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
     store still gets no user for such a key, since there is none to key a stored credential by."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _extract_user_id_from_request,
-        _resolve_active_litellm_key,
         _ResolvedKey,
+        _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6007,7 +6021,7 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
 async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals):
     """A blocked key must not yield a hash, so no gateway-bound envelope is minted for a revoked key;
     the mint fails closed with invalid_request instead."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6030,7 +6044,7 @@ async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
     raise. Before the fix this raised a ValueError instead of returning None."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6050,7 +6064,7 @@ async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy
 @pytest.mark.asyncio
 async def test_resolve_active_litellm_key_no_active_key_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request yields no hash without consulting the resolver."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6068,7 +6082,7 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
     the caller's fault, so the resolver reports "unavailable" (the mint statuses it 503) rather than
     collapsing it to the same value as a missing credential. is_database_service_unavailable_error
     classifies a connection error (an OSError) as an outage, matching admission's egress-side handling."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6089,7 +6103,7 @@ async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_glob
     """With no database connection configured the gateway cannot verify the presented key at all, so
     the resolver reports "unresolvable" (the mint statuses it 500) instead of blaming the caller.
     Mirrors admission, which 500s a missing prisma_client on the egress side."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
         _resolve_active_litellm_key,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -6123,7 +6137,7 @@ async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_glob
     refresh path maps it to invalid_grant), not unresolvable/500. get_user_object catches the missing row
     and re-raises a bare ValueError, so a missing user must not be misclassified as a DB outage or an
     opaque gateway fault."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -6142,7 +6156,7 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
     a missing user, so the refresh path surfaces "unavailable" (a 503) rather than blaming the caller.
     get_user_object wraps the outage in a bare ValueError, so this exercises the chain-aware classifier; a
     raw ConnectionError would falsely pass even a chain-blind check because it is an OSError."""
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -6755,3 +6769,364 @@ async def test_token_exchange_pairs_client_secret_with_server_client_id():
     sent = mock_async_client.post.call_args.kwargs["data"]
     assert sent["client_id"] == "persisted-client"
     assert "client_secret" not in sent
+
+
+def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
+    import httpx
+
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    if json_body is not None:
+        return httpx.Response(status_code, json=json_body, request=request)
+    return httpx.Response(status_code, text=text_body, request=request)
+
+
+async def _exchange_with_upstream_response(upstream_response, *, server_client_id="web-client.apps.googleusercontent.com"):
+    """Run the raw (non-bridge) authorization_code exchange against a canned upstream token-endpoint
+    response and return what the gateway would hand the client. ``server_client_id=None`` models the
+    caller-supplied-credentials flow (no stored client on the server)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="gcal",
+        name="gcal",
+        server_name="gcal",
+        alias="gcal",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=server_client_id,
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=upstream_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        return await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="web-client.apps.googleusercontent.com",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_gateway_credential_rejection_is_502_with_gateway_prose():
+    """When the gateway presented the server's stored client credentials and the IdP rejected them
+    (Google refusing a secret-less or unknown client), the fault is the operator's, not the caller's:
+    502 server_error with gateway-authored prose naming the code, and the IdP's own prose stays in
+    server logs. Before the framework this either 500ed raw or relayed provider prose verbatim."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+        )
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "invalid_client" in body["error_description"]
+    assert "client_id and client_secret" in body["error_description"]
+    assert "The OAuth client was not found." not in body["error_description"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_caller_supplied_credential_rejection_relays_code():
+    """When the caller supplied the client credentials themselves (no stored client on the server),
+    an invalid_client rejection is theirs to act on: the §5.2 code relays on the 401 that code
+    implies."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+        ),
+        server_client_id=None,
+    )
+
+    assert response.status_code == 401
+    body = json.loads(response.body)
+    assert body == {"error": "invalid_client", "error_description": "The OAuth client was not found."}
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_status_derives_from_error_code_not_upstream_status():
+    """An upstream that pairs a caller-fault code with a server-fault status (invalid_grant on a 500)
+    must not produce a contradictory response: status derives from the classified fault, so the
+    caller sees 400 invalid_grant and knows to re-authorize rather than blaming the gateway."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(500, json_body={"error": "invalid_grant", "error_description": "Code expired."})
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body == {"error": "invalid_grant", "error_description": "Code expired."}
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_relays_only_rfc6749_error_fields():
+    """Only error / error_description / error_uri cross the gateway; any other upstream body field is
+    dropped so an arbitrary rejection payload cannot ride the relay to the client."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            400,
+            json_body={
+                "error": "invalid_grant",
+                "error_description": "Code was already redeemed.",
+                "error_uri": "https://idp.example.com/errors/invalid_grant",
+                "internal_trace": "should never reach the client",
+            },
+        )
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert set(body.keys()) == {"error", "error_description", "error_uri"}
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_maps_out_of_contract_rejection_to_502():
+    """A rejection outside the §5.2 contract (no JSON error field, or a status the token-endpoint
+    contract does not define) is an upstream fault; 502 keeps it from being misread as a caller
+    mistake while the description still names the upstream status."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(503, text_body="<html>upstream maintenance</html>")
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "HTTP 503" in body["error_description"]
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_bounds_relayed_error_fields():
+    """Relayed §5.2 fields are length-bounded so a hostile or broken upstream cannot bloat the
+    gateway response."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(400, json_body={"error": "invalid_request", "error_description": "x" * 5000})
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert len(body["error_description"]) == 500
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_200_without_access_token_is_502_not_keyerror():
+    """A 200 whose body has no usable access_token used to KeyError into a 500; the raw arm now
+    answers 502 with the same wording as the bridge arm's no_upstream_token rejection."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(200, json_body={"token_type": "Bearer"})
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "access_token" in body["error_description"]
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_relays_rejection_when_http_client_raises():
+    """litellm's AsyncHTTPHandler.post raise_for_status()es internally and raises MaskedHTTPStatusError
+    at call time, so in production the rejection escapes from the post call itself rather than from the
+    explicit raise_for_status; the relay must catch it there too (proven live: a mock returning the
+    error response passed while the real proxy still 500ed)."""
+    import httpx
+
+    rejection = _upstream_token_response(
+        401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Client error '401 Unauthorized'", request=rejection.request, response=rejection)
+    )
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="gcal",
+        name="gcal",
+        server_name="gcal",
+        alias="gcal",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="web-client.apps.googleusercontent.com",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=raising_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            client_id="web-client.apps.googleusercontent.com",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "invalid_client" in body["error_description"]
+
+
+@pytest.mark.asyncio
+async def test_register_relays_rejection_when_http_client_raises():
+    """Same live mechanism as the token exchange: the DCR rejection escapes from the post call itself,
+    so the register relay must catch it there, not only from the explicit raise_for_status."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    rejection = httpx.Response(
+        400,
+        json={"error": "invalid_client_metadata"},
+        request=httpx.Request("POST", "https://idp.example.com/register"),
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Client error '400 Bad Request'", request=rejection.request, response=rejection)
+    )
+
+    oauth2_server = _bridge_server(auth_type=MCPAuth.oauth2, dcr_bridge=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=raising_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=oauth2_server,
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "invalid_client_metadata" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_never_relays_out_of_contract_body_to_client():
+    """These endpoints serve unauthenticated OAuth clients, so a non-RFC6749 upstream body (HTML
+    error page, proxy banner, stack trace) must stay in server logs; the client sees only the
+    upstream status."""
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(404, text_body="<html>Error 404 stack trace: secret internals</html>")
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 404"}
+
+
+@pytest.mark.asyncio
+async def test_register_never_relays_out_of_contract_body_to_client():
+    """Same trust boundary for DCR: a non-RFC7591 rejection body is logged server-side and the
+    client detail names only the status."""
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    rejection = httpx.Response(
+        500,
+        text="<html>Tomcat stack trace with internals</html>",
+        request=httpx.Request("POST", "https://idp.example.com/register"),
+    )
+    raising_client = MagicMock()
+    raising_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("Server error '500'", request=rejection.request, response=rejection)
+    )
+
+    oauth2_server = _bridge_server(auth_type=MCPAuth.oauth2, dcr_bridge=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=raising_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reuse_persisted_dcr_client_if_available",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await register_client_with_server(
+                request=_bridge_mock_request(),
+                mcp_server=oauth2_server,
+                client_name="Claude",
+                grant_types=None,
+                response_types=None,
+                token_endpoint_auth_method=None,
+            )
+
+    assert exc.value.status_code == 502
+    assert str(exc.value.detail) == "upstream registration failed with HTTP 500"
+    assert "Tomcat" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
+    """An upstream whose failure body cannot be read (unconsumed stream, lying content-encoding)
+    makes response.text/.json raise; the classifier must stay total so the caller still gets the
+    §5.2-shaped 502 instead of the opaque 500 this change set out to remove."""
+    import httpx
+
+    unreadable = httpx.Response(
+        400,
+        stream=httpx.ByteStream(b"\x1f\x8bnot-actually-gzip"),
+        headers={"content-encoding": "gzip"},
+        request=httpx.Request("POST", "https://oauth2.googleapis.com/token"),
+    )
+
+    response = await _exchange_with_upstream_response(unreadable)
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 400"}

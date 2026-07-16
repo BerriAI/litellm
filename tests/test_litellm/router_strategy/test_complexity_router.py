@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
     DimensionScore,
@@ -2386,6 +2387,16 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
+    def test_returns_empty_dict_for_missing_metadata(self):
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        for absent in (None, {}):
+            result = _classifier_call_metadata(absent)
+            assert result == {}
+            assert isinstance(result, dict)
+
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.router_strategy.complexity_router.complexity_router import (
@@ -2485,3 +2496,464 @@ class TestRoutingDecisionCauseLogging:
         assert "score=" in router_log_capture.text
         assert "cause=literal_keyword_match" not in router_log_capture.text
         assert "cause=semantic_keyword_match" not in router_log_capture.text
+
+
+class TestSessionAffinity:
+    """Test the opt-in session_affinity sticky-routing behavior."""
+
+    REASONING_MESSAGE = [
+        {
+            "role": "user",
+            "content": "Let's think step by step and reason through this problem carefully.",
+        }
+    ]
+    SIMPLE_MESSAGE = [{"role": "user", "content": "Hello!"}]
+
+    @pytest.fixture
+    def session_affinity_config(self, basic_config) -> Dict:
+        return {**basic_config, "session_affinity": True}
+
+    @staticmethod
+    def _request_kwargs(session_id: str) -> Dict:
+        return {"metadata": {"session_id": session_id}}
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to False, so a shared session_id must
+        not pin the model -- each turn is still classified independently."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_pins_model_after_first_turn(self, mock_router_instance, session_affinity_config):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert first.model == "o1-preview"
+
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy_aclassify:
+            second = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+            )
+            spy_aclassify.assert_not_called()
+        # Pinned to the first turn's model, not re-classified down to SIMPLE.
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_different_sessions_classify_independently(self, mock_router_instance, session_affinity_config):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        reasoning = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-a"), messages=self.REASONING_MESSAGE
+        )
+        simple = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-b"), messages=self.SIMPLE_MESSAGE
+        )
+        assert reasoning.model == "o1-preview"
+        assert simple.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_affinity": True,
+                "session_affinity_ttl_seconds": 120,
+            },
+        )
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        )
+        cache.async_set_cache.assert_called_once()
+        call_kwargs = cache.async_set_cache.call_args.kwargs
+        assert call_kwargs["ttl"] == 120
+        assert call_kwargs["value"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
+        """Regression: a pinned turn must refresh the TTL, not just the first write --
+        otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value="o1-preview")
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_affinity": True,
+                "session_affinity_ttl_seconds": 90,
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "o1-preview"
+        cache.async_set_cache.assert_called_once()
+        call_kwargs = cache.async_set_cache.call_args.kwargs
+        assert call_kwargs["value"] == "o1-preview"
+        assert call_kwargs["ttl"] == 90
+
+    @pytest.mark.asyncio
+    async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
+        """A session_id is client-supplied and unauthenticated; two different callers
+        (API keys) reusing the same session_id must not poison each other's pin."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        caller_a_kwargs = {"metadata": {"session_id": "shared-session", "user_api_key_hash": "key-a"}}
+        caller_b_kwargs = {"metadata": {"session_id": "shared-session", "user_api_key_hash": "key-b"}}
+
+        pinned_for_a = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_a_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert pinned_for_a.model == "o1-preview"
+
+        # Caller B reuses the same session_id but has a different API key; its trivial
+        # message must classify fresh, not inherit caller A's REASONING-tier pin.
+        result_for_b = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_b_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert result_for_b.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_falls_back_to_reclassify(self, mock_router_instance, session_affinity_config):
+        cache = AsyncMock()
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "gpt-4o-mini"
+        cache.async_get_cache.assert_not_called()
+        cache.async_set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_adaptive_pinned_turn_still_stamps_chosen_model_metadata(self, mock_router_instance):
+        """Regression: skipping classification on a pinned turn must not break the
+        adaptive bandit's reward-feedback loop, which only records a turn's outcome
+        when ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY is present in the request metadata."""
+        mock_router_instance.cache = DualCache()
+        mock_router_instance.model_list = [
+            {
+                "model_name": "cheap",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "input_cost_per_token": 0.0},
+                "model_info": {},
+            },
+        ]
+        mock_router_instance.model_name_to_deployment_indices = {"cheap": [0]}
+        router = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "adaptive": True,
+                "session_affinity": True,
+                "tiers": {
+                    "SIMPLE": ["cheap"],
+                    "MEDIUM": ["cheap"],
+                    "COMPLEX": ["cheap"],
+                    "REASONING": ["cheap"],
+                },
+                "default_model": "cheap",
+            },
+        )
+        first = await router.async_pre_routing_hook(
+            model="hybrid",
+            request_kwargs=self._request_kwargs("session-1"),
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert first.model == "cheap"
+
+        request_kwargs_2 = self._request_kwargs("session-1")
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy_aclassify:
+            second = await router.async_pre_routing_hook(
+                model="hybrid",
+                request_kwargs=request_kwargs_2,
+                messages=[{"role": "user", "content": "hi again"}],
+            )
+            spy_aclassify.assert_not_called()
+        assert second.model == "cheap"
+        assert request_kwargs_2["metadata"]["adaptive_router_chosen_model"] == "cheap"
+
+
+class _DummyPlugin:
+    async def run(self, context):
+        return context
+
+
+class TestRoutingPlugins:
+    """Test the `complexity_router_config.plugins` field: narrows the classified
+    tier's candidate pool before a model is picked. Discussion:
+    https://github.com/BerriAI/litellm/discussions/32168"""
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrows_tier_candidates(self, mock_router_instance):
+        class ExcludeGpt4oMini:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-mini"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "plugins": [ExcludeGpt4oMini()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrowing_to_zero_raises_even_with_default_model_configured(self, mock_router_instance):
+        """Regression: default_model must never be used as an escape hatch around a
+        plugin's narrowing decision -- it was never checked against the plugins, so
+        falling back to it would let a tenant/budget policy be silently bypassed.
+        Reported by Veria AI on PR #33251."""
+
+        class BlockEverything:
+            async def run(self, context):
+                context.candidate_models = []
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "default_model": "gpt-4o-fallback",
+                "plugins": [BlockEverything()],
+            },
+        )
+        with pytest.raises(ValueError, match="No candidate models left for tier"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrowing_to_zero_without_default_model_raises(self, mock_router_instance):
+        class BlockEverything:
+            async def run(self, context):
+                context.candidate_models = []
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "plugins": [BlockEverything()],
+            },
+        )
+        with pytest.raises(ValueError, match="No candidate models left for tier"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_plugin_receives_metadata_from_request_kwargs(self, mock_router_instance):
+        captured = {}
+
+        class CaptureMetadata:
+            async def run(self, context):
+                captured.update(context.metadata)
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "plugins": [CaptureMetadata()],
+            },
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {"tenant": "acme-corp"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert captured.get("tenant") == "acme-corp"
+
+    @pytest.mark.asyncio
+    async def test_plugin_applies_to_keyword_tier_override(self, mock_router_instance):
+        """A policy plugin must not be bypassable via the keyword_tier_rules override path."""
+
+        class ExcludeGpt4oMini:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-mini"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}],
+                "plugins": [ExcludeGpt4oMini()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
+    @pytest.mark.asyncio
+    async def test_plugin_applies_to_no_user_message_default_tier_path(self, mock_router_instance):
+        """Regression: `self.config.default_model or await self._pick_model_for_tier(...)`
+        short-circuited on a truthy default_model, so the no-user-message path never ran
+        the plugin pipeline at all when default_model was configured. A policy plugin
+        must not be bypassable via this path either. Reported by Veria AI on PR #33251."""
+
+        class ExcludeDefaultModel:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-default"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "default_model": "gpt-4o-default",
+                "plugins": [ExcludeDefaultModel()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "assistant", "content": "Hello!"},
+            ],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+
+    @pytest.mark.asyncio
+    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(
+        self, mock_router_instance
+    ):
+        """Regression: without plugins configured, the no-user-message path must keep its
+        pre-existing default_model-first priority over the MEDIUM tier exactly as before --
+        closing the plugin-bypass gap must not silently flip model selection for the (much
+        larger) population of users who don't use plugins at all. Flagged by Greptile on
+        PR #33251 after the plugin-bypass fix changed this priority unconditionally."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-medium-tier"]},
+                "default_model": "gpt-4o-configured-default",
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "assistant", "content": "Hello!"},
+            ],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-configured-default"
+
+    def test_plugins_and_adaptive_together_raises(self):
+        with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": ["gpt-4o-mini"]},
+                adaptive=True,
+                plugins=[_DummyPlugin()],
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_plugins_configured_is_unaffected(self, complexity_router):
+        """Regression guard: a ComplexityRouter with no `plugins` configured behaves exactly as before."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_pin_shortcut_disabled_when_plugins_configured(self, mock_router_instance):
+        """Regression: the session_affinity cache-pin shortcut returned a stale pinned
+        model without ever re-running it through plugins, so a policy plugin's decision
+        (e.g. a budget cap crossed mid-session) was only ever enforced on a session's
+        first turn. With plugins configured, every turn must go through
+        _classify_and_route (and therefore the plugin pipeline) again."""
+        mock_router_instance.cache = DualCache()
+
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "session_affinity": True,
+                "plugins": [AllowAll()],
+            },
+        )
+        request_kwargs = {"metadata": {"session_id": "session-1"}}
+
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            first = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+            )
+            second = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi again"}]
+            )
+        assert first.model == "gpt-4o-mini"
+        assert second.model == "gpt-4o-mini"
+        assert spy.call_count == 2
