@@ -85,6 +85,31 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     item.session.stash[_E2E_TEST_RAN] = True
 
 
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]):
+    """Emit one structured E2E_RESULT line per finished test for Loki/Grafana.
+
+    Status-history panels should aggregate by package (and optional covers), not
+    scrape pytest progress basenames. See e2e_result_reporter.py.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
+
+    result = result_from_pytest(
+        nodeid=report.nodeid,
+        when=report.when,
+        failed=report.failed,
+        skipped=report.skipped,
+        passed=report.passed,
+        duration_seconds=float(report.duration),
+        covers=covers_from_item(item),
+    )
+    if result is None:
+        return
+    print(format_e2e_result_line(result), flush=True)
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Once the whole e2e session is done (all suites), truncate the spend logs so
     the DB doesn't accumulate test rows. Sessions where no e2e test body ran leave
