@@ -17,7 +17,7 @@ from fastapi import (
     Request,
     Response,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -125,6 +125,8 @@ class ScimUserData(TypedDict):
     family_name: Optional[str]
     active: Optional[bool]
     enterprise: Optional[SCIMEnterpriseUser]
+    entitlements: list[SCIMMultiValuedAttribute] | None
+    roles: list[SCIMMultiValuedAttribute] | None
 
 
 class GroupMemberExtractionResult(BaseModel):
@@ -199,6 +201,8 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
         "family_name": user.name.familyName if user.name else None,
         "active": user.active,
         "enterprise": user.enterprise_user,
+        "entitlements": user.entitlements,
+        "roles": user.roles,
     }
 
 
@@ -207,6 +211,8 @@ def _build_scim_metadata(
     family_name: Optional[str],
     active: Optional[bool] = None,
     enterprise: Optional[SCIMEnterpriseUser] = None,
+    entitlements: list[SCIMMultiValuedAttribute] | None = None,
+    roles: list[SCIMMultiValuedAttribute] | None = None,
 ) -> Dict[str, Any]:
     """Build metadata dictionary with SCIM data."""
     metadata: Dict[str, Any] = {
@@ -221,6 +227,12 @@ def _build_scim_metadata(
 
     if enterprise is not None:
         metadata[SCIM_ENTERPRISE_METADATA_KEY] = enterprise.model_dump(by_alias=True, exclude_none=True)
+
+    if entitlements is not None:
+        metadata[SCIM_ENTITLEMENTS_METADATA_KEY] = [e.model_dump(exclude_none=True) for e in entitlements]
+
+    if roles is not None:
+        metadata[SCIM_ROLES_METADATA_KEY] = [r.model_dump(exclude_none=True) for r in roles]
 
     return metadata
 
@@ -739,6 +751,62 @@ def _get_schemas() -> list:
                         ),
                     ],
                 ),
+                SCIMSchemaAttribute(
+                    name="entitlements",
+                    type="complex",
+                    multiValued=True,
+                    description="A list of entitlements for the user.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="The value of an entitlement.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="A human-readable name for the entitlement.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="type",
+                            type="string",
+                            description="A label indicating the entitlement's function.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="primary",
+                            type="boolean",
+                            description="Whether this is the primary entitlement.",
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
+                    name="roles",
+                    type="complex",
+                    multiValued=True,
+                    description="A list of roles for the user.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="The value of a role.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="A human-readable name for the role.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="type",
+                            type="string",
+                            description="A label indicating the role's function.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="primary",
+                            type="boolean",
+                            description="Whether this is the primary role.",
+                        ),
+                    ],
+                ),
             ],
             meta={
                 "location": "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:User",
@@ -1074,6 +1142,8 @@ async def create_user(
             user_data["given_name"],
             user_data["family_name"],
             enterprise=user_data["enterprise"],
+            entitlements=user_data["entitlements"],
+            roles=user_data["roles"],
         )
 
         default_role = _default_scim_user_role()
@@ -1152,6 +1222,8 @@ async def update_user(
             user_data["family_name"],
             scim_active_for_metadata,
             enterprise=user_data["enterprise"],
+            entitlements=user_data["entitlements"],
+            roles=user_data["roles"],
         )
 
         await _handle_team_membership_changes(
@@ -1311,6 +1383,30 @@ def _handle_group_operations(op_type: str, value: Any, teams_set: Set[str]) -> O
     return None
 
 
+def _handle_multi_valued_attribute_update(path: str, op_type: str, value: Any, metadata: dict[str, Any]) -> None:
+    """Handle add/replace/remove for the entitlements and roles multi-valued attributes."""
+    metadata_key = SCIM_ENTITLEMENTS_METADATA_KEY if path == "entitlements" else SCIM_ROLES_METADATA_KEY
+    if op_type == "remove":
+        metadata.pop(metadata_key, None)
+        return
+
+    normalized = value if isinstance(value, list) else [value]
+    try:
+        attrs = SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python(normalized)
+    except ValidationError:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid value for {path}: expected a list of objects with a 'value' sub-attribute"},
+        )
+
+    dumped = [attr.model_dump(exclude_none=True) for attr in attrs]
+    existing = metadata.get(metadata_key)
+    if op_type == "add" and isinstance(existing, list):
+        metadata[metadata_key] = existing + dumped
+        return
+    metadata[metadata_key] = dumped
+
+
 def _handle_generic_metadata(path: str, op_type: str, value: Any, metadata: Dict[str, Any]) -> None:
     """Handle generic metadata operations for unknown paths."""
     if op_type == "remove":
@@ -1346,6 +1442,8 @@ def _apply_patch_ops(
                     _handle_displayname_update(op_type, val, update_data)
                 elif key_lower == "externalid":
                     _handle_externalid_update(op_type, val, update_data)
+                elif key_lower in ("entitlements", "roles"):
+                    _handle_multi_valued_attribute_update(key_lower, op_type, val, metadata)
                 elif key_lower == "name" and isinstance(val, dict):
                     for name_key, name_val in val.items():
                         name_key_lower = name_key.lower()
@@ -1366,6 +1464,8 @@ def _apply_patch_ops(
             _handle_active_update(op_type, value, metadata)
         elif path in ("name.givenname", "name.familyname"):
             _handle_name_update(path, op_type, value, scim_metadata)
+        elif path in ("entitlements", "roles"):
+            _handle_multi_valued_attribute_update(path, op_type, value, metadata)
         elif path.startswith("groups"):
             new_replace_set = _handle_group_operations(op_type, value, teams_set)
             if new_replace_set is not None:
