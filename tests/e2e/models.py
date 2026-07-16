@@ -441,6 +441,7 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]

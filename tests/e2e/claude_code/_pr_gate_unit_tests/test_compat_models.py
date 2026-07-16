@@ -115,3 +115,52 @@ def test_vertex_yaml_keys_populate_pydantic_body() -> None:
         assert d.litellm_params.vertex_location, (
             f"{d.model_name} lost its vertex_location after normalization"
         )
+
+
+def test_vertex_deployments_keep_use_in_pass_through() -> None:
+    """Vertex passthrough cells need the deployment registered with
+    ``use_in_pass_through: true`` so the proxy wires project/location
+    credentials into the /vertex_ai passthrough router. ``LiteLLMParamsBody``
+    defaults to ``extra="ignore"``, so a missing field on the body silently
+    strips the yaml flag and every vertex passthrough cell fails at runtime
+    with "No credentials found on proxy for project_name=..."."""
+    vertex = [
+        d
+        for d in load_all_deployments()
+        if d.model_name.endswith("-vertex")
+    ]
+    assert vertex, "no vertex deployments found in yaml"
+    for d in vertex:
+        assert d.litellm_params.use_in_pass_through is True, (
+            f"{d.model_name} lost use_in_pass_through after load; "
+            f"serialized body would be "
+            f"{d.litellm_params.model_dump(exclude_none=True)}"
+        )
+
+
+def test_yaml_litellm_params_are_all_known_body_fields() -> None:
+    """Every key under ``litellm_params`` in ``test_config.yaml`` must map
+    to a ``LiteLLMParamsBody`` field (after the vertex alias rewrite).
+    Without this pin, a new yaml flag can land in the fixture config and
+    be silently dropped by pydantic before ``/model/new`` ever sees it."""
+    import yaml
+    from models import LiteLLMParamsBody
+
+    from claude_code._compat_models import (
+        CONFIG_PATH,
+        _YAML_TO_PYDANTIC_ALIASES,
+    )
+
+    known = frozenset(LiteLLMParamsBody.model_fields)
+    doc = yaml.safe_load(CONFIG_PATH.read_text())
+    model_list = doc.get("model_list") or []
+    unknown = tuple(
+        (entry["model_name"], key)
+        for entry in model_list
+        for key in entry["litellm_params"]
+        if _YAML_TO_PYDANTIC_ALIASES.get(key, key) not in known
+    )
+    assert not unknown, (
+        f"test_config.yaml litellm_params keys not on LiteLLMParamsBody "
+        f"(will be silently dropped at register time): {unknown}"
+    )
