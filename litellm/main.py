@@ -5560,14 +5560,24 @@ def completion(  # type: ignore
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
     except Exception as e:
-        ## Map to OpenAI Exception
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            completion_kwargs=args,
-            extra_kwargs=kwargs,
-        )
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
+        try:
+            raise exception_type(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=e,
+                completion_kwargs=args,
+                extra_kwargs=kwargs,
+            )
+        except litellm.ContextWindowExceededError:
+            if context_window_fallback_dict and model in context_window_fallback_dict and not _is_litellm_router_call:
+                fallback_model = context_window_fallback_dict[model]
+                existing_logging_obj = kwargs.get("litellm_logging_obj")
+                if existing_logging_obj:
+                    existing_logging_obj.update_from_kwargs(kwargs=kwargs, model=fallback_model)
+                    kwargs["litellm_logging_obj"] = existing_logging_obj
+                return completion(model=fallback_model, messages=messages, **kwargs)
+            raise
 
 
 def completion_with_retries(*args, **kwargs):

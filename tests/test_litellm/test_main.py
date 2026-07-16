@@ -7,9 +7,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import urllib.parse
 from unittest.mock import MagicMock, patch
@@ -110,9 +108,7 @@ def test_completion_missing_role(openai_api_response):
 
     print(f"openai_api_response: {openai_api_response}")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create", mock_raw_response
-    ) as mock_create:
+    with patch.object(client.chat.completions.with_raw_response, "create", mock_raw_response) as mock_create:
         litellm.completion(
             model="gpt-4o-mini",
             messages=[
@@ -181,9 +177,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
     # URL->image conversion helpers so suite-level network/client state from
     # earlier tests cannot prevent the mocked provider client from being hit.
     fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
-    monkeypatch.setattr(
-        prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
-    )
+    monkeypatch.setattr(prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image)
     monkeypatch.setattr(
         prompt_factory.BedrockImageProcessor,
         "get_image_details",
@@ -298,9 +292,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
             }
         ],
     }
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             if sync_mode:
                 response = completion(**args, client=client)
@@ -352,9 +344,7 @@ def test_strip_input_examples_for_non_anthropic_providers():
         }
     ]
 
-    assert not litellm_main._should_allow_input_examples(
-        custom_llm_provider="openai", model="gpt-4o-mini"
-    )
+    assert not litellm_main._should_allow_input_examples(custom_llm_provider="openai", model="gpt-4o-mini")
 
     cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
 
@@ -366,9 +356,7 @@ def test_strip_input_examples_for_non_anthropic_providers():
 def test_custom_provider_with_extra_headers():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(
-        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
-    ) as mock_post:
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -383,9 +371,7 @@ def test_custom_provider_with_extra_headers():
 def test_custom_provider_with_extra_body():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(
-        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
-    ) as mock_post:
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -412,9 +398,7 @@ def test_custom_provider_with_extra_body():
         }
 
     # test that extra_body is not passed if not provided
-    with patch.object(
-        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
-    ) as mock_post:
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -445,9 +429,7 @@ def set_openrouter_api_key():
 
 
 @pytest.mark.asyncio
-async def test_extra_body_with_fallback(
-    respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch
-):
+async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch):
     """
     test regression for https://github.com/BerriAI/litellm/issues/8425.
 
@@ -515,9 +497,7 @@ async def test_extra_body_with_fallback(
 
         # Verify the response
         assert response is not None
-        assert (
-            len(respx_mock.calls) > 0
-        ), "Mock was not called - check if aiohttp transport is properly disabled"
+        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
 
         # Get the request from the mock
         request: httpx.Request = respx_mock.calls[0].request
@@ -541,9 +521,7 @@ async def test_extra_body_with_fallback(
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_openai_env_base(
-    respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
-):
+async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
     # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
@@ -558,9 +536,7 @@ async def test_openai_env_base(
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
     # Configure respx mock to intercept the request
-    mock_route = respx_mock.post(
-        url__regex=r"http://localhost:12345/v1/chat/completions.*"
-    ).mock(
+    mock_route = respx_mock.post(url__regex=r"http://localhost:12345/v1/chat/completions.*").mock(
         return_value=httpx.Response(
             status_code=200,
             json={
@@ -594,9 +570,7 @@ async def test_openai_env_base(
         assert response.choices[0].message.content == "Hello from mocked response!"
 
         # Verify the mock was called
-        assert (
-            mock_route.called
-        ), "Mock route was not called - request may have bypassed respx"
+        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
     finally:
         # Clean up to avoid affecting other tests
         litellm.disable_aiohttp_transport = False
@@ -667,9 +641,9 @@ def test_responses_api_bridge_check_gpt_5_4_pro():
             model=model_name,
             custom_llm_provider="openai",
         )
-        assert (
-            model_info.get("mode") == "responses"
-        ), f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
+        assert model_info.get("mode") == "responses", (
+            f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
+        )
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses():
@@ -987,9 +961,7 @@ def test_responses_api_bridge_check_handles_exception():
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.side_effect = Exception("Model not found")
 
-        model_info, model = responses_api_bridge_check(
-            model="responses/custom-model", custom_llm_provider="custom"
-        )
+        model_info, model = responses_api_bridge_check(model="responses/custom-model", custom_llm_provider="custom")
 
         assert model == "custom-model"
         assert model_info["mode"] == "responses"
@@ -1770,9 +1742,7 @@ def test_image_edit_merges_headers_and_extra_headers():
 
     mock_image_edit_config = MagicMock()
     mock_image_edit_config.get_supported_openai_params.return_value = set()
-    mock_image_edit_config.map_openai_params.side_effect = lambda **kwargs: dict(
-        kwargs["image_edit_optional_params"]
-    )
+    mock_image_edit_config.map_openai_params.side_effect = lambda **kwargs: dict(kwargs["image_edit_optional_params"])
 
     with (
         patch(
@@ -1854,10 +1824,7 @@ def test_mock_completion_stream_with_model_response():
     # Verify the content is streamed correctly
     accumulated_content = ""
     for chunk in chunks:
-        if (
-            hasattr(chunk.choices[0].delta, "content")
-            and chunk.choices[0].delta.content
-        ):
+        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is a test response" in accumulated_content or len(chunks) > 0
@@ -1915,10 +1882,7 @@ async def test_async_mock_completion_stream_with_model_response():
     # Verify the content is streamed correctly
     accumulated_content = ""
     for chunk in chunks:
-        if (
-            hasattr(chunk.choices[0].delta, "content")
-            and chunk.choices[0].delta.content
-        ):
+        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
@@ -1962,3 +1926,62 @@ class TestCallTypesOCR:
 
         call_type = CallTypes("aocr")
         assert call_type == CallTypes.aocr
+
+
+def test_context_window_fallback_reuses_logging_object():
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-fallback-logging-obj",
+        function_id="test-fallback-logging-obj",
+    )
+    update_calls: list[str] = []
+    original_update_from_kwargs = Logging.update_from_kwargs
+
+    def _track_update_from_kwargs(self, kwargs, **update_kwargs):
+        if update_kwargs.get("model") is not None:
+            update_calls.append(update_kwargs["model"])
+        return original_update_from_kwargs(self, kwargs, **update_kwargs)
+
+    call_count = {"n": 0}
+
+    def _mock_completion_with_fallback(*args, **mock_kwargs):
+        call_count["n"] += 1
+        current_model = args[0] if args else mock_kwargs.get("model")
+        if call_count["n"] == 1:
+            raise litellm.ContextWindowExceededError(
+                message="mock context window exceeded",
+                llm_provider="openai",
+                model=current_model,
+            )
+        response = litellm.ModelResponse()
+        response.choices = [
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(content="fallback success", role="assistant"),
+            )
+        ]
+        response.model = current_model
+        return response
+
+    with patch.object(Logging, "update_from_kwargs", _track_update_from_kwargs):
+        with patch("litellm.main.mock_completion", side_effect=_mock_completion_with_fallback):
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hello"}],
+                context_window_fallback_dict={"gpt-3.5-turbo": "gpt-4o-mini"},
+                litellm_logging_obj=logging_obj,
+                mock_response="placeholder",
+            )
+
+    assert response.choices[0].message.content == "fallback success"
+    assert update_calls == ["gpt-4o-mini"]
+    assert call_count["n"] == 2
