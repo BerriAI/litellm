@@ -32,7 +32,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
-    MAX_FILE_ATTACHMENTS_PER_REQUEST,
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
@@ -371,12 +370,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
         return response
 
-    def _max_file_attachments(self) -> int:
-        configured = self.optional_params.get("max_file_attachments")
-        if isinstance(configured, int) and not isinstance(configured, bool) and configured > 0:
-            return configured
-        return MAX_FILE_ATTACHMENTS_PER_REQUEST
-
     @staticmethod
     def _unscannable_block_error(reason: str) -> HTTPException:
         return HTTPException(
@@ -392,11 +385,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         findings, not a sanitized document), so it only blocks. A file_id or remote URL reference
         with no inline bytes and a document over the 4 MB byte limit are guardrail failures that
         block unless the operator has opted into fail-open via fail_on_error=False.
-
-        More attachments than max_file_attachments (default 10) is a fan-out limit, not an
-        unscannable document: it blocks under fail_on_error=True, and under fail_on_error=False
-        every attachment is still scanned rather than silently dropping the overflow. Operators
-        whose requests legitimately carry more attachments raise max_file_attachments.
 
         skip_unscannable_attachments decouples reference-only attachments from fail_on_error: when
         enabled, attachments Model Armor cannot scan (file_id, gs://, or http(s) references with no
@@ -432,14 +420,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 f"{unscannable_references} attachment(s) reference a document with no inline bytes "
                 "(file_id or remote URL) that Model Armor cannot scan"
             )
-            verbose_proxy_logger.warning("Model Armor: %s", reason)
-            if fail_on_error:
-                metadata["_model_armor_status"] = "blocked"
-                raise self._unscannable_block_error(reason)
-
-        max_file_attachments = self._max_file_attachments()
-        if len(attachments) > max_file_attachments:
-            reason = f"{len(attachments)} attachments exceed the per-request scan limit of {max_file_attachments}"
             verbose_proxy_logger.warning("Model Armor: %s", reason)
             if fail_on_error:
                 metadata["_model_armor_status"] = "blocked"

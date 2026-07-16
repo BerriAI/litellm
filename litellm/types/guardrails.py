@@ -808,15 +808,6 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
         ),
     )
-    max_file_attachments: Optional[int] = Field(
-        default=None,
-        description=(
-            "Implemented by guardrail='model_armor'. Maximum number of inline document/file "
-            "attachments scanned per request (default 10). A request over this cap blocks when "
-            "fail_on_error is True; when fail_on_error is False every attachment is still scanned "
-            "instead of dropping the overflow. Raise it for workloads that legitimately attach more."
-        ),
-    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
