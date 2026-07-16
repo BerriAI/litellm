@@ -123,8 +123,7 @@ class TestDataDogLogDelivery:
         DataDog logs intake as exactly one log event whose payload carries the
         model, the token counts, and the response cost.
 
-        This currently fails on the known /v1/messages double-log (LIT-4447)
-        and serves as its regression pin; it goes green when the fix lands."""
+        This currently fails on the known /v1/messages double-log (LIT-4447); it goes green when the fix lands."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-messages-{unique_marker()}", models=[CHEAP_ANTHROPIC_MODEL])
