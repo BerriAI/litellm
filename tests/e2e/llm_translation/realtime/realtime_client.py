@@ -307,6 +307,11 @@ class RealtimeSession:
     def collect_until(
         self, stop_type: str, *, timeout: float
     ) -> tuple[ReceivedEvent, ...]:
+        """Collect events until `stop_type` arrives. A server `error` event fails
+        immediately with the error payload instead of burning the rest of the
+        timeout: upstream failures (bad key, exhausted quota) arrive as an `error`
+        event on an otherwise-open socket, and waiting out the timeout used to
+        bury the cause in a bare "no session.created; got ['error']" (LIT-4482)."""
         deadline = time.monotonic() + timeout
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
@@ -322,6 +327,10 @@ class RealtimeSession:
             collected.append(event)
             if event.type == stop_type:
                 return tuple(collected)
+            if event.type == "error":
+                raise AssertionError(
+                    f"server sent 'error' while waiting for {stop_type!r}: {event.payload}"
+                )
         raise TimeoutError(
             f"no {stop_type!r} within {timeout}s; got {[e.type for e in collected]}"
         )
