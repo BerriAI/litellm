@@ -15,6 +15,7 @@ const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "extract_footer",
     "table_format",
     "confidence_scores_granularity",
+    "include_blocks",
     "id",
 ];
 
@@ -193,6 +194,7 @@ mod tests {
                 "extract_footer",
                 "table_format",
                 "confidence_scores_granularity",
+                "include_blocks",
                 "id",
             ]
         );

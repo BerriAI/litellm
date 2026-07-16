@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -116,6 +116,11 @@ fn max_document_download_bytes() -> u64 {
     (max_size_mb.max(0.0) * 1024.0 * 1024.0) as u64
 }
 
+fn ipv4_in_cidr(ip: Ipv4Addr, network: Ipv4Addr, prefix_length: u32) -> bool {
+    let mask = u32::MAX << (32 - prefix_length);
+    u32::from(ip) & mask == u32::from(network) & mask
+}
+
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -125,16 +130,30 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || ip.is_broadcast()
                 || ip.is_multicast()
                 || ip.is_unspecified()
+                || ipv4_in_cidr(ip, Ipv4Addr::new(0, 0, 0, 0), 8)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(100, 64, 0, 0), 10)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(192, 0, 0, 0), 24)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(192, 0, 2, 0), 24)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(192, 88, 99, 0), 24)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(198, 18, 0, 0), 15)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(198, 51, 100, 0), 24)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(203, 0, 113, 0), 24)
+                || ipv4_in_cidr(ip, Ipv4Addr::new(240, 0, 0, 0), 4)
         }
         IpAddr::V6(ip) => {
-            let first_segment = ip.segments()[0];
+            let segments = ip.segments();
+            let first_segment = segments[0];
             let is_unique_local = (first_segment & 0xfe00) == 0xfc00;
             let is_link_local = (first_segment & 0xffc0) == 0xfe80;
+            let is_site_local = (first_segment & 0xffc0) == 0xfec0;
+            let is_documentation = first_segment == 0x2001 && segments[1] == 0x0db8;
             ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_multicast()
                 || is_unique_local
                 || is_link_local
+                || is_site_local
+                || is_documentation
                 || ip
                     .to_ipv4_mapped()
                     .or_else(|| ip.to_ipv4())
@@ -544,11 +563,18 @@ mod tests {
         assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
         assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
         assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
+        assert!(is_blocked_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("198.18.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("192.0.2.1".parse().unwrap()));
         assert!(is_blocked_ip("::1".parse().unwrap()));
         assert!(is_blocked_ip("fd00::1".parse().unwrap()));
         assert!(is_blocked_ip("fe80::1".parse().unwrap()));
+        assert!(is_blocked_ip("fec0::1".parse().unwrap()));
+        assert!(is_blocked_ip("2001:db8::1".parse().unwrap()));
         assert!(is_blocked_ip("::ffff:169.254.169.254".parse().unwrap()));
         assert!(is_blocked_ip("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("::ffff:100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("::ffff:198.18.0.1".parse().unwrap()));
         assert!(!is_blocked_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_blocked_ip("::ffff:8.8.8.8".parse().unwrap()));
     }

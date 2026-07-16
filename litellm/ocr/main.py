@@ -297,9 +297,11 @@ async def aocr(
         )
 
         # OCR with local file
+        from pathlib import Path
+
         response = await litellm.aocr(
             model="mistral/mistral-ocr-latest",
-            document={"type": "file", "file": "/path/to/document.pdf"}
+            document={"type": "file", "file": Path("/path/to/document.pdf")}
         )
         ```
     """
@@ -554,9 +556,11 @@ def ocr(
         )
 
         # OCR with local file
+        from pathlib import Path
+
         response = litellm.ocr(
             model="mistral/mistral-ocr-latest",
-            document={"type": "file", "file": "/path/to/document.pdf"}
+            document={"type": "file", "file": Path("/path/to/document.pdf")}
         )
 
         # Access pages
@@ -575,8 +579,7 @@ def ocr(
         "kwargs": kwargs,
     }
     try:
-        _is_async = kwargs.pop("aocr", False) is True
-        completion_kwargs["aocr"] = _is_async
+        completion_kwargs["aocr"] = kwargs.pop("aocr", False) is True
         (
             model,
             document,
