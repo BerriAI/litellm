@@ -180,8 +180,7 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
  * Generate install command for Claude Code CLI.
  * Installs the named plugin from the "litellm" marketplace registered in settings.json.
  */
-export const formatInstallCommand = (plugin: { name: string }): string =>
-  `/plugin install ${plugin.name}@litellm`;
+export const formatInstallCommand = (plugin: { name: string }): string => `/plugin install ${plugin.name}@litellm`;
 
 /**
  * Extract unique categories from plugins list

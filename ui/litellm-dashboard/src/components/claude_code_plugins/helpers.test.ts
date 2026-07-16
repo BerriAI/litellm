@@ -18,7 +18,7 @@ import {
   parseSkillSource,
   isValidSubPath,
 } from "./helpers";
-import { MarketplacePluginEntry, PluginSource } from "./types";
+import { MarketplacePluginEntry } from "./types";
 
 describe("formatInstallCommand", () => {
   it("produces a /plugin install command scoped to the litellm marketplace", () => {
