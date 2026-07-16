@@ -177,20 +177,11 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 };
 
 /**
- * Generate install command for Claude Code CLI
- * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
+ * Generate install command for Claude Code CLI.
+ * Installs the named plugin from the "litellm" marketplace registered in settings.json.
  */
-export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  const { source } = plugin;
-  if (source.source === "github" && source.repo) {
-    return `/plugin marketplace add ${source.repo}`;
-  }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return `/plugin marketplace add ${source.url}`;
-  }
-  // Fallback to plugin name
-  return `/plugin marketplace add ${plugin.name}`;
-};
+export const formatInstallCommand = (plugin: { name: string }): string =>
+  `/plugin install ${plugin.name}@litellm`;
 
 /**
  * Extract unique categories from plugins list
