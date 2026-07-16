@@ -1474,6 +1474,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    tool_use_tokens: Optional[int] = None
+    """Number of tokens consumed by tool-use prompts (e.g. Gemini grounding). Kept out of prompt_tokens so the flat grounding fee is not also charged per input token."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 

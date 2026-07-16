@@ -5254,3 +5254,70 @@ def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     fields = model_response.choices[-1].message.provider_specific_fields
     assert fields["thought_signatures"] == ["sig-text"]
     assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
+
+
+def test_vertex_ai_usage_metadata_grounding_surfaces_tool_use_tokens():
+    """Grounded (googleSearch) request: toolUsePromptTokenCount is surfaced and reconciles the total.
+
+    Regression for https://github.com/BerriAI/litellm/issues/33530
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=100,
+        candidatesTokenCount=40,
+        toolUsePromptTokenCount=25,
+        totalTokenCount=165,
+    )
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert result.prompt_tokens == 100
+    assert result.completion_tokens == 40
+    assert result.total_tokens == 165
+    assert result.prompt_tokens_details.tool_use_tokens == 25
+    assert (
+        result.prompt_tokens + result.completion_tokens + result.prompt_tokens_details.tool_use_tokens
+        == result.total_tokens
+    )
+
+
+def test_vertex_ai_usage_metadata_grounding_does_not_double_count_reasoning():
+    """Grounded request whose candidatesTokenCount already includes thoughts.
+
+    Without accounting for toolUsePromptTokenCount, is_candidate_token_count_inclusive treats
+    candidates as exclusive and double-counts reasoning into completion_tokens.
+    Regression for https://github.com/BerriAI/litellm/issues/33530
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=100,
+        candidatesTokenCount=60,
+        toolUsePromptTokenCount=30,
+        thoughtsTokenCount=10,
+        totalTokenCount=190,
+    )
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert result.completion_tokens == 60
+    assert result.prompt_tokens_details.tool_use_tokens == 30
+
+
+def test_is_candidate_token_count_inclusive_accounts_for_grounding():
+    """toolUsePromptTokenCount must be part of the inclusive/exclusive determination.
+
+    Regression for https://github.com/BerriAI/litellm/issues/33530
+    """
+    inclusive = UsageMetadata(
+        promptTokenCount=100,
+        candidatesTokenCount=60,
+        toolUsePromptTokenCount=30,
+        totalTokenCount=190,
+    )
+    exclusive = UsageMetadata(
+        promptTokenCount=100,
+        candidatesTokenCount=50,
+        toolUsePromptTokenCount=30,
+        thoughtsTokenCount=10,
+        totalTokenCount=190,
+    )
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(inclusive) is True
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(exclusive) is False

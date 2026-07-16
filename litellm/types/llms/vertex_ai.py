@@ -304,6 +304,8 @@ class UsageMetadata(TypedDict, total=False):
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
     candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
+    toolUsePromptTokenCount: int
+    toolUsePromptTokensDetails: List[PromptTokensDetails]
 
 
 class TokenCountDetailsResponse(TypedDict):
