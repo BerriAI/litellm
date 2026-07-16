@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from e2e_config import (
     DD_API_KEY,
     DD_APP_KEY,
+    DD_SEARCH_FROM,
     DD_SETTLE_SECONDS,
     DD_SITE,
     POLL_INTERVAL,
@@ -38,7 +39,8 @@ class _SearchFilter(BaseModel):
     query: str
     #: Wide enough to cover a full suite run plus DataDog's ingestion lag;
     #: markers are unique per test, so a wide window cannot match foreign events.
-    from_: str = Field(default="now-30m", serialization_alias="from")
+    #: Override via E2E_DD_SEARCH_FROM when CI lookback needs more than the default.
+    from_: str = Field(default_factory=lambda: DD_SEARCH_FROM, serialization_alias="from")
     to: str = "now"
 
 
@@ -120,14 +122,22 @@ class DdLogsReader:
         self, marker: str, events: list[DdLogEvent]
     ) -> list[DdLogEvent]:
         """Re-read at every poll interval until the settle window closes; a
-        duplicate ends the watch early because more waiting cannot clear it."""
+        duplicate ends the watch early because more waiting cannot clear it.
+
+        Keep the last non-empty result: a transient empty search (index lag)
+        must not erase events already confirmed earlier in the settle window.
+        """
         settle_deadline = time.monotonic() + DD_SETTLE_SECONDS
+        last_nonempty = events
         while time.monotonic() < settle_deadline:
             time.sleep(POLL_INTERVAL)
-            events = self.events_for_marker(marker)
-            if len(events) > 1:
-                return events
-        return events
+            latest = self.events_for_marker(marker)
+            if not latest:
+                continue
+            if len(latest) > 1:
+                return latest
+            last_nonempty = latest
+        return last_nonempty
 
 
 def build_dd_logs_reader() -> DdLogsReader:

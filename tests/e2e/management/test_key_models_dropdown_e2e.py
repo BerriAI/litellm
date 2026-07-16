@@ -74,10 +74,12 @@ def _open_key_edit_form(page: Page, key_alias: str) -> None:
     row = page.locator("tr").filter(has_text=key_alias).first
     expect(row).to_be_visible(timeout=60_000)
     # Key Alias is plain text. KeyInfoView opens from the Key ID control in the
-    # same row (blue truncated hash button on the tremor table / IdCell on the
-    # newer DataTable). Prefer that button; fall back to the alias text for
-    # layouts where the Key column itself is the click target.
-    key_id_button = row.locator("button").first
+    # same row (mono hash button on the tremor table / IdCell on the newer
+    # DataTable). Prefer that button; fall back to the alias text for layouts
+    # where the Key column itself is the click target.
+    key_id_button = row.locator("button.font-mono").first
+    if key_id_button.count() == 0:
+        key_id_button = row.locator("button").first
     if key_id_button.count() > 0:
         key_id_button.click()
     else:

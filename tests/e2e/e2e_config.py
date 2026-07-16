@@ -46,6 +46,9 @@ DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
 # make one call's two events searchable tens of seconds apart, and a duplicate
 # that surfaces late IS the bug (LIT-4447), so one poll interval is not enough.
 DD_SETTLE_SECONDS = float(os.environ.get("E2E_DD_SETTLE_SECONDS", "30"))
+# DataDog Logs Search `from` window (relative to now). Wide enough for a suite
+# run plus ingestion lag; override if a long CI queue needs a wider lookback.
+DD_SEARCH_FROM = os.environ.get("E2E_DD_SEARCH_FROM", "now-30m").strip() or "now-30m"
 
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.
