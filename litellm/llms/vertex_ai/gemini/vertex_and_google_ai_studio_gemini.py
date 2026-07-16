@@ -1739,7 +1739,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
             "candidatesTokenCount", 0
-        ) == usage_metadata.get("totalTokenCount", 0):
+        ) + usage_metadata.get("toolUsePromptTokenCount", 0) == usage_metadata.get("totalTokenCount", 0):
             return True
         else:
             return False
@@ -1894,6 +1894,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             text_tokens=prompt_text_tokens,
             image_tokens=prompt_image_tokens,
             video_tokens=prompt_video_tokens,
+            tool_use_tokens=usage_metadata.get("toolUsePromptTokenCount"),
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
