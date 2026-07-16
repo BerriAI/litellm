@@ -360,7 +360,7 @@ class ParallelRequestGauge(TypedDict):
 
 class ParallelSlotAcquisition(TypedDict):
     slot_id: str
-    counter_keys: List[str]
+    counter_keys: list[str]
 
 
 class RateLimitStatus(TypedDict):
@@ -791,7 +791,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         read_only: bool = False,
         skip_tpm_check: bool = False,
-        parallel_slot_id: Optional[str] = None,
+        parallel_slot_id: str | None = None,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -913,17 +913,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _collect_windowed_keys_and_gauges(
         self,
-        descriptors: List[RateLimitDescriptor],
+        descriptors: list[RateLimitDescriptor],
         skip_tpm_check: bool,
-    ) -> Tuple[List[str], Dict[str, Dict[str, Any]], List[ParallelRequestGauge]]:
+    ) -> tuple[list[str], dict[str, dict[str, Any]], list[ParallelRequestGauge]]:
         """
         Split descriptors into the windowed (window_key, counter_key) fetch
         list with its per-window metadata, and the concurrency gauges for
         descriptors carrying a max_parallel_requests limit.
         """
         keys_to_fetch: List[str] = []
-        key_metadata: Dict[str, Dict[str, Any]] = {}
-        gauges: List[ParallelRequestGauge] = []
+        key_metadata: dict[str, dict[str, Any]] = {}
+        gauges: list[ParallelRequestGauge] = []
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
@@ -993,9 +993,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _check_parallel_request_gauges(
         self,
-        gauges: List[ParallelRequestGauge],
+        gauges: list[ParallelRequestGauge],
         slot_id: str,
-        parent_otel_span: Optional[Span] = None,
+        parent_otel_span: Span | None = None,
         read_only: bool = False,
     ) -> RateLimitResponse:
         """
@@ -1079,9 +1079,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _read_local_gauge_counts(
         self,
-        gauge_keys: List[str],
-        parent_otel_span: Optional[Span] = None,
-    ) -> List[int]:
+        gauge_keys: list[str],
+        parent_otel_span: Span | None = None,
+    ) -> list[int]:
         values = await self.internal_usage_cache.async_batch_get_cache(
             keys=gauge_keys,
             parent_otel_span=parent_otel_span,
@@ -1093,9 +1093,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _acquire_parallel_slots_in_memory(
         self,
-        gauges: List[ParallelRequestGauge],
+        gauges: list[ParallelRequestGauge],
         slot_id: str,
-        parent_otel_span: Optional[Span] = None,
+        parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """
         All-or-nothing in-memory slot-registry acquire. Caller holds the lock.
@@ -1109,7 +1109,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         now = self._get_current_time().timestamp()
         cutoff = now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
-        states: List[Tuple[Optional[Dict[str, float]], int]] = []
+        states: list[tuple[dict[str, float] | None, int]] = []
         for gauge in gauges:
             raw_value = await self.internal_usage_cache.async_get_cache(
                 key=gauge["counter_key"],
@@ -1117,7 +1117,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 local_only=True,
             )
             if isinstance(raw_value, dict):
-                registry: Optional[Dict[str, float]] = {
+                registry: dict[str, float] | None = {
                     key: float(ts) for key, ts in raw_value.items() if isinstance(ts, (int, float)) and ts >= cutoff
                 }
                 in_flight = len(registry or {})
@@ -1136,7 +1136,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         statuses = []
         for gauge, (registry, in_flight) in zip(gauges, states):
-            new_value: Union[Dict[str, float], int] = (
+            new_value: Union[dict[str, float], int] = (
                 {**registry, slot_id: now} if registry is not None else in_flight + 1
             )
             await self.internal_usage_cache.async_set_cache(
@@ -1152,7 +1152,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def _release_parallel_request_slots(
         self,
         acquisition: ParallelSlotAcquisition,
-        parent_otel_span: Optional[Span] = None,
+        parent_otel_span: Span | None = None,
     ) -> None:
         """
         Release the max_parallel_requests slots acquired at pre-call by
@@ -1196,7 +1196,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if isinstance(raw_value, dict):
                     if slot_id not in raw_value:
                         continue
-                    new_value: Union[Dict[str, float], int] = {
+                    new_value: Union[dict[str, float], int] = {
                         key: ts for key, ts in raw_value.items() if key != slot_id
                     }
                 elif raw_value is None:
@@ -2893,8 +2893,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _get_parallel_slot_acquisition(
         cls,
         kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ParallelSlotAcquisition]:
+        standard_logging_metadata: dict[str, Any] | None = None,
+    ) -> ParallelSlotAcquisition | None:
         """The slot acquisition this request's pre-call hook made, if any."""
         candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, MAX_PARALLEL_SLOT_ACQUIRED_KEY)
         if not isinstance(candidate, dict):
@@ -3371,7 +3371,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key ``max_parallel_requests`` slot that

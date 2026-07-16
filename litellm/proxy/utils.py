@@ -2586,7 +2586,7 @@ class ProxyLogging:
     def _release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
