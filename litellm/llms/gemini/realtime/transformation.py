@@ -1103,7 +1103,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         key: str,
         value: Any,
         current_delta_type: Optional[ALL_DELTA_TYPES],
-    ) -> Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]:
+    ) -> Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents, None]:
+        """Map a Gemini top-level key to the OpenAI event it produces. Returns None
+        for a ``generationComplete`` with no preceding content deltas (a toolCall-only
+        or empty generation): there is no text/audio "done" to emit for it, and
+        raising here used to make the caller drop the entire backend frame."""
         if isinstance(value, dict):
             model_turn_event = value.get("modelTurn")
             generation_complete_event = value.get("generationComplete")
@@ -1114,6 +1118,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if model_turn_event:  # check if model turn event
             openai_event = self.map_model_turn_event(model_turn_event)
         elif generation_complete_event:
+            if current_delta_type is None:
+                return None
             openai_event = self.map_generation_complete_event(delta_type=current_delta_type)
         else:
             # Check if this key or any nested key matches our mapping. Use a
@@ -1237,6 +1243,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             server_content_handled = False
 
         tool_call_handled = False
+        generation_complete_handled = False
         for key, value in list(json_message.items()):  # snapshot: handlers may mutate json_message
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
@@ -1255,6 +1262,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 value=value,
                 current_delta_type=current_delta_type,
             )
+            if openai_event is None:
+                generation_complete_handled = True
+                continue
 
             if openai_event == OpenAIRealtimeEventTypes.SESSION_CREATED:
                 transformed_message = self.transform_session_created_event(
@@ -1498,6 +1508,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 for key in json_message
                 if key in _KNOWN_GEMINI_TOP_LEVEL_KEYS
                 and not (key == "serverContent" and server_content_handled)
+                and not (key == "serverContent" and generation_complete_handled)
                 and not (key == "toolCall" and tool_call_handled)
             ]
             standalone_usage_metadata = json_message.get("usageMetadata")
