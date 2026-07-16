@@ -56,6 +56,7 @@ AZURE_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.azure_foundry.count_tokens.nonstream.works")
 def test_count_tokens_azure(compat_result):
     """Probe `/v1/messages/count_tokens` for each Azure (Microsoft Foundry) tier and
     assert the response shape."""

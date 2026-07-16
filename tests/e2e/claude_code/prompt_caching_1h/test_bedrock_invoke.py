@@ -61,6 +61,7 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.prompt_cache_1h.nonstream.works")
 def test_prompt_caching_1h_bedrock_invoke(compat_result):
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)

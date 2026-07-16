@@ -56,6 +56,7 @@ ANTHROPIC_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.anthropic.count_tokens.nonstream.works")
 def test_count_tokens_anthropic(compat_result):
     """Probe `/v1/messages/count_tokens` for each Anthropic tier and
     assert the response shape."""

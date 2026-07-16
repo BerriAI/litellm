@@ -56,6 +56,7 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.count_tokens.nonstream.works")
 def test_count_tokens_bedrock_invoke(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Invoke) tier and
     assert the response shape."""

@@ -56,6 +56,7 @@ BEDROCK_CONVERSE_MODELS = [
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_converse.count_tokens.nonstream.works")
 def test_count_tokens_bedrock_converse(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Converse) tier and
     assert the response shape."""
