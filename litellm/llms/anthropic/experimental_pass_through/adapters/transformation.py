@@ -1403,11 +1403,6 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(thinking, str)
                         assert isinstance(signature, str)
 
-                        if thinking and signature:
-                            raise ValueError(
-                                "Both `thinking` and `signature` in a single streaming chunk isn't supported."
-                            )
-
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
@@ -1463,17 +1458,14 @@ class LiteLLMAnthropicMessagesAdapter:
                 if choice.delta.reasoning_content is not None:
                     reasoning_content += choice.delta.reasoning_content
 
-        if reasoning_content and reasoning_signature:
-            raise ValueError("Both `reasoning` and `signature` in a single streaming chunk isn't supported.")
-
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(type="input_json_delta", partial_json=partial_json)
-        elif reasoning_content:
-            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         elif reasoning_signature:
             return "signature_delta", ContentThinkingSignatureBlockDelta(
                 type="signature_delta", signature=reasoning_signature
             )
+        elif reasoning_content:
+            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 

@@ -438,6 +438,58 @@ async def test_empty_reasoning_delta_mid_thinking_block_is_suppressed_async():
     _assert_empty_reasoning_delta_suppressed(await _drain_async(wrapper))
 
 
+def _full_snapshot_signature_chunks() -> List[MagicMock]:
+    """Mirror litellm's real Anthropic streaming: incremental ``thinking_delta``
+    chunks (empty signature), then a terminal chunk whose ``thinking_blocks`` entry
+    re-states the *full accumulated thinking text* together with the signature
+    (anthropic/chat/handler.py builds the signature_delta event this way), then the
+    answer text.
+    """
+    return [
+        _thinking_chunk("Let me "),
+        _thinking_chunk("think about it."),
+        _thinking_chunk("Let me think about it.", signature="sig-abc"),
+        _make_chunk(Delta(content="42")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def _assert_full_snapshot_signature_handled(events: List[dict]) -> None:
+    _assert_deltas_match_their_block_type(events)
+    # The full-text snapshot on the signature chunk must NOT be re-emitted as an
+    # extra thinking_delta (it was already streamed incrementally) - otherwise the
+    # client renders the reasoning twice.
+    assert _thinking_deltas(events) == ["Let me ", "think about it."]
+    assert "".join(_thinking_deltas(events)) == "Let me think about it."
+    assert _signature_deltas(events) == ["sig-abc"]
+    assert _text_deltas(events) == ["42"]
+
+
+def test_full_thinking_snapshot_with_signature_emits_signature_only_sync():
+    """Regression: a terminal thinking chunk carrying both the full thinking text
+    and the signature used to raise ``ValueError`` (500) mid-stream, breaking every
+    Claude Code request routed through the proxy with an extended-thinking model. It
+    must instead emit a single ``signature_delta`` without duplicating the thinking.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_full_snapshot_signature_chunks()),
+        model="claude-x",
+    )
+    _assert_full_snapshot_signature_handled(_drain_sync(wrapper))
+
+
+@pytest.mark.asyncio
+async def test_full_thinking_snapshot_with_signature_emits_signature_only_async():
+    """Async twin - the proxy serves the async iterator, so the crash must be gone
+    on that path too.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(_full_snapshot_signature_chunks()),
+        model="claude-x",
+    )
+    _assert_full_snapshot_signature_handled(await _drain_async(wrapper))
+
+
 def test_empty_content_chunk_mid_text_block_is_suppressed_sync():
     """An empty-content chunk arriving mid-text-block (no transition) used to
     emit a pointless ``text_delta {"text": ""}``; it must be dropped without
