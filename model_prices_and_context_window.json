@@ -25612,6 +25612,19 @@
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true
     },
+    "crusoe/moonshotai/Kimi-K2.6": {
+      "max_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 32768,
+      "input_cost_per_token": 7e-07,
+      "output_cost_per_token": 3.5e-06,
+      "cache_read_input_token_cost": 3.5e-07,
+      "litellm_provider": "crusoe",
+      "mode": "chat",
+      "supports_function_calling": true,
+      "supports_tool_choice": true,
+      "supports_system_messages": true
+    },
     "crusoe/deepseek-ai/DeepSeek-R1-0528": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "crusoe",
