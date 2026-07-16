@@ -2,7 +2,11 @@ from typing import Any, Final
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
@@ -45,6 +49,33 @@ def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
             return extra_body_custom_llm_provider
 
     return None
+
+
+def _hidden_param(response: object, key: str) -> str | None:
+    params: Final = getattr(response, "_hidden_params", None)
+    if not isinstance(params, dict):
+        return None
+    value: Final = params.get(key)
+    return value if isinstance(value, str) else None
+
+
+def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
+    video_id: Final = response.get("id") if isinstance(response, dict) else getattr(response, "id", None)
+    if not isinstance(video_id, str) or not video_id:
+        return response
+
+    decoded: Final = decode_video_id_with_provider(video_id)
+    encoded: Final = encode_video_id_with_provider(
+        video_id=decoded.get("video_id", ""),
+        provider=_hidden_param(response, "custom_llm_provider") or decoded.get("custom_llm_provider") or "openai",
+        model_id=_hidden_param(response, "model_id") or fallback_model,
+    )
+    if isinstance(response, dict):
+        response["id"] = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response
+        return response
+
+    response.id = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response
+    return response
 
 
 def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> Any:
