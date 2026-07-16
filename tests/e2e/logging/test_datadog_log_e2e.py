@@ -77,7 +77,13 @@ def _assert_exactly_one_event(
     assert "source:litellm" in event.tags, (
         f"the ingested event must carry the litellm source (shipped as ddsource), got tags {event.tags!r}"
     )
-    assert event.status == "info", f"success events ship at status info, got {event.status!r}"
+    # The proxy ships the envelope at status "info", but DataDog re-derives the
+    # indexed event status from the parsed payload's status attribute
+    # ("success") and normalizes it to its OK severity - so "ok" is what a
+    # successfully ingested success event looks like on the search API.
+    assert event.status == "ok", (
+        f"success events must index at DataDog's ok severity, got {event.status!r}"
+    )
 
     payload = _DdMessagePayload.model_validate(event.attributes)
     assert payload.status == "success", f"payload status must be success, got {payload.status!r}"
