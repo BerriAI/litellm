@@ -1236,6 +1236,12 @@ class MCPServerManager:
             resolved_registration_url = manual_registration_url or (
                 gated_oauth_metadata.registration_url if gated_oauth_metadata else None
             )
+            discovered_issuer = (
+                gated_oauth_metadata.discovered_issuer
+                if gated_oauth_metadata and not gated_oauth_metadata.from_origin_fallback
+                else None
+            )
+            effective_issuer = manual_issuer or discovered_issuer
 
             config_oauth2_flow = server_config.get("oauth2_flow", None)
             if auth_type == MCPAuth.oauth2 and config_oauth2_flow not in (
@@ -1284,7 +1290,7 @@ class MCPServerManager:
                 client_secret=server_config.get("client_secret", None),
                 oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
-                issuer=manual_issuer,
+                issuer=effective_issuer,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
@@ -1700,6 +1706,12 @@ class MCPServerManager:
         )
 
         resolved_scopes = scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
+        discovered_issuer = (
+            gated_oauth_metadata.discovered_issuer
+            if gated_oauth_metadata and not gated_oauth_metadata.from_origin_fallback
+            else None
+        )
+        effective_issuer = manual_issuer or discovered_issuer
 
         new_server = MCPServer(
             server_id=mcp_server.server_id,
@@ -1719,7 +1731,7 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
-            issuer=manual_issuer,
+            issuer=effective_issuer,
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
             token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
             registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),

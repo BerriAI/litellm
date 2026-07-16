@@ -1167,6 +1167,66 @@ class TestMCPServerManager:
         assert built.scopes == ["read", "admin"]
 
     @pytest.mark.asyncio
+    async def test_build_from_table_reflects_discovered_issuer_trust_on_first_use(self):
+        """An unpinned server resolves endpoints resource-rooted on first discovery and records the
+        discovered issuer trust-on-first-use. The returned in-memory server must carry that discovered
+        issuer so the registry matches what gets persisted to the row; otherwise the OAuth token
+        identity (which includes issuer) differs between this build and the next rebuild, forcing a
+        spurious re-auth. Endpoints and issuer come from the same authorization-server document, so
+        they are consistent."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="tofu-issuer-1",
+            alias="tofu_issuer",
+            description="unpinned, discovers its issuer",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            scopes=["read"],
+            discovered_issuer="https://idp.example.com",
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.issuer == "https://idp.example.com"
+        assert built.authorization_url == "https://idp.example.com/authorize"
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_origin_fallback_issuer_is_not_reflected(self):
+        """An origin-fallback discovery is a guess that is deliberately never persisted, so the built
+        server must not claim an issuer the row will not hold; otherwise in-memory and DB would
+        disagree in the opposite direction."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="origin-fallback-1",
+            alias="origin_fallback",
+            description="unpinned, origin-fallback discovery",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://up.example.com/authorize",
+            token_url="https://up.example.com/token",
+            discovered_issuer="https://up.example.com",
+            from_origin_fallback=True,
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.issuer is None
+
+    @pytest.mark.asyncio
     async def test_build_from_table_whitespace_authorization_url_is_not_a_pin(self):
         """A whitespace-only authorization_url on the row must not be kept for redirects while the
         gate treats it as unpinned. It is normalized to unpinned everywhere, so the built server

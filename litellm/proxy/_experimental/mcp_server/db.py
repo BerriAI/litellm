@@ -61,6 +61,13 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
     }
 )
 
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
 # Token-exchange settings with dedicated columns that also exist on
 # ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
 # columns). Every write lifts blob values into the columns and strips them from
@@ -705,7 +712,8 @@ async def update_mcp_server(
     # legacy blob copies below, so the existing row is needed for those updates.
     explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
     url_provided = "url" in data_dict and data_dict["url"] is not None
-    if data.auth_type or has_credentials or explicit_te_write or url_provided:
+    issuer_provided = "issuer" in data_dict
+    if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
     auth_type_changed = bool(
@@ -716,12 +724,16 @@ async def update_mcp_server(
     # A url change re-points the server at a potentially different upstream, so any discovered or
     # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
     url_changed = bool(url_provided and existing and existing.url != data_dict["url"])
+    old_issuer = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
+    issuer_changed = bool(
+        issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
+    )
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
 
-    if auth_type_changed or url_changed:
+    if auth_type_changed or url_changed or issuer_changed:
         # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
         # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
         # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
