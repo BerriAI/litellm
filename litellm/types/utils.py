@@ -241,6 +241,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    audio_seconds_per_prediction: Optional[float]
+    max_audio_length_hours: Optional[float]
+    max_audio_per_prompt: Optional[int]
     output_cost_per_second_1080p: Optional[
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
@@ -261,6 +264,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
             "ocr",
         ]

@@ -3181,15 +3181,25 @@ def test_vertex_ai_lyria_models_in_cost_map():
     assert lyria_2["litellm_provider"] == "vertex_ai"
     assert clip["litellm_provider"] == "vertex_ai"
     assert pro["litellm_provider"] == "vertex_ai"
+    assert lyria_2["mode"] == "audio_speech"
+    assert clip["mode"] == "audio_speech"
+    assert pro["mode"] == "audio_speech"
     assert lyria_2["audio_seconds_per_prediction"] == 30
     assert lyria_2["output_cost_per_second"] == 0.002
     assert lyria_2["supported_modalities"] == ["text"]
     assert lyria_2["supported_output_modalities"] == ["audio"]
     assert lyria_2["supports_audio_output"] is True
+    assert lyria_2["supported_endpoints"] == ["/v1/audio/speech"]
     assert clip["output_cost_per_image"] == 0.04
     assert pro["output_cost_per_image"] == 0.08
-    assert clip["supported_endpoints"] == ["/v1beta/interactions"]
-    assert pro["supported_endpoints"] == ["/v1beta/interactions"]
+    assert clip["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
+    assert pro["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
     assert clip["supported_modalities"] == ["text", "image"]
     assert pro["supported_modalities"] == ["text", "image"]
     assert clip["supported_regions"] == ["global"]
@@ -3198,7 +3208,6 @@ def test_vertex_ai_lyria_models_in_cost_map():
     assert pro["supports_audio_output"] is True
     assert clip["supports_image_input"] is True
     assert pro["supports_image_input"] is True
-
 
 def test_model_info_for_fireworks_short_form_models():
     """

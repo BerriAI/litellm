@@ -8034,6 +8034,7 @@ def speech(
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
+            VertexAILyriaTextToSpeechConfig,
             VertexAITextToSpeechConfig,
         )
 
@@ -8058,7 +8059,10 @@ def speech(
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = VertexAITextToSpeechConfig()
+            if VertexAILyriaTextToSpeechConfig.is_lyria_model(model):
+                text_to_speech_provider_config = VertexAILyriaTextToSpeechConfig()
+            else:
+                text_to_speech_provider_config = VertexAITextToSpeechConfig()
 
         # Cast to specific Vertex AI config type to access dispatch method
         vertex_config = cast(VertexAITextToSpeechConfig, text_to_speech_provider_config)

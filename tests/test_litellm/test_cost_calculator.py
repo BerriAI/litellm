@@ -118,6 +118,27 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("vertex_ai/lyria-002", 0.06),
+        ("vertex_ai/lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+def test_vertex_lyria_speech_cost(model, expected_cost, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    cost = completion_cost(
+        model=model,
+        prompt="A bright synth track",
+        call_type="speech",
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
 def test_baseten_model_api_pricing_entries():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

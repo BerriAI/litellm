@@ -5477,6 +5477,9 @@ def _get_model_info_helper(
                     "output_cost_per_token_above_512k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                audio_seconds_per_prediction=_model_info.get("audio_seconds_per_prediction", None),
+                max_audio_length_hours=_model_info.get("max_audio_length_hours", None),
+                max_audio_per_prompt=_model_info.get("max_audio_per_prompt", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
@@ -8948,9 +8951,12 @@ class ProviderConfigManager:
             return RunwayMLTextToSpeechConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.text_to_speech.transformation import (
+                VertexAILyriaTextToSpeechConfig,
                 VertexAITextToSpeechConfig,
             )
 
+            if VertexAILyriaTextToSpeechConfig.is_lyria_model(model):
+                return VertexAILyriaTextToSpeechConfig()
             return VertexAITextToSpeechConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.text_to_speech.transformation import (

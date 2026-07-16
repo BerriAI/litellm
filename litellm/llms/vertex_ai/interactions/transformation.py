@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Protocol, Tuple, Union, cast
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -29,22 +29,20 @@ _TRUSTED_GOOGLE_API_HOST_SUFFIX = ".googleapis.com"
 class VertexAIInteractionsAuth(Protocol):
     def get_access_token(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
         _retry_reauth: bool = False,
-    ) -> Tuple[str, str]: ...
+    ) -> tuple[str, str]: ...
 
 
 class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
     def __init__(
         self,
-        vertex_auth: Optional[VertexAIInteractionsAuth] = None,
-        interactions_config: Optional[GoogleAIStudioInteractionsConfig] = None,
+        vertex_auth: VertexAIInteractionsAuth | None = None,
+        interactions_config: GoogleAIStudioInteractionsConfig | None = None,
     ) -> None:
         self._vertex_auth = vertex_auth or VertexBase()
-        self._interactions_config = (
-            interactions_config or GoogleAIStudioInteractionsConfig()
-        )
+        self._interactions_config = interactions_config or GoogleAIStudioInteractionsConfig()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -54,14 +52,14 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
     def api_version(self) -> str:
         return "v1beta1"
 
-    def get_supported_params(self, model: str) -> List[str]:
+    def get_supported_params(self, model: str) -> list[str]:
         return self._interactions_config.get_supported_params(model)
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         headers = headers or {}
         headers["Content-Type"] = "application/json"
@@ -71,11 +69,11 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        model: Optional[str],
-        agent: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        stream: Optional[bool] = None,
+        api_base: str | None,
+        model: str | None,
+        agent: str | None = None,
+        litellm_params: dict | None = None,
+        stream: bool | None = None,
     ) -> str:
         return self._get_interactions_url(
             api_base=api_base,
@@ -85,13 +83,13 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_request(
         self,
-        model: Optional[str],
-        agent: Optional[str],
-        input: Optional[InteractionInput],
+        model: str | None,
+        agent: str | None,
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         return self._interactions_config.transform_request(
             model=self._get_base_model(model=model),
             agent=agent,
@@ -103,7 +101,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
@@ -115,7 +113,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def transform_streaming_response(
         self,
-        model: Optional[str],
+        model: str | None,
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
@@ -131,7 +129,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         return (
             self._get_interactions_url(
                 api_base=api_base,
@@ -157,7 +155,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         return (
             self._get_interactions_url(
                 api_base=api_base,
@@ -185,7 +183,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         return (
             self._get_interactions_url(
                 api_base=api_base,
@@ -208,19 +206,17 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def _get_interactions_url(
         self,
-        api_base: Optional[str],
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
-        interaction_id: Optional[str] = None,
+        api_base: str | None,
+        litellm_params: GenericLiteLLMParams | dict | None,
+        interaction_id: str | None = None,
         cancel: bool = False,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base_url = self._get_api_base(api_base=api_base)
         project_id = self._get_project_id(litellm_params=litellm_params)
         url = f"{base_url}/{self.api_version}/projects/{project_id}/locations/global/interactions"
         if interaction_id is not None:
-            encoded_interaction_id = encode_url_path_segment(
-                interaction_id, field_name="interaction_id"
-            )
+            encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
             url = f"{url}/{encoded_interaction_id}"
         if cancel:
             url = f"{url}:cancel"
@@ -229,7 +225,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         return url
 
     @staticmethod
-    def _get_api_base(api_base: Optional[str]) -> str:
+    def _get_api_base(api_base: str | None) -> str:
         if api_base is None or api_base == "":
             return _DEFAULT_VERTEX_AI_INTERACTIONS_API_BASE
 
@@ -241,16 +237,18 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
             or hostname is None
             or not hostname.endswith(_TRUSTED_GOOGLE_API_HOST_SUFFIX)
         ):
-            raise ValueError(
-                "Vertex AI interactions api_base must be a trusted Google API HTTPS endpoint"
-            )
+            raise ValueError("Vertex AI interactions api_base must be a trusted Google API HTTPS endpoint")
         return base_url
 
     def _get_project_id(
         self,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
+        litellm_params: GenericLiteLLMParams | dict | None,
     ) -> str:
-        params_dict = cast(Dict, litellm_params or {})
+        params_dict = (
+            litellm_params.model_dump(exclude_none=True)
+            if isinstance(litellm_params, GenericLiteLLMParams)
+            else litellm_params or {}
+        )
         vertex_project = VertexBase.safe_get_vertex_ai_project(params_dict)
         if vertex_project is not None:
             return vertex_project
@@ -260,9 +258,13 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
 
     def _get_access_token(
         self,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
-    ) -> Tuple[str, str]:
-        params_dict = cast(Dict, litellm_params or {})
+        litellm_params: GenericLiteLLMParams | dict | None,
+    ) -> tuple[str, str]:
+        params_dict = (
+            litellm_params.model_dump(exclude_none=True)
+            if isinstance(litellm_params, GenericLiteLLMParams)
+            else litellm_params or {}
+        )
         vertex_project = VertexBase.safe_get_vertex_ai_project(params_dict)
         vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(params_dict)
         return self._vertex_auth.get_access_token(
@@ -271,7 +273,7 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         )
 
     @staticmethod
-    def _get_base_model(model: Optional[str]) -> Optional[str]:
+    def _get_base_model(model: str | None) -> str | None:
         if model is None:
             return None
         return model.replace("vertex_ai/", "", 1)

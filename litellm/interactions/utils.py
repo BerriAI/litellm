@@ -2,7 +2,7 @@
 Utility functions for Interactions API.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import InteractionsAPIOptionalRequestParams
@@ -28,8 +28,8 @@ _VERTEX_AI_INTERACTIONS_ENDPOINT = "/v1beta/interactions"
 
 def get_provider_interactions_api_config(
     provider: str,
-    model: Optional[str] = None,
-) -> Optional[BaseInteractionsAPIConfig]:
+    model: str | None = None,
+) -> BaseInteractionsAPIConfig | None:
     """
     Get the interactions API config for the given provider.
 
@@ -60,7 +60,7 @@ def get_provider_interactions_api_config(
     return None
 
 
-def _supports_vertex_ai_interactions(model: Optional[str]) -> bool:
+def _supports_vertex_ai_interactions(model: str | None) -> bool:
     if model is None:
         return False
 
@@ -69,10 +69,7 @@ def _supports_vertex_ai_interactions(model: Optional[str]) -> bool:
     model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
     model_info = litellm.model_cost.get(model_key, {})
     supported_endpoints = model_info.get("supported_endpoints")
-    return (
-        isinstance(supported_endpoints, list)
-        and _VERTEX_AI_INTERACTIONS_ENDPOINT in supported_endpoints
-    )
+    return isinstance(supported_endpoints, list) and _VERTEX_AI_INTERACTIONS_ENDPOINT in supported_endpoints
 
 
 class InteractionsAPIRequestUtils:
@@ -80,7 +77,7 @@ class InteractionsAPIRequestUtils:
 
     @staticmethod
     def get_requested_interactions_api_optional_params(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> InteractionsAPIOptionalRequestParams:
         """
         Filter parameters to only include valid optional params per OpenAPI spec.
