@@ -1008,6 +1008,124 @@ async def test_semantic_filter_hook_narrows_mcp_reference_for_chat_completions()
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_zero_matches_exposes_all_tools_on_both_paths():
+    """
+    A query that matches nothing must expose every MCP tool, whether the request
+    carries a litellm_proxy MCP reference or plain MCP tool objects.
+
+    Given: A router that returns no matches for the query
+    When:  The hook processes an MCP reference request and a plain MCP tool request
+    Then:  Both expose all 3 tools, because filter_tools owns the undecidable-selection
+           policy and returns the full set rather than an empty one
+
+    The two paths narrow through different mechanisms (allowed_tools on the reference
+    versus dropping unmatched entries), so they could drift into opposite fail
+    behaviours. Pinning both here keeps that single policy honest: flipping
+    filter_tools to fail closed must fail this test on both paths at once, instead of
+    silently hard-limiting one surface and not the other.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(3)
+    ]
+
+    def build_hook():
+        filter_instance = SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=mock_router,
+            top_k=2,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+        filter_instance._build_router(registry_tools)
+        zero_match_router = Mock(return_value=[])
+        zero_match_router.top_k = 2
+        filter_instance.tool_router = zero_match_router
+        return SemanticToolFilterHook(filter_instance)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(3)
+    ]
+
+    reference_hook = build_hook()
+    reference_hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+    reference_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "something entirely unrelated"}],
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        "metadata": {},
+    }
+    reference_result = await reference_hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=reference_data,
+        call_type="acompletion",
+    )
+
+    reference_tools = (reference_result or reference_data)["tools"]
+    mcp_references = [tool for tool in reference_tools if tool.get("type") == "mcp"]
+    assert len(mcp_references) == 1, "The MCP reference must survive a zero-match query"
+    assert set(mcp_references[0].get("allowed_tools") or []) == {tool["name"] for tool in expanded_tools}, (
+        "A zero-match query must leave every expanded tool reachable through the reference"
+    )
+
+    plain_hook = build_hook()
+    plain_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "something entirely unrelated"}],
+        "tools": list(registry_tools),
+        "metadata": {},
+    }
+    plain_result = await plain_hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=plain_data,
+        call_type="acompletion",
+    )
+
+    plain_tools = (plain_result or plain_data)["tools"]
+    assert len(plain_tools) == len(registry_tools), (
+        f"A zero-match query must not drop plain MCP tools, got {len(plain_tools)} of {len(registry_tools)}"
+    )
+
+    print("✅ zero matches: both the MCP reference path and the plain tool path expose every tool")
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
     """
     Responses API requests may pass ``input`` as a plain string; the

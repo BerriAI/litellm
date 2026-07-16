@@ -169,6 +169,12 @@ class SemanticToolFilterHook(CustomLogger):
         MCP gateway still performs the expansion. That keeps the per-endpoint tool shape
         and tool auto-execution intact. Expansion already applied any caller-supplied
         allowed_tools, so this selection can only narrow a block further.
+
+        Whether an undecidable selection exposes every tool or none is owned by
+        SemanticMCPToolFilter.filter_tools, which returns the full set when nothing
+        matches; the same policy therefore governs references and plain tools. Passing an
+        empty selection through is safe rather than a hidden allow-all: the gateway reads
+        the union of every reference's allowed_tools and treats an empty union as unset.
         """
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
@@ -305,10 +311,6 @@ class SemanticToolFilterHook(CustomLogger):
                 filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
 
                 selected_tool_names = self._selected_tool_names(filtered_expanded_tools)
-                if not selected_tool_names:
-                    verbose_proxy_logger.warning("Semantic filter selected no MCP tools, leaving MCP references intact")
-                    return None
-
                 narrowed_tools = self._narrow_mcp_references(tools, selected_tool_names)
                 data["tools"] = narrowed_tools
                 self._emit_filter_metadata_safe(
