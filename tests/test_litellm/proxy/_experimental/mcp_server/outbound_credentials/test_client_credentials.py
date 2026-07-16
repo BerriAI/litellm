@@ -152,6 +152,39 @@ async def test_short_lived_token_is_never_served_past_its_expiry():
     assert len(poster.calls) == 2
 
 
+class _RecordingBackend:
+    """A TokenCacheBackend spy: records every write so a test can assert none happened."""
+
+    def __init__(self) -> None:
+        self.set_ttls: list[float] = []
+
+    async def get(self, identity_key: str, server_id: str):
+        return None
+
+    async def set(self, identity_key: str, server_id: str, token, ttl_seconds: float) -> None:
+        self.set_ttls.append(ttl_seconds)
+
+    async def delete(self, identity_key: str, server_id: str) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_in", [0, -30])
+async def test_non_positive_expires_in_writes_no_cache_entry(expires_in):
+    # A dead-on-arrival entry (ttl 0) must not be written at all: it can never be served, but it
+    # would occupy a slot in the bounded backend and could evict a live token. The mint itself
+    # still succeeds for the current request, and the next get re-fetches.
+    backend = _RecordingBackend()
+    poster = _FakePoster([_success("t1", expires_in=expires_in), _success("t2", expires_in=expires_in)])
+    source = ClientCredentialsTokenSource(poster, backend=backend)
+    first = await source.get("s", _config())
+    assert isinstance(first, Ok) and first.ok.access_token == "t1"
+    again = await source.get("s", _config())
+    assert isinstance(again, Ok) and again.ok.access_token == "t2"
+    assert backend.set_ttls == []
+    assert len(poster.calls) == 2
+
+
 @pytest.mark.asyncio
 async def test_lock_dict_is_bounded_for_ephemeral_server_ids():
     poster = _FakePoster([_success()])
