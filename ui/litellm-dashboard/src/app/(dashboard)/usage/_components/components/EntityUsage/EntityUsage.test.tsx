@@ -381,6 +381,54 @@ describe("EntityUsage", () => {
     expect(screen.getByText("1,000")).toBeInTheDocument(); // Total Requests
   });
 
+  it("does not crash when breakdown entries are missing metrics (partial-page data)", async () => {
+    const partialSpendData = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: {
+            spend: 10,
+            api_requests: 100,
+            successful_requests: 95,
+            failed_requests: 5,
+            total_tokens: 5000,
+            prompt_tokens: 3000,
+            completion_tokens: 2000,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          breakdown: {
+            models: { "gpt-4": { metadata: {} } },
+            api_keys: { "key-1": { metadata: { key_alias: "k1", team_id: null } } },
+            providers: { openai: { metadata: {} } },
+            entities: {
+              "tag-1": {
+                metadata: { team_alias: "Tag 1" },
+                api_key_breakdown: { "key-2": { metadata: {} } },
+              },
+            },
+          },
+        },
+      ],
+      metadata: {
+        total_spend: 10,
+        total_api_requests: 100,
+        total_successful_requests: 95,
+        total_failed_requests: 5,
+        total_tokens: 5000,
+      },
+    };
+    mockTagDailyActivityCall.mockResolvedValue(partialSpendData as any);
+
+    render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+  });
+
   it("should render with team entity type and call team API", async () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 

@@ -161,6 +161,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const modelSpend: { [key: string]: any } = {};
     spendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+        if (!metrics.metrics) return;
         if (!modelSpend[model]) {
           modelSpend[model] = {
             spend: 0,
@@ -195,6 +196,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const agentSpend: { [key: string]: any } = {};
     agentSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.entities || {}).forEach(([agentId, data]) => {
+        if (!data.metrics) return;
         if (!agentSpend[agentId]) {
           agentSpend[agentId] = {
             spend: 0,
@@ -230,7 +232,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       const tagDictionary = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
         const { api_key_breakdown } = entities[entity];
         Object.keys(api_key_breakdown).forEach((key) => {
-          const tagUsage = { tag: entity, usage: api_key_breakdown[key].metrics.spend };
+          const tagUsage = { tag: entity, usage: api_key_breakdown[key].metrics?.spend ?? 0 };
           if (acc[key]) {
             acc[key].push(tagUsage);
           } else {
@@ -240,6 +242,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         return acc;
       }, {});
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
+        if (!metrics.metrics) return;
         if (!keySpend[key]) {
           keySpend[key] = {
             metrics: {
@@ -287,6 +290,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const providerSpend: { [key: string]: any } = {};
     spendData.results.forEach((day) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+        if (!metrics.metrics) return;
         if (!providerSpend[provider]) {
           providerSpend[provider] = {
             provider,
@@ -351,6 +355,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const entitySpend: { [key: string]: EntityMetricWithMetadata } = {};
     spendData.results.forEach((day) => {
       Object.entries(day.breakdown.entities || {}).forEach(([entity, data]) => {
+        if (!data.metrics) return;
         if (!entitySpend[entity]) {
           entitySpend[entity] = {
             metrics: {
