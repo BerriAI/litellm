@@ -1005,7 +1005,7 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_input: List[Any],
         model: str,
         all_tools: Optional[List[Any]],
-        response_id: str,
+        previous_response_id: Optional[str],
         **call_params: Any,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         """Make follow-up response API call with tool results."""
@@ -1013,7 +1013,7 @@ class LiteLLM_Proxy_MCP_Handler:
             input=follow_up_input,
             model=model,
             tools=all_tools,  # Keep tools for potential future calls
-            previous_response_id=response_id,  # Link to previous response
+            previous_response_id=previous_response_id,
             **call_params,
         )
 
