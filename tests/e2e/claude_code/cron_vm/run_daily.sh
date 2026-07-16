@@ -22,7 +22,7 @@
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, claude.
+# Required commands on $PATH: git, uv, gh, jq, curl, npm, python3, unshare.
 # Required state: ~/litellm/litellm checked out (this file lives in it),
 # $WORKTREE is created on first run, gh is already authenticated.
 #
@@ -90,9 +90,12 @@ trap cleanup EXIT INT TERM
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-for cmd in git uv gh jq curl claude; do
+for cmd in git uv gh jq curl npm python3 unshare; do
   command -v "${cmd}" >/dev/null 2>&1 || die "missing required command: ${cmd}"
 done
+
+unshare --user --map-current-user --pid --fork --mount-proc true 2>/dev/null \
+  || die "cannot create an unprivileged user+pid namespace (unshare --user --pid); refusing to run npm package code without one"
 
 # Publishing is from a fork (agent-shin/litellm-docs) so neither the cron
 # host nor the bot identity needs write access to BerriAI/litellm-docs. We
@@ -165,23 +168,30 @@ log "resolved litellm: ${LITELLM_VERSION}"
 
 # The systemd unit loads provider credentials and the agent-shin GitHub
 # token from /etc/litellm-compat-matrix.env into this script's
-# environment. Running the npm-installed `claude` binary directly here
-# would hand that full env to package code -- a compromised
-# @anthropic-ai/claude-code release could read ANTHROPIC_API_KEY /
-# AWS_BEARER_TOKEN_BEDROCK / AZURE_FOUNDRY_API_KEY /
+# environment. Running npm install or the npm-installed `claude` binary
+# directly here would hand that full env to package code -- a
+# compromised @anthropic-ai/claude-code release could read
+# ANTHROPIC_API_KEY / AWS_BEARER_TOKEN_BEDROCK / AZURE_FOUNDRY_API_KEY /
 # AGENT_SHIN_GITHUB_TOKEN from os.environ and exfiltrate them before
-# the proxy or test harness ever starts. Probe under `env -i` with the
-# same minimal allowlist the PR-gate uses (the matrix run itself goes
-# through cli_driver.py, which already scrubs the CLI env).
+# the proxy or test harness ever starts. Resolve, install, and probe
+# under `env -i` with the same minimal allowlist the pytest step below
+# uses (the matrix run itself goes through cli_driver.py, which already
+# scrubs the CLI env). The env scrub alone is not a boundary, though:
+# package code still runs as the same uid and could read the secrets
+# straight out of this script's /proc/<pid>/environ. The two points
+# that execute package code (npm install with its lifecycle scripts,
+# and the installed `claude` binary) therefore also run inside an
+# unprivileged user+pid namespace with a freshly mounted /proc, in
+# which the secret-bearing parent process does not exist.
 #
-# The probe also runs under a fresh empty HOME instead of the runtime
+# These steps also run under a fresh empty HOME instead of the runtime
 # user's real $HOME. `ProtectHome=read-only` in the systemd unit
 # blocks *writes* to /home/mateo but still allows reads, so a
 # compromised claude package invoked here with HOME=/home/mateo could
 # read ~/.config/gh/hosts.yml (the gh-host token), ~/.bash_history,
 # or ~/.ssh/. Pointing HOME at a per-run dir under ${WORKDIR} hides
 # those entirely from the subprocess; ${WORKDIR} is rm -rf'd by the
-# script-wide cleanup() trap regardless of probe outcome.
+# script-wide cleanup() trap regardless of outcome.
 CLAUDE_PROBE_HOME="${WORKDIR}/claude-probe-home"
 mkdir -p "${CLAUDE_PROBE_HOME}"
 CLAUDE_CODE_VERSION="$(env -i \
@@ -192,6 +202,33 @@ CLAUDE_CODE_VERSION="$(env -i \
   LANG="${LANG:-C.UTF-8}" \
   LC_ALL="${LC_ALL:-}" \
   TMPDIR="${TMPDIR:-/tmp}" \
+  python3 "${POPULATOR_DIR}/../pr_gate_version_resolver.py")"
+[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "pr_gate_version_resolver.py printed an empty version"
+log "resolved claude code: ${CLAUDE_CODE_VERSION}"
+
+CLAUDE_CLI_PREFIX="${WORKDIR}/claude-cli"
+env -i \
+  PATH="${PATH}" \
+  HOME="${CLAUDE_PROBE_HOME}" \
+  USER="${USER:-mateo}" \
+  TERM="${TERM:-dumb}" \
+  LANG="${LANG:-C.UTF-8}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  unshare --user --map-current-user --pid --fork --mount-proc \
+  npm install --prefix "${CLAUDE_CLI_PREFIX}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+  || die "npm install of @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} failed"
+CLAUDE_CLI_BIN="${CLAUDE_CLI_PREFIX}/node_modules/.bin"
+
+PROBED_CLAUDE_VERSION="$(env -i \
+  PATH="${CLAUDE_CLI_BIN}:${PATH}" \
+  HOME="${CLAUDE_PROBE_HOME}" \
+  USER="${USER:-mateo}" \
+  TERM="${TERM:-dumb}" \
+  LANG="${LANG:-C.UTF-8}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  unshare --user --map-current-user --pid --fork --mount-proc \
   claude --version 2>/dev/null \
   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' \
   | head -n1 || true)"
@@ -199,8 +236,10 @@ CLAUDE_CODE_VERSION="$(env -i \
 # `grep` finds no match (exit 1) — without it the assignment inherits the
 # pipeline's non-zero exit, `set -e` kills the script, and the operator
 # never sees the helpful diagnostic below.
-[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not parse semver from 'claude --version'"
-log "local claude code: ${CLAUDE_CODE_VERSION}"
+[[ -n "${PROBED_CLAUDE_VERSION}" ]] || die "could not parse semver from 'claude --version'"
+[[ "${PROBED_CLAUDE_VERSION}" == "${CLAUDE_CODE_VERSION}" ]] \
+  || die "claude on PATH reports ${PROBED_CLAUDE_VERSION}, expected pinned ${CLAUDE_CODE_VERSION}"
+log "pinned claude code: ${CLAUDE_CODE_VERSION}"
 
 # ---------------------------------------------------------------------------
 # 2. Update the worktree to that tag
@@ -385,9 +424,8 @@ set +e
 #   2. a model-directed `Read` tool call during a PDF/vision cell
 #      cannot reach /proc/<pytest-pid>/environ and pull the creds out
 #      of the parent process the way it can today;
-#   3. this matches the PR-gate pytest step in `.circleci/config.yml`,
-#      which already runs under `env -i` with the same minimal
-#      allowlist.
+#   3. this matches the resolver/npm-install/probe steps above, which
+#      already run under `env -i` with the same minimal allowlist.
 #
 # `cli_driver.py` re-allowlists its own subset (PATH/USER/LOGNAME/etc.)
 # when spawning the `claude` binary, so the CLI still finds Node + the
@@ -395,7 +433,7 @@ set +e
 (
   cd "${WORKTREE}" \
     && env -i \
-       PATH="${PATH}" \
+       PATH="${CLAUDE_CLI_BIN}:${PATH}" \
        HOME="${HOME}" \
        USER="${USER:-mateo}" \
        TERM="${TERM:-dumb}" \
