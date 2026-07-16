@@ -325,6 +325,7 @@ class CallTypes(str, Enum):
     cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
+    aanthropic_messages = "aanthropic_messages"
     get_assistants = "get_assistants"
     aget_assistants = "aget_assistants"
     create_assistants = "create_assistants"
@@ -493,6 +494,7 @@ CallTypesLiteral = Literal[
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
+    "aanthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
     "generate_content",
