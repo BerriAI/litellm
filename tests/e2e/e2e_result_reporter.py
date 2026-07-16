@@ -44,9 +44,16 @@ class _ItemWithCovers(Protocol):
 
 
 def package_from_nodeid(nodeid: str) -> str:
-    """Top-level suite package under tests/e2e/, or 'root' for top-level files."""
+    """Top-level suite package under tests/e2e/, or 'root' for top-level files.
+
+    Pytest nodeids are relative to the invocation cwd. Repo-root runs look like
+    `tests/e2e/logging/...`; suite-cwd runs look like `logging/...`. Strip the
+    `tests/e2e` prefix so package is the suite dir either way.
+    """
     path_part = nodeid.split("::", 1)[0].replace("\\", "/")
     parts = tuple(p for p in path_part.split("/") if p and p != ".")
+    if len(parts) >= 3 and parts[0] == "tests" and parts[1] == "e2e":
+        parts = parts[2:]
     if len(parts) <= 1:
         return "root"
     return parts[0]
