@@ -1,6 +1,4 @@
 # stdlib imports
-import io
-import sys
 from typing import Optional
 
 # third party imports
@@ -22,16 +20,6 @@ from .commands.models import models
 from .commands.teams import teams
 from .commands.users import users
 from .interface import interactive_shell
-
-
-def _ensure_utf8_output() -> None:
-    """Force stdout/stderr to UTF-8 so emoji in CLI output don't crash on legacy Windows consoles."""
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, io.TextIOWrapper) and stream.encoding.lower() not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-            except (ValueError, OSError):
-                pass
 
 
 def print_version(base_url: str, api_key: Optional[str]):
@@ -86,7 +74,6 @@ def print_version(base_url: str, api_key: Optional[str]):
 @click.pass_context
 def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
-    _ensure_utf8_output()
     ctx.ensure_object(dict)
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely

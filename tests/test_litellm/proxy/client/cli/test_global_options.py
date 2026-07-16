@@ -1,7 +1,7 @@
 # stdlib imports
-import io
 import os
 import sys
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,9 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+import litellm.proxy.client.cli
 from litellm._version import version as litellm_version
 from litellm.proxy.client.cli import cli
-from litellm.proxy.client.cli.main import _ensure_utf8_output
 
 
 @pytest.fixture
@@ -38,20 +38,17 @@ def test_cli_version_flag(cli_runner):
     assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
 
 
-def test_ensure_utf8_output_reconfigures_legacy_encoding():
-    """A cp1252 console must be switched to UTF-8 so emoji output can't raise UnicodeEncodeError."""
-    stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
-    stderr = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
-
-    with patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
-        with pytest.raises(UnicodeEncodeError):
-            sys.stdout.write("\u274c")
-
-        _ensure_utf8_output()
-
-        assert sys.stdout.encoding == "utf-8"
-        assert sys.stderr.encoding == "utf-8"
-        sys.stdout.write("\u274c \u2705")
+def test_cli_source_is_ascii_only():
+    """Non-ASCII output (emoji, box-drawing chars) raises UnicodeEncodeError on legacy Windows
+    consoles (cp1252), so the whole CLI package must stay ASCII-only."""
+    cli_root = Path(litellm.proxy.client.cli.__file__).parent
+    offenders = [
+        f"{path.relative_to(cli_root)}:{line_number}: {line.strip()}"
+        for path in sorted(cli_root.rglob("*.py"))
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if not line.isascii()
+    ]
+    assert offenders == []
 
 
 def test_base_url_trailing_slash_normalized(cli_runner):
