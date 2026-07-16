@@ -534,7 +534,7 @@ class KeyAndTeamLoggingSettings:
         return None
 
 
-async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """The org this request belongs to, falling back to the team's org when the token
     carries none. Team keys frequently have no ``org_id`` on the token, so without this
     an org-scoped destination would be invisible at request time even though the write
@@ -563,7 +563,7 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
     return getattr(team_obj, "organization_id", None)
 
 
-async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: Optional[str]) -> set:
+async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: str | None) -> set:
     """The union of admin-assigned exporter names across the request's identity chain.
 
     Each level is read from its own ``logging_exporters`` column: the key via
@@ -686,7 +686,7 @@ async def _resolve_logging_exporters(
 
     def _build(
         credential: "CredentialItem",
-    ) -> "Optional[tuple[str, OtelDestination]]":
+    ) -> "tuple[str, OtelDestination] | None":
         backend = (credential.credential_info or {}).get("description")
         if not backend:
             return None

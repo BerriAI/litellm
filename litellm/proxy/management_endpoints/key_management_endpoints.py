@@ -3683,7 +3683,7 @@ async def generate_key_helper_fn(
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
-    logging_exporters: Optional[list] = None,  # admin-owned OTEL destinations (credential names)
+    logging_exporters: list | None = None,  # admin-owned OTEL destinations (credential names)
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -4840,7 +4840,7 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
 
         # Look up the key's team once (the body may omit team_id); shared by the
         # access-group, object-permission, and logging-exporter gates below.
-        regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
         if _key_in_db.team_id is not None:
             try:
                 regenerate_team_table = await get_team_object(

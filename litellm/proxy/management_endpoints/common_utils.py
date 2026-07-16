@@ -111,7 +111,7 @@ def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_Tea
     return False
 
 
-async def _is_user_org_admin_for_org_id(user_api_key_dict: UserAPIKeyAuth, organization_id: Optional[str]) -> bool:
+async def _is_user_org_admin_for_org_id(user_api_key_dict: UserAPIKeyAuth, organization_id: str | None) -> bool:
     """Check if the caller has the ORG_ADMIN role in the given organization.
 
     Returns False when ``organization_id`` is falsy or the caller has no user_id,

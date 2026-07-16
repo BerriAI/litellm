@@ -81,7 +81,7 @@ class CallerAdminScope:
 
 
 async def _caller_admin_scope(
-    user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
+    user_api_key_dict: UserAPIKeyAuth, prisma_client: "PrismaClient | None"
 ) -> CallerAdminScope:
     """The teams and orgs the caller administers.
 
@@ -153,21 +153,21 @@ async def _caller_admin_scope(
 
 
 async def _caller_grantable_team_ids(
-    user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
+    user_api_key_dict: UserAPIKeyAuth, prisma_client: "PrismaClient | None"
 ) -> frozenset[str]:
     """Team ids the caller may add to / remove from a destination's ``access.teams``
     (the PATCH decider's grant scope)."""
     return (await _caller_admin_scope(user_api_key_dict, prisma_client)).team_ids
 
 
-def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:
+def _credential_in_memory(credential_name: str) -> CredentialItem | None:
     return next(
         (cred for cred in litellm.credential_list if cred.credential_name == credential_name),
         None,
     )
 
 
-async def _credential_for_admin_gate(credential_name: str, prisma_client: object) -> Optional[CredentialItem]:
+async def _credential_for_admin_gate(credential_name: str, prisma_client: object) -> CredentialItem | None:
     """Authoritative credential lookup for the admin gate on update/delete.
 
     The in-process ``litellm.credential_list`` can be stale: a credential created
@@ -526,9 +526,9 @@ async def _authorize_credential_patch(
     *,
     credential_name: str,
     patch: UpdateCredentialItem,
-    existing: Optional[CredentialItem],
+    existing: CredentialItem | None,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: "Optional[PrismaClient]",
+    prisma_client: "PrismaClient | None",
 ) -> None:
     """Raise 403 unless the caller is allowed to apply ``patch`` to ``existing``.
 
@@ -660,7 +660,7 @@ def _sync_in_memory_credential(
     ``_merge_credential_info`` so a partial patch can't clobber stored
     ``access`` subfields it didn't touch.
     """
-    existing_in_memory: Optional[CredentialItem] = None
+    existing_in_memory: CredentialItem | None = None
     for cred in litellm.credential_list:
         if cred.credential_name == old_name:
             existing_in_memory = cred
