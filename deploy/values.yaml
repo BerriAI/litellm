@@ -78,6 +78,9 @@ container:
 
 replicaCount: 1
 
+# Keep fewer ReplicaSets than the Kubernetes default (10).
+revisionHistoryLimit: 5
+
 autoscaling:
   enabled: true
   minReplicas: 1
