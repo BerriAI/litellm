@@ -9258,8 +9258,10 @@ class Router:
         1. Direct model_name / deployment ID match
         2. Provider-prefixed model_name / deployment ID match
         3. Provider-qualified litellm_params.model exact match
-        4. Provider-agnostic exact / suffix match
-        5. Wildcard pattern match via PatternMatchRouter
+        4. Same-provider wildcard pattern match via PatternMatchRouter
+           (before any provider-agnostic suffix scan, so a gemini exact
+           deployment cannot shadow a vertex_ai/* wildcard)
+        5. Provider-agnostic exact / suffix match as last resort
         """
         if not model_id:
             return None
@@ -9283,14 +9285,12 @@ class Router:
             if matched:
                 return matched
 
-        matched = self._match_model_id_suffix(all_models, model_id)
-        if matched:
-            return matched
+            # Prefer same-provider wildcard over cross-provider suffix matches.
+            matched = self._match_wildcard_model(model_id, custom_llm_provider)
+            if matched:
+                return matched
 
-        if custom_llm_provider:
-            return self._match_wildcard_model(model_id, custom_llm_provider)
-
-        return None
+        return self._match_model_id_suffix(all_models, model_id)
 
     def map_team_model(self, team_model_name: Optional[str], team_id: str) -> Optional[str]:
         """
