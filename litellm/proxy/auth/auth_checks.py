@@ -1088,7 +1088,7 @@ async def _check_end_user_budget(
         max_budget=end_user_budget,
         fallback_authoritative=True,
     )
-    if end_user_spend > end_user_budget:
+    if end_user_spend >= end_user_budget:
         raise litellm.BudgetExceededError(
             current_cost=end_user_spend,
             max_budget=end_user_budget,
@@ -3900,7 +3900,7 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
         )
 
-        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
+        if math.isfinite(team_object.max_budget) and spend >= team_object.max_budget:
             if valid_token:
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -4320,7 +4320,7 @@ async def _tag_max_budget_check(
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 fallback_authoritative=True,
             )
-            if tag_spend <= tag_object.litellm_budget_table.max_budget:
+            if tag_spend < tag_object.litellm_budget_table.max_budget:
                 continue
             raise litellm.BudgetExceededError(
                 current_cost=tag_spend,
