@@ -135,6 +135,7 @@ services:
     environment:
       LITELLM_MASTER_KEY: sk-1234
       STORE_MODEL_IN_DB: "True"
+      LITELLM_GEMINI_LIVE_DEFER_SETUP: "true"
       DD_API_KEY: local-sink-noauth
       DD_SITE: datadoghq.com
       DD_BASE_URL: http://dd-sink:8080

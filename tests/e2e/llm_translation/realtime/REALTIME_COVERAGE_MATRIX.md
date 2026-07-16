@@ -22,7 +22,9 @@ appears). That raw-websocket tool path is the source of truth for tool calling.
 `test_pipecat_tool_smoke` is a realism layer through pipecat for openai, azure,
 and gemini only (not vertex_ai: native-audio live is flaky under pipecat tool
 calling while raw-ws tools pass; see pipecat-ai/pipecat#2544). Assertions are
-coarse; raw-ws remains authoritative. Requires `pipecat-ai`.
+coarse; raw-ws remains authoritative. Requires `pipecat-ai[openai]<1.5`:
+1.5.0 broke the azure/gemini/vertex realtime paths through the proxy
+(`pipecat_service.py` fails loudly on >=1.5).
 
 Pipecat audio coverage lives in `test_realtime_pipecat_audio_e2e.py` (VAD / audio
 I/O).
@@ -57,7 +59,12 @@ to turn its tests green.
 ## Running
 
 Start a proxy with the provider keys set in its environment (the suite registers
-the deployments itself), then
+the deployments itself). The proxy must also run with
+`LITELLM_GEMINI_LIVE_DEFER_SETUP=true` (the `tests/e2e` compose stack sets it):
+the suite configures sessions through the client's first `session.update`, and
+without deferred setup the Gemini Live bridge sends its own `setup` at connect,
+ignores that `session.update`, and never echoes `session.updated`, so every
+gemini and vertex_ai case times out. Then
 
 ```
 uv run pytest tests/e2e/llm_translation/realtime/ -v

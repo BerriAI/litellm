@@ -10,7 +10,7 @@ the raw-websocket suite is the source of truth.
 The harness is synchronous, so each test stays a normal sync function and drives
 the async pipecat pipeline with asyncio.run. Skips unless pipecat is installed:
 
-    uv pip install "pipecat-ai[openai]"
+    uv pip install "pipecat-ai[openai]<1.5"
 
 Known caveat: pipecat tool calling over the realtime service has been flaky
 upstream (pipecat-ai/pipecat#2544). A failure here with the matching raw-ws tool
@@ -103,7 +103,18 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
     )
     llm.register_function("get_weather", get_weather)
 
-    context = LLMContext(tools=WEATHER_TOOL)
+    context = LLMContext(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Use the get_weather tool whenever the user asks about weather. "
+                    "After receiving the result, state the temperature."
+                ),
+            }
+        ],
+        tools=WEATHER_TOOL,
+    )
     aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureText()
     task = PipelineTask(

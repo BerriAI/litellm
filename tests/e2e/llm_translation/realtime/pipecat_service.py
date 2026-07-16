@@ -9,16 +9,28 @@ three overrides from bot.py needed to talk to the proxy, the keepalive-disabling
 
 Importing this module skips the collecting test when pipecat is not installed:
 
-    uv pip install "pipecat-ai[openai]"
+    uv pip install "pipecat-ai[openai]<1.5"
+
+pipecat 1.5.0 broke the azure/gemini/vertex realtime paths through the proxy
+(openai still passes; raw-ws passes for every provider), so imports fail loudly
+on >=1.5 instead of letting the suites fail as opaque no-response timeouts.
 """
 
 # pipecat is an optional, dynamically typed dependency loaded behind importorskip,
 # so its symbols are Unknown to the type checker; relax those rules for this file.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportAttributeAccessIssue=false, reportUntypedBaseClass=false, reportUnknownParameterType=false, reportMissingParameterType=false
 
+from importlib.metadata import version as _distribution_version
+
 import pytest
 
 pytest.importorskip("pipecat", reason="pipecat-ai not installed")
+
+_PIPECAT_VERSION = _distribution_version("pipecat-ai")
+assert tuple(int(part) for part in _PIPECAT_VERSION.split(".")[:2]) < (1, 5), (
+    f"pipecat-ai {_PIPECAT_VERSION} is installed, but >=1.5 breaks the "
+    'azure/gemini/vertex realtime paths; install "pipecat-ai[openai]<1.5"'
+)
 
 from pipecat.services.openai.realtime.llm import (  # noqa: E402
     OpenAIRealtimeLLMService,

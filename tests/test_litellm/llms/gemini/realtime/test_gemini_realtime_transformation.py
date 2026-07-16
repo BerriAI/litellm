@@ -311,6 +311,37 @@ def test_gemini_realtime_transformation_generation_complete():
     assert contains_audio_done_event, "Expected audio done event"
 
 
+def test_gemini_realtime_transformation_generation_complete_without_deltas():
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request_str = json.dumps(
+        {
+            "setup": {
+                "model": "gemini-1.5-flash",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"generationComplete": True}}),
+        "gemini-1.5-flash",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    assert result["response"] == []
+    assert result["current_delta_type"] is None
+
+
 def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
     for key in (
         "gemini-3.1-flash-live-preview",
