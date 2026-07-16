@@ -30,6 +30,7 @@ from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _resolve_embedding_config_from_db,
     _resolve_embedding_config_from_router,
     create_vector_store_in_db,
+    list_vector_stores,
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -39,6 +40,25 @@ from litellm.proxy.vector_store_endpoints.utils import (
 )
 from litellm.types.vector_stores import IndexCreateRequest
 from litellm.types.utils import LlmProviders
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_size", [0, -1])
+async def test_list_vector_stores_rejects_non_positive_page_size(page_size):
+    """Invalid pagination must fail before feature access or database work."""
+    user = UserAPIKeyAuth(user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    feature_access = AsyncMock()
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+        new=feature_access,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await list_vector_stores(user_api_key_dict=user, page_size=page_size)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "page_size must be at least 1"
+    feature_access.assert_not_awaited()
 
 
 def _serialize_litellm_params(litellm_params):
