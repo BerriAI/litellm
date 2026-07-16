@@ -1,7 +1,9 @@
 import base64
 import json  # <--- NEW
 import os
+import re
 from datetime import datetime
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -16,15 +18,35 @@ from litellm.types.integrations.langfuse_otel import (
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
+    from opentelemetry.context import Context as _Context
     from opentelemetry.trace import Span as _Span
 
     Span = Union[_Span, Any]
+    Context = Union[_Context, Any]
 else:
     Span = Any
+    Context = Any
 
 
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
+
+_OTEL_TRACE_ID_HEX = re.compile(r"[0-9a-f]{32}")
+
+
+def normalize_trace_id_for_otel(trace_id: str) -> str:
+    """Map an arbitrary trace id onto a valid 32-hex-char OTEL/Langfuse trace id.
+
+    Langfuse derives a trace's identity from the OTEL span-context trace id, which
+    must be 32 lowercase hex chars. An id that is already valid (case-insensitively,
+    or a dashed UUID) is reused directly so an explicit valid id is preserved; any
+    other string is hashed exactly as ``langfuse.create_trace_id(seed=...)`` does,
+    so a caller can reproduce the trace id from their external id.
+    """
+    canonical = trace_id.replace("-", "").lower()
+    if _OTEL_TRACE_ID_HEX.fullmatch(canonical):
+        return canonical
+    return sha256(trace_id.encode("utf-8")).digest()[:16].hex()
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -79,6 +101,61 @@ class LangfuseOtelLogger(OpenTelemetry):
             pass
 
         return metadata
+
+    @staticmethod
+    def _effective_langfuse_trace_id(kwargs) -> Optional[str]:
+        """Return the user-provided Langfuse trace id seed, if any.
+
+        ``existing_trace_id`` continues an existing trace and wins over
+        ``trace_id``, matching the vanilla Langfuse precedence.
+        """
+        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+        raw = metadata.get("existing_trace_id") or metadata.get("trace_id")
+        return raw if isinstance(raw, str) and raw else None
+
+    @staticmethod
+    def _trace_id_parent_context(otel_trace_id_hex: str) -> "Context":
+        """Build an OTEL context whose non-recording parent carries
+        ``otel_trace_id_hex`` so a span started under it inherits that trace id.
+
+        Mirrors how the Langfuse SDK turns ``trace_context={"trace_id": ...}``
+        into a context: a non-recording parent with a synthetic span id and the
+        sampled flag set.
+        """
+        from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
+        from opentelemetry.trace import (
+            NonRecordingSpan,
+            SpanContext,
+            TraceFlags,
+            set_span_in_context,
+        )
+
+        span_context = SpanContext(
+            trace_id=int(otel_trace_id_hex, 16),
+            span_id=RandomIdGenerator().generate_span_id(),
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+        return set_span_in_context(NonRecordingSpan(span_context))
+
+    def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
+        """Honor an explicit Langfuse trace id from request metadata.
+
+        Any upstream parent (explicit parent span, traceparent header, or active
+        span) still wins, preserving distributed-tracing behavior. Only the
+        otherwise-random root span is anchored to the normalized trace id so the
+        Langfuse trace identity matches the caller's ``metadata.trace_id``.
+        """
+        ctx, parent_span = super()._get_span_context(kwargs, default_span=default_span)
+        if ctx is not None or parent_span is not None:
+            return ctx, parent_span
+
+        effective_trace_id = self._effective_langfuse_trace_id(kwargs)
+        if effective_trace_id is None:
+            return ctx, parent_span
+
+        otel_trace_id = normalize_trace_id_for_otel(effective_trace_id)
+        return self._trace_id_parent_context(otel_trace_id), None
 
     @staticmethod
     def _set_metadata_attributes(span: Span, metadata: dict):

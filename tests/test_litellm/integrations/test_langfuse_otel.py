@@ -1,12 +1,56 @@
 import json
 import os
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
+
+
+def _export_generation_span_for_kwargs(kwargs, *, generation_name):
+    """Run a success event through a real (in-memory) Langfuse OTEL exporter and
+    return the finished generation span, so trace-id tests assert against the
+    actually-exported OTEL span context rather than a mock."""
+    exporter = InMemorySpanExporter()
+    logger = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+        callback_name="langfuse_otel",
+    )
+    response_obj = {
+        "id": "chatcmpl-test",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.now()
+    with patch("litellm.integrations.arize._utils.set_attributes"):
+        logger.log_success_event(
+            kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+        )
+    return next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes.get("langfuse.generation.name") == generation_name
+    )
+
+
+def _export_langfuse_generation_span(
+    metadata, *, generation_name="gen", model="doubao"
+):
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"generation_name": generation_name, **metadata}
+        },
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": model,
+        "call_type": "acompletion",
+    }
+    return _export_generation_span_for_kwargs(kwargs, generation_name=generation_name)
 
 
 class TestLangfuseOtelIntegration:
@@ -240,6 +284,159 @@ class TestLangfuseOtelIntegration:
                 actual == expected
             ), "Mismatch between expected and actual OTEL attribute mapping."
 
+    def test_openai_extra_body_trace_id_controls_langfuse_otel_trace_identity(self):
+        """A non-hex ``metadata.trace_id`` from ``extra_body`` must drive the
+        exported OTEL span-context trace id (Langfuse derives a trace's identity
+        from it), deterministically hashed the same way ``langfuse.create_trace_id``
+        does so the caller can reproduce the id from their external id."""
+        import hashlib
+
+        trace_id = "global_20260225143025_ord2468"
+        expected_otel_trace_id = (
+            hashlib.sha256(trace_id.encode("utf-8")).digest()[:16].hex()
+        )
+        generation_name = "ishaan-test-generation"
+        exporter = InMemorySpanExporter()
+        logger = LangfuseOtelLogger(
+            config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+            callback_name="langfuse_otel",
+        )
+        metadata_from_openai_extra_body = {
+            "generation_name": generation_name,
+            "trace_id": trace_id,
+        }
+        kwargs = {
+            "litellm_params": {"metadata": metadata_from_openai_extra_body},
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        response_obj = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}},
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        now = datetime.now()
+        with patch("litellm.integrations.arize._utils.set_attributes"):
+            logger.log_success_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=now,
+                end_time=now,
+            )
+
+        generation_span = next(
+            span
+            for span in exporter.get_finished_spans()
+            if span.attributes.get("langfuse.generation.name") == generation_name
+        )
+
+        assert generation_span.attributes.get("langfuse.trace.id") == trace_id
+        assert (
+            format(generation_span.context.trace_id, "032x") == expected_otel_trace_id
+        )
+
+    def test_valid_hex_trace_id_used_directly(self):
+        """A ``metadata.trace_id`` that is already a valid 32-hex OTEL id must be
+        used verbatim (lowercased) as the trace identity, never re-hashed, so an
+        explicit valid id is preserved end to end."""
+        for given, expected in (
+            ("abcdef0123456789abcdef0123456789", "abcdef0123456789abcdef0123456789"),
+            ("ABCDEF0123456789ABCDEF0123456789", "abcdef0123456789abcdef0123456789"),
+        ):
+            span = _export_langfuse_generation_span({"trace_id": given})
+            assert format(span.context.trace_id, "032x") == expected
+
+    def test_dashed_uuid_trace_id_normalized(self):
+        """A dashed UUID ``metadata.trace_id`` must map to its dash-stripped
+        32-hex form (LiteLLM's conventional trace id), not be sha256-hashed."""
+        span = _export_langfuse_generation_span(
+            {"trace_id": "123e4567-e89b-12d3-a456-426614174000"}
+        )
+        assert (
+            format(span.context.trace_id, "032x") == "123e4567e89b12d3a456426614174000"
+        )
+
+    def test_existing_trace_id_takes_precedence_over_trace_id(self):
+        """``existing_trace_id`` continues an existing trace and must win over
+        ``trace_id`` for the OTEL trace identity, matching the vanilla Langfuse
+        precedence so trace continuation does not regress on the OTEL path."""
+        existing = "fedcba9876543210fedcba9876543210"
+        span = _export_langfuse_generation_span(
+            {"trace_id": "global_20260225143025_ord2468", "existing_trace_id": existing}
+        )
+        assert format(span.context.trace_id, "032x") == existing
+
+    def test_generation_name_preserved_with_custom_trace_id(self):
+        """Applying a custom trace context must not drop generation attributes:
+        the generation name still reaches the span (as both attribute and span
+        name) while the custom trace id drives the trace identity."""
+        import hashlib
+
+        trace_id = "order-42-trace"
+        expected = hashlib.sha256(trace_id.encode("utf-8")).digest()[:16].hex()
+        span = _export_langfuse_generation_span(
+            {"trace_id": trace_id}, generation_name="my-gen"
+        )
+        assert span.attributes.get("langfuse.generation.name") == "my-gen"
+        assert span.name == "my-gen"
+        assert format(span.context.trace_id, "032x") == expected
+
+    def test_traceparent_header_wins_over_metadata_trace_id(self):
+        """Distributed tracing must not regress: a traceparent header keeps
+        control of the trace identity even when metadata.trace_id is present."""
+        parent_trace_hex = "11111111111111111111111111111111"
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "gen",
+                    "trace_id": "global_20260225143025_ord2468",
+                },
+                "proxy_server_request": {
+                    "headers": {
+                        "traceparent": f"00-{parent_trace_hex}-2222222222222222-01"
+                    }
+                },
+            },
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        span = _export_generation_span_for_kwargs(kwargs, generation_name="gen")
+        assert format(span.context.trace_id, "032x") == parent_trace_hex
+
+    def test_explicit_parent_span_wins_over_metadata_trace_id(self):
+        """An explicit proxy parent span keeps control of the trace identity even
+        when metadata.trace_id is present (the common proxy nesting case)."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        parent = TracerProvider().get_tracer("test").start_span("parent")
+        parent_trace_hex = format(parent.get_span_context().trace_id, "032x")
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "gen",
+                    "trace_id": "global_20260225143025_ord2468",
+                    "litellm_parent_otel_span": parent,
+                },
+            },
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        span = _export_generation_span_for_kwargs(kwargs, generation_name="gen")
+        assert format(span.context.trace_id, "032x") == parent_trace_hex
+
+    def test_no_trace_id_keeps_independent_random_root_spans(self):
+        """Without a metadata trace id the default behavior is unchanged: each
+        request gets its own random root trace, not a shared anchored one."""
+        first = _export_langfuse_generation_span({})
+        second = _export_langfuse_generation_span({})
+        assert first.context.trace_id != second.context.trace_id
+
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
@@ -410,6 +607,63 @@ class TestLangfuseOtelIntegration:
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
+
+
+class TestNormalizeTraceIdForOtel:
+    """Unit tests for the trace-id normalization helper."""
+
+    def test_valid_lowercase_hex_passthrough(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        tid = "abcdef0123456789abcdef0123456789"
+        assert normalize_trace_id_for_otel(tid) == tid
+
+    def test_uppercase_hex_is_lowercased(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        assert (
+            normalize_trace_id_for_otel("ABCDEF0123456789ABCDEF0123456789")
+            == "abcdef0123456789abcdef0123456789"
+        )
+
+    def test_dashed_uuid_is_stripped_not_hashed(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        assert (
+            normalize_trace_id_for_otel("123e4567-e89b-12d3-a456-426614174000")
+            == "123e4567e89b12d3a456426614174000"
+        )
+
+    def test_external_id_hashed_like_langfuse_create_trace_id(self):
+        """Non-hex ids hash the ORIGINAL string (dashes and case preserved) so
+        the result is byte-for-byte ``langfuse.create_trace_id(seed=...)``."""
+        import hashlib
+
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        for seed in ("global_20260225143025_ord2468", "Order-42", "ab-cd"):
+            assert (
+                normalize_trace_id_for_otel(seed)
+                == hashlib.sha256(seed.encode("utf-8")).digest()[:16].hex()
+            )
+
+    def test_output_is_always_32_lowercase_hex(self):
+        import re
+
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        for seed in ("x", "global_seed", "ABCDEF0123456789ABCDEF0123456789", "1-2-3"):
+            assert re.fullmatch(r"[0-9a-f]{32}", normalize_trace_id_for_otel(seed))
 
 
 class TestLangfuseOtelResponsesAPI:
