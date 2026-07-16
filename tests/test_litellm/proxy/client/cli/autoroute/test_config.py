@@ -3,10 +3,12 @@ from typing import Any, Dict, Tuple
 import pytest
 
 from litellm.proxy.client.cli.commands.autoroute.config import (
+    DEFAULT_KEYWORD_TIER_RULES,
     AutorouteConfig,
     ConfigGenerationError,
     DiscoveredModel,
     HeuristicClassifier,
+    KeywordTierRule,
     LLMClassifier,
     NoSemanticMatching,
     SemanticMatching,
@@ -128,6 +130,31 @@ class TestBuildGeneratedModelList:
         assert router_config["match_threshold"] == 0.7
         assert router_config["keyword_tier_rules"]
         assert "classifier_type" not in router_config
+
+    def test_semantic_matching_defaults_emit_builtin_keyword_rules(self):
+        config = _base_config(semantic_matching=SemanticMatching(embedding_model="text-embedding-3-small"))
+        autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
+        router_config = autorouter["litellm_params"]["complexity_router_config"]
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": list(rule.keywords), "tier": rule.tier} for rule in DEFAULT_KEYWORD_TIER_RULES
+        ]
+
+    def test_semantic_matching_serializes_custom_keyword_rules(self):
+        config = _base_config(
+            semantic_matching=SemanticMatching(
+                embedding_model="text-embedding-3-small",
+                keyword_tier_rules=(
+                    KeywordTierRule(keywords=("yo", "sup"), tier="SIMPLE"),
+                    KeywordTierRule(keywords=("architect", "design a system"), tier="COMPLEX"),
+                ),
+            )
+        )
+        autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
+        router_config = autorouter["litellm_params"]["complexity_router_config"]
+        assert router_config["keyword_tier_rules"] == [
+            {"keywords": ["yo", "sup"], "tier": "SIMPLE"},
+            {"keywords": ["architect", "design a system"], "tier": "COMPLEX"},
+        ]
 
     def test_complexity_router_config_reflects_adaptive(self):
         config = _base_config(adaptive=True)
