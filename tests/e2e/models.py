@@ -154,6 +154,7 @@ class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     max_tokens: int
+    stream: bool | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
