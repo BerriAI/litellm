@@ -14,7 +14,7 @@
 mod deployment;
 mod strategy;
 
-pub use deployment::{Deployment, LiteLLMParams};
+pub use deployment::{resolve_deployment_provider, Deployment, LiteLLMParams};
 pub use strategy::RoutingStrategy;
 
 /// Load-balancing router over a `model_list`.
