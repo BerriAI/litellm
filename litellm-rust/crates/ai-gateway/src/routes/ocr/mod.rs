@@ -291,7 +291,7 @@ mod tests {
             assert_eq!(response.status(), reqwest::StatusCode::OK, "path {path}");
             let body: Value = response.json().await.expect("json body");
             assert_eq!(body["object"], "ocr", "path {path}");
-            assert_eq!(body["model"], "mistral-ocr-latest", "path {path}");
+            assert_eq!(body["model"], "rust-ocr-mistral", "path {path}");
             assert_eq!(body["pages"][0]["markdown"], "hello ocr", "path {path}");
 
             let upstream_request = upstream_handle.await.expect("upstream served");

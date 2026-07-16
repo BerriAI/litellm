@@ -35,17 +35,29 @@ pub async fn run_ocr(router: &Router, call: OcrCall) -> CoreResult<Value> {
     let params = &deployment.litellm_params;
     let (provider, provider_model) = split_provider(&params.model)?;
 
-    ocr(OcrRequest {
+    let OcrCall {
+        model: requested_model,
+        document,
+        optional_params,
+        timeout,
+    } = call;
+
+    let mut response = ocr(OcrRequest {
         model: provider_model,
-        document: call.document,
+        document,
         api_key: present(params.api_key.as_deref()),
         api_base: present(params.api_base.as_deref()),
         custom_llm_provider: provider,
         extra_headers: None,
-        optional_params: call.optional_params,
-        timeout: call.timeout,
+        optional_params,
+        timeout,
     })
-    .await
+    .await?;
+
+    if let Value::Object(map) = &mut response {
+        map.insert("model".to_string(), Value::String(requested_model));
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
