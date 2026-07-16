@@ -452,6 +452,81 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
             mock_push.assert_awaited_once()
 
 
+class _SharedRedisCache:
+    """Minimal shared Redis stand-in backing multiple DualCache instances."""
+
+    def __init__(self, store):
+        self.store = store
+        self.get_calls = 0
+
+    async def async_get_cache(self, key, parent_otel_span=None, **kwargs):
+        self.get_calls += 1
+        return self.store.get(key)
+
+
+@pytest.mark.asyncio
+async def test_admission_uses_shared_redis_spend_across_replicas():
+    """
+    Regression for #33325: with multiple proxy replicas, each pod holds a
+    pod-local in-memory spend below the cap while the shared Redis total is
+    already above it. Admission must read the shared Redis value (Redis-first),
+    so every pod rejects once the combined spend exceeds the cap instead of
+    each admitting off its stale local value.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    token = "test-key"
+    model = "gpt-4"
+    budget_duration = "1d"
+    max_budget = 100.0
+    spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{token}:{model}:{budget_duration}"
+
+    shared_store = {spend_key: 120.0}
+
+    user_api_key = UserAPIKeyAuth(
+        token=token,
+        key_alias="test-alias",
+        model_max_budget={model: {"budget_limit": max_budget, "time_period": budget_duration}},
+    )
+
+    limiters = []
+    redis_caches = []
+    for pod_local_spend in (60.0, 60.0):
+        dual_cache = DualCache()
+        redis_cache = _SharedRedisCache(shared_store)
+        dual_cache.redis_cache = redis_cache
+        # Seed a stale pod-local value that is below the cap on its own.
+        await dual_cache.in_memory_cache.async_set_cache(key=spend_key, value=pod_local_spend)
+        limiters.append(_PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache))
+        redis_caches.append(redis_cache)
+
+    for limiter in limiters:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key, model)
+
+    # Admission must consult shared Redis, not only the local in-memory value.
+    assert all(rc.get_calls > 0 for rc in redis_caches)
+
+
+@pytest.mark.asyncio
+async def test_get_shared_model_spend_falls_back_to_in_memory_without_redis(
+    budget_limiter,
+):
+    """When Redis is not configured, admission reads the local in-memory value."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    assert budget_limiter.dual_cache.redis_cache is None
+    cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d"
+    await budget_limiter.dual_cache.in_memory_cache.async_set_cache(key=cache_key, value=42.0)
+
+    spend = await budget_limiter._get_shared_model_spend(cache_key=cache_key)
+    assert spend == 42.0
+
+
 @pytest.mark.asyncio
 async def test_get_fallback_model_within_budget_returns_none_without_fallbacks(
     budget_limiter,
