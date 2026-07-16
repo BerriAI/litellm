@@ -401,13 +401,7 @@ def get_mime_type(file_path: str) -> str:
     return guessed or "application/octet-stream"
 
 
-def sniff_mime_type_from_bytes(data: bytes) -> str | None:
-    """
-    Detect a document/image MIME type from a byte payload's magic-number prefix.
-
-    Returns None when the prefix matches none of the OCR-supported signatures,
-    leaving the caller to fall back to an explicit MIME type or octet-stream.
-    """
+def _sniff_mime_type_from_bytes(data: bytes) -> str | None:
     if data.startswith(b"%PDF-"):
         return "application/pdf"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -506,7 +500,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     )
     mime_type = (
         resolved_mime
-        or sniff_mime_type_from_bytes(file_bytes)
+        or _sniff_mime_type_from_bytes(file_bytes)
         or "application/octet-stream"
     )
 

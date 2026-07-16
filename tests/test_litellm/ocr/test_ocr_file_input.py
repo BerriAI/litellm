@@ -20,9 +20,9 @@ import orjson
 import pytest
 
 from litellm.ocr.main import (
+    _sniff_mime_type_from_bytes,
     convert_file_document_to_url_document,
     get_mime_type,
-    sniff_mime_type_from_bytes,
 )
 
 
@@ -65,34 +65,34 @@ class TestGetMimeType:
 
 class TestSniffMimeTypeFromBytes:
     def test_should_detect_pdf_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"%PDF-1.7\n%rest") == "application/pdf"
+        assert _sniff_mime_type_from_bytes(b"%PDF-1.7\n%rest") == "application/pdf"
 
     def test_should_detect_png_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"\x89PNG\r\n\x1a\n rest") == "image/png"
+        assert _sniff_mime_type_from_bytes(b"\x89PNG\r\n\x1a\n rest") == "image/png"
 
     def test_should_detect_jpeg_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"\xff\xd8\xff\xe0 rest") == "image/jpeg"
+        assert _sniff_mime_type_from_bytes(b"\xff\xd8\xff\xe0 rest") == "image/jpeg"
 
     def test_should_detect_gif_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"GIF89a rest") == "image/gif"
+        assert _sniff_mime_type_from_bytes(b"GIF89a rest") == "image/gif"
 
     def test_should_detect_webp_from_magic_bytes(self):
         assert (
-            sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
+            _sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
         )
 
     def test_should_detect_tiff_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"II*\x00 rest") == "image/tiff"
-        assert sniff_mime_type_from_bytes(b"MM\x00* rest") == "image/tiff"
+        assert _sniff_mime_type_from_bytes(b"II*\x00 rest") == "image/tiff"
+        assert _sniff_mime_type_from_bytes(b"MM\x00* rest") == "image/tiff"
 
     def test_should_detect_bmp_from_magic_bytes(self):
-        assert sniff_mime_type_from_bytes(b"BM rest") == "image/bmp"
+        assert _sniff_mime_type_from_bytes(b"BM rest") == "image/bmp"
 
     def test_should_return_none_for_unknown_prefix(self):
-        assert sniff_mime_type_from_bytes(b"not a known file") is None
+        assert _sniff_mime_type_from_bytes(b"not a known file") is None
 
     def test_should_not_confuse_riff_without_webp_tag(self):
-        assert sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WAVErest") is None
+        assert _sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WAVErest") is None
 
 
 class TestConvertFileDocumentToUrlDocument:
@@ -184,8 +184,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert base64.b64decode(b64_data) == content
 
     def test_should_infer_pdf_mime_from_raw_bytes_magic_number(self):
-        """Raw PDF bytes with no name or explicit MIME must be detected as application/pdf,
-        not application/octet-stream (which Mistral/Azure AI reject)."""
         content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
 
         result = convert_file_document_to_url_document(
@@ -196,7 +194,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["document_url"].startswith("data:application/pdf;base64,")
 
     def test_should_infer_png_mime_from_raw_bytes_magic_number(self):
-        """Raw PNG bytes must be detected as image/png and produce an image_url."""
         content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 
         result = convert_file_document_to_url_document(
@@ -207,7 +204,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["image_url"].startswith("data:image/png;base64,")
 
     def test_should_infer_pdf_mime_from_unnamed_bytesio_magic_number(self):
-        """An unnamed BytesIO carrying PDF bytes must be detected as application/pdf."""
         file_obj = BytesIO(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
 
         result = convert_file_document_to_url_document(
@@ -218,7 +214,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["document_url"].startswith("data:application/pdf;base64,")
 
     def test_should_prefer_explicit_mime_over_sniffed_magic_number(self):
-        """An explicit mime_type must win over content sniffing."""
         content = b"%PDF-1.4 pretends to be a pdf"
 
         result = convert_file_document_to_url_document(
@@ -229,9 +224,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["image_url"].startswith("data:image/png;base64,")
 
     def test_should_sniff_when_explicit_mime_is_octet_stream(self):
-        """The proxy multipart path always passes an explicit mime_type, using
-        application/octet-stream as its unknown-type fallback. That placeholder must
-        not defeat content sniffing, otherwise uploaded PDFs regress to octet-stream."""
         content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
 
         result = convert_file_document_to_url_document(
@@ -242,7 +234,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["document_url"].startswith("data:application/pdf;base64,")
 
     def test_should_prefer_named_extension_over_sniffed_magic_number(self):
-        """A file-like object's name extension stays authoritative over sniffing."""
         file_obj = BytesIO(b"\x89PNG\r\n\x1a\n not really a png")
         file_obj.name = "report.pdf"
 
@@ -254,7 +245,6 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["document_url"].startswith("data:application/pdf;base64,")
 
     def test_should_fallback_to_octet_stream_for_unrecognized_raw_bytes(self):
-        """Bytes matching no known signature stay octet-stream so behavior is unchanged."""
         content = b"totally unrecognized payload"
 
         result = convert_file_document_to_url_document(
