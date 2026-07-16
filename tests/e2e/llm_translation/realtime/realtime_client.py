@@ -14,12 +14,11 @@ import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Protocol, TypeVar
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict
 from websockets.sync.client import connect
-from websockets.sync.connection import Connection
 
 from e2e_config import PROXY_BASE_URL, unique_marker
 from e2e_gateway import Gateway, build_gateway
@@ -226,6 +225,47 @@ class ResponseDone(BaseModel):
     response: ResponsePayload
 
 
+class ErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+
+class ErrorEvent(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str = "error"
+    error: ErrorDetail | None = None
+
+
+def error_summary(payload: str) -> str:
+    """Human-readable one-liner for an `error` event payload. OpenAI's realtime
+    quota rejection arrives as {"type":"error","error":{"code":"insufficient_quota",
+    "message":"..."}}, so surfacing code + message turns an opaque socket failure
+    into the actual reason. Falls back to the raw payload when it is not shaped
+    that way (a provider whose error envelope the proxy has not normalized)."""
+    detail = ErrorEvent.model_validate_json(payload).error
+    if detail is None:
+        return payload
+    label = detail.code or detail.type
+    if label and detail.message:
+        return f"{label}: {detail.message}"
+    return detail.message or label or payload
+
+
+class RealtimeError(RuntimeError):
+    """Raised when the provider emits an `error` event while a test is waiting for
+    a lifecycle or response event, instead of letting the wait time out with the
+    cause discarded. `payload` is the raw error event for further inspection."""
+
+    def __init__(self, stop_type: str, payload: str, preceding: tuple[str, ...]) -> None:
+        self.payload = payload
+        super().__init__(
+            f"realtime provider returned an error before {stop_type!r}: "
+            f"{error_summary(payload)} (preceding events: {list(preceding)})"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ReceivedEvent:
     type: str
@@ -297,9 +337,19 @@ def _as_text(message: str | bytes) -> str:
     return message.decode("utf-8") if isinstance(message, bytes) else message
 
 
+class WebSocketConnection(Protocol):
+    """The slice of websockets.sync.connection.Connection the session uses, kept a
+    Protocol so the collect loop can be driven with a scripted connection in harness
+    coverage without a live socket (dependency injection over monkeypatching)."""
+
+    def send(self, message: str) -> None: ...
+
+    def recv(self, timeout: float | None = None) -> str | bytes: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeSession:
-    connection: Connection
+    connection: WebSocketConnection
 
     def send(self, event: BaseModel) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
@@ -322,6 +372,10 @@ class RealtimeSession:
             collected.append(event)
             if event.type == stop_type:
                 return tuple(collected)
+            if event.type == "error":
+                raise RealtimeError(
+                    stop_type, text, tuple(e.type for e in collected[:-1])
+                )
         raise TimeoutError(
             f"no {stop_type!r} within {timeout}s; got {[e.type for e in collected]}"
         )
