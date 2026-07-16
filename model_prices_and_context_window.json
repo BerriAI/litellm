@@ -1375,7 +1375,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "global.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -1410,7 +1411,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1445,7 +1447,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "eu.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1480,7 +1483,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
@@ -1764,7 +1768,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "global.anthropic.claude-sonnet-5": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -1799,7 +1804,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.anthropic.claude-sonnet-5": {
         "cache_creation_input_token_cost": 2.75e-06,
@@ -1834,7 +1840,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "eu.anthropic.claude-sonnet-5": {
         "cache_creation_input_token_cost": 2.75e-06,
@@ -1869,7 +1876,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "au.anthropic.claude-sonnet-5": {
         "cache_creation_input_token_cost": 2.75e-06,
@@ -1904,7 +1912,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "jp.anthropic.claude-sonnet-5": {
         "cache_creation_input_token_cost": 2.75e-06,
@@ -1939,7 +1948,8 @@
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
-        "supports_parallel_tool_use_config": true
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
