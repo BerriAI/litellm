@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 import requests
-from pluggy import Result
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
@@ -86,19 +85,16 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     item.session.stash[_E2E_TEST_RAN] = True
 
 
-@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+@pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[object]
-) -> Generator[None, Result[object], None]:
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     """Emit one structured E2E_RESULT line per finished test for Loki/Grafana.
 
     Status-history panels should aggregate by package (and optional covers), not
     scrape pytest progress basenames. See e2e_result_reporter.py.
     """
-    outcome = yield
-    report = outcome.get_result()
-    if not isinstance(report, pytest.TestReport):
-        return
+    report = yield
     from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
 
     result = result_from_pytest(
@@ -110,9 +106,9 @@ def pytest_runtest_makereport(
         duration_seconds=float(report.duration),
         covers=covers_from_item(item),
     )
-    if result is None:
-        return
-    print(format_e2e_result_line(result), flush=True)
+    if result is not None:
+        print(format_e2e_result_line(result), flush=True)
+    return report
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
