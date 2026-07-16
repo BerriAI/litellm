@@ -24,6 +24,11 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
 
+# Dashboard base URL. On split deployments the Next.js Admin UI is a separate
+# service (e.g. litellm-ui:3000); the data-plane gateway often 404s /ui.
+# Defaults to PROXY_BASE_URL so compose/monolith (proxy-served /ui) still works.
+UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
+
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 

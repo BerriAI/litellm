@@ -14,7 +14,7 @@ proxy under test does not serve it.
 
 import pytest
 
-from e2e_config import PROXY_BASE_URL, unique_marker
+from e2e_config import UI_BASE_URL, unique_marker
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, TeamNewBody
@@ -46,7 +46,7 @@ def _models_dropdown_texts(page: Page, must_contain: str) -> list[str]:
 
 
 def _open_create_key_modal(page: Page) -> None:
-    page.goto(f"{PROXY_BASE_URL}/ui/api-keys/?create=true")
+    page.goto(f"{UI_BASE_URL}/ui/api-keys/?create=true")
     expect(page.locator(".ant-modal").first).to_be_visible()
 
 
@@ -69,7 +69,7 @@ def _submit_create_modal(page: Page, sentinel_label: str) -> str:
 
 
 def _open_key_edit_form(page: Page, key_alias: str) -> None:
-    page.goto(f"{PROXY_BASE_URL}/ui/api-keys/")
+    page.goto(f"{UI_BASE_URL}/ui/api-keys/")
     page.get_by_text(key_alias).first.click()
     page.get_by_role("tab", name="Settings").click()
     page.get_by_role("button", name="Edit Settings").click()
