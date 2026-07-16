@@ -50,8 +50,8 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
         page.goto(f"{PROXY_BASE_URL}/ui/")
         page.fill("#username", UI_USERNAME)
         page.fill("#password", UI_PASSWORD)
-        page.click('input[type="submit"]')
-        page.wait_for_url("**/ui/**")
+        page.click('button[type="submit"]')
+        page.wait_for_function("() => document.cookie.includes('token=')")
         yield page
     finally:
         context.close()
