@@ -78,11 +78,15 @@ model_list:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: os.environ/VERTEXAI_LOCATION
       use_in_pass_through: true
+  # The opus tier pins `global`: the test project's opus-4-7
+  # input-TPM quota is granted only on the global endpoint, not
+  # regionally, and the split keeps both passthrough URL shapes
+  # (regional host vs locations/global) under test.
   - model_name: claude-opus-4-7-vertex
     litellm_params:
       model: vertex_ai/claude-opus-4-7
       vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: os.environ/VERTEXAI_LOCATION
+      vertex_location: global
       use_in_pass_through: true
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
