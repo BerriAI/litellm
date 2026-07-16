@@ -5837,3 +5837,106 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def _sonnet_json_schema_response_format() -> dict:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "WeatherResult",
+            "schema": {
+                "type": "object",
+                "properties": {"temp": {"type": "number"}},
+                "required": ["temp"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "model,expects_native",
+    [
+        # Bedrock Converse Sonnet 5: AWS does not support bedrock-runtime
+        # structured outputs, so response_format must fall back to the
+        # synthetic json_tool_call instead of native outputConfig.
+        ("anthropic.claude-sonnet-5", False),
+        ("us.anthropic.claude-sonnet-5", False),
+        # Sonnet 4.6 does support native structured outputs on Bedrock and must
+        # keep using outputConfig (positive control).
+        ("anthropic.claude-sonnet-4-6", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+    ],
+)
+def test_sonnet_response_format_native_routing_by_capability(model, expects_native):
+    """response_format routes to native outputConfig only for models that
+    advertise ``supports_native_structured_output``. Sonnet 5 (unsupported on
+    Bedrock) falls back to the synthetic tool, and because it is an always-on
+    adaptive-thinking model it must not force a specific tool_choice, which
+    Bedrock rejects while reasoning is enabled."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        config = AmazonConverseConfig()
+        response_format = _sonnet_json_schema_response_format()
+
+        result = config._translate_response_format_param(
+            value=response_format,
+            model=model,
+            optional_params={},
+            non_default_params={"response_format": response_format},
+            is_thinking_enabled=False,
+        )
+
+        assert result["json_mode"] is True
+        if expects_native:
+            assert "outputConfig" in result
+            assert "tools" not in result
+            assert "tool_choice" not in result
+        else:
+            assert "outputConfig" not in result
+            assert "tools" in result
+            # Always-on adaptive thinking: no forced/specific tool_choice.
+            assert "tool_choice" not in result
+    finally:
+        litellm.model_cost = old_cost
+        litellm.get_model_info.cache_clear()
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_sonnet_5_response_format_no_forced_tool_choice_when_thinking_omitted():
+    """Even when the caller omits thinking, an always-on adaptive Sonnet 5 must
+    still be protected from a forced synthetic tool_choice; the base
+    ``is_thinking_enabled`` helper only sees explicit thinking/reasoning_effort,
+    so the Converse boundary has to detect always-on thinking from the model."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        config = AmazonConverseConfig()
+        response_format = _sonnet_json_schema_response_format()
+
+        optional_params = config.map_openai_params(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5",
+            non_default_params={"response_format": response_format},
+            optional_params={},
+            drop_params=False,
+        )
+
+        assert "outputConfig" not in optional_params
+        assert "tools" in optional_params
+        assert "tool_choice" not in optional_params
+    finally:
+        litellm.model_cost = old_cost
+        litellm.get_model_info.cache_clear()
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env

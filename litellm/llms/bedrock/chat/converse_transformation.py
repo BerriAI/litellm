@@ -1049,6 +1049,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
                 and not is_thinking_enabled
+                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
             ):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)

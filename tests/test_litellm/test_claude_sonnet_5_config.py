@@ -185,3 +185,72 @@ def test_sonnet_5_all_variants_carry_adaptive_thinking_flag(cost_map):
     assert variants, "no claude-sonnet-5 entries found in cost map"
     missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"
+
+
+BEDROCK_CONVERSE_SONNET_5_VARIANTS = (
+    "anthropic.claude-sonnet-5",
+    "global.anthropic.claude-sonnet-5",
+    "us.anthropic.claude-sonnet-5",
+    "eu.anthropic.claude-sonnet-5",
+    "au.anthropic.claude-sonnet-5",
+    "jp.anthropic.claude-sonnet-5",
+)
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_sonnet_5_bedrock_converse_does_not_advertise_native_structured_output(cost_map):
+    """Bedrock Converse Sonnet 5 must not advertise native structured outputs.
+
+    AWS's Sonnet 5 model card lists bedrock-runtime structured outputs as
+    unsupported, so LiteLLM must not serialize ``response_format`` into
+    ``outputConfig.textFormat`` for these ids; the flag drives
+    ``AmazonConverseConfig._supports_native_structured_outputs`` and leaving it
+    true routes the request to a wire shape Bedrock rejects. Root and bundled
+    backup must agree so the model resolves the same way at import and runtime.
+    """
+    for model_name in BEDROCK_CONVERSE_SONNET_5_VARIANTS:
+        assert model_name in cost_map, f"Missing model entry: {model_name}"
+        assert cost_map[model_name].get("supports_native_structured_output") is False, (
+            f"{model_name} must set supports_native_structured_output=false"
+        )
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_sonnet_5_bedrock_converse_keeps_other_capabilities(cost_map):
+    """Only the native-structured-output flag flips; the rest of the gen-5
+    profile stays intact so the synthetic-tool fallback and adaptive thinking
+    keep working."""
+    for model_name in BEDROCK_CONVERSE_SONNET_5_VARIANTS:
+        info = cost_map[model_name]
+        assert info.get("supports_response_schema") is True
+        assert info.get("supports_output_config") is True
+        assert info.get("supports_adaptive_thinking") is True
+        assert info.get("supports_tool_choice") is True
+        assert info.get("supports_function_calling") is True
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_non_bedrock_sonnet_5_native_structured_output_unchanged(cost_map):
+    """The fix is scoped to Bedrock Converse. Direct Anthropic, Vertex, and
+    Azure Sonnet 5 entries route through other providers and must keep their
+    existing native-structured-output flag (absent), so they are not caught by
+    the Bedrock-only change."""
+    for model_name in (
+        "claude-sonnet-5",
+        "vertex_ai/claude-sonnet-5",
+        "azure_ai/claude-sonnet-5",
+    ):
+        assert model_name in cost_map, f"Missing model entry: {model_name}"
+        assert cost_map[model_name].get("supports_native_structured_output") is not True
