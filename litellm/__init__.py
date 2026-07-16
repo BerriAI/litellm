@@ -315,6 +315,8 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
+enable_anthropic_prompt_caching: bool = False
+anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = None
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
