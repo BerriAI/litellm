@@ -1,4 +1,3 @@
-import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { getDaysUntilExpiration } from "@/utils/licenseUtils";
 import { Button } from "@/components/ui/button";
@@ -79,7 +78,6 @@ const buildMeters = (data: RemainingUsage | null): MeterData[] => {
  * design's Spend / API-request meters are intentionally omitted.
  */
 export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
-  const disableUsageIndicator = useDisableUsageIndicator();
   const licenseInfo = useLicenseInfo(accessToken).data ?? null;
   const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
   const data = usageData ?? null;
@@ -87,7 +85,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
   const hasData = data !== null && (data.total_users !== null || data.total_teams !== null);
   const noUsableData = !isLoading && !hasData;
   const noLicensedUsage = !licenseInfo?.has_license || noUsableData;
-  if (disableUsageIndicator || !accessToken || noLicensedUsage) {
+  if (!accessToken || noLicensedUsage) {
     return null;
   }
 
