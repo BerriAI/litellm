@@ -1339,6 +1339,50 @@ class TestMCPServerManager:
         assert built.scopes is None
 
     @pytest.mark.asyncio
+    async def test_build_from_table_issuer_anchor_overrides_stored_endpoints_even_when_populated(self):
+        """When an issuer is pinned, the endpoints come SOLELY from the §3.3-validated issuer document
+        and win over any stored/manual endpoint values, even a fully-populated row. Otherwise an
+        attacker who controls a stored token endpoint keeps receiving codes/secrets after an admin
+        pins a trusted issuer: `needs_discovery` must not short-circuit on populated fields, and the
+        issuer's endpoints must override the stored ones."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="issuer-anchored-populated",
+            alias="issuer_anchored_populated",
+            description="issuer set, but stale/hostile endpoints already stored",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            authorization_url="https://attacker.example.com/authorize",
+            token_url="https://attacker.example.com/steal",
+            credentials={"scopes": ["stale"]},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        issuer_resolved = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            scopes=["read"],
+        )
+        with (
+            patch.object(
+                manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=issuer_resolved)
+            ) as anchored,
+            patch.object(manager, "_persist_discovered_oauth_endpoints", new=AsyncMock()) as mock_persist,
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://idp.example.com", "https://up.example.com/mcp")
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.token_url != "https://attacker.example.com/steal"
+        # The issuer-anchored endpoints are never persisted into the endpoint columns, so a later
+        # build cannot treat them as authoritative stored values.
+        assert mock_persist.await_args.kwargs["is_issuer_anchored"] is True
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "advertised_authorization_url",
         ["https://attacker.example.com/authorize", None],
@@ -2668,6 +2712,37 @@ class TestMCPServerManager:
         assert result is not None
         assert result.authorization_url == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
         assert result.token_url == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+
+    @pytest.mark.asyncio
+    async def test_azure_heuristic_reachable_under_require_issuer(self):
+        """Under issuer-anchored discovery (require_issuer set), an Entra issuer whose OIDC document
+        cannot be fetched still gets the deterministic Azure endpoint construction. The heuristic
+        derives the endpoints from the pinned issuer's own tenant URL, so it is authoritative-by-
+        construction and safe under require_issuer; only a non-Entra issuer stays fail-closed (None)."""
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        request = httpx.Request("GET", issuer)
+        response_obj = httpx.Response(status_code=404, request=request)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("not found", request=request, response=response_obj)
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            azure = await manager._fetch_single_authorization_server_metadata(issuer, issuer, require_issuer=issuer)
+            non_entra = await manager._fetch_single_authorization_server_metadata(
+                "https://idp.example.com", "https://idp.example.com", require_issuer="https://idp.example.com"
+            )
+
+        assert azure is not None
+        assert azure.token_url == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        assert non_entra is None
 
     @pytest.mark.asyncio
     async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
@@ -5485,6 +5560,41 @@ class TestMCPServerTimestamps:
         assert persisted.issuer == "https://idp.example.com"
 
     @pytest.mark.asyncio
+    async def test_persist_discovered_oauth_endpoints_does_not_persist_endpoints_for_issuer_anchored(self):
+        """For an issuer-anchored server the endpoints are re-derived from the §3.3-validated issuer
+        document every build, so they must NOT be written into the endpoint columns: persisting them
+        would make the next build see populated endpoints and treat them as authoritative stored
+        values, defeating the issuer-only invariant. Only the resource-driven scopes are persisted."""
+        manager = MCPServerManager()
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            scopes=["read"],
+        )
+
+        update_mcp_server_mock = AsyncMock()
+        with (
+            patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            await manager._persist_discovered_oauth_endpoints(
+                server_id="s",
+                auth_type=MCPAuth.oauth2,
+                existing_issuer="https://idp.example.com",
+                existing_authorization_url=None,
+                existing_token_url=None,
+                existing_scopes=None,
+                metadata=metadata,
+                is_issuer_anchored=True,
+            )
+
+        update_mcp_server_mock.assert_awaited_once()
+        persisted = update_mcp_server_mock.call_args.kwargs["data"]
+        assert "authorization_url" not in persisted.fields_set()
+        assert "token_url" not in persisted.fields_set()
+        assert persisted.credentials == {"scopes": ["read"]}
+
+    @pytest.mark.asyncio
     async def test_build_mcp_server_from_table_skips_persistence_for_temporary_servers(self):
         """The session endpoint builds temporary servers whose server_id has no DB row; with
         persist_discovered_endpoints=False neither the oauth2 nor the OBO write-back may fire."""
@@ -5697,6 +5807,44 @@ class TestMCPServerTimestamps:
         _carry_forward_resolved_oauth_endpoints(new_server=same_authorize, previous_server=previous())
         assert same_authorize.token_url == "https://idp.example.com/token"
         assert same_authorize.registration_url == "https://idp.example.com/register"
+
+    def test_carry_forward_does_not_restore_endpoints_for_issuer_anchored_server(self):
+        """When an issuer is configured the endpoints come solely from the §3.3-validated issuer
+        document, so a failed issuer fetch (token_url None) must stay fail-closed. Carry-forward must
+        NOT resurrect the previous registry entry's token endpoint, or the very attacker-controlled
+        endpoint the issuer anchor distrusts would keep being served across rebuilds. Resource-driven
+        scopes still carry as last-known-good."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _carry_forward_resolved_oauth_endpoints,
+        )
+
+        previous = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=["read"],
+        )
+        failed_rebuild = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+        )
+
+        _carry_forward_resolved_oauth_endpoints(new_server=failed_rebuild, previous_server=previous)
+
+        assert failed_rebuild.authorization_url is None
+        assert failed_rebuild.token_url is None
+        assert failed_rebuild.registration_url is None
+        assert failed_rebuild.scopes == ["read"]
 
     def test_normalized_authorize_endpoint_treats_default_port_and_slash_as_identity(self):
         """The corroboration check must not fail on formatting-only differences an IdP legitimately
