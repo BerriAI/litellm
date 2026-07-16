@@ -1,0 +1,318 @@
+use std::time::Duration;
+
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use litellm_core::error::CoreError;
+use litellm_core::CoreResult;
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+
+use crate::constants::{DEFAULT_UPLOAD_MIME_TYPE, OCR_UPLOAD_MIME_BY_EXTENSION};
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OcrDocument {
+    DocumentUrl { document_url: String },
+    ImageUrl { image_url: String },
+    File {},
+}
+
+impl OcrDocument {
+    fn into_value(self) -> CoreResult<Value> {
+        let (field, url) = match self {
+            OcrDocument::DocumentUrl { document_url } => ("document_url", document_url),
+            OcrDocument::ImageUrl { image_url } => ("image_url", image_url),
+            OcrDocument::File {} => {
+                return Err(CoreError::InvalidRequest(
+                    "document type 'file' is not supported through the JSON API; upload the \
+                     file via multipart/form-data with a 'file' field, or use a 'document_url' \
+                     or 'image_url' document type"
+                        .to_string(),
+                ))
+            }
+        };
+        if url.starts_with("reducto://") {
+            return Err(CoreError::InvalidRequest(
+                "reducto:// file IDs are not accepted through the OCR API; upload the file in \
+                 the same request via multipart/form-data with a 'file' field, or pass an \
+                 inline base64 data URI as the document URL"
+                    .to_string(),
+            ));
+        }
+        Ok(json!({ "type": field, field: url }))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OcrJsonRequest {
+    pub model: String,
+    pub document: OcrDocument,
+    #[serde(default)]
+    pub timeout: Option<f64>,
+    #[serde(flatten)]
+    pub optional_params: Map<String, Value>,
+}
+
+#[derive(Debug)]
+pub struct OcrCall {
+    pub model: String,
+    pub document: Value,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
+}
+
+fn positive_duration(seconds: Option<f64>) -> Option<Duration> {
+    seconds
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+        .map(Duration::from_secs_f64)
+}
+
+pub fn parse_json_body(body: &[u8]) -> CoreResult<OcrCall> {
+    if body.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "empty request body; send a JSON body with 'model' and 'document', or use \
+             multipart/form-data for file uploads"
+                .to_string(),
+        ));
+    }
+    let request: OcrJsonRequest = serde_json::from_slice(body)
+        .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR request body: {err}")))?;
+    Ok(OcrCall {
+        model: request.model,
+        document: request.document.into_value()?,
+        optional_params: request.optional_params,
+        timeout: positive_duration(request.timeout),
+    })
+}
+
+fn mime_from_filename(filename: &str) -> Option<&'static str> {
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())?;
+    OCR_UPLOAD_MIME_BY_EXTENSION
+        .iter()
+        .find(|(candidate, _)| *candidate == extension)
+        .map(|(_, mime)| *mime)
+}
+
+fn resolve_upload_mime(content_type: Option<&str>, filename: Option<&str>) -> String {
+    let declared = content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != DEFAULT_UPLOAD_MIME_TYPE);
+    if let Some(declared) = declared {
+        return declared.to_string();
+    }
+    filename
+        .and_then(mime_from_filename)
+        .unwrap_or(DEFAULT_UPLOAD_MIME_TYPE)
+        .to_string()
+}
+
+pub fn build_upload_document(
+    bytes: Vec<u8>,
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> CoreResult<Value> {
+    if bytes.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "uploaded file is empty".to_string(),
+        ));
+    }
+    let mime = resolve_upload_mime(content_type, filename);
+    let data_uri = format!("data:{mime};base64,{}", BASE64_STANDARD.encode(&bytes));
+    let field = if mime.starts_with("image/") {
+        "image_url"
+    } else {
+        "document_url"
+    };
+    Ok(json!({ "type": field, field: data_uri }))
+}
+
+fn coerce_form_field(value: &str) -> Value {
+    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
+}
+
+pub fn assemble_multipart_call(
+    document: Value,
+    text_fields: &[(String, String)],
+) -> CoreResult<OcrCall> {
+    let model = text_fields
+        .iter()
+        .find(|(name, _)| name == "model")
+        .map(|(_, value)| value.clone())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "multipart OCR request must include a 'model' form field".to_string(),
+            )
+        })?;
+
+    let timeout = match text_fields.iter().find(|(name, _)| name == "timeout") {
+        Some((_, value)) => positive_duration(Some(value.parse::<f64>().map_err(|_| {
+            CoreError::InvalidRequest(format!("invalid 'timeout' form field: {value:?}"))
+        })?)),
+        None => None,
+    };
+
+    let optional_params: Map<String, Value> = text_fields
+        .iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "model" | "timeout" | "file" | "document"))
+        .map(|(name, value)| (name.clone(), coerce_form_field(value)))
+        .collect();
+
+    Ok(OcrCall {
+        model,
+        document,
+        optional_params,
+        timeout,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_document_url_and_flattens_provider_params() {
+        let call = parse_json_body(
+            br#"{"model":"rust-ocr","document":{"type":"document_url","document_url":"https://x/doc.pdf"},"include_image_base64":true}"#,
+        )
+        .expect("valid body parses");
+
+        assert_eq!(call.model, "rust-ocr");
+        assert_eq!(call.document["type"], "document_url");
+        assert_eq!(call.document["document_url"], "https://x/doc.pdf");
+        assert_eq!(
+            call.optional_params["include_image_base64"],
+            Value::Bool(true)
+        );
+        assert!(call.timeout.is_none());
+    }
+
+    #[test]
+    fn parses_image_url_document() {
+        let call = parse_json_body(
+            br#"{"model":"m","document":{"type":"image_url","image_url":"https://x/i.png"}}"#,
+        )
+        .expect("valid body parses");
+        assert_eq!(call.document["type"], "image_url");
+        assert_eq!(call.document["image_url"], "https://x/i.png");
+    }
+
+    #[test]
+    fn extracts_timeout_and_keeps_it_out_of_provider_params() {
+        let call = parse_json_body(
+            br#"{"model":"m","document":{"type":"document_url","document_url":"https://x"},"timeout":12.5}"#,
+        )
+        .expect("valid body parses");
+        assert_eq!(call.timeout, Some(Duration::from_secs_f64(12.5)));
+        assert!(!call.optional_params.contains_key("timeout"));
+    }
+
+    #[test]
+    fn rejects_file_document_over_json() {
+        let err =
+            parse_json_body(br#"{"model":"m","document":{"type":"file","file":"/etc/passwd"}}"#)
+                .expect_err("file type rejected");
+        match err {
+            CoreError::InvalidRequest(message) => assert!(message.contains("multipart/form-data")),
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_reducto_file_id_over_json() {
+        let err = parse_json_body(
+            br#"{"model":"m","document":{"type":"document_url","document_url":"reducto://abc"}}"#,
+        )
+        .expect_err("reducto id rejected");
+        match err {
+            CoreError::InvalidRequest(message) => assert!(message.contains("reducto://")),
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_body_is_rejected() {
+        assert!(matches!(
+            parse_json_body(b""),
+            Err(CoreError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn upload_prefers_declared_content_type() {
+        let document = build_upload_document(
+            b"%PDF-1.4".to_vec(),
+            Some("scan.bin"),
+            Some("application/pdf"),
+        )
+        .expect("builds document");
+        assert_eq!(document["type"], "document_url");
+        assert!(document["document_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:application/pdf;base64,"));
+    }
+
+    #[test]
+    fn upload_infers_mime_from_filename_when_octet_stream() {
+        let document = build_upload_document(
+            vec![0x89, b'P', b'N', b'G'],
+            Some("photo.PNG"),
+            Some("application/octet-stream"),
+        )
+        .expect("builds document");
+        assert_eq!(document["type"], "image_url");
+        assert!(document["image_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn upload_falls_back_to_octet_stream() {
+        let document = build_upload_document(vec![1, 2, 3], Some("data.unknown"), None)
+            .expect("builds document");
+        assert_eq!(document["type"], "document_url");
+        assert!(document["document_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:application/octet-stream;base64,"));
+    }
+
+    #[test]
+    fn empty_upload_is_rejected() {
+        assert!(matches!(
+            build_upload_document(Vec::new(), Some("a.pdf"), Some("application/pdf")),
+            Err(CoreError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn multipart_extracts_model_timeout_and_json_params() {
+        let document =
+            json!({"type": "document_url", "document_url": "data:application/pdf;base64,AA=="});
+        let fields = vec![
+            ("model".to_string(), "rust-ocr".to_string()),
+            ("timeout".to_string(), "30".to_string()),
+            ("pages".to_string(), "[0,1,2]".to_string()),
+            ("id".to_string(), "abc".to_string()),
+        ];
+        let call = assemble_multipart_call(document, &fields).expect("assembles call");
+
+        assert_eq!(call.model, "rust-ocr");
+        assert_eq!(call.timeout, Some(Duration::from_secs(30)));
+        assert_eq!(call.optional_params["pages"], json!([0, 1, 2]));
+        assert_eq!(call.optional_params["id"], Value::String("abc".to_string()));
+        assert!(!call.optional_params.contains_key("timeout"));
+        assert!(!call.optional_params.contains_key("model"));
+    }
+
+    #[test]
+    fn multipart_requires_model() {
+        let document = json!({"type": "document_url", "document_url": "data:x"});
+        let err = assemble_multipart_call(document, &[]).expect_err("model required");
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+}
