@@ -59,20 +59,9 @@ class DiskCache(BaseCache):
 
     def increment_cache(self, key, value: int, **kwargs) -> int:
         with self.disk_cache.transact():
-            init_value = self.disk_cache.get(key, default=0)
-
-            if isinstance(init_value, (str, bytes, bytearray)):
-                try:
-                    parsed_value = json.loads(init_value)  # type: ignore[arg-type]
-                except Exception:
-                    parsed_value = init_value
-            else:
-                parsed_value = init_value
-
-            if parsed_value is None:
-                parsed_value = 0
-
-            new_value = parsed_value + value  # type: ignore[operator]
+            cached_value = self.get_cache(key=key)
+            init_value = cached_value if isinstance(cached_value, int) else 0
+            new_value = init_value + value
             self.set_cache(key, new_value, **kwargs)
             return new_value
 
