@@ -10,6 +10,7 @@ proxy does not already list it (compose has it in static config; stage does not)
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -17,8 +18,14 @@ from requests import RequestException
 
 from complexity_router_client import ComplexityRouterClient, build_client
 from e2e_gateway import Gateway
-from e2e_http import NoBody, Success
-from models import LiteLLMParamsBody, ModelsListResponse
+from e2e_http import NoBody, Success, unwrap
+from models import (
+    LiteLLMParamsBody,
+    ModelInfoBody,
+    ModelNewBody,
+    ModelNewResponse,
+    ModelsListResponse,
+)
 
 ROUTER_MODEL = "complexity-smart-router"
 ROUTER_PARAMS = LiteLLMParamsBody(
@@ -51,6 +58,38 @@ def _model_is_servable(gateway: Gateway, model_name: str) -> bool:
     return isinstance(result, Success) and any(entry.id == model_name for entry in result.data.data)
 
 
+def _register_router_model(gateway: Gateway) -> str:
+    """POST /model/new only; returns the proxy model_id before data-plane wait.
+
+    Split from create_model so a slow control→data propagation timeout still
+    leaves us a model_id for teardown (avoids orphaning complexity-smart-router).
+    """
+    return unwrap(
+        gateway.transport.post(
+            "/model/new",
+            headers=gateway.transport.master,
+            json=ModelNewBody(
+                model_name=ROUTER_MODEL,
+                litellm_params=ROUTER_PARAMS,
+                model_info=ModelInfoBody(),
+            ),
+            response_type=ModelNewResponse,
+        )
+    ).model_id
+
+
+def _await_router_model_servable(gateway: Gateway) -> None:
+    deadline = time.monotonic() + gateway.poll_timeout
+    while time.monotonic() < deadline:
+        if _model_is_servable(gateway, ROUTER_MODEL):
+            return
+        time.sleep(gateway.poll_interval)
+    raise AssertionError(
+        f"model {ROUTER_MODEL!r} was created but never became servable on the data "
+        f"plane within {gateway.poll_timeout}s of /model/new"
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  # pytest autouse session fixture, wired by name
     client: ComplexityRouterClient,
@@ -66,7 +105,7 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
         return
 
     try:
-        model_id = gateway.create_model(ROUTER_MODEL, ROUTER_PARAMS)
+        model_id = _register_router_model(gateway)
     except (AssertionError, RequestException) as exc:
         if _model_is_servable(gateway, ROUTER_MODEL):
             yield
@@ -77,6 +116,7 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
         ) from exc
 
     try:
+        _await_router_model_servable(gateway)
         yield
     finally:
         gateway.delete_model(model_id)
