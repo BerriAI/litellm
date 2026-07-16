@@ -2387,6 +2387,16 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
+    def test_returns_empty_dict_for_missing_metadata(self):
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        for absent in (None, {}):
+            result = _classifier_call_metadata(absent)
+            assert result == {}
+            assert isinstance(result, dict)
+
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.router_strategy.complexity_router.complexity_router import (
@@ -2489,7 +2499,7 @@ class TestRoutingDecisionCauseLogging:
 
 
 class TestSessionAffinity:
-    """Test the opt-in session_affinity sticky-routing behavior."""
+    """Test the session_affinity sticky-routing behavior (on by default)."""
 
     REASONING_MESSAGE = [
         {
@@ -2503,19 +2513,46 @@ class TestSessionAffinity:
     def session_affinity_config(self, basic_config) -> Dict:
         return {**basic_config, "session_affinity": True}
 
+    @pytest.fixture
+    def session_affinity_disabled_config(self, basic_config) -> Dict:
+        return {**basic_config, "session_affinity": False}
+
     @staticmethod
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
-    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to False, so a shared session_id must
-        not pin the model -- each turn is still classified independently."""
+    async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to True, so a shared session_id pins the
+        first turn's model and later turns reuse it instead of reclassifying."""
+        assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=basic_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_can_be_disabled_reclassifies_every_turn(
+        self, mock_router_instance, session_affinity_disabled_config
+    ):
+        """Regression: session_affinity=False must still reclassify every turn even when a
+        shared session_id is present, so the opt-out keeps working."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_disabled_config,
         )
         request_kwargs = self._request_kwargs("session-1")
         first = await router.async_pre_routing_hook(

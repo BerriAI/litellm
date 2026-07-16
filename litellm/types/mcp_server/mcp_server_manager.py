@@ -17,6 +17,12 @@ MCPInfo = Dict[str, Any]
 
 class MCPOAuthMetadata(BaseModel):
     scopes: Optional[List[str]] = None
+    """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
+    ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
+    supplied one, else the authorization server's ``scopes_supported``. This is the scope value a
+    client requests per the MCP authorization spec Scope Selection Strategy; scope minimization and
+    inflation control are the authorization server's and user's job at consent (RFC 6749 §3.3), not
+    the client's."""
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -131,9 +137,10 @@ class MCPServer(BaseModel):
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
     token_validation: Optional[Dict[str, Any]] = None
-    # Optional TTL override (seconds) for the Redis per-user token cache.
-    # Defaults to the token's expires_in minus the expiry buffer, or
-    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
+    # Optional TTL override (seconds) for the Redis per-user token cache, capped
+    # at the token's expires_in minus the expiry buffer so a cached entry never
+    # outlives the token. Defaults to the token's expires_in minus the expiry
+    # buffer, or MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
     timeout: Optional[float] = None
     # Max concurrent outbound tool calls to this server; excess calls queue.
