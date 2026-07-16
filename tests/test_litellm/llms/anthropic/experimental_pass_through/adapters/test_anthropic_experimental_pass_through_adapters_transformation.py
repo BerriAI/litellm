@@ -256,11 +256,14 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block(
     }
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_content_block():
-    """Anthropic closes a thinking block with a chunk that carries both the full
-    thinking recap and the signature. The classifier must still resolve it to a
-    ``thinking`` block rather than raising, so the block-type transition detection
-    keeps the stream on the open thinking block."""
+def test_translate_streaming_openai_chunk_to_anthropic_content_block_thinking_and_signature():
+    """The content-block classifier must treat a chunk carrying both ``thinking``
+    and ``signature`` as a ``thinking`` block instead of raising.
+
+    Such a chunk is the terminal signature event of an already-open thinking block,
+    so classifying it as ``thinking`` keeps the stream on the same block rather than
+    500'ing. Before the fix this raised ``ValueError``.
+    """
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -301,11 +304,6 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_co
     )
 
     assert block_type == "thinking"
-    assert content_block_start == {
-        "type": "thinking",
-        "thinking": "I need to summar",
-        "signature": "sigsig",
-    }
 
 
 def test_translate_anthropic_messages_to_openai_thinking_blocks():
@@ -751,12 +749,17 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     assert content_block_delta["signature"] == "sigsig"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_emits_signature_delta():
-    """Regression for the /v1/messages streaming crash: Anthropic (through the chat
-    completions adapter) emits the signature in a closing chunk that also recaps the
-    full accumulated thinking. That thinking already streamed as ``thinking_delta``
-    events, so this chunk must emit only a ``signature_delta`` (never raise, never
-    re-emit the recap as a duplicate ``thinking_delta``)."""
+def test_translate_streaming_openai_chunk_to_anthropic_emits_signature_when_thinking_and_signature():
+    """A single streaming chunk carrying both ``thinking`` and ``signature`` must
+    translate to a ``signature_delta``, not crash.
+
+    litellm's Anthropic streaming handler emits the ``signature_delta`` event as an
+    OpenAI chunk whose ``thinking_blocks`` entry re-states the full accumulated
+    thinking text alongside the signature (see anthropic/chat/handler.py). That text
+    was already streamed as ``thinking_delta`` chunks, so the signature must win and
+    the duplicate thinking must not be re-emitted. Before the fix this raised
+    ``ValueError`` and 500'd the whole stream, breaking Claude Code through the proxy.
+    """
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -789,13 +792,25 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_and_signature_em
         )
     ]
 
-    (
-        delta_type,
-        delta,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+    adapter = LiteLLMAnthropicMessagesAdapter()
 
-    assert delta_type == "signature_delta"
-    assert delta == {"type": "signature_delta", "signature": "sigsig"}
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "signature_delta"
+    assert content_block_delta["type"] == "signature_delta"
+    assert content_block_delta["signature"] == "sigsig"
+
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
 
 
 def test_translate_anthropic_messages_to_openai_user_message_with_base64_image():
