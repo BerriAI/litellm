@@ -38,6 +38,7 @@ from litellm import (
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
 from litellm.exceptions import (
+    BudgetExceededError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -925,7 +926,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
-        litellm.error_logs["PRE_CALL"] = locals()
         try:
             self._pre_call(
                 input=input,
@@ -1135,7 +1135,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
-        litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)
         try:
@@ -3074,7 +3073,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """
@@ -4599,6 +4598,10 @@ class StandardLoggingPayloadSetup:
             user_api_key_spend=None,
             user_api_key_max_budget=None,
             user_api_key_budget_reset_at=None,
+            user_api_key_user_spend=None,
+            user_api_key_user_max_budget=None,
+            user_api_key_team_spend=None,
+            user_api_key_team_max_budget=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_org_alias=None,
@@ -4945,6 +4948,7 @@ class StandardLoggingPayloadSetup:
 
         rate_limit_category = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
+        budget_error = original_exception if isinstance(original_exception, BudgetExceededError) else None
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
@@ -4954,6 +4958,10 @@ class StandardLoggingPayloadSetup:
             error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
+            error_budget_entity_type=budget_error.entity_type if budget_error else None,
+            error_budget_entity_id=budget_error.entity_id if budget_error else None,
+            error_budget_limit=budget_error.max_budget if budget_error else None,
+            error_budget_spend=budget_error.current_cost if budget_error else None,
         )
 
     @staticmethod
@@ -5430,6 +5438,10 @@ def get_standard_logging_metadata(
         user_api_key_spend=None,
         user_api_key_max_budget=None,
         user_api_key_budget_reset_at=None,
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_org_alias=None,
@@ -5529,6 +5541,10 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         user_api_key_team_id=str("test_team"),
         user_api_key_user_id=str("test_user"),
         user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_org_id=None,
         spend_logs_metadata=None,
         requester_ip_address=str("127.0.0.1"),

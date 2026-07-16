@@ -33,7 +33,6 @@ from __future__ import annotations
 import functools
 import json
 import os
-import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -43,7 +42,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 import pytest
 import yaml
 
-from claude_code._compat_models import CompatDeployment, load_all_deployments
+from claude_code.cli_driver import RATE_LIMIT_SHAPED_RE
 
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
@@ -64,11 +63,10 @@ DEFAULT_RATE_LIMIT_SUMMARY_PATH = "compat-rate-limit-summary.json"
 # the rate limiter is supposed to back off from. False positives on a
 # genuinely slow upstream are tolerable here because the worst case is
 # the binary search runs at a slightly lower rate than necessary.
-_RATE_LIMIT_RE = re.compile(
-    r"(?:\b429\b|rate[\s_-]?limit|too\s+many\s+requests|throttl(?:ed|ing)|"
-    r"claude\s+CLI\s+timed\s+out)",
-    re.IGNORECASE,
-)
+#
+# The pattern lives in `cli_driver` so the driver's retry-on-rate-limit
+# logic and this summary classify failures identically.
+_RATE_LIMIT_RE = RATE_LIMIT_SHAPED_RE
 
 
 @dataclass
@@ -171,8 +169,9 @@ def _manifest_feature_ids() -> FrozenSet[str]:
 
     Used as a positive filter so only directories that correspond to a
     real matrix row contribute results — utility/support directories
-    (e.g. `cron_vm`, `_driver_unit_tests`) are dropped regardless of
-    naming convention, and the rate-limit summary stays clean.
+    (e.g. `_driver_unit_tests`, `_builder_unit_tests`) are dropped
+    regardless of naming convention, and the rate-limit summary stays
+    clean.
 
     Returns an empty set if the manifest is missing or malformed; the
     caller treats that as "no path is a feature path", which is the
@@ -201,11 +200,10 @@ def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
 
     Path shape:  tests/e2e/claude_code/<feature_id>/test_<provider>.py
     Returns None if the file is not a per-feature test (e.g. unit tests
-    under `_driver_unit_tests/` or support code under `cron_vm/`), so
-    those don't pollute the matrix artifact. We positively filter the
-    parent directory against `manifest.yaml` rather than relying on
-    naming conventions, because non-feature siblings don't all share
-    an underscore prefix.
+    under `_driver_unit_tests/`), so those don't pollute the matrix
+    artifact. We positively filter the parent directory against
+    `manifest.yaml` rather than relying on naming conventions, because
+    non-feature siblings don't all share an underscore prefix.
     """
     name = node_path.name
     if not name.startswith("test_") or not name.endswith(".py"):
@@ -552,67 +550,115 @@ def pytest_sessionfinish(session, exitstatus):
     _print_rate_limit_summary(summary)
 
 
-def _proxy_env_configured() -> bool:
-    has_url = bool(os.environ.get("LITELLM_PROXY_URL") or os.environ.get("LITELLM_PROXY_BASE_URL"))
-    has_key = bool(os.environ.get("LITELLM_MASTER_KEY") or os.environ.get("LITELLM_PROXY_API_KEY"))
-    return has_url and has_key
+# ---------------------------------------------------------------------------
+# Session-scoped compat model registration.
+#
+# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-5``
+# and ``claude-sonnet-4-5-bedrock-invoke``. On stage those live in the
+# gateway's model_list at deploy time; locally the docker-config.yaml
+# under tests/e2e/ only declares one of them, so every non-haiku cell
+# 400s with ``Invalid model name``. The fixture here reconciles the two:
+# it reads ``test_config.yaml`` (the ground-truth compat matrix config)
+# and POSTs ``/model/new`` for the subset whose provider credentials are
+# actually set in the current environment, then tears them all down at
+# session end.
+#
+# Kept below the rest of the conftest so the compat-artifact hooks stay
+# grouped up top. The fixture is opt-in via autouse=True on the session
+# scope, so a cell that hits the proxy sees the deployment ready without
+# any per-cell wiring, and pure unit tests that never reach the proxy
+# pay only one skipped-liveness check.
+# ---------------------------------------------------------------------------
+
+from claude_code._env import ProxyConfig, resolve_proxy  # noqa: E402
+from claude_code._compat_models import (  # noqa: E402
+    CompatDeployment,
+    load_all_deployments,
+)
 
 
-def _build_control_gateway():
+def _build_control_gateway(proxy: ProxyConfig):
+    """Local import of the shared harness so the pure-unit-test tree
+    under ``_driver_unit_tests/`` etc. never has to pull it in. The
+    control plane transport is what /model/new lives on; SplitTransport
+    routes it correctly for both monolithic and split deployments.
+
+    The endpoints come from the *resolved* proxy, not from a second
+    independent env read, so registration and the cells always hit the
+    same host and key. Both planes get the one URL the cells use; the
+    deployment is fronted by a single address that routes management
+    and LLM paths itself."""
     from e2e_gateway import build_gateway
 
-    return build_gateway()
+    return build_gateway(
+        base_url=proxy.base_url,
+        master_key=proxy.api_key,
+        control_plane_base_url=proxy.base_url,
+    )
 
 
-def _register_deployment(gateway: Any, deployment: CompatDeployment) -> str:
-    return gateway.create_model(deployment.model_name, deployment.litellm_params)
-
-
-def _try_register(
-    gateway: Any, deployment: CompatDeployment
-) -> tuple[str | None, tuple[str, str] | None]:
-    from requests import RequestException
-
-    try:
-        return _register_deployment(gateway, deployment), None
-    except (AssertionError, RequestException) as exc:
-        return None, (deployment.model_name, str(exc))
+def _register_deployment(gateway, deployment: CompatDeployment) -> str:
+    """Register one deployment and return its proxy-assigned model_id
+    once it is servable on the data plane."""
+    return gateway.create_model(
+        deployment.model_name,
+        deployment.litellm_params,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _compat_models_registered() -> Any:
-    """POST /model/new for every deployment in test_config.yaml; delete on exit.
+    """Register every compat deployment against the running proxy, then
+    tear them all down on session exit.
 
-    No-ops when proxy env is unset so unit-test trees stay hermetic.
-    Per-deployment register failures are printed and skipped: cells that need
-    that alias fail with Invalid model name, which is the right signal when
-    the proxy lacks that provider's credentials.
-    """
-    if not _proxy_env_configured():
+    Skips silently if the proxy env is not configured (no
+    ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
+    stay hermetic.
+
+    Design note: we always attempt to register all 15 deployments,
+    regardless of what credentials are exported in the test-runner's
+    shell. The credentials live in the proxy container's environment
+    (via docker-compose ``env_file``), not the shell running pytest -
+    so gating on shell env would filter out deployments the proxy can
+    actually serve. Per-deployment ``/model/new`` failures are printed
+    but do not abort the session: the cells that need that specific
+    deployment will 400 with "Invalid model name" and fail loudly,
+    which is the right signal (missing cred on the proxy side)."""
+    proxy = resolve_proxy()
+    if proxy is None:
         yield
         return
 
     from requests import RequestException
 
-    gateway = _build_control_gateway()
-    outcomes = tuple(_try_register(gateway, d) for d in load_all_deployments())
-    registered_ids = tuple(model_id for model_id, err in outcomes if model_id is not None)
-    failures = tuple(err for _model_id, err in outcomes if err is not None)
-    if failures:
-        summary = "\n".join(f"  - {name}: {reason}" for name, reason in failures)
-        print(
-            f"[compat fixture] {len(failures)} of "
-            f"{len(failures) + len(registered_ids)} deployments "
-            f"failed to register (proxy likely missing that provider's "
-            f"credentials); cells that target them will fail loudly:\n"
-            f"{summary}",
-            flush=True,
-        )
+    gateway = _build_control_gateway(proxy)
+    registered_ids: list[str] = []
+    failures: list[tuple[str, str]] = []
     try:
+        for deployment in load_all_deployments():
+            try:
+                model_id = _register_deployment(gateway, deployment)
+                registered_ids.append(model_id)
+            except (AssertionError, RequestException) as exc:
+                failures.append((deployment.model_name, str(exc)))
+        if failures:
+            summary = "\n".join(
+                f"  - {name}: {reason}" for name, reason in failures
+            )
+            print(
+                f"[compat fixture] {len(failures)} of "
+                f"{len(failures) + len(registered_ids)} deployments "
+                f"failed to register (proxy likely missing that provider's "
+                f"credentials); cells that target them will fail loudly:\n"
+                f"{summary}"
+            )
         yield
     finally:
         for model_id in registered_ids:
             try:
                 gateway.delete_model(model_id)
             except (AssertionError, RequestException):
+                # Best-effort — teardown surfaces via warnings inside
+                # ``delete_model`` already; swallowing here so one flaky
+                # delete does not mask real test failures.
                 pass

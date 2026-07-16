@@ -431,7 +431,6 @@ class LiteLLMParamsBody(BaseModel):
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
-    use_in_pass_through: bool | None = None
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
@@ -441,6 +440,8 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
