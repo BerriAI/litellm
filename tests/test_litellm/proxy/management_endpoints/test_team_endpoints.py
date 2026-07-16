@@ -555,6 +555,84 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
     assert created_permission_data["mcp_servers"] == ["server_a", "server_b"]
 
 
+@pytest.mark.parametrize(
+    "user_role,user_id,flag_value,expected",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", True, False),
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", False, True),
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", None, True),
+        (LitellmUserRoles.INTERNAL_USER, "user-1", True, True),
+        (LitellmUserRoles.ORG_ADMIN, "org-admin-1", True, True),
+        (LitellmUserRoles.PROXY_ADMIN, None, False, False),
+    ],
+)
+def test_should_auto_add_team_creator(user_role, user_id, flag_value, expected):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _should_auto_add_team_creator,
+    )
+
+    general_settings = (
+        {} if flag_value is None else {"disable_auto_add_proxy_admin_to_teams": flag_value}
+    )
+    auth = UserAPIKeyAuth(user_role=user_role, user_id=user_id)
+    assert _should_auto_add_team_creator(auth, general_settings) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disable_flag,expect_creator_added", [(True, False), (False, True)]
+)
+async def test_new_team_disable_auto_add_proxy_admin_flag(
+    mock_db_client, disable_flag, expect_creator_added
+):
+    """
+    When general_settings.disable_auto_add_proxy_admin_to_teams is True, a proxy
+    admin calling /team/new must NOT be auto-added to the team's members. When
+    the flag is off, the creator is auto-added as a team admin (default
+    behavior, regression guard for LIT-3739).
+    """
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    team_create_result = MagicMock(team_id="team-789")
+    team_create_result.model_dump.return_value = {"team_id": "team-789"}
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(
+        return_value=team_create_result
+    )
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user-1"
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_auto_add_proxy_admin_to_teams": disable_flag},
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+    ) as mock_add_members:
+        await new_team(
+            data=NewTeamRequest(team_alias="flag-test-team"),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=admin_auth,
+        )
+
+    member_add_request = mock_add_members.call_args.kwargs["data"]
+    member_user_ids = [m.user_id for m in member_add_request.member]
+    assert ("admin-user-1" in member_user_ids) is expect_creator_added
+
+
 @pytest.mark.asyncio
 async def test_team_update_object_permissions_existing_permission(monkeypatch):
     """
