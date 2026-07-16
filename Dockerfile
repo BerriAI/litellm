@@ -86,6 +86,7 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # working directory on sys.path; litellm/proxy/hooks resolves
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
 # which is /root/.cache here. Copy only the Prisma subdirs — copying the
 # whole /root/.cache drags in the uv build cache (~660 MB, includes a
