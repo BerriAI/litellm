@@ -14,6 +14,7 @@ from litellm.realtime_api.main import (  # noqa: E402
     _is_openai_compatible_realtime_provider,
     _realtime_health_check,
     _realtime_health_check_connect,
+    _resolve_self_hosted_realtime_api_key,
 )
 
 
@@ -122,7 +123,7 @@ async def test_realtime_health_check_vllm_uses_openai_compatible_url():
 
 
 @pytest.mark.asyncio
-async def test_realtime_health_check_openai_compatible_api_key_falls_back_to_litellm_api_key(
+async def test_realtime_health_check_openai_compatible_does_not_use_global_litellm_api_key(
     monkeypatch,
 ):
     monkeypatch.setattr(litellm, "api_key", "global-litellm-key")
@@ -140,7 +141,7 @@ async def test_realtime_health_check_openai_compatible_api_key_falls_back_to_lit
         )
 
         assert mock_ws_connect.call_args.kwargs["additional_headers"] == {
-            "Authorization": "Bearer global-litellm-key",
+            "Authorization": "Bearer Not Required",
         }
 
 
@@ -206,7 +207,7 @@ async def test_arealtime_openai_compatible_uses_explicit_api_key_when_dynamic_ke
     )
 
     def fake_get_llm_provider(model, api_base=None, api_key=None):
-        return ("test-realtime-model", "hosted_vllm", None, "http://127.0.0.1:8113")
+        return ("test-realtime-model", "hosted_vllm", api_key, "http://127.0.0.1:8113")
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
     monkeypatch.setattr(litellm, "api_key", "should-not-use-yet")
@@ -262,7 +263,7 @@ async def test_arealtime_openai_compatible_uses_litellm_params_api_key_fallback(
 
 
 @pytest.mark.asyncio
-async def test_arealtime_openai_compatible_uses_litellm_api_key_fallback(monkeypatch):
+async def test_arealtime_openai_compatible_does_not_use_global_litellm_api_key(monkeypatch):
     captured_kwargs = {}
 
     async def mock_async_realtime(**kwargs):
@@ -288,7 +289,7 @@ async def test_arealtime_openai_compatible_uses_litellm_api_key_fallback(monkeyp
         litellm_logging_obj=MagicMock(),
     )
 
-    assert captured_kwargs["api_key"] == "global-litellm-key"
+    assert captured_kwargs["api_key"] == "Not Required"
 
 
 @pytest.mark.asyncio
@@ -319,3 +320,33 @@ async def test_arealtime_openai_compatible_api_base_falls_back_to_litellm_params
     )
 
     assert captured_kwargs["api_base"] == "http://127.0.0.1:8113"
+
+
+def test_resolve_self_hosted_realtime_api_key_prefers_dynamic_key():
+    assert (
+        _resolve_self_hosted_realtime_api_key(
+            dynamic_api_key="dynamic-key",
+            litellm_params_api_key="params-key",
+        )
+        == "dynamic-key"
+    )
+
+
+def test_resolve_self_hosted_realtime_api_key_falls_back_to_litellm_params_key():
+    assert (
+        _resolve_self_hosted_realtime_api_key(
+            dynamic_api_key=None,
+            litellm_params_api_key="params-key",
+        )
+        == "params-key"
+    )
+
+
+def test_resolve_self_hosted_realtime_api_key_defaults_to_not_required():
+    assert (
+        _resolve_self_hosted_realtime_api_key(
+            dynamic_api_key=None,
+            litellm_params_api_key=None,
+        )
+        == "Not Required"
+    )

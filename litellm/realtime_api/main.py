@@ -501,14 +501,9 @@ async def _arealtime(
             or litellm.api_base
             or openai_realtime._get_default_api_base()
         )
-        api_key = (
-            dynamic_api_key
-            or litellm_params.api_key
-            or api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-            or ""
+        api_key = _resolve_self_hosted_realtime_api_key(
+            dynamic_api_key=dynamic_api_key,
+            litellm_params_api_key=litellm_params.api_key,
         )
 
         await openai_realtime.async_realtime(
@@ -529,6 +524,14 @@ async def _arealtime(
 
 def _is_openai_compatible_realtime_provider(custom_llm_provider: str) -> bool:
     return custom_llm_provider in litellm.openai_compatible_providers or custom_llm_provider == "vllm"
+
+
+def _resolve_self_hosted_realtime_api_key(
+    *,
+    dynamic_api_key: Optional[str],
+    litellm_params_api_key: Optional[str],
+) -> str:
+    return dynamic_api_key or litellm_params_api_key or "Not Required"
 
 
 async def _realtime_health_check_connect(url: str, headers: dict[str, str]) -> bool:
@@ -607,7 +610,10 @@ async def _realtime_health_check(
         headers = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
     elif _is_openai_compatible_realtime_provider(custom_llm_provider):
         resolved_api_base = api_base or litellm.api_base or openai_realtime._get_default_api_base()
-        resolved_api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
+        resolved_api_key = _resolve_self_hosted_realtime_api_key(
+            dynamic_api_key=api_key,
+            litellm_params_api_key=None,
+        )
         url = openai_realtime._construct_url(
             api_base=resolved_api_base,
             query_params={"model": model},
