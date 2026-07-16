@@ -148,18 +148,18 @@ model_list:
   - model_name: gpt-5-6-sol-azure-openai
     litellm_params:
       model: azure/gpt-5.6-sol
-      api_base: os.environ/AZURE_OPENAI_API_BASE
-      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
   - model_name: gpt-5-6-terra-azure-openai
     litellm_params:
       model: azure/gpt-5.6-terra
-      api_base: os.environ/AZURE_OPENAI_API_BASE
-      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
   - model_name: gpt-5-6-luna-azure-openai
     litellm_params:
       model: azure/gpt-5.6-luna
-      api_base: os.environ/AZURE_OPENAI_API_BASE
-      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
 
   # ---- Bedrock Mantle (GPT-5.6, Responses API) ----
   # Sol is only served from us-east-1 / us-east-2 as of 2026-07;

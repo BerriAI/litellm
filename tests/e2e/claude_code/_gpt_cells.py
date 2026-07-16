@@ -19,7 +19,7 @@ cover "OpenAI plus the big three clouds":
 Live GPT cells are opt-in via `COMPAT_GPT_CELLS=1`. The cron VM that
 runs the scheduled suite and publishes the matrix must be provisioned
 with the GPT-route credentials (`OPENAI_API_KEY` with available
-quota, `AZURE_OPENAI_API_BASE` + `AZURE_OPENAI_API_KEY` with gpt-5.6
+quota, `AZURE_API_BASE` + `AZURE_API_KEY` with gpt-5.6
 deployments, and Bedrock Mantle model access) before these cells can
 pass, so until the flag is set each live cell skips and its matrix
 cell publishes as `not_tested` instead of a credential-shaped red.
