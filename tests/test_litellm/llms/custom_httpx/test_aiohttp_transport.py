@@ -130,13 +130,14 @@ async def test_transfer_encoding_error_no_httpx_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    # This should NOT raise httpx.ReadError or any other exception
-    # It should handle the error gracefully and just return what was received
-    async for chunk in stream:
-        received_chunks.append(chunk)
-    print(f"received_chunks: {received_chunks}")
+    # An incomplete transfer must surface as an error rather than looking
+    # like a clean stream end, so callers don't synthesize a successful
+    # finish_reason/[DONE] for a connection that was actually dropped.
+    with pytest.raises(aiohttp.ClientPayloadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
 
-    # Should have received the first chunk before the error
+    # Chunks received before the error should still have been yielded
     assert received_chunks == [b"chunk1"]
     assert len(received_chunks) == 1
 
@@ -158,13 +159,78 @@ async def test_client_payload_error_graceful_handling():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    # This should handle the error gracefully without raising
-    async for chunk in stream:
-        received_chunks.append(chunk)
+    # A payload error mid-stream must propagate so it isn't mistaken for
+    # a clean, successful stream completion.
+    with pytest.raises(aiohttp.client_exceptions.ClientPayloadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
 
     # Should have received chunks before the error
     assert received_chunks == [b"data1", b"data2"]
     assert len(received_chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_connection_closed_runtime_error_raises():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33404
+
+    A RuntimeError("Connection closed.") mid-stream (e.g. an upstream TCP
+    reset before any finish_reason/[DONE] was sent) must propagate instead
+    of being swallowed as a graceful end-of-stream. Silently swallowing it
+    causes callers to synthesize a successful finish_reason="stop" for a
+    stream that was actually dropped mid-flight.
+    """
+    connection_closed_error = RuntimeError("Connection closed.")
+
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1"],
+        exception_to_raise=connection_closed_error,
+        exception_at_chunk=0,  # reset before any bytes are delivered
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    received_chunks = []
+
+    with pytest.raises(RuntimeError, match="Connection closed"):
+        async for chunk in stream:
+            received_chunks.append(chunk)
+
+    assert received_chunks == []
+
+
+@pytest.mark.asyncio
+async def test_reset_before_any_chunk_raises():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33404
+
+    When the upstream resets before sending any SSE chunk at all, the
+    stream must raise rather than end cleanly, so the caller returns an
+    error response instead of a synthetic empty successful completion.
+    """
+    transfer_error = aiohttp.http_exceptions.TransferEncodingError(
+        message="400, message: Not enough data for satisfy transfer length header."
+    )
+    client_payload_error = aiohttp.ClientPayloadError(
+        "Response payload is not completed"
+    )
+    client_payload_error.__cause__ = transfer_error
+
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+        exception_to_raise=client_payload_error,
+        exception_at_chunk=1,  # reset after the first chunk
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    received_chunks = []
+
+    with pytest.raises(aiohttp.ClientPayloadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
+
+    # The chunk(s) delivered before the reset should still have been yielded
+    assert received_chunks == [b"chunk1"]
 
 
 @pytest.mark.asyncio
