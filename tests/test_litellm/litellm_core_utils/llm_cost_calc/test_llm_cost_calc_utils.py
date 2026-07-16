@@ -379,12 +379,12 @@ def test_audio_input_tokens_gemini_priced_at_text_rate():
     )
 
 
-def test_audio_video_input_tokens_gemini_use_above_200k_tier():
-    """Regression for LIT-4474: audio/video fallbacks must honor the >200k long-context tier.
+def test_audio_video_image_input_tokens_gemini_use_above_200k_tier():
+    """Regression for LIT-4474: audio/video/image fallbacks must honor the >200k long-context tier.
 
     Falling back to the raw un-tiered input_cost_per_token undercounts when the request crosses
-    the 200k boundary; audio and video should be priced at input_cost_per_token_above_200k_tokens
-    like text.
+    the 200k boundary; audio, video and image tokens should be priced at
+    input_cost_per_token_above_200k_tokens like text.
     """
     model = "gemini-3-pro-preview"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -393,11 +393,13 @@ def test_audio_video_input_tokens_gemini_use_above_200k_tier():
     model_cost_map = litellm.model_cost[f"gemini/{model}"]
     hi_rate = model_cost_map["input_cost_per_token_above_200k_tokens"]
     assert hi_rate != model_cost_map["input_cost_per_token"]
+    assert model_cost_map.get("input_cost_per_image_token") is None
 
     text_tokens = 100000
-    audio_tokens = 60000
-    video_tokens = 80000
-    prompt_tokens = text_tokens + audio_tokens + video_tokens
+    audio_tokens = 40000
+    video_tokens = 60000
+    image_tokens = 40000
+    prompt_tokens = text_tokens + audio_tokens + video_tokens + image_tokens
     usage = Usage(
         completion_tokens=0,
         prompt_tokens=prompt_tokens,
@@ -406,6 +408,7 @@ def test_audio_video_input_tokens_gemini_use_above_200k_tier():
             text_tokens=text_tokens,
             audio_tokens=audio_tokens,
             video_tokens=video_tokens,
+            image_tokens=image_tokens,
         ),
     )
 
