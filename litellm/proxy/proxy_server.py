@@ -4425,6 +4425,15 @@ class ProxyConfig:
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = litellm.default_max_internal_user_budget
+                elif key == "default_internal_user_params" and isinstance(value, dict):
+                    litellm.default_internal_user_params = (
+                        {**value, "max_budget": float(value["max_budget"])}
+                        if value.get("max_budget") is not None
+                        else value
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, litellm.default_internal_user_params, is_full_admin=False)}{reset_color_code}"
+                    )
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
