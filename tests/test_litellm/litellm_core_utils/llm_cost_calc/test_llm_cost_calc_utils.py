@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
+    _is_within_off_peak_window,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_token_type_cost_breakdown,
@@ -2237,3 +2238,154 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
     assert text_output_cost + eu.reasoning_cost == pytest.approx(completion_cost)
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
+
+
+def test_is_within_off_peak_window_same_day():
+    from datetime import datetime, timezone
+
+    window = "09:00-17:00"
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 8, 59, tzinfo=timezone.utc)) is False
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_wraps_midnight():
+    from datetime import datetime, timezone
+
+    window = "16:30-00:30"
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)) is False
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_multiple_windows():
+    from datetime import datetime, timezone
+
+    # Providers like DeepSeek V4 have more than one daily peak/off-peak window.
+    windows = ["01:00-05:00", "13:00-16:00"]
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is False
+    # a malformed entry in the list is ignored, valid entries still match
+    assert _is_within_off_peak_window(["bad", "13:00-16:00"], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window([], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_malformed_returns_false():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+    assert _is_within_off_peak_window("not-a-window", now) is False
+    assert _is_within_off_peak_window("16:30", now) is False
+    assert _is_within_off_peak_window("25:00-26:00", now) is False
+
+
+def test_get_token_base_cost_applies_off_peak_pricing():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 5e-8,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak[0] == 5e-7
+    assert off_peak[1] == 1e-6
+    assert off_peak[4] == 5e-8
+
+    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak[0] == 1e-6
+    assert peak[1] == 2e-6
+    assert peak[4] == 1e-7
+
+
+def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 5e-7},
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    result = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert result[0] == 5e-7
+    assert result[1] == 2e-6
+
+
+def test_get_token_base_cost_off_peak_wins_over_threshold():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "output_cost_per_token_above_200k_tokens": 4e-6,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=250000, completion_tokens=250000, total_tokens=500000)
+
+    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak[0] == 5e-7
+    assert off_peak[1] == 1e-6
+
+    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak[0] == 3e-6
+    assert peak[1] == 4e-6
+
+
+def test_get_model_info_propagates_off_peak_fields():
+    model_name = "test-off-peak-model"
+    off_peak_pricing = {
+        "hours_utc": "16:30-00:30",
+        "input_cost_per_token": 5e-7,
+        "output_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": 5e-8,
+    }
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "off_peak_pricing": off_peak_pricing,
+            }
+        }
+    )
+    info = litellm.get_model_info(model=model_name)
+    assert info["off_peak_pricing"] == off_peak_pricing

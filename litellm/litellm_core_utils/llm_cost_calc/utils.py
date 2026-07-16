@@ -2,7 +2,8 @@
 ## Helper utilities for cost_per_token()
 
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional, Tuple, TypedDict, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -198,8 +199,77 @@ def _parse_above_token_threshold(key: str) -> float:
     return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
 
 
+def _is_within_off_peak_window(
+    off_peak_hours_utc: Union[str, list[str]], current_time: Optional[datetime] = None
+) -> bool:
+    """Return True if current_time (UTC, defaulting to now) falls inside any off-peak window.
+
+    off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
+    with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
+    midnight. The start is inclusive and the end is exclusive; malformed windows are ignored.
+    """
+    if current_time is None:
+        current_time = datetime.now(timezone.utc)
+    now = current_time.time()
+    windows = [off_peak_hours_utc] if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
+    for window in windows:
+        try:
+            start_str, end_str = window.split("-")
+            start = datetime.strptime(start_str.strip(), "%H:%M").time()
+            end = datetime.strptime(end_str.strip(), "%H:%M").time()
+        except (ValueError, AttributeError):
+            continue
+        if start <= end:
+            if start <= now < end:
+                return True
+        elif now >= start or now < end:
+            return True
+    return False
+
+
+def _coerce_off_peak_rate(value: object, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _apply_off_peak_pricing(
+    model_info: ModelInfo,
+    current_time: Optional[datetime],
+    prompt_base_cost: float,
+    completion_base_cost: float,
+    cache_read_cost: float,
+) -> tuple[float, float, float]:
+    """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
+    off_peak_pricing windows. Applied after threshold pricing so the discount is honored rather
+    than overwritten when a model combines off-peak and above-threshold rates. Any rate left
+    unset in off_peak_pricing falls back to the standard rate.
+    """
+    off_peak = model_info.get("off_peak_pricing")
+    if not off_peak:
+        return prompt_base_cost, completion_base_cost, cache_read_cost
+    hours_utc = off_peak.get("hours_utc")
+    if not hours_utc or not _is_within_off_peak_window(hours_utc, current_time):
+        return prompt_base_cost, completion_base_cost, cache_read_cost
+    return (
+        _coerce_off_peak_rate(off_peak.get("input_cost_per_token"), prompt_base_cost),
+        _coerce_off_peak_rate(off_peak.get("output_cost_per_token"), completion_base_cost),
+        _coerce_off_peak_rate(off_peak.get("cache_read_input_token_cost"), cache_read_cost),
+    )
+
+
 def _get_token_base_cost(
-    model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
+    model_info: ModelInfo,
+    usage: Usage,
+    service_tier: Optional[str] = None,
+    current_time: Optional[datetime] = None,
 ) -> Tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
@@ -242,6 +312,9 @@ def _get_token_base_cost(
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
+        prompt_base_cost, completion_base_cost, cache_read_cost = _apply_off_peak_pricing(
+            model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
+        )
         return (
             prompt_base_cost,
             completion_base_cost,
@@ -348,6 +421,9 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
+    prompt_base_cost, completion_base_cost, cache_read_cost = _apply_off_peak_pricing(
+        model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
+    )
     return (
         prompt_base_cost,
         completion_base_cost,

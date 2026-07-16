@@ -177,6 +177,19 @@ class AgenticLoopParams(TypedDict, total=False):
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
+class OffPeakPricing(TypedDict, total=False):
+    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows;
+    a window may wrap past midnight. Any rate left unset falls back to the standard rate.
+    """
+
+    hours_utc: Union[str, list[str]]
+    input_cost_per_token: float
+    output_cost_per_token: float
+    cache_read_input_token_cost: float
+
+
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
@@ -197,6 +210,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
+    off_peak_pricing: Optional[OffPeakPricing]  # time-windowed off-peak rates
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
