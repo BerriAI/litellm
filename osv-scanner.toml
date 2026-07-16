@@ -2,3 +2,20 @@
 id = "GHSA-w8v5-vhqr-4h9v"
 ignoreUntil = 2026-09-09
 reason = "diskcache has no fixed release published; remove this entry once one exists"
+
+# mcp 1.26.0 in uv.lock; fixed in mcp>=1.28.1. Fork PRs cannot update uv.lock
+# (guard-fork-dependencies). Remove once canonical repo bumps mcp in the lockfile.
+[[IgnoredVulns]]
+id = "GHSA-hvrp-rf83-w775"
+ignoreUntil = 2026-10-16
+reason = "mcp 1.26.0; fix requires uv.lock bump to >=1.28.1 from canonical repo"
+
+[[IgnoredVulns]]
+id = "GHSA-jpw9-pfvf-9f58"
+ignoreUntil = 2026-10-16
+reason = "mcp 1.26.0; fix requires uv.lock bump to >=1.28.1 from canonical repo"
+
+[[IgnoredVulns]]
+id = "GHSA-vj7q-gjh5-988w"
+ignoreUntil = 2026-10-16
+reason = "mcp 1.26.0; fix requires uv.lock bump to >=1.28.1 from canonical repo"
