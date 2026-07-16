@@ -5515,3 +5515,37 @@ def test_resolve_model_name_from_model_id_prefers_provider_qualified_model():
     )
     assert result == "gemini-veo", f"Expected 'gemini-veo', got '{result}'"
 
+
+def test_resolve_model_name_from_model_id_wildcard_beats_cross_provider_suffix():
+    """
+    When provider is known, same-provider wildcard must win over a different
+    provider's exact deployment that only shares the model-name suffix.
+
+    Regression for Greptile P1 on the video credential re-land:
+    gemini/veo-... exact must not shadow vertex_ai/* for a Vertex video id.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-veo",
+                "litellm_params": {
+                    "model": "gemini/veo-3.0-generate-preview",
+                    "api_key": "gemini-key",
+                },
+            },
+            {
+                "model_name": "vertex_ai/*",
+                "litellm_params": {
+                    "model": "vertex_ai/*",
+                    "vertex_project": "vertex-project",
+                },
+            },
+        ],
+    )
+
+    result = router.resolve_model_name_from_model_id(
+        model_id="veo-3.0-generate-preview",
+        custom_llm_provider="vertex_ai",
+    )
+    assert result == "vertex_ai/*", f"Expected 'vertex_ai/*', got '{result}'"
+
