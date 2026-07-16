@@ -628,6 +628,7 @@ async def test_new_team_disable_auto_add_proxy_admin_flag(
             user_api_key_dict=admin_auth,
         )
 
+    mock_add_members.assert_called_once()
     member_add_request = mock_add_members.call_args.kwargs["data"]
     member_user_ids = [m.user_id for m in member_add_request.member]
     assert ("admin-user-1" in member_user_ids) is expect_creator_added
