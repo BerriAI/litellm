@@ -150,8 +150,41 @@ async def test_reservation_blocks_over_budget_non_throttled_key(
     await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
     await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)  # counter -> 1.0
 
-    with pytest.raises(litellm.BudgetExceededError):
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
         await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert exc_info.value.entity_type == "key"
+    assert exc_info.value.entity_id == "key-no-optin-over"
+
+
+@pytest.mark.asyncio
+async def test_over_budget_window_counter_tags_clean_entity_id():
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _apply_over_budget_reservation_policy,
+        _BudgetCounter,
+    )
+
+    counter = _BudgetCounter(
+        counter_key="spend:key:test-token:window:1d",
+        max_budget=1.0,
+        fallback_spend=0.0,
+        entity_type="Key",
+        entity_id="test-token:1d",
+        spend_log_entity_id="test-token",
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _apply_over_budget_reservation_policy(
+            counter=counter,
+            valid_token=None,
+            entry={"counter_key": counter.counter_key},
+            applied_entries=[],
+            reservation_cost=0.5,
+            current_spend=2.0,
+        )
+    assert exc_info.value.entity_type == "key"
+    assert exc_info.value.entity_id == "test-token"
+    assert exc_info.value.max_budget == 1.0
+    assert exc_info.value.current_cost == 2.0
 
 
 def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
