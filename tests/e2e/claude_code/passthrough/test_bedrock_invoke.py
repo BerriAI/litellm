@@ -27,7 +27,7 @@ from claude_code._passthrough import bedrock_extra_env, run_passthrough_cell
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
+    "claude-sonnet-4-5-bedrock-invoke",
     "claude-opus-4-7-bedrock-invoke",
 ]
 

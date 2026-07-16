@@ -152,7 +152,7 @@ def test_per_provider_test_file_imports_and_parametrizes_three_models(
     `claude-opus-4-7-bedrock-invoke`), so we check for the tier
     substrings rather than exact alias names."""
     text = (SUITE_ROOT / feature_id / f"test_{provider}.py").read_text()
-    for tier in ("haiku-4-5", "sonnet-4-6", "opus-4-7"):
+    for tier in ("haiku-4-5", "sonnet-4-5", "opus-4-7"):
         assert (
             tier in text
         ), f"{feature_id}/test_{provider}.py does not reference {tier}"

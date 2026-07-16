@@ -1,26 +1,31 @@
 """Unit tests for the shared `run_basic_messaging_cell` helper.
 
-These tests mock `run_claude_models_parallel` so they exercise the
-helper's branching (env-missing guard, per-model pass/fail/empty-text,
-streaming wire check) without spawning the real CLI. The streaming
-check is the regression we care about: a proxy that buffers the
-upstream stream must turn the cell red, not green.
+These tests inject a fake ``ClaudeRunner`` and a fake env mapping so
+they exercise the helper's branching (env-missing guard, per-model
+pass/fail/empty-text, streaming wire check) without spawning the real
+CLI or touching ``os.environ``. The streaming check is the regression
+we care about: a proxy that buffers the upstream stream must turn the
+cell red, not green.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import pytest
 
-from claude_code import _basic_messaging
 from claude_code._basic_messaging import (
     MIN_STREAM_DELTA_EVENTS,
     _count_stream_event_deltas,
     run_basic_messaging_cell,
 )
 from claude_code.cli_driver import DriverResult
+
+
+_PROXY_ENV: Mapping[str, str] = {
+    "LITELLM_PROXY_URL": "http://localhost:4000",
+    "LITELLM_MASTER_KEY": "sk-test",
+}
 
 
 class _FakeResult:
@@ -82,16 +87,17 @@ def _buffered_events() -> List[Dict[str, Any]]:
     ]
 
 
-def _install_fake_runner(monkeypatch, *, outcomes_by_model):
-    """Patch `run_claude_models_parallel` to return canned outcomes.
+def _make_fake_runner(*, outcomes_by_model):
+    """Build an injectable runner that returns canned outcomes and
+    records the kwargs the helper passed in.
 
-    Captures the kwargs the cell passed in so tests can assert on
-    `extra_args` (which is how the streaming variant opts into
-    `--include-partial-messages`).
-    """
+    Returns a ``(runner, captured)`` pair; ``captured`` is a dict the
+    test can assert against without any global mutation, which is why
+    we prefer DI over ``monkeypatch.setattr``: the helper takes a
+    ``runner=`` kwarg, so tests bind their fake directly."""
     captured: Dict[str, Any] = {}
 
-    def fake(*, models, prompt, base_url, api_key, extra_args=None, **_kwargs):
+    def runner(*, models, prompt, base_url, api_key, extra_args=None, **_kwargs):
         captured["models"] = list(models)
         captured["prompt"] = prompt
         captured["base_url"] = base_url
@@ -99,14 +105,7 @@ def _install_fake_runner(monkeypatch, *, outcomes_by_model):
         captured["extra_args"] = list(extra_args) if extra_args else []
         return {model: outcomes_by_model[model] for model in models}
 
-    monkeypatch.setattr(_basic_messaging, "run_claude_models_parallel", fake)
-    return captured
-
-
-@pytest.fixture(autouse=True)
-def _proxy_env(monkeypatch):
-    monkeypatch.setenv("LITELLM_PROXY_BASE_URL", "http://localhost:4000")
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
+    return runner, captured
 
 
 def test_count_stream_event_deltas_only_counts_records_with_event_payload():
@@ -123,28 +122,30 @@ def test_count_stream_event_deltas_only_counts_records_with_event_payload():
     assert _count_stream_event_deltas(events) == 2
 
 
-def test_verify_streaming_passes_when_proxy_streams(monkeypatch):
+def test_verify_streaming_passes_when_proxy_streams():
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
     outcome = DriverResult(text="1\n2\n3", events=_streamed_events(n_deltas=5))
-    captured = _install_fake_runner(monkeypatch, outcomes_by_model={model: outcome})
+    runner, captured = _make_fake_runner(outcomes_by_model={model: outcome})
 
     run_basic_messaging_cell(
         compat_result=fake_result,
         models=[model],
         prompt="Count from 1 to 5, one number per line.",
         verify_streaming=True,
+        env=_PROXY_ENV,
+        runner=runner,
     )
 
     assert captured["extra_args"] == ["--include-partial-messages"]
     assert fake_result.rows == [{"status": "pass"}]
 
 
-def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
+def test_verify_streaming_fails_when_proxy_buffers():
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
     outcome = DriverResult(text="1\n2\n3", events=_buffered_events())
-    _install_fake_runner(monkeypatch, outcomes_by_model={model: outcome})
+    runner, _captured = _make_fake_runner(outcomes_by_model={model: outcome})
 
     with pytest.raises(pytest.fail.Exception):
         run_basic_messaging_cell(
@@ -152,7 +153,9 @@ def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
             models=[model],
             prompt="Count from 1 to 5, one number per line.",
             verify_streaming=True,
-        )
+            env=_PROXY_ENV,
+            runner=runner,
+            )
 
     assert len(fake_result.rows) == 1
     row = fake_result.rows[0]
@@ -161,33 +164,35 @@ def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
     assert f"< {MIN_STREAM_DELTA_EVENTS}" in row["error"]
 
 
-def test_non_streaming_variant_omits_partial_messages_flag(monkeypatch):
+def test_non_streaming_variant_omits_partial_messages_flag():
     """Default `verify_streaming=False` keeps the non-streaming wire identical."""
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
     outcome = DriverResult(text="pong", events=_buffered_events())
-    captured = _install_fake_runner(monkeypatch, outcomes_by_model={model: outcome})
+    runner, captured = _make_fake_runner(outcomes_by_model={model: outcome})
 
     run_basic_messaging_cell(
         compat_result=fake_result,
         models=[model],
         prompt="Reply with the single word 'pong' and nothing else.",
+        env=_PROXY_ENV,
+        runner=runner,
     )
 
     assert captured["extra_args"] == []
     assert fake_result.rows == [{"status": "pass"}]
 
 
-def test_verify_streaming_requires_all_models_to_stream(monkeypatch):
+def test_verify_streaming_requires_all_models_to_stream():
     """If any one tier buffers, the cell fails — same all-must-pass shape as
     the non-streaming check."""
     fake_result = _FakeResult()
     outcomes = {
         "claude-haiku-4-5": DriverResult(text="ok", events=_streamed_events(5)),
-        "claude-sonnet-4-6": DriverResult(text="ok", events=_buffered_events()),
+        "claude-sonnet-4-5": DriverResult(text="ok", events=_buffered_events()),
         "claude-opus-4-7": DriverResult(text="ok", events=_streamed_events(5)),
     }
-    _install_fake_runner(monkeypatch, outcomes_by_model=outcomes)
+    runner, _captured = _make_fake_runner(outcomes_by_model=outcomes)
 
     with pytest.raises(pytest.fail.Exception):
         run_basic_messaging_cell(
@@ -195,7 +200,30 @@ def test_verify_streaming_requires_all_models_to_stream(monkeypatch):
             models=list(outcomes.keys()),
             prompt="Count from 1 to 5, one number per line.",
             verify_streaming=True,
-        )
+            env=_PROXY_ENV,
+            runner=runner,
+            )
 
     statuses = [row["status"] for row in fake_result.rows]
     assert statuses == ["pass", "fail", "pass"]
+
+
+def test_missing_proxy_env_hard_fails_regardless_of_runner():
+    """The env guard fires before the runner is called, and takes the
+    env from the injected mapping (not os.environ). Passing an empty
+    env dict must hard-fail even if a happy runner is bound."""
+    fake_result = _FakeResult()
+    runner, captured = _make_fake_runner(outcomes_by_model={})
+
+    with pytest.raises(pytest.fail.Exception):
+        run_basic_messaging_cell(
+            compat_result=fake_result,
+            models=["claude-haiku-4-5"],
+            prompt="whatever",
+            env={},
+            runner=runner,
+            )
+
+    assert captured == {}, "runner must not be called when env resolution fails"
+
+

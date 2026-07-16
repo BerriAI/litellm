@@ -26,7 +26,7 @@
       "providers": {
         "anthropic": {
           "status": "fail",
-          "error": "[claude-sonnet-4-6] tool call dropped"
+          "error": "[claude-sonnet-4-5] tool call dropped"
         },
         "bedrock_invoke": {
           "status": "not_applicable",

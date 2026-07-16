@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import pytest
 
+from claude_code._env import (
+    PRIMARY_API_KEY_ENV,
+    PRIMARY_BASE_URL_ENV,
+)
 from claude_code._passthrough import (
     ANTHROPIC_PASSTHROUGH_BASE_PATH,
     CLIENT_SIDE_AWS_REGION,
@@ -33,8 +37,8 @@ from claude_code._passthrough import (
 from claude_code.cli_driver import ClaudeCLIError, DriverResult
 
 PROXY_ENV = {
-    "LITELLM_PROXY_BASE_URL": "http://localhost:4000",
-    "LITELLM_PROXY_API_KEY": "sk-test",
+    PRIMARY_BASE_URL_ENV: "http://localhost:4000",
+    PRIMARY_API_KEY_ENV: "sk-test",
 }
 
 
@@ -73,7 +77,29 @@ def test_env_missing_guard_reports_fail_and_aborts():
         )
     assert fake_result.single is not None
     assert fake_result.single["status"] == "fail"
-    assert "LITELLM_PROXY_BASE_URL" in fake_result.single["error"]
+    assert PRIMARY_BASE_URL_ENV in fake_result.single["error"]
+    assert PRIMARY_API_KEY_ENV in fake_result.single["error"]
+
+
+def test_suite_wide_env_reaches_the_proxy():
+    """Passthrough cells resolve via the same suite-wide env names as
+    every other e2e cell, so EKS wiring that only exports
+    LITELLM_PROXY_URL + LITELLM_MASTER_KEY reaches the ALB."""
+    fake_result = _FakeResult()
+    captured: Dict[str, Any] = {}
+    outcome = DriverResult(text="pong")
+
+    run_passthrough_cell(
+        compat_result=fake_result,
+        models=["claude-haiku-4-5"],
+        prompt="ping",
+        run_models=_fake_run_models({"claude-haiku-4-5": outcome}, captured),
+        env=PROXY_ENV,
+    )
+
+    assert captured["base_url"] == "http://localhost:4000"
+    assert captured["api_key"] == "sk-test"
+    assert fake_result.rows == [{"status": "pass"}]
 
 
 def test_anthropic_base_path_appended_to_normalized_proxy_url():
@@ -87,7 +113,7 @@ def test_anthropic_base_path_appended_to_normalized_proxy_url():
         prompt="ping",
         passthrough_base_path=ANTHROPIC_PASSTHROUGH_BASE_PATH,
         run_models=_fake_run_models({"claude-haiku-4-5": outcome}, captured),
-        env={**PROXY_ENV, "LITELLM_PROXY_BASE_URL": "http://localhost:4000/"},
+        env={**PROXY_ENV, PRIMARY_BASE_URL_ENV: "http://localhost:4000/"},
     )
 
     assert captured["base_url"] == "http://localhost:4000/anthropic"
@@ -111,7 +137,7 @@ def test_extra_env_builder_receives_normalized_base_and_is_forwarded():
         prompt="ping",
         build_extra_env=build,
         run_models=_fake_run_models({"claude-haiku-4-5": outcome}, captured),
-        env={**PROXY_ENV, "LITELLM_PROXY_BASE_URL": "http://localhost:4000/"},
+        env={**PROXY_ENV, PRIMARY_BASE_URL_ENV: "http://localhost:4000/"},
     )
 
     assert seen_bases == ["http://localhost:4000"]
@@ -124,7 +150,7 @@ def test_per_model_failures_reported_individually():
     captured: Dict[str, Any] = {}
     outcomes = {
         "claude-haiku-4-5": DriverResult(text="pong"),
-        "claude-sonnet-4-6": ClaudeCLIError("claude CLI timed out after 120s"),
+        "claude-sonnet-4-5": ClaudeCLIError("claude CLI timed out after 120s"),
         "claude-opus-4-7": DriverResult(text="", exit_code=1),
     }
 

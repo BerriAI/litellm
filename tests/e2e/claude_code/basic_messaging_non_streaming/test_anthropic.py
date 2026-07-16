@@ -20,6 +20,7 @@ the matrix builder still sees three rows for this (feature, provider).
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per the PRD: each cell is exercised against three Claude tiers via the
@@ -27,11 +28,12 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # routing config; the driver only sends the alias.
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 
 
+@pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
 def test_basic_messaging_non_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply.
 
