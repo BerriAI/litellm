@@ -91,6 +91,23 @@ features:
     # Code releases. The HTTP probe hits the bug surface LiteLLM
     # has actually shipped fixes for (2.1.117, 2.1.72, 2.1.70 per
     # the Claude Code release notes).
+  - id: passthrough
+    name: Native API passthrough
+    # Drives the CLI in each cloud's native mode against LiteLLM's
+    # passthrough routes instead of the /v1/messages translation
+    # layer -- the "LLM gateway" setup from
+    # https://code.claude.com/docs/en/gateway. anthropic uses
+    # ANTHROPIC_BASE_URL={proxy}/anthropic; bedrock_invoke uses
+    # CLAUDE_CODE_USE_BEDROCK=1 against {proxy}/bedrock (InvokeModel
+    # wire, alias resolved from the URL by the router); vertex_ai
+    # uses CLAUDE_CODE_USE_VERTEX=1 against {proxy}/vertex_ai/v1
+    # (rawPredict wire, alias + project + location resolved from the
+    # deployment, which therefore needs `use_in_pass_through: true`);
+    # azure uses CLAUDE_CODE_USE_FOUNDRY=1 against {proxy}/azure and
+    # needs AZURE_API_BASE/AZURE_API_KEY on the proxy (see
+    # passthrough/test_azure.py and the cron env example).
+    # bedrock_converse is structurally not_applicable: Claude Code
+    # has no Converse-wire client.
   - id: long_context_1m
     name: Long context (1M)
     # Sends a ~210k-token padded prompt with the

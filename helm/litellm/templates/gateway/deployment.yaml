@@ -46,13 +46,19 @@ spec:
             - name: NUM_WORKERS
               value: {{ .Values.gateway.numWorkers | quote }}
             {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
+            {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
             {{- end }}
             {{- with .Values.gateway.volumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -68,12 +74,15 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
-      {{- if or .Values.gateway.config.create .Values.gateway.volumes }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled }}
       volumes:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
             name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- if .Values.billingMetrics.enabled }}
+        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
         {{- end }}
         {{- with .Values.gateway.volumes }}
         {{- toYaml . | nindent 8 }}
