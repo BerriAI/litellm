@@ -1117,12 +1117,12 @@ class TestCommonRequestProcessingHelpers:
             ),  # Invalid string code
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
-                None,
-            ),  # Integer code too low
+                502,
+            ),  # Integer code too low — below HTTP range, mapped to 502
             (
                 'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
-            ),  # Integer code too high
+                502,
+            ),  # Integer code too high — above HTTP range, mapped to 502
             (
                 'data: {"id": "123", "content": "hello"}',
                 None,
