@@ -36,6 +36,53 @@ interface generalSettingsItem {
   field_options?: string[] | null;
 }
 
+const SettingValueEditor: React.FC<{
+  setting: generalSettingsItem;
+  onChange: (fieldName: string, newValue: any) => void;
+}> = ({ setting, onChange }) => {
+  if (setting.field_type === "Integer") {
+    return (
+      <InputNumber
+        step={1}
+        value={setting.field_value}
+        onChange={(newValue) => onChange(setting.field_name, newValue)}
+      />
+    );
+  }
+  if (setting.field_type === "Boolean") {
+    return (
+      <Switch
+        checked={setting.field_value === true || setting.field_value === "true"}
+        onChange={(checked) => onChange(setting.field_name, checked)}
+      />
+    );
+  }
+  if (setting.field_type === "Float") {
+    return (
+      <InputNumber
+        min={0}
+        max={1}
+        step={0.05}
+        value={setting.field_value}
+        onChange={(newValue) => onChange(setting.field_name, newValue)}
+      />
+    );
+  }
+  if (setting.field_type === "Select") {
+    return (
+      <AntdSelect
+        allowClear
+        style={{ minWidth: "8rem" }}
+        placeholder="Default"
+        value={setting.field_value || undefined}
+        options={(setting.field_options ?? []).map((option) => ({ label: option, value: option }))}
+        onChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
+      />
+    );
+  }
+  return null;
+};
+
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
@@ -151,38 +198,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           </p>
                         </TableCell>
                         <TableCell>
-                          {value.field_type == "Integer" ? (
-                            <InputNumber
-                              step={1}
-                              value={value.field_value}
-                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
-                            />
-                          ) : value.field_type == "Boolean" ? (
-                            <Switch
-                              checked={value.field_value === true || value.field_value === "true"}
-                              onChange={(checked) => handleInputChange(value.field_name, checked)}
-                            />
-                          ) : value.field_type == "Float" ? (
-                            <InputNumber
-                              min={0}
-                              max={1}
-                              step={0.05}
-                              value={value.field_value}
-                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
-                            />
-                          ) : value.field_type == "Select" ? (
-                            <AntdSelect
-                              allowClear
-                              style={{ minWidth: "8rem" }}
-                              placeholder="Default"
-                              value={value.field_value || undefined}
-                              options={(value.field_options ?? []).map((option) => ({
-                                label: option,
-                                value: option,
-                              }))}
-                              onChange={(newValue) => handleInputChange(value.field_name, newValue ?? "")}
-                            />
-                          ) : null}
+                          <SettingValueEditor setting={value} onChange={handleInputChange} />
                         </TableCell>
                         <TableCell>
                           {value.stored_in_db == true ? (
