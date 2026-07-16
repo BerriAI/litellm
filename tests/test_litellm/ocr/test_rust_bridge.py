@@ -5,6 +5,7 @@ import builtins
 import types
 
 import httpx
+import pydantic
 import pytest
 
 import litellm
@@ -524,10 +525,8 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
     assert "Rust OCR bridge is required" in str(exc_info.value)
 
 
-# The Rust bridge surfaces provider/transport failures as a typed ``RustOcrError``
-# carrying the public status code; the host must translate each onto the matching
-# public ``litellm`` exception (with its canonical status_code) so proxy and SDK
-# callers keep the same contract they had on the Python path.
+# Each typed RustOcrError status must map to the matching public litellm
+# exception with its canonical status_code, preserving the Python-path contract.
 RUST_OCR_ERROR_CASES = [
     pytest.param(401, litellm.AuthenticationError, 401, id="401_authentication"),
     pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
@@ -540,8 +539,12 @@ RUST_OCR_ERROR_CASES = [
 ]
 
 
-@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
-def test_rust_ocr_error_maps_to_public_exception(status_code, expected_exception, expected_status):
+@pytest.mark.parametrize(
+    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
+)
+def test_rust_ocr_error_maps_to_public_exception(
+    status_code, expected_exception, expected_status
+):
     exc = ocr_main._rust_ocr_error_to_public_exception(
         RustOcrError("upstream boom", status_code),
         model="mistral-ocr-latest",
@@ -555,8 +558,12 @@ def test_rust_ocr_error_maps_to_public_exception(status_code, expected_exception
     assert "upstream boom" in str(exc)
 
 
-@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
-def test_ocr_raises_typed_exception_from_rust_error(status_code, expected_exception, expected_status):
+@pytest.mark.parametrize(
+    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
+)
+def test_ocr_raises_typed_exception_from_rust_error(
+    status_code, expected_exception, expected_status
+):
     rust_bridge._set_rust_ocr_bridge(ocr=RustErrorBridge("upstream boom", status_code))
 
     with pytest.raises(expected_exception) as exc_info:
@@ -566,10 +573,16 @@ def test_ocr_raises_typed_exception_from_rust_error(status_code, expected_except
     assert exc_info.value.llm_provider == "mistral"
 
 
-@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+@pytest.mark.parametrize(
+    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
+)
 @pytest.mark.asyncio
-async def test_aocr_raises_typed_exception_from_rust_error(status_code, expected_exception, expected_status):
-    rust_bridge._set_rust_ocr_bridge(aocr=RustErrorAsyncBridge("upstream boom", status_code))
+async def test_aocr_raises_typed_exception_from_rust_error(
+    status_code, expected_exception, expected_status
+):
+    rust_bridge._set_rust_ocr_bridge(
+        aocr=RustErrorAsyncBridge("upstream boom", status_code)
+    )
 
     with pytest.raises(expected_exception) as exc_info:
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -588,3 +601,55 @@ def test_rust_ocr_error_message_is_preserved_bounded():
     )
 
     assert bounded in str(exc)
+
+
+# Invalid caller input is caught before the Rust bridge as a plain ValueError; it
+# must surface as BadRequestError/400, not collapse to APIConnectionError/500.
+INVALID_OCR_INPUTS = [
+    pytest.param({"type": "bogus", "document_url": "https://x/y.pdf"}, id="bad_type"),
+    pytest.param("not-a-dict", id="non_dict_document"),
+]
+
+
+@pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
+def test_ocr_invalid_input_raises_bad_request(document):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.ocr(model=MODEL, document=document, api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
+@pytest.mark.asyncio
+async def test_aocr_invalid_input_raises_bad_request(document):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+
+
+def test_map_ocr_exception_keeps_validation_error_off_bad_request(monkeypatch):
+    class _Model(pydantic.BaseModel):
+        value: int
+
+    try:
+        _Model(value="not-an-int")  # type: ignore[arg-type]
+    except pydantic.ValidationError as validation_error:
+        captured: dict[str, object] = {}
+
+        def fake_exception_type(**kwargs: object) -> CapturedException:
+            captured.update(kwargs)
+            return CapturedException("wrapped")
+
+        monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+
+        result = ocr_main._map_ocr_exception(
+            validation_error,
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+        assert isinstance(result, CapturedException)
+        assert captured["original_exception"] is validation_error
