@@ -495,9 +495,21 @@ async def _arealtime(
         )
     elif _is_openai_compatible_realtime_provider(_custom_llm_provider):
         api_base = (
-            dynamic_api_base or litellm_params.api_base or litellm.api_base or openai_realtime._get_default_api_base()
+            dynamic_api_base
+            or litellm_params.api_base
+            or api_base
+            or litellm.api_base
+            or openai_realtime._get_default_api_base()
         )
-        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
+        api_key = (
+            dynamic_api_key
+            or litellm_params.api_key
+            or api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+            or ""
+        )
 
         await openai_realtime.async_realtime(
             model=model,
