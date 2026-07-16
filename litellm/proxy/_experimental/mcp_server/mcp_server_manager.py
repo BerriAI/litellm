@@ -201,6 +201,18 @@ def _blank_to_none(value: str | None) -> str | None:
     return value.strip() or None
 
 
+def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool) -> bool:
+    """Whether the endpoints are authoritatively anchored to an admin-pinned issuer (RFC 8414 §3.3).
+
+    This is the trust/provenance property, distinct from whether the ``issuer`` field is merely
+    populated: a trust-on-first-use discovered issuer sets ``issuer`` for token identity but is NOT
+    anchored, so its endpoints stay resource-rooted. Anchoring holds only when the issuer was pinned
+    (present on the row/config) on a discovery auth type. Every consumer of "is this anchored" reads
+    this one definition, so the answer cannot diverge across build paths.
+    """
+    return _blank_to_none(manual_issuer) is not None and is_discovery_auth_type
+
+
 def _endpoints_yield_to_issuer(
     issuer: str | None,
     is_discovery_auth_type: bool,
@@ -292,16 +304,20 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     consistent group) or pins the same one. An admin re-pointing ``authorization_url`` to a different
     server must not keep serving the old server's token endpoint or granted scopes.
 
-    When an ``issuer`` is configured the endpoints must come solely from the §3.3-validated issuer
-    document, so carry-forward is skipped entirely for its endpoints: a failed issuer fetch leaves
-    them ``None`` and must stay ``None`` (fail-closed), never resurrected from the previous registry
-    entry. Scopes stay resource-driven and can still carry.
+    When the server is issuer-anchored (``issuer_is_anchored`` -- a pinned issuer on a discovery auth
+    type), the endpoints come solely from the §3.3-validated issuer document, so carry-forward is
+    skipped entirely for its endpoints: a failed issuer fetch leaves them ``None`` and must stay
+    ``None`` (fail-closed), never resurrected from the previous registry entry. A merely discovered
+    (trust-on-first-use) issuer is NOT anchored -- ``issuer`` is set for token identity but the
+    endpoints are resource-rooted, so they still carry forward as last-known-good, gated by the
+    corroboration check below like any other resource-rooted server. Scopes stay resource-driven and
+    can carry either way.
     """
     if previous_server is None:
         return
     if previous_server.url != new_server.url or previous_server.auth_type != new_server.auth_type:
         return
-    if _blank_to_none(new_server.issuer):
+    if new_server.issuer_is_anchored:
         # Endpoints come solely from the §3.3-validated issuer document; a failed fetch stays
         # fail-closed and must not be resurrected from the previous entry. Only the resource-driven
         # scopes carry as last-known-good.
@@ -1185,7 +1201,7 @@ class MCPServerManager:
             manual_token_url = _blank_to_none(server_config.get("token_url"))
             manual_registration_url = _blank_to_none(server_config.get("registration_url"))
             is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-            use_issuer_anchor = manual_issuer is not None and is_discovery_auth_type
+            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
             manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
                 manual_issuer,
                 is_discovery_auth_type,
@@ -1291,6 +1307,7 @@ class MCPServerManager:
                 oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
                 issuer=effective_issuer,
+                issuer_is_anchored=use_issuer_anchor,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
@@ -1685,7 +1702,7 @@ class MCPServerManager:
         manual_token_url = _blank_to_none(mcp_server.token_url)
         manual_registration_url = _blank_to_none(mcp_server.registration_url)
         is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-        use_issuer_anchor = manual_issuer is not None and is_discovery_auth_type
+        use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
         manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
             manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
         )
@@ -1732,6 +1749,7 @@ class MCPServerManager:
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             issuer=effective_issuer,
+            issuer_is_anchored=use_issuer_anchor,
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
             token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
             registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),

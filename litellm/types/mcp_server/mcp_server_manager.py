@@ -66,6 +66,7 @@ class MCPServer(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     issuer: Optional[str] = None
+    issuer_is_anchored: bool = False
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
