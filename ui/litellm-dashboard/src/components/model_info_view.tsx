@@ -76,29 +76,58 @@ const normalizeTierModels = (value: unknown): string[] => {
   return [];
 };
 
-// A complexity-router deployment (litellm_params.model="auto_router/complexity_router") is a
-// routing-strategy config, not a real provider endpoint -- there is nothing for a raw
-// litellm.ahealth_check() completion call to hit. "Test Connection" instead probes each
-// configured tier's underlying model group, mirroring the Add Auto Router wizard's test.
-const buildComplexityRouterTestTargets = (modelData: any): AutoRouterTestTarget[] => {
-  let config = modelData?.litellm_params?.complexity_router_config ?? {};
-  if (typeof config === "string") {
+interface ComplexityRouterTierConfig {
+  tiers?: {
+    SIMPLE?: unknown;
+    MEDIUM?: unknown;
+    COMPLEX?: unknown;
+    REASONING?: unknown;
+  };
+  semantic_keyword_matching?: boolean;
+  embedding_model?: string;
+}
+
+interface ComplexityRouterModelData {
+  litellm_params?: {
+    complexity_router_config?: ComplexityRouterTierConfig | string;
+    complexity_router_default_model?: string;
+  };
+}
+
+const buildComplexityRouterTestTargets = (
+  modelData: ComplexityRouterModelData | null | undefined,
+): AutoRouterTestTarget[] => {
+  const rawConfig = modelData?.litellm_params?.complexity_router_config;
+  let config: ComplexityRouterTierConfig = {};
+  if (typeof rawConfig === "string") {
     try {
-      config = JSON.parse(config);
+      config = JSON.parse(rawConfig);
     } catch {
       config = {};
     }
+  } else if (rawConfig) {
+    config = rawConfig;
   }
-  return buildAutoRouterTestTargets({
+
+  const tierTargets = buildAutoRouterTestTargets({
     tiers: {
-      SIMPLE: normalizeTierModels(config?.tiers?.SIMPLE),
-      MEDIUM: normalizeTierModels(config?.tiers?.MEDIUM),
-      COMPLEX: normalizeTierModels(config?.tiers?.COMPLEX),
-      REASONING: normalizeTierModels(config?.tiers?.REASONING),
+      SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
+      REASONING: normalizeTierModels(config.tiers?.REASONING),
     },
-    semanticMatchingEnabled: Boolean(config?.semantic_keyword_matching),
-    embeddingModel: config?.embedding_model,
+    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
+    embeddingModel: config.embedding_model,
   });
+
+  const defaultModel = modelData?.litellm_params?.complexity_router_default_model?.trim();
+  if (!defaultModel || tierTargets.some((target) => target.modelGroup === defaultModel)) {
+    return tierTargets;
+  }
+  return [
+    ...tierTargets,
+    { labels: ["Default (unconfigured tiers)"], modelGroup: defaultModel, mode: "chat" as const },
+  ];
 };
 
 export default function ModelInfoView({
@@ -477,7 +506,7 @@ export default function ModelInfoView({
     if (isComplexityRouter) {
       const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
       if (targets.length === 0) {
-        NotificationsManager.fromBackend("No complexity tiers are configured yet, so there is nothing to test.");
+        NotificationsManager.warning("No complexity tiers are configured yet, so there is nothing to test.");
         return;
       }
       setAutoRouterTestTargets(targets);
@@ -1486,7 +1515,6 @@ export default function ModelInfoView({
         userRole={userRole || ""}
       />
 
-      {/* Complexity Router Connection Test Modal */}
       <Modal
         title="Connection Test Results"
         open={isAutoRouterTestModalOpen}
