@@ -21,28 +21,12 @@ import {
 import { MarketplacePluginEntry, PluginSource } from "./types";
 
 describe("formatInstallCommand", () => {
-  it("formats github source with repo", () => {
-    const source: PluginSource = { source: "github", repo: "org/repo" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add org/repo");
+  it("produces a /plugin install command scoped to the litellm marketplace", () => {
+    expect(formatInstallCommand({ name: "my-plugin" })).toBe("/plugin install my-plugin@litellm");
   });
 
-  it("formats url source", () => {
-    const source: PluginSource = { source: "url", url: "https://example.com/plugin" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://example.com/plugin",
-    );
-  });
-
-  it("formats git-subdir source using its url", () => {
-    const source: PluginSource = { source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://github.com/org/repo",
-    );
-  });
-
-  it("falls back to plugin name when no repo or url", () => {
-    const source: PluginSource = { source: "github" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add my-plugin");
+  it("uses the plugin name as the identifier", () => {
+    expect(formatInstallCommand({ name: "code-review" })).toBe("/plugin install code-review@litellm");
   });
 });
 
