@@ -64,6 +64,7 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -144,7 +145,7 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
     closing = "\n\nEnd of excerpt. Please reply with the single word 'ok'."
 
     pad_target_chars = target_tokens * _CHARS_PER_TOKEN - len(preamble) - len(closing)
-    pad_lines = []
+    pad_lines: list[str] = []
     pad_len = 0
     idx = 0
     while pad_len < pad_target_chars:
@@ -155,7 +156,7 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
     return preamble + "".join(pad_lines) + closing
 
 
-def test_long_context_1m_azure(compat_result):
+def test_long_context_1m_azure(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI (Azure (Microsoft Foundry)) with a ~210k-token prompt and the
     `context-1m-2025-08-07` beta header; assert no 400 / 413 and a
     non-empty reply for Sonnet + Opus."""
@@ -197,7 +198,7 @@ def test_long_context_1m_azure(compat_result):
         timeout=300.0,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in AZURE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

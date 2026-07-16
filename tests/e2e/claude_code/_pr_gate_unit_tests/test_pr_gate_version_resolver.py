@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from claude_code.json_types import JSONValue
 from claude_code.pr_gate_version_resolver import (
     NoEligibleVersionError,
     resolve_pr_gate_version,
@@ -32,7 +33,7 @@ def _t(iso: str) -> str:
 NOW = datetime(2026, 4, 25, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _metadata_with_times(times: dict) -> dict:
+def _metadata_with_times(times: dict[str, JSONValue]) -> dict[str, JSONValue]:
     """Shape an npm `packument`-like dict with the `time` field populated.
 
     The npm registry response includes `time.created` / `time.modified`
@@ -48,7 +49,7 @@ def _metadata_with_times(times: dict) -> dict:
     }
 
 
-def test_picks_newest_version_at_least_three_days_old():
+def test_picks_newest_version_at_least_three_days_old() -> None:
     metadata = _metadata_with_times(
         {
             "2.1.118": _t("2026-04-15T10:00:00.000Z"),
@@ -60,9 +61,9 @@ def test_picks_newest_version_at_least_three_days_old():
     assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "2.1.119"
 
 
-def test_skips_created_and_modified_meta_keys():
+def test_skips_created_and_modified_meta_keys() -> None:
     """`time` contains `created` / `modified` non-version entries — must be ignored."""
-    metadata = {
+    metadata: dict[str, JSONValue] = {
         "name": "@anthropic-ai/claude-code",
         "time": {
             "created": _t("2024-01-01T00:00:00.000Z"),
@@ -73,7 +74,7 @@ def test_skips_created_and_modified_meta_keys():
     assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "2.0.0"
 
 
-def test_min_age_boundary_is_inclusive():
+def test_min_age_boundary_is_inclusive() -> None:
     """A version published exactly 3 days ago is eligible (>= cutoff)."""
     three_days_ago = NOW - timedelta(days=3)
     metadata = _metadata_with_times(
@@ -84,7 +85,7 @@ def test_min_age_boundary_is_inclusive():
     assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "2.1.0"
 
 
-def test_raises_when_every_version_is_too_new():
+def test_raises_when_every_version_is_too_new() -> None:
     metadata = _metadata_with_times(
         {
             "2.1.121": _t("2026-04-25T08:00:00.000Z"),  # 4h old
@@ -95,13 +96,13 @@ def test_raises_when_every_version_is_too_new():
         resolve_pr_gate_version(metadata=metadata, as_of=NOW)
 
 
-def test_raises_when_metadata_has_no_versions():
-    metadata = {"name": "@anthropic-ai/claude-code", "time": {}}
+def test_raises_when_metadata_has_no_versions() -> None:
+    metadata: dict[str, JSONValue] = {"name": "@anthropic-ai/claude-code", "time": {}}
     with pytest.raises(NoEligibleVersionError):
         resolve_pr_gate_version(metadata=metadata, as_of=NOW)
 
 
-def test_picks_latest_publish_time_not_largest_semver():
+def test_picks_latest_publish_time_not_largest_semver() -> None:
     """If a patch is published to an old major after a newer release,
     "newest" is by publish time, not semver string ordering."""
     metadata = _metadata_with_times(
@@ -113,7 +114,7 @@ def test_picks_latest_publish_time_not_largest_semver():
     assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "1.9.99"
 
 
-def test_uses_custom_min_age():
+def test_uses_custom_min_age() -> None:
     metadata = _metadata_with_times(
         {
             "1.0.0": _t("2026-04-23T10:00:00.000Z"),  # 2d 2h old
@@ -127,7 +128,7 @@ def test_uses_custom_min_age():
     assert out == "0.9.0"
 
 
-def test_excludes_prerelease_versions():
+def test_excludes_prerelease_versions() -> None:
     """Pre-release tags (1.0.0-alpha.1, 2.0.0-rc.1, etc.) must never win,
     even if their publish timestamp is the newest eligible one."""
     metadata = _metadata_with_times(
@@ -141,7 +142,7 @@ def test_excludes_prerelease_versions():
     assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "2.1.119"
 
 
-def test_raises_when_only_prereleases_are_eligible():
+def test_raises_when_only_prereleases_are_eligible() -> None:
     metadata = _metadata_with_times(
         {
             "2.2.0-alpha.1": _t("2026-04-22T10:00:00.000Z"),
@@ -152,10 +153,10 @@ def test_raises_when_only_prereleases_are_eligible():
         resolve_pr_gate_version(metadata=metadata, as_of=NOW)
 
 
-def test_resolver_uses_fetcher_when_metadata_not_provided():
-    captured = {}
+def test_resolver_uses_fetcher_when_metadata_not_provided() -> None:
+    captured: dict[str, str] = {}
 
-    def fake_fetch(package_name: str) -> dict:
+    def fake_fetch(package_name: str) -> dict[str, JSONValue]:
         captured["package"] = package_name
         return _metadata_with_times({"3.0.0": _t("2026-04-10T10:00:00.000Z")})
 

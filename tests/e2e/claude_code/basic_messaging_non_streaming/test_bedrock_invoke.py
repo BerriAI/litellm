@@ -21,6 +21,7 @@ the matrix builder still sees three rows for this (feature, provider).
 from __future__ import annotations
 
 from claude_code._basic_messaging import run_basic_messaging_cell
+from claude_code.conftest import CompatResult
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
 # point at Bedrock's legacy InvokeModel endpoint. The driver only sends
@@ -33,7 +34,7 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
-def test_basic_messaging_non_streaming_bedrock_invoke(compat_result):
+def test_basic_messaging_non_streaming_bedrock_invoke(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply."""
     run_basic_messaging_cell(
         compat_result=compat_result,

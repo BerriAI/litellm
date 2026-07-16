@@ -26,6 +26,7 @@ the matrix builder still sees three rows for this (feature, provider).
 from __future__ import annotations
 
 from claude_code._basic_messaging import run_basic_messaging_cell
+from claude_code.conftest import CompatResult
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
 # point at Microsoft Foundry's Anthropic deployments. The driver only
@@ -38,7 +39,7 @@ AZURE_MODELS = [
 ]
 
 
-def test_basic_messaging_non_streaming_azure(compat_result):
+def test_basic_messaging_non_streaming_azure(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply.
 
     "Basic messaging" means: send a single user prompt, receive any

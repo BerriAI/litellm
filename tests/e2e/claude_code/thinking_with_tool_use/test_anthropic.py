@@ -25,7 +25,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -34,6 +34,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -72,7 +74,7 @@ TOOL_USE_ARGS = [
 
 
 def _has_block_type(
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, JSONValue]],
     block_type: str,
 ) -> bool:
     """Walk the stream-json events and return True if any assistant
@@ -80,8 +82,8 @@ def _has_block_type(
     for event in events:
         if event.get("type") != "assistant":
             continue
-        message = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -90,7 +92,7 @@ def _has_block_type(
     return False
 
 
-def test_thinking_with_tool_use_anthropic(compat_result):
+def test_thinking_with_tool_use_anthropic(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and tool use, and assert both `thinking` and `tool_use`
     content blocks landed in the same turn."""
@@ -119,7 +121,7 @@ def test_thinking_with_tool_use_anthropic(compat_result):
         extra_args=THINKING_ARGS + TOOL_USE_ARGS,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in ANTHROPIC_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

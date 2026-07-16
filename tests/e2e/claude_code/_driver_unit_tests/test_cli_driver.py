@@ -10,31 +10,47 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass
-from typing import List, Optional
+from typing import Mapping, Sequence, TypedDict
 
 import pytest
 
 from claude_code.cli_driver import (
     ClaudeCLIError,
+    CommandRunner,
     DriverResult,
     failure_diagnostic,
     run_claude,
     run_claude_models_parallel,
 )
+from claude_code.json_types import JSONObject
 
 
-@dataclass
-class _Completed:
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
+class _Completed(subprocess.CompletedProcess[str]):
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(args=(), returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def _make_runner(*, stdout: str = "", returncode: int = 0, stderr: str = ""):
-    captured = {}
+class _Captured(TypedDict):
+    cmd: Sequence[str]
+    env: Mapping[str, str]
+    timeout: float
+    input: str | None
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+
+def _make_runner(
+    *, stdout: str = "", returncode: int = 0, stderr: str = ""
+) -> tuple[CommandRunner, _Captured]:
+    captured: _Captured = {"cmd": (), "env": {}, "timeout": 0.0, "input": None}
+
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         captured["cmd"] = cmd
         captured["env"] = env
         captured["timeout"] = timeout
@@ -44,7 +60,7 @@ def _make_runner(*, stdout: str = "", returncode: int = 0, stderr: str = ""):
     return runner, captured
 
 
-def test_run_claude_assembles_command_correctly():
+def test_run_claude_assembles_command_correctly() -> None:
     runner, captured = _make_runner(
         stdout='{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}\n'
     )
@@ -66,7 +82,7 @@ def test_run_claude_assembles_command_correctly():
     assert cmd[-2:] == ["--", "hello"]
 
 
-def test_run_claude_places_extra_args_before_prompt():
+def test_run_claude_places_extra_args_before_prompt() -> None:
     """`claude --print` expects the prompt as the final positional arg.
 
     Flags appearing after the prompt are ignored or eaten by the prompt
@@ -93,7 +109,7 @@ def test_run_claude_places_extra_args_before_prompt():
     assert cmd.index("--allowed-tools") < cmd.index("--")
 
 
-def test_run_claude_overlays_proxy_env():
+def test_run_claude_overlays_proxy_env() -> None:
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
@@ -107,7 +123,7 @@ def test_run_claude_overlays_proxy_env():
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-abc"
 
 
-def test_run_claude_extra_env_is_added_to_subprocess_env():
+def test_run_claude_extra_env_is_added_to_subprocess_env() -> None:
     """Caller-supplied extra_env entries land on the subprocess env."""
     runner, captured = _make_runner(stdout="")
     run_claude(
@@ -121,7 +137,7 @@ def test_run_claude_extra_env_is_added_to_subprocess_env():
     assert captured["env"]["MAX_THINKING_TOKENS"] == "4096"
 
 
-def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
+def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     """Process-runtime vars (PATH) flow through; credentials don't.
 
     The `claude` CLI is a Node binary installed dynamically from npm in
@@ -160,7 +176,7 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     assert "GITHUB_TOKEN" not in env
 
 
-def test_run_claude_uses_isolated_per_invocation_home(monkeypatch, tmp_path):
+def test_run_claude_uses_isolated_per_invocation_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """`claude` subprocess never sees the runtime user's real $HOME.
 
     The CLI needs *a* HOME (it caches per-session state under
@@ -196,7 +212,7 @@ def test_run_claude_uses_isolated_per_invocation_home(monkeypatch, tmp_path):
     assert "claude-cli-home-" in env["HOME"]
 
 
-def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch):
+def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two consecutive calls get two different isolated HOMEs.
 
     Reusing a single tmpdir across calls would defeat the isolation
@@ -229,7 +245,7 @@ def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch):
     assert home_a != home_b
 
 
-def test_run_claude_isolated_home_cleaned_up_after_run(monkeypatch):
+def test_run_claude_isolated_home_cleaned_up_after_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """The per-invocation HOME tmpdir is rm-rf'd when run_claude returns.
 
     Without cleanup, a long matrix run would accumulate one tmpdir
@@ -254,7 +270,9 @@ def test_run_claude_isolated_home_cleaned_up_after_run(monkeypatch):
     ), f"isolated HOME {isolated_home!r} should be removed after run_claude returns"
 
 
-def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(monkeypatch):
+def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Cleanup runs even when the CLI subprocess raises.
 
     If the CLI is missing or times out, `run_claude` raises
@@ -266,9 +284,17 @@ def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(monkeypatch):
 
     monkeypatch.setenv("HOME", "/home/runner")
 
-    captured: dict = {}
+    captured: dict[str, Mapping[str, str]] = {}
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         captured["env"] = env
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
@@ -287,7 +313,9 @@ def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(monkeypatch):
     ), f"isolated HOME {isolated_home!r} should be removed even on timeout"
 
 
-def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(monkeypatch):
+def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The allowlist applies to inherited os.environ; extra_env is the
     sanctioned way for a test to opt-in to passing something extra."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "from-os")
@@ -303,8 +331,8 @@ def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(monkeypatch
     assert captured["env"]["ANTHROPIC_API_KEY"] == "from-arg"
 
 
-def test_run_claude_parses_stream_json_assistant_text():
-    events = [
+def test_run_claude_parses_stream_json_assistant_text() -> None:
+    events: list[JSONObject] = [
         {"type": "system", "session_id": "abc"},
         {
             "type": "assistant",
@@ -333,7 +361,7 @@ def test_run_claude_parses_stream_json_assistant_text():
     assert result.exit_code == 0
 
 
-def test_run_claude_handles_string_message_content():
+def test_run_claude_handles_string_message_content() -> None:
     """Some CLI versions emit `message.content` as a plain string."""
     stdout = (
         json.dumps({"type": "assistant", "message": {"content": "bare text"}}) + "\n"
@@ -349,7 +377,7 @@ def test_run_claude_handles_string_message_content():
     assert result.text == "bare text"
 
 
-def test_run_claude_skips_malformed_lines():
+def test_run_claude_skips_malformed_lines() -> None:
     stdout = (
         "not-json\n"
         + json.dumps(
@@ -373,7 +401,7 @@ def test_run_claude_skips_malformed_lines():
     assert len(result.events) == 1
 
 
-def test_run_claude_propagates_nonzero_exit_code():
+def test_run_claude_propagates_nonzero_exit_code() -> None:
     runner, _ = _make_runner(stdout="", returncode=2, stderr="auth failed")
     result = run_claude(
         prompt="hi",
@@ -387,8 +415,8 @@ def test_run_claude_propagates_nonzero_exit_code():
     assert result.text == ""
 
 
-def test_run_claude_raises_on_missing_cli():
-    def runner(*args, **kwargs):
+def test_run_claude_raises_on_missing_cli() -> None:
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError(2, "no such file", "claude")
 
     with pytest.raises(ClaudeCLIError, match="claude CLI not found"):
@@ -401,8 +429,8 @@ def test_run_claude_raises_on_missing_cli():
         )
 
 
-def test_run_claude_raises_on_timeout():
-    def runner(*args, **kwargs):
+def test_run_claude_raises_on_timeout() -> None:
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
 
     with pytest.raises(ClaudeCLIError, match="timed out"):
@@ -416,7 +444,7 @@ def test_run_claude_raises_on_timeout():
         )
 
 
-def test_run_claude_validates_required_params():
+def test_run_claude_validates_required_params() -> None:
     runner, _ = _make_runner()
     with pytest.raises(ValueError, match="prompt"):
         run_claude(
@@ -473,7 +501,7 @@ def test_run_claude_validates_required_params():
 # ---------------------------------------------------------------------------
 
 
-def test_failure_diagnostic_surfaces_api_error_text_from_stdout():
+def test_failure_diagnostic_surfaces_api_error_text_from_stdout() -> None:
     """The CLI hides 4xx/5xx from the proxy in `assistant.message.content` text."""
     api_error_text = (
         'API Error: 400 {"error":{"message":"litellm.BadRequestError: '
@@ -505,14 +533,14 @@ def test_failure_diagnostic_surfaces_api_error_text_from_stdout():
     assert "There are no healthy deployments" in diag
 
 
-def test_failure_diagnostic_falls_back_to_stderr_when_no_text():
+def test_failure_diagnostic_falls_back_to_stderr_when_no_text() -> None:
     result = DriverResult(text="", events=[], exit_code=2, stderr="boom\n")
     diag = failure_diagnostic(result)
     assert "exit=2" in diag
     assert "stderr=boom" in diag
 
 
-def test_failure_diagnostic_handles_completely_empty_result():
+def test_failure_diagnostic_handles_completely_empty_result() -> None:
     """A run that produced literally nothing should still yield a useful string."""
     result = DriverResult(text="", events=[], exit_code=137, stderr="")
     diag = failure_diagnostic(result)
@@ -520,7 +548,7 @@ def test_failure_diagnostic_handles_completely_empty_result():
     assert "no diagnostic output" in diag
 
 
-def test_failure_diagnostic_truncates_long_text():
+def test_failure_diagnostic_truncates_long_text() -> None:
     """Don't let a 5MB HTML 502 page from a load balancer wreck the matrix JSON."""
     huge = "x" * 5000
     result = DriverResult(text=huge, events=[], exit_code=1, stderr="")
@@ -530,7 +558,7 @@ def test_failure_diagnostic_truncates_long_text():
     assert len(diag) < 300
 
 
-def test_failure_diagnostic_ignores_non_int_api_error_status():
+def test_failure_diagnostic_ignores_non_int_api_error_status() -> None:
     """The CLI sometimes emits api_error_status as a string; don't crash."""
     result = DriverResult(
         text="oops",
@@ -554,11 +582,19 @@ def test_failure_diagnostic_ignores_non_int_api_error_status():
 # ---------------------------------------------------------------------------
 
 
-def test_run_claude_models_parallel_returns_one_result_per_model():
+def test_run_claude_models_parallel_returns_one_result_per_model() -> None:
     """Each model gets its own DriverResult keyed under the helper's dict."""
-    seen_models: List[str] = []
+    seen_models: list[str] = []
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         # The model id is two slots after `--model` in the assembled command.
         idx = cmd.index("--model")
         model = cmd[idx + 1]
@@ -593,10 +629,18 @@ def test_run_claude_models_parallel_returns_one_result_per_model():
     assert sorted(seen_models) == ["a", "b", "c"]
 
 
-def test_run_claude_models_parallel_returns_errors_as_values():
+def test_run_claude_models_parallel_returns_errors_as_values() -> None:
     """A model whose CLI is missing surfaces as a ClaudeCLIError, not a raise."""
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         if model == "boom":
@@ -626,10 +670,18 @@ def test_run_claude_models_parallel_returns_errors_as_values():
     assert "claude CLI not found" in str(outcomes["boom"])
 
 
-def test_run_claude_models_parallel_preserves_nonzero_exit_codes():
+def test_run_claude_models_parallel_preserves_nonzero_exit_codes() -> None:
     """Mixed success/failure on exit code should not collapse into one verdict."""
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         if model == "fail":
@@ -653,12 +705,14 @@ def test_run_claude_models_parallel_preserves_nonzero_exit_codes():
         runner=runner,
     )
 
+    assert isinstance(outcomes["ok-model"], DriverResult)
+    assert isinstance(outcomes["fail"], DriverResult)
     assert outcomes["ok-model"].exit_code == 0
     assert outcomes["fail"].exit_code == 2
     assert outcomes["fail"].stderr == "auth failed"
 
 
-def test_run_claude_models_parallel_rejects_empty_models():
+def test_run_claude_models_parallel_rejects_empty_models() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         run_claude_models_parallel(
             models=[],
@@ -668,7 +722,7 @@ def test_run_claude_models_parallel_rejects_empty_models():
         )
 
 
-def test_run_claude_models_parallel_stamps_duration_on_each_result():
+def test_run_claude_models_parallel_stamps_duration_on_each_result() -> None:
     """Each DriverResult carries the per-model wall time so callers can
     attribute slow cells without re-timing the work themselves.
 
@@ -680,7 +734,15 @@ def test_run_claude_models_parallel_stamps_duration_on_each_result():
     """
     import time
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         time.sleep(0.05 if model == "fast" else 0.40)
@@ -694,6 +756,8 @@ def test_run_claude_models_parallel_stamps_duration_on_each_result():
         runner=runner,
     )
 
+    assert isinstance(outcomes["fast"], DriverResult)
+    assert isinstance(outcomes["slow"], DriverResult)
     fast_ms = outcomes["fast"].duration_ms
     slow_ms = outcomes["slow"].duration_ms
     assert fast_ms is not None and slow_ms is not None
@@ -705,11 +769,21 @@ def test_run_claude_models_parallel_stamps_duration_on_each_result():
     assert slow_ms > fast_ms
 
 
-def test_run_claude_models_parallel_breakdown_logs_to_stderr(capsys):
+def test_run_claude_models_parallel_breakdown_logs_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """The breakdown helper must emit a per-model timing block so users
     can answer "why didn't parallel help?" without re-instrumenting."""
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return _Completed(returncode=0, stdout="")
 
     run_claude_models_parallel(
@@ -728,11 +802,21 @@ def test_run_claude_models_parallel_breakdown_logs_to_stderr(capsys):
     assert "slowest=" in captured.err
 
 
-def test_run_claude_models_parallel_breakdown_marks_cli_errors(capsys):
+def test_run_claude_models_parallel_breakdown_marks_cli_errors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """When a model raises ClaudeCLIError, the breakdown should still
     show its row tagged as `cli-error` rather than crashing or omitting it."""
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         idx = cmd.index("--model")
         if cmd[idx + 1] == "boom":
             raise FileNotFoundError(2, "no such file", "claude")
@@ -752,12 +836,20 @@ def test_run_claude_models_parallel_breakdown_marks_cli_errors(capsys):
     assert "cli-error" in captured.err
 
 
-def test_run_claude_models_parallel_forwards_extra_args_and_env():
+def test_run_claude_models_parallel_forwards_extra_args_and_env() -> None:
     """Shared kwargs must reach every per-model invocation unchanged."""
-    captured_envs: List[dict] = []
-    captured_cmds: List[List[str]] = []
+    captured_envs: list[Mapping[str, str]] = []
+    captured_cmds: list[Sequence[str]] = []
 
-    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+    def runner(
+        cmd: Sequence[str],
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         captured_envs.append(env)
         captured_cmds.append(cmd)
         return _Completed(returncode=0, stdout="")
@@ -778,7 +870,7 @@ def test_run_claude_models_parallel_forwards_extra_args_and_env():
         assert "Bash" in cmd
 
 
-def test_failure_diagnostic_uses_last_result_event_status():
+def test_failure_diagnostic_uses_last_result_event_status() -> None:
     """If multiple `result` events appear, the most recent status wins."""
     result = DriverResult(
         text="",

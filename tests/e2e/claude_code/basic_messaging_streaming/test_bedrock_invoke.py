@@ -16,6 +16,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 from claude_code._basic_messaging import run_basic_messaging_cell
+from claude_code.conftest import CompatResult
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
@@ -24,7 +25,7 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
-def test_basic_messaging_streaming_bedrock_invoke(compat_result):
+def test_basic_messaging_streaming_bedrock_invoke(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).
     """

@@ -22,7 +22,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -31,6 +31,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -56,12 +58,12 @@ TOOL_USE_ARGS = [
 ]
 
 
-def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
+def _has_tool_use_event(events: Sequence[Mapping[str, JSONValue]]) -> bool:
     for event in events:
         if event.get("type") != "assistant":
             continue
-        message = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -70,7 +72,7 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
+def _count_input_json_deltas(events: Sequence[Mapping[str, JSONValue]]) -> int:
     """Count `input_json_delta` records among the `stream_event`
     entries. Zero means the proxy collapsed the streamed tool input
     into a single complete block instead of forwarding the incremental
@@ -83,12 +85,12 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
         for inner in inner_events
         if isinstance(inner, Mapping)
         and inner.get("type") == "content_block_delta"
-        and isinstance(inner.get("delta"), Mapping)
-        and inner["delta"].get("type") == "input_json_delta"
+        and isinstance(delta := inner.get("delta"), Mapping)
+        and delta.get("type") == "input_json_delta"
     )
 
 
-def test_tool_use_streaming_bedrock_invoke(compat_result):
+def test_tool_use_streaming_bedrock_invoke(compat_result: CompatResult) -> None:
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -113,7 +115,7 @@ def test_tool_use_streaming_bedrock_invoke(compat_result):
         extra_args=TOOL_USE_ARGS,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in BEDROCK_INVOKE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

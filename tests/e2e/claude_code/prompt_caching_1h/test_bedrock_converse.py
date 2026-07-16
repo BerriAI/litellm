@@ -21,7 +21,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Optional
+from typing import Mapping
 
 import pytest
 
@@ -30,6 +30,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -46,18 +48,20 @@ CACHE_1H_ENV = {
 }
 
 
-def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
+def _cache_tokens(usage: Mapping[str, JSONValue] | None) -> int:
     if not isinstance(usage, Mapping):
         return 0
     creation = usage.get("cache_creation_input_tokens") or 0
     read = usage.get("cache_read_input_tokens") or 0
+    if not isinstance(creation, (str, int, float)) or not isinstance(read, (str, int, float)):
+        return 0
     try:
         return int(creation) + int(read)
     except (TypeError, ValueError):
         return 0
 
 
-def test_prompt_caching_1h_bedrock_converse(compat_result):
+def test_prompt_caching_1h_bedrock_converse(compat_result: CompatResult) -> None:
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -82,7 +86,7 @@ def test_prompt_caching_1h_bedrock_converse(compat_result):
         extra_env=CACHE_1H_ENV,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in BEDROCK_CONVERSE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

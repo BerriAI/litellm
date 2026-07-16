@@ -22,6 +22,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,7 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -71,7 +73,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
     )
 
     out = bytearray(b"%PDF-1.4\n")
-    offsets = []
+    offsets: list[int] = []
     for i, obj in enumerate(objects, start=1):
         offsets.append(len(out))
         out += f"{i} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
@@ -91,7 +93,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
     return bytes(out)
 
 
-def test_pdf_input_bedrock_converse(compat_result, tmp_path):
+def test_pdf_input_bedrock_converse(compat_result: CompatResult, tmp_path: Path) -> None:
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -122,7 +124,7 @@ def test_pdf_input_bedrock_converse(compat_result, tmp_path):
         extra_args=["--allowed-tools", "Read"],
     )
 
-    failures = []
+    failures: list[str] = []
     for model in BEDROCK_CONVERSE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

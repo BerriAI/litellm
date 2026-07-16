@@ -16,8 +16,25 @@ from pathlib import Path
 import pytest
 import yaml
 
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONValue
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "manifest.yaml"
+
+
+def _as_dict(value: JSONValue) -> dict[str, JSONValue]:
+    assert isinstance(value, dict)
+    return value
+
+
+def _as_list(value: JSONValue) -> list[JSONValue]:
+    assert isinstance(value, list)
+    return value
+
+
+def _as_str(value: JSONValue) -> str:
+    assert isinstance(value, str)
+    return value
 
 # The PRD's "Features in v0" section, in row order.
 EXPECTED_FEATURE_IDS = [
@@ -55,8 +72,10 @@ def _all_manifest_feature_ids() -> list[str]:
     constants above only validate the original six rows by design.
     """
     return [
-        feature["id"]
-        for feature in yaml.safe_load(MANIFEST_PATH.read_text())["features"]
+        _as_str(_as_dict(feature)["id"])
+        for feature in _as_list(
+            JSON_OBJECT_ADAPTER.validate_python(yaml.safe_load(MANIFEST_PATH.read_text()))["features"]
+        )
     ]
 
 
@@ -64,45 +83,46 @@ ALL_FEATURE_IDS = _all_manifest_feature_ids()
 
 
 @pytest.fixture(scope="module")
-def manifest() -> dict:
-    return yaml.safe_load(MANIFEST_PATH.read_text())
+def manifest() -> dict[str, JSONValue]:
+    return JSON_OBJECT_ADAPTER.validate_python(yaml.safe_load(MANIFEST_PATH.read_text()))
 
 
-def test_manifest_lists_all_six_v0_features_in_order(manifest):
+def test_manifest_lists_all_six_v0_features_in_order(manifest: dict[str, JSONValue]) -> None:
     """The PRD's v0 row set must appear at the top of the manifest in
     order. Features beyond v0 (extensions added after the matrix
     shipped) are allowed but must not reorder or displace the v0
     rows — the docs page anchors row links by index, so v0 stays
     pinned at positions [0:6] for the lifetime of the schema.
     """
-    ids = [feature["id"] for feature in manifest["features"]]
+    ids = [_as_dict(feature)["id"] for feature in _as_list(manifest["features"])]
     assert ids[: len(EXPECTED_FEATURE_IDS)] == EXPECTED_FEATURE_IDS
 
 
-def test_manifest_lists_all_five_v0_providers_in_order(manifest):
+def test_manifest_lists_all_five_v0_providers_in_order(manifest: dict[str, JSONValue]) -> None:
     assert manifest["providers"] == EXPECTED_PROVIDERS
 
 
-def test_manifest_every_feature_has_human_readable_name(manifest):
-    for feature in manifest["features"]:
-        assert isinstance(feature["name"], str) and feature["name"].strip()
+def test_manifest_every_feature_has_human_readable_name(manifest: dict[str, JSONValue]) -> None:
+    for feature in _as_list(manifest["features"]):
+        name = _as_dict(feature)["name"]
+        assert isinstance(name, str) and name.strip()
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
-def test_feature_directory_exists(feature_id):
+def test_feature_directory_exists(feature_id: str) -> None:
     feature_dir = REPO_ROOT / feature_id
     assert feature_dir.is_dir(), f"missing feature directory: {feature_dir}"
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
-def test_per_provider_test_file_exists(feature_id, provider):
+def test_per_provider_test_file_exists(feature_id: str, provider: str) -> None:
     test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
     assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
-def test_feature_directory_has_init_file(feature_id):
+def test_feature_directory_has_init_file(feature_id: str) -> None:
     """Each feature directory needs an __init__.py so pytest collects
     the per-provider test files as a package — matches the layout
     established by `basic_messaging_non_streaming/`."""
@@ -116,7 +136,7 @@ def test_feature_directory_has_init_file(feature_id):
 # extend the same structural guarantees to any row added afterward so
 # a broken post-v0 directory still fails CI.
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
-def test_every_manifest_feature_has_directory(feature_id):
+def test_every_manifest_feature_has_directory(feature_id: str) -> None:
     feature_dir = REPO_ROOT / feature_id
     assert feature_dir.is_dir(), (
         f"manifest declares {feature_id!r} but {feature_dir} is missing — "
@@ -125,14 +145,14 @@ def test_every_manifest_feature_has_directory(feature_id):
 
 
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
-def test_every_manifest_feature_has_init_file(feature_id):
+def test_every_manifest_feature_has_init_file(feature_id: str) -> None:
     init_file = REPO_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
 
 
 @pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
-def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider):
+def test_every_manifest_feature_has_per_provider_test_file(feature_id: str, provider: str) -> None:
     """Every (feature, provider) cell in the rendered matrix must be
     backed by a per-provider test file. Without this check, a missing
     file silently becomes a `not_tested` cell in the published matrix
@@ -144,8 +164,8 @@ def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider)
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
 @pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
 def test_per_provider_test_file_imports_and_parametrizes_three_models(
-    feature_id, provider
-):
+    feature_id: str, provider: str
+) -> None:
     """Every test file must reference the three Claude tiers required
     by the PRD: Haiku 4.5, Sonnet 4.6, Opus 4.7. Implementations may
     use plain aliases or per-provider-suffixed aliases (e.g.
@@ -159,7 +179,7 @@ def test_per_provider_test_file_imports_and_parametrizes_three_models(
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
-def test_azure_test_file_drives_the_proxy(feature_id):
+def test_azure_test_file_drives_the_proxy(feature_id: str) -> None:
     """Azure (Microsoft Foundry) hosts Anthropic Claude as of 2025-11-18,
     so every Azure cell in the v0 matrix exercises a real route through
     the LiteLLM proxy — same shape as the other provider columns. Pin

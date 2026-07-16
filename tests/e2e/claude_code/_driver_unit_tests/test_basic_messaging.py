@@ -9,21 +9,22 @@ upstream stream must turn the cell red, not green.
 
 from __future__ import annotations
 
-import os
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Mapping, Sequence, TypedDict
 
 import pytest
 
 from claude_code import _basic_messaging
 from claude_code._basic_messaging import (
     MIN_STREAM_DELTA_EVENTS,
-    _count_stream_event_deltas,
+    _count_stream_event_deltas,  # pyright: ignore[reportPrivateUsage]  # unit tests exercise the private helper
     run_basic_messaging_cell,
 )
-from claude_code.cli_driver import DriverResult
+from claude_code.cli_driver import DriverResult, ModelResult
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONObject, JSONValue
 
 
-class _FakeResult:
+class _FakeResult(CompatResult):
     """Stand-in for the test's `compat_result` fixture.
 
     Records every `set` / `add` payload so assertions can inspect what
@@ -32,24 +33,25 @@ class _FakeResult:
     """
 
     def __init__(self) -> None:
-        self.rows: List[Dict[str, Any]] = []
-        self.single: Optional[Dict[str, Any]] = None
+        super().__init__()
+        self.rows: list[dict[str, JSONValue]] = []
+        self.single: dict[str, JSONValue] | None = None
 
-    def set(self, payload: Mapping[str, Any]) -> None:
-        self.single = dict(payload)
+    def set(self, result: Mapping[str, JSONValue]) -> None:
+        self.single = dict(result)
 
-    def add(self, payload: Mapping[str, Any]) -> None:
-        self.rows.append(dict(payload))
+    def add(self, result: Mapping[str, JSONValue]) -> None:
+        self.rows.append(dict(result))
 
 
-def _streamed_events(n_deltas: int = 5) -> List[Dict[str, Any]]:
+def _streamed_events(n_deltas: int = 5) -> list[JSONObject]:
     """Build a stream-json event list that *looks* streamed.
 
     Includes `n_deltas` `stream_event` records (matching what
     `--include-partial-messages` produces) plus the usual
     `system`/`assistant`/`result` boilerplate the CLI always emits.
     """
-    events: List[Dict[str, Any]] = [{"type": "system", "subtype": "init"}]
+    events: list[JSONObject] = [{"type": "system", "subtype": "init"}]
     for i in range(n_deltas):
         events.append(
             {
@@ -70,7 +72,7 @@ def _streamed_events(n_deltas: int = 5) -> List[Dict[str, Any]]:
     return events
 
 
-def _buffered_events() -> List[Dict[str, Any]]:
+def _buffered_events() -> list[JSONObject]:
     """Event list a buffering proxy would produce: zero `stream_event`s."""
     return [
         {"type": "system", "subtype": "init"},
@@ -82,16 +84,40 @@ def _buffered_events() -> List[Dict[str, Any]]:
     ]
 
 
-def _install_fake_runner(monkeypatch, *, outcomes_by_model):
+class _CapturedCall(TypedDict):
+    models: list[str]
+    prompt: str | None
+    base_url: str
+    api_key: str
+    extra_args: list[str]
+
+
+def _install_fake_runner(
+    monkeypatch: pytest.MonkeyPatch, *, outcomes_by_model: Mapping[str, ModelResult]
+) -> _CapturedCall:
     """Patch `run_claude_models_parallel` to return canned outcomes.
 
     Captures the kwargs the cell passed in so tests can assert on
     `extra_args` (which is how the streaming variant opts into
     `--include-partial-messages`).
     """
-    captured: Dict[str, Any] = {}
+    captured: _CapturedCall = {
+        "models": [],
+        "prompt": None,
+        "base_url": "",
+        "api_key": "",
+        "extra_args": [],
+    }
 
-    def fake(*, models, prompt, base_url, api_key, extra_args=None, **_kwargs):
+    def fake(
+        *,
+        models: Sequence[str],
+        prompt: str | None,
+        base_url: str,
+        api_key: str,
+        extra_args: Sequence[str] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, ModelResult]:
         captured["models"] = list(models)
         captured["prompt"] = prompt
         captured["base_url"] = base_url
@@ -104,13 +130,15 @@ def _install_fake_runner(monkeypatch, *, outcomes_by_model):
 
 
 @pytest.fixture(autouse=True)
-def _proxy_env(monkeypatch):
+def _proxy_env(  # pyright: ignore[reportUnusedFunction]  # autouse fixture, invoked by pytest
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_PROXY_BASE_URL", "http://localhost:4000")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
 
 
-def test_count_stream_event_deltas_only_counts_records_with_event_payload():
-    events = [
+def test_count_stream_event_deltas_only_counts_records_with_event_payload() -> None:
+    events: list[JSONObject] = [
         {"type": "system"},
         {"type": "stream_event", "event": {"type": "message_start"}},
         {"type": "stream_event", "event": {"type": "content_block_delta"}},
@@ -123,7 +151,7 @@ def test_count_stream_event_deltas_only_counts_records_with_event_payload():
     assert _count_stream_event_deltas(events) == 2
 
 
-def test_verify_streaming_passes_when_proxy_streams(monkeypatch):
+def test_verify_streaming_passes_when_proxy_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
     outcome = DriverResult(text="1\n2\n3", events=_streamed_events(n_deltas=5))
@@ -140,7 +168,7 @@ def test_verify_streaming_passes_when_proxy_streams(monkeypatch):
     assert fake_result.rows == [{"status": "pass"}]
 
 
-def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
+def test_verify_streaming_fails_when_proxy_buffers(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
     outcome = DriverResult(text="1\n2\n3", events=_buffered_events())
@@ -157,11 +185,12 @@ def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
     assert len(fake_result.rows) == 1
     row = fake_result.rows[0]
     assert row["status"] == "fail"
+    assert isinstance(row["error"], str)
     assert "stream_event" in row["error"]
     assert f"< {MIN_STREAM_DELTA_EVENTS}" in row["error"]
 
 
-def test_non_streaming_variant_omits_partial_messages_flag(monkeypatch):
+def test_non_streaming_variant_omits_partial_messages_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default `verify_streaming=False` keeps the non-streaming wire identical."""
     fake_result = _FakeResult()
     model = "claude-haiku-4-5"
@@ -178,11 +207,11 @@ def test_non_streaming_variant_omits_partial_messages_flag(monkeypatch):
     assert fake_result.rows == [{"status": "pass"}]
 
 
-def test_verify_streaming_requires_all_models_to_stream(monkeypatch):
+def test_verify_streaming_requires_all_models_to_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     """If any one tier buffers, the cell fails — same all-must-pass shape as
     the non-streaming check."""
     fake_result = _FakeResult()
-    outcomes = {
+    outcomes: dict[str, ModelResult] = {
         "claude-haiku-4-5": DriverResult(text="ok", events=_streamed_events(5)),
         "claude-sonnet-4-6": DriverResult(text="ok", events=_buffered_events()),
         "claude-opus-4-7": DriverResult(text="ok", events=_streamed_events(5)),

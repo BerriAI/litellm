@@ -16,7 +16,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -25,6 +25,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -49,12 +51,12 @@ TOOL_USE_ARGS = [
 ]
 
 
-def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
+def _has_tool_use_event(events: Sequence[Mapping[str, JSONValue]]) -> bool:
     for event in events:
         if event.get("type") != "assistant":
             continue
-        message = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -63,7 +65,7 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-def test_tool_use_bedrock_converse(compat_result):
+def test_tool_use_bedrock_converse(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     tool call was emitted on the wire."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -90,7 +92,7 @@ def test_tool_use_bedrock_converse(compat_result):
         extra_args=TOOL_USE_ARGS,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in BEDROCK_CONVERSE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

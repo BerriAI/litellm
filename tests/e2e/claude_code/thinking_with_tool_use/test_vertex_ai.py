@@ -24,7 +24,7 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -33,6 +33,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -60,14 +62,14 @@ TOOL_USE_ARGS = [
 
 
 def _has_block_type(
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, JSONValue]],
     block_type: str,
 ) -> bool:
     for event in events:
         if event.get("type") != "assistant":
             continue
-        message = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -76,7 +78,7 @@ def _has_block_type(
     return False
 
 
-def test_thinking_with_tool_use_vertex_ai(compat_result):
+def test_thinking_with_tool_use_vertex_ai(compat_result: CompatResult) -> None:
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -102,7 +104,7 @@ def test_thinking_with_tool_use_vertex_ai(compat_result):
         extra_args=THINKING_ARGS + TOOL_USE_ARGS,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in VERTEX_AI_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

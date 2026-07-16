@@ -34,6 +34,7 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -85,7 +86,7 @@ def _build_stdin_input() -> str:
     return json.dumps(user_event) + "\n"
 
 
-def test_vision_bedrock_converse(compat_result):
+def test_vision_bedrock_converse(compat_result: CompatResult) -> None:
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached via stream-json input and assert a non-empty reply."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -115,7 +116,7 @@ def test_vision_bedrock_converse(compat_result):
         stdin_input=_build_stdin_input(),
     )
 
-    failures = []
+    failures: list[str] = []
     for model in BEDROCK_CONVERSE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

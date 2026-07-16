@@ -14,6 +14,9 @@ limiter was added.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Generator
+
 import pytest
 
 from claude_code.rate_limiter import (
@@ -25,7 +28,9 @@ from claude_code.rate_limiter import (
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_rate_limiter(tmp_path):
+def _hermetic_rate_limiter(  # pyright: ignore[reportUnusedFunction]  # autouse fixture, invoked by pytest
+    tmp_path: Path,
+) -> Generator[None]:
     config = {p: ProviderConfig(rate_per_sec=0.0, burst=0.0) for p in ALL_PROVIDERS}
     limiter = RateLimiter(config=config, state_dir=tmp_path)
     with use_limiter(limiter):
