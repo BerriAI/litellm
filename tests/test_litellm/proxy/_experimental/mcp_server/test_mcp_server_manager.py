@@ -336,6 +336,35 @@ class TestMCPServerManager:
         assert env == {}
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_debug_dump_redacts_secrets(self, caplog):
+        """The registry debug dump must not leak long-lived credentials: the ID-JAG signing key,
+        client secret, and static token are masked while non-secret fields stay readable."""
+
+        manager = MCPServerManager()
+        config = {
+            "idjag": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_id_jag,
+                "client_id": "gateway-client",
+                "client_secret": "SECRET-CLIENT-SECRET",
+                "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
+                "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
+                "authentication_token": "SECRET-STATIC-TOKEN",
+            }
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        dump = next(m for m in caplog.messages if "Loaded MCP Servers" in m)
+        assert "SECRET-PEM" not in dump
+        assert "SECRET-CLIENT-SECRET" not in dump
+        assert "SECRET-STATIC-TOKEN" not in dump
+        assert "gateway-client" in dump
+        assert "https://org-idp.example/oauth2/token" in dump
+
     async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
         """Invalid aliases from config should emit warnings during load."""
 

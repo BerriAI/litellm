@@ -556,6 +556,28 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
     )
 
 
+_REGISTRY_DUMP_SECRET_FIELDS = frozenset(
+    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+)
+
+
+def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str, str]]:
+    """A JSON-safe view of the server registry with credential fields masked, for debug logging.
+
+    The registry holds long-lived secrets as plain strings (the static token, OAuth client secret,
+    the ID-JAG signing key, AWS keys); dumping them verbatim hands the gateway's client identity to
+    anyone who can read debug logs.
+    """
+    dumps: dict[str, dict[str, object]] = {server_id: server.model_dump() for server_id, server in servers.items()}
+    return {
+        server_id: {
+            field: ("**REDACTED**" if field in _REGISTRY_DUMP_SECRET_FIELDS and value is not None else str(value))
+            for field, value in dump.items()
+        }
+        for server_id, dump in dumps.items()
+    }
+
+
 def _to_server_spec_fail_closed(server: MCPServer) -> Optional[ServerSpec]:
     """`to_server_spec`, except a half-configured `oauth2_id_jag` server refuses instead of deferring.
 
@@ -1311,7 +1333,9 @@ class MCPServerManager:
                     base_url=server_config.get("url", ""),
                 )
 
-        verbose_logger.debug(f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}")
+        verbose_logger.debug(
+            f"Loaded MCP Servers: {json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)}"
+        )
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
