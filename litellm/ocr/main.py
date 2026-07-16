@@ -105,7 +105,7 @@ def _resolve_ocr_call_context(
         **{
             key: kwargs[key]
             for key in _OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM
-            if key in kwargs
+            if kwargs.get(key) is not None
         },
     }
     optional_params = {

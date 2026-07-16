@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -25,7 +26,11 @@ import httpx
 import pytest
 import yaml
 
+from litellm.rust_bridge import native_bridge_available
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_SECRET_PATTERN = re.compile(r"(sk-[A-Za-z0-9_\-]+|Bearer\s+\S+)")
 
 MISTRAL_OCR_SUPPORTED_PARAMS: dict[str, Any] = {
     "pages": [0, 2, 5],
@@ -257,12 +262,13 @@ class _CaptureProxy:
     capture: type[_CaptureHandler]
 
 
+def _sanitize(text: str) -> str:
+    return _SECRET_PATTERN.sub("[redacted]", text)
+
+
 @pytest.fixture
 def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
-    native_available = __import__(
-        "litellm.rust_bridge", fromlist=["native_bridge_available"]
-    ).native_bridge_available()
-    if not native_available:
+    if not native_bridge_available():
         pytest.skip("compiled Rust OCR bridge is required for the capture E2E")
 
     capture_port = _free_port()
@@ -288,6 +294,8 @@ def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
     config_path = tmp_path / "capture-config.yml"
     config_path.write_text(yaml.safe_dump(config))
 
+    proxy_log_path = tmp_path / "capture-proxy.log"
+    proxy_log = proxy_log_path.open("w")
     proxy = subprocess.Popen(
         [
             sys.executable,
@@ -302,15 +310,21 @@ def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
             "1",
         ],
         cwd=str(REPO_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=proxy_log,
+        stderr=subprocess.STDOUT,
     )
     proxy_url = f"http://127.0.0.1:{proxy_port}"
     try:
         if not _wait_for_liveness(proxy_url, time.monotonic() + 90):
-            pytest.skip("capture proxy did not become live in time")
+            proxy_log.flush()
+            tail = _sanitize(proxy_log_path.read_text()[-4000:])
+            pytest.fail(
+                f"capture proxy did not become live while the Rust bridge is available; "
+                f"sanitized proxy log at {proxy_log_path}\n{tail}"
+            )
         yield _CaptureProxy(proxy_url=proxy_url, capture=_CaptureHandler)
     finally:
+        proxy_log.close()
         proxy.terminate()
         try:
             proxy.wait(timeout=15)

@@ -409,6 +409,31 @@ def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
         assert internal not in optional_params
 
 
+def test_ocr_omits_reserved_id_when_none(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id=None,
+        include_image_base64=True,
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert "id" not in optional_params
+    assert optional_params["include_image_base64"] is True
+
+
+def test_ocr_omits_reserved_id_when_absent(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        include_image_base64=True,
+    )
+
+    assert "id" not in fake_bridge.calls[0]["optional_params"]
+
+
 def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
     response = litellm.ocr(
         model="azure_ai/pixtral-12b-2409",
