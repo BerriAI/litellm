@@ -16,6 +16,10 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
+from litellm.llms.vertex_ai.common_utils import (
+    VertexAILyriaModelInfo,
+    get_vertex_ai_lyria_model_info,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.llms.vertex_ai_text_to_speech import (
@@ -472,15 +476,16 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
 
 class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
-    LYRIA_MODELS = {
-        "lyria-002",
-        "lyria-3-clip-preview",
-        "lyria-3-pro-preview",
-    }
-
     @classmethod
     def is_lyria_model(cls, model: str) -> bool:
-        return model.removeprefix("vertex_ai/") in cls.LYRIA_MODELS
+        return get_vertex_ai_lyria_model_info(model=model) is not None
+
+    @staticmethod
+    def _get_model_info(model: str) -> VertexAILyriaModelInfo:
+        model_info = get_vertex_ai_lyria_model_info(model=model)
+        if model_info is None:
+            raise ValueError(f"Vertex AI model {model!r} does not declare a Lyria audio API")
+        return model_info
 
     def get_supported_openai_params(self, model: str) -> list:
         return ["response_format"]
@@ -495,6 +500,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
     ) -> tuple[str | None, dict]:
         mapped_params = dict(optional_params)
         base_model = model.removeprefix("vertex_ai/")
+        model_info = self._get_model_info(model=model)
         unsupported_params = [param for param in ("speed", "instructions") if mapped_params.get(param) is not None]
         if unsupported_params:
             if drop_params or litellm.drop_params:
@@ -510,9 +516,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                     ),
                 )
         response_format = mapped_params.get("response_format")
-        supported_formats = (
-            {"wav"} if base_model == "lyria-002" else {"mp3", "wav"} if base_model == "lyria-3-pro-preview" else {"mp3"}
-        )
+        supported_formats = frozenset(model_info["supported_audio_formats"])
         if response_format is not None and response_format not in supported_formats:
             if drop_params or litellm.drop_params:
                 mapped_params.pop("response_format", None)
@@ -534,6 +538,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         litellm_params: dict,
     ) -> str:
         base_model = model.removeprefix("vertex_ai/")
+        model_info = self._get_model_info(model=model)
         project = self.safe_get_vertex_ai_project(litellm_params)
         if project is None:
             _, project = self._ensure_access_token(
@@ -541,7 +546,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                 project_id=None,
                 custom_llm_provider="vertex_ai",
             )
-        if base_model.startswith("lyria-3-"):
+        if model_info["vertex_ai_audio_api"] == "lyria_interactions":
             from litellm.llms.vertex_ai.interactions.transformation import (
                 VertexAIInteractionsConfig,
             )
@@ -577,7 +582,8 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
             }
         )
         base_model = model.removeprefix("vertex_ai/")
-        if base_model == "lyria-002":
+        model_info = self._get_model_info(model=model)
+        if model_info["vertex_ai_audio_api"] == "lyria_predict":
             request_body = {
                 "instances": [{"prompt": input}],
                 "parameters": {"sample_count": 1},
@@ -601,9 +607,10 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
 
         response_json = raw_response.json()
         base_model = model.removeprefix("vertex_ai/")
+        model_info = self._get_model_info(model=model)
         audio_data: str | None = None
         mime_type: str | None = None
-        if base_model == "lyria-002":
+        if model_info["vertex_ai_audio_api"] == "lyria_predict":
             predictions = response_json.get("predictions") or []
             if predictions:
                 audio_data = predictions[0].get("audioContent") or predictions[0].get("bytesBase64Encoded")
@@ -617,7 +624,8 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                         mime_type = content.get("mime_type")
         if audio_data is None:
             raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
-        mime_type = mime_type or ("audio/wav" if base_model == "lyria-002" else "audio/mpeg")
+        default_format = model_info["supported_audio_formats"][0]
+        mime_type = mime_type or {"mp3": "audio/mpeg", "wav": "audio/wav"}[default_format]
         response = HttpxBinaryResponseContent(
             httpx.Response(
                 status_code=raw_response.status_code,

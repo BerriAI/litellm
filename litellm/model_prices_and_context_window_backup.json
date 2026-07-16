@@ -37236,6 +37236,9 @@
         "mode": "audio_speech",
         "output_cost_per_second": 0.002,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "wav"
+        ],
         "supported_endpoints": [
             "/v1/audio/speech"
         ],
@@ -37245,7 +37248,8 @@
         "supported_output_modalities": [
             "audio"
         ],
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "vertex_ai_audio_api": "lyria_predict"
     },
     "vertex_ai/lyria-3-clip-preview": {
         "input_cost_per_token": 0,
@@ -37257,6 +37261,9 @@
         "output_cost_per_image": 0.04,
         "output_cost_per_token": 0,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "mp3"
+        ],
         "supported_endpoints": [
             "/v1beta/interactions",
             "/v1/audio/speech"
@@ -37279,7 +37286,8 @@
         "supports_response_schema": false,
         "supports_system_messages": false,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "vertex_ai_audio_api": "lyria_interactions"
     },
     "vertex_ai/lyria-3-pro-preview": {
         "input_cost_per_token": 0,
@@ -37291,6 +37299,10 @@
         "output_cost_per_image": 0.08,
         "output_cost_per_token": 0,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "mp3",
+            "wav"
+        ],
         "supported_endpoints": [
             "/v1beta/interactions",
             "/v1/audio/speech"
@@ -37313,7 +37325,8 @@
         "supports_response_schema": false,
         "supports_system_messages": false,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "vertex_ai_audio_api": "lyria_interactions"
     },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,

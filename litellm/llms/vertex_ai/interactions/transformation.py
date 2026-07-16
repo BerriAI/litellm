@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Protocol, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -9,6 +9,7 @@ from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -24,6 +25,11 @@ from litellm.types.utils import LlmProviders
 
 _DEFAULT_VERTEX_AI_INTERACTIONS_API_BASE = "https://aiplatform.googleapis.com"
 _TRUSTED_GOOGLE_API_HOST_SUFFIX = ".googleapis.com"
+_InteractionsResponseT = TypeVar(
+    "_InteractionsResponseT",
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
+)
 
 
 class VertexAIInteractionsAuth(Protocol):
@@ -105,10 +111,13 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
-        return self._interactions_config.transform_response(
+        return self._apply_lyria_response_cost(
             model=model,
-            raw_response=raw_response,
-            logging_obj=logging_obj,
+            response=self._interactions_config.transform_response(
+                model=model,
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            ),
         )
 
     def transform_streaming_response(
@@ -117,11 +126,30 @@ class VertexAIInteractionsConfig(BaseInteractionsAPIConfig):
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
-        return self._interactions_config.transform_streaming_response(
+        return self._apply_lyria_response_cost(
             model=model,
-            parsed_chunk=parsed_chunk,
-            logging_obj=logging_obj,
+            response=self._interactions_config.transform_streaming_response(
+                model=model,
+                parsed_chunk=parsed_chunk,
+                logging_obj=logging_obj,
+            ),
         )
+
+    @staticmethod
+    def _apply_lyria_response_cost(
+        model: str | None,
+        response: _InteractionsResponseT,
+    ) -> _InteractionsResponseT:
+        model_info = get_vertex_ai_lyria_model_info(model=model) if model is not None else None
+        response_cost = (
+            model_info.get("output_cost_per_image")
+            if model_info is not None and model_info["vertex_ai_audio_api"] == "lyria_interactions"
+            else None
+        )
+        if response_cost is None:
+            return response
+        response._hidden_params = {**response._hidden_params, "response_cost": response_cost}
+        return response
 
     def transform_get_interaction_request(
         self,

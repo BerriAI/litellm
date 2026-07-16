@@ -141,6 +141,68 @@ class TestVertexAILyriaTextToSpeechConfig:
 
         assert isinstance(config, VertexAILyriaTextToSpeechConfig)
 
+    @pytest.mark.parametrize(
+        ("model", "vertex_ai_audio_api", "supported_audio_formats", "expected_url"),
+        [
+            (
+                "future-lyria-predict",
+                "lyria_predict",
+                ["wav"],
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/music-project/locations/"
+                "us-central1/publishers/google/models/future-lyria-predict:predict",
+            ),
+            (
+                "future-music-interactions",
+                "lyria_interactions",
+                ["mp3", "wav"],
+                "https://aiplatform.googleapis.com/v1beta1/projects/music-project/locations/global/interactions",
+            ),
+        ],
+    )
+    def test_dispatches_from_model_metadata(
+        self,
+        monkeypatch,
+        model,
+        vertex_ai_audio_api,
+        supported_audio_formats,
+        expected_url,
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"vertex_ai/{model}",
+            {
+                "vertex_ai_audio_api": vertex_ai_audio_api,
+                "supported_audio_formats": supported_audio_formats,
+            },
+        )
+
+        config = ProviderConfigManager.get_provider_text_to_speech_config(
+            model=model,
+            provider=LlmProviders.VERTEX_AI,
+        )
+
+        assert isinstance(config, VertexAILyriaTextToSpeechConfig)
+        assert (
+            config.get_complete_url(
+                model=model,
+                api_base=None,
+                litellm_params={
+                    "vertex_project": "music-project",
+                    "vertex_location": "us-central1",
+                },
+            )
+            == expected_url
+        )
+
+    def test_vertex_chirp_does_not_select_lyria_config(self):
+        config = ProviderConfigManager.get_provider_text_to_speech_config(
+            model="chirp",
+            provider=LlmProviders.VERTEX_AI,
+        )
+
+        assert isinstance(config, VertexAITextToSpeechConfig)
+        assert not isinstance(config, VertexAILyriaTextToSpeechConfig)
+
     def test_get_complete_url_for_lyria_2(self):
         config = VertexAILyriaTextToSpeechConfig()
 

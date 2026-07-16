@@ -152,6 +152,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
+    supported_audio_formats: Optional[List[Literal["mp3", "wav"]]]
+    vertex_ai_audio_api: Optional[Literal["lyria_predict", "lyria_interactions"]]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
     bedrock_converse_supports_strict_tools: Optional[bool]
 

@@ -1,4 +1,7 @@
 from typing import List, Optional, Tuple
+from unittest.mock import MagicMock
+
+import httpx
 
 import litellm
 import pytest
@@ -173,6 +176,51 @@ def test_transform_request_strips_vertex_ai_prefix() -> None:
         ],
         "stream": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+def test_transform_response_sets_lyria_generation_cost(
+    model: str, expected_cost: float
+) -> None:
+    config = VertexAIInteractionsConfig(vertex_auth=FakeVertexAuth())
+
+    response = config.transform_response(
+        model=model,
+        raw_response=httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "outputs": [
+                    {
+                        "type": "audio",
+                        "data": "bHlyaWEtYXVkaW8=",
+                        "mime_type": "audio/mpeg",
+                    }
+                ],
+            },
+        ),
+        logging_obj=MagicMock(),
+    )
+
+    assert response._hidden_params["response_cost"] == expected_cost
+
+
+def test_transform_streaming_response_sets_lyria_generation_cost() -> None:
+    config = VertexAIInteractionsConfig(vertex_auth=FakeVertexAuth())
+
+    response = config.transform_streaming_response(
+        model="lyria-3-clip-preview",
+        parsed_chunk={"event_type": "interaction.completed", "status": "completed"},
+        logging_obj=MagicMock(),
+    )
+
+    assert response._hidden_params["response_cost"] == 0.04
 
 
 def test_vertex_ai_models_with_interactions_endpoint_route_to_config(

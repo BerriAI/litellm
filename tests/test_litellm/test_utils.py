@@ -866,6 +866,17 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "supported_audio_formats": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["mp3", "wav"],
+                    },
+                },
+                "vertex_ai_audio_api": {
+                    "type": "string",
+                    "enum": ["lyria_predict", "lyria_interactions"],
+                },
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
@@ -3189,9 +3200,15 @@ def test_vertex_ai_lyria_models_in_cost_map():
     assert lyria_2["supported_modalities"] == ["text"]
     assert lyria_2["supported_output_modalities"] == ["audio"]
     assert lyria_2["supports_audio_output"] is True
+    assert lyria_2["supported_audio_formats"] == ["wav"]
+    assert lyria_2["vertex_ai_audio_api"] == "lyria_predict"
     assert lyria_2["supported_endpoints"] == ["/v1/audio/speech"]
     assert clip["output_cost_per_image"] == 0.04
     assert pro["output_cost_per_image"] == 0.08
+    assert clip["supported_audio_formats"] == ["mp3"]
+    assert pro["supported_audio_formats"] == ["mp3", "wav"]
+    assert clip["vertex_ai_audio_api"] == "lyria_interactions"
+    assert pro["vertex_ai_audio_api"] == "lyria_interactions"
     assert clip["supported_endpoints"] == [
         "/v1beta/interactions",
         "/v1/audio/speech",
