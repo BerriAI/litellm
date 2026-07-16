@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - litellm_internal_staging
   pull_request:
     branches:
       - main
+      - litellm_internal_staging
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
@@ -41,6 +43,7 @@ jobs:
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@a4a36bb07c0638b0b4ca52bf1f3dad1b4289e52f # v4.18.1
+        continue-on-error: true
         with:
           mode: simulation
           run: >

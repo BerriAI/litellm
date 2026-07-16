@@ -438,10 +438,30 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableRequestMetricsMiddleware,
+    BillingRecorder,
+)
 from litellm.proxy.plugin_routes import (
-    router as plugin_router,
     register_plugins_from_config,
 )
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+)
+
+try:
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        build_billing_metrics_recorder as _build_billing_metrics_recorder,
+    )
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
+    )
+
+    build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Optional[Callable[[], None]] = _shutdown_billing_metrics_recorder
+except ImportError:
+    build_billing_metrics_recorder = None
+    shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -461,12 +481,10 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
+    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -552,22 +570,19 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
-)
-from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (
     RouterGeneralSettings,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
 )
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
+from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -767,6 +782,11 @@ async def proxy_shutdown_event():
 
     if db_writer_client is not None:
         await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
+
+    # final flush of billable-request counts: without it, up to one export
+    # interval of enterprise billing data is dropped on every restart
+    if shutdown_billing_metrics_recorder is not None:
+        shutdown_billing_metrics_recorder()
 
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
@@ -973,11 +993,11 @@ async def proxy_startup_event(app: FastAPI):
         if is_otel_v2_enabled():
             from opentelemetry import trace as _otel_trace
 
-            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(
@@ -1781,6 +1801,31 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+# Added before InFlightRequestsMiddleware so it nests *inside* it: Starlette
+# makes the last-added middleware outermost. The billable count is recorded
+# after the inner app returns, so if this sat outside the in-flight tracker a
+# request could be counted as drained while its record() had not yet run, and
+# proxy_shutdown_event could flush and stop the exporter underneath it.
+app.add_middleware(
+    BillableRequestMetricsMiddleware,
+    # Factory, not an instance: the recorder is resolved on the first request so
+    # it sees premium_user and the billing env vars AFTER proxy_startup_event has
+    # loaded the YAML config's environment_variables. Building it here at import
+    # time would permanently capture recorder=None for YAML-configured
+    # deployments. The lambda reads the module globals at call time.
+    recorder_factory=lambda: (
+        build_billing_metrics_recorder(
+            premium=premium_user,
+            # Read from the license check, not the premium_user_data module
+            # global: that global is bound once at import and goes stale when
+            # the license arrives via the YAML config's environment_variables.
+            license_data=_license_check.airgapped_license_data,
+            litellm_version=version,
+        )
+        if build_billing_metrics_recorder is not None
+        else None
+    ),
+)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 

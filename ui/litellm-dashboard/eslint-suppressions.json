@@ -1161,11 +1161,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/tag-management/_components/TagTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/tag-management/_components/components/CreateTagModal.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1657,17 +1652,6 @@
   },
   "src/components/UIAccessControlForm.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsageIndicator.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
       "count": 1
     }
   },

@@ -26,6 +26,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    FrozenSet,
     Generator,
     List,
     Literal,
@@ -108,6 +109,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -543,6 +545,7 @@ class Router:
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
+        self.team_public_model_names: FrozenSet[str] = frozenset()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # touches *before* the first ``set_model_list`` below (which calls
@@ -3044,7 +3047,7 @@ class Router:
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self.cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags = deployment.get("litellm_params", {}).get("tags")
@@ -7864,6 +7867,7 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
@@ -8215,6 +8219,9 @@ class Router:
                 self.team_model_to_deployment_indices[key] = updated_indices
             else:
                 del self.team_model_to_deployment_indices[key]
+        self.team_public_model_names = frozenset(
+            public_model_name for _, public_model_name in self.team_model_to_deployment_indices
+        )
 
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
@@ -8228,6 +8235,7 @@ class Router:
         team_public_model_name = (model.get("model_info") or {}).get("team_public_model_name")
         if team_id and team_public_model_name:
             key = (team_id, team_public_model_name)
+            self.team_public_model_names = self.team_public_model_names | frozenset({team_public_model_name})
             if key not in self.team_model_to_deployment_indices:
                 self.team_model_to_deployment_indices[key] = []
             if idx not in self.team_model_to_deployment_indices[key]:
@@ -8777,7 +8785,7 @@ class Router:
             if _deployment_rpm is None:
                 _deployment_rpm = model_info_dict.get("rpm", None)  # type: ignore
 
-            _deployment_itpm: Optional[int] = model.get("itpm")
+            _deployment_itpm: Optional[int] = model.get("itpm")  # type: ignore
             if _deployment_itpm is None:
                 _deployment_itpm = model_litellm_params.get("itpm", None)
             if _deployment_itpm is None:
@@ -8938,7 +8946,7 @@ class Router:
             if _deployment_otpm is not None:
                 if total_otpm is None:
                     total_otpm = 0
-                total_otpm += _deployment_otpm
+                total_otpm += _deployment_otpm  # type: ignore
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -9195,6 +9203,7 @@ class Router:
         """
         self.model_name_to_deployment_indices.clear()
         self.team_model_to_deployment_indices.clear()
+        self.team_public_model_names = frozenset()
 
         for idx, model in enumerate(model_list):
             model_name = model.get("model_name")
@@ -10103,7 +10112,10 @@ class Router:
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
     def _try_early_resolve_deployments_for_model_not_in_names(
-        self, model: str, request_team_id: Optional[str]
+        self,
+        model: str,
+        request_team_id: Optional[str],
+        include_team_models: bool = False,
     ) -> Optional[Tuple[str, Union[List, Dict]]]:
         """
         When ``model`` is not in ``self.model_names``, try team routes, pattern routes,
@@ -10116,6 +10128,30 @@ class Router:
         # so that named team deployments shadow wildcard/pattern routes.
         if request_team_id is not None:
             team_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
+            if team_deployments:
+                return model, team_deployments
+        elif include_team_models:
+            team_deployments = [
+                self.model_list[index]
+                for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
+                if public_model_name == model
+                for index in indices
+            ]
+            team_ids = {
+                team_id
+                for deployment in team_deployments
+                for team_id in [(deployment.get("model_info") or {}).get("team_id")]
+                if team_id is not None
+            }
+            if len(team_ids) > 1:
+                raise litellm.BadRequestError(
+                    message=(
+                        f"Model name '{model}' matches deployments from multiple teams. "
+                        "Specify the deployment ID directly to disambiguate."
+                    ),
+                    model=model,
+                    llm_provider="",
+                )
             if team_deployments:
                 return model, team_deployments
 
@@ -10182,7 +10218,11 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        early = self._try_early_resolve_deployments_for_model_not_in_names(model=model, request_team_id=request_team_id)
+        early = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=model,
+            request_team_id=request_team_id,
+            include_team_models=_is_proxy_admin_request(request_kwargs),
+        )
         if early is not None:
             return early
 
