@@ -32,6 +32,10 @@ CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 # read exported spans back through it.
 OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
 
+# Query URL of the compose stack's DataDog logs-intake sink (the `dd-sink`
+# service records every intake POST and replays them on GET /requests).
+DD_SINK_URL = os.environ.get("E2E_DD_SINK_URL", "http://localhost:9915").rstrip("/")
+
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))

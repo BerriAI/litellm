@@ -4,6 +4,7 @@ Semantic MCP Tool Filtering using semantic-router
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
@@ -76,6 +77,7 @@ class SemanticMCPToolFilter:
         self.tool_router: Optional["SemanticRouter"] = None
         self.context_window_error: Optional[str] = None
         self._tool_map: Dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
+        self._index_sync_lock = asyncio.Lock()
 
     async def build_router_from_mcp_registry(self) -> None:
         """Build semantic router from all MCP tools in the registry (no auth checks)."""
@@ -182,6 +184,81 @@ class SemanticMCPToolFilter:
                 return
             raise
 
+    def _has_tools_missing_from_index(self, tools: list[Any]) -> bool:
+        """Allocation-free check for any named tool not yet in the semantic index."""
+        return any(name and name not in self._tool_map for name in (self._extract_tool_info(t)[0] for t in tools))
+
+    def _tools_missing_from_index(self, tools: list[Any]) -> dict[str, Any]:
+        """Map name -> tool for every named tool not yet in the semantic index."""
+        return {
+            name: tool
+            for name, tool in ((self._extract_tool_info(t)[0], t) for t in tools)
+            if name and name not in self._tool_map
+        }
+
+    async def _ensure_tools_indexed(self, available_tools: list[Any]) -> None:
+        """
+        Index request-time tools the startup build never saw.
+
+        The startup index lists every registered MCP server WITHOUT per-user
+        credentials, so servers requiring per-user auth (interactive OAuth
+        tokens, user-scoped env vars) contribute zero routes. Tools reaching
+        the filter came through an authenticated expansion; without indexing
+        them here they can never be selected, so requests either bypass
+        filtering entirely (N->N) or lose every tool to unrelated matches.
+
+        Runs async-only (no synchronous embedding on the request path) and
+        never writes shared error state: an embedding failure here raises and
+        is scoped to the requesting call, so one request's oversized tool
+        description cannot poison the filter for other users on the worker.
+        """
+        from semantic_router.routers import SemanticRouter
+        from semantic_router.routers.base import Route
+
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
+
+        if not self._has_tools_missing_from_index(available_tools):
+            return
+
+        async with self._index_sync_lock:
+            missing = self._tools_missing_from_index(available_tools)
+            if not missing:
+                return
+
+            descriptions = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
+            routes = [
+                Route(
+                    name=name,
+                    description=description,
+                    utterances=[description],
+                    score_threshold=self.similarity_threshold,
+                )
+                for name, description in descriptions.items()
+            ]
+
+            if self.tool_router is None:
+                router = SemanticRouter(
+                    routes=[],
+                    encoder=LiteLLMRouterEncoder(
+                        litellm_router_instance=self.router_instance,
+                        model_name=self.embedding_model,
+                        score_threshold=self.similarity_threshold,
+                    ),
+                    auto_sync="local",
+                    top_k=self.top_k,
+                )
+                await router.aadd(routes)
+                self.tool_router = router
+            else:
+                await self.tool_router.aadd(routes)
+
+            self._tool_map.update(missing)
+            verbose_logger.info(
+                f"Semantic tool filter indexed {len(routes)} request-time tools missing from the startup index"
+            )
+
     async def filter_tools(
         self,
         query: str,
@@ -216,22 +293,34 @@ class SemanticMCPToolFilter:
         if not query or not query.strip():
             return available_tools
 
-        # Router should be built on startup - if not, something went wrong
-        if self.tool_router is None:
-            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
-            return available_tools
-
         # Run semantic filtering
         try:
+            await self._ensure_tools_indexed(available_tools)
+
+            if self.tool_router is None:
+                verbose_logger.warning("Semantic router could not be built from the request's tools")
+                return available_tools
+
+            available_names = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            if not available_names:
+                return available_tools
+
             limit = top_k or self.top_k
-            matches = self.tool_router(text=query, limit=limit)
+            if self.tool_router.top_k < limit:
+                self.tool_router.top_k = limit
+            matches = self.tool_router(text=query, limit=limit, route_filter=available_names)
             matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
                 return available_tools
 
-            return self._get_tools_by_names(matched_tool_names, available_tools)
+            filtered_tools = self._get_tools_by_names(matched_tool_names, available_tools)
+            if not filtered_tools:
+                return available_tools
+            return filtered_tools
 
+        except SemanticToolFilterContextWindowError:
+            raise
         except Exception as e:
             if _is_context_window_error(e):
                 verbose_logger.error(
@@ -240,7 +329,7 @@ class SemanticMCPToolFilter:
                 )
                 raise SemanticToolFilterContextWindowError(
                     embedding_model=self.embedding_model,
-                    stage="the user query",
+                    stage="the user query or the MCP tool descriptions being indexed",
                     original_error=str(e),
                 ) from e
             verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
