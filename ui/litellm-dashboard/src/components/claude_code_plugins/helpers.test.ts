@@ -19,7 +19,7 @@ import {
   isValidSubPath,
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
-import { MarketplacePluginEntry, PluginSource } from "./types";
+import { MarketplacePluginEntry } from "./types";
 
 describe("buildMarketplaceSettingsSnippet", () => {
   it("nests the url under a source object so Claude Code accepts the marketplace", () => {
