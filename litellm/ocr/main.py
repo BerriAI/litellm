@@ -21,6 +21,7 @@ from litellm.ocr.rust_bridge import (
     RustOcr,
     load_rust_aocr,
     load_rust_ocr,
+    rust_ocr_input_error_type,
 )
 from litellm.utils import client, filter_out_litellm_params
 
@@ -200,7 +201,7 @@ def _missing_rust_bridge_error() -> RuntimeError:
 
 
 def _raise_ocr_input_error(
-    e: ValueError,
+    e: BaseException,
     *,
     model: str,
     custom_llm_provider: str | None,
@@ -210,6 +211,11 @@ def _raise_ocr_input_error(
         model=model,
         llm_provider=custom_llm_provider or "",
     ) from e
+
+
+def _is_rust_ocr_input_error(e: BaseException) -> bool:
+    input_error_type = rust_ocr_input_error_type()
+    return input_error_type is not None and isinstance(e, input_error_type)
 
 
 async def _run_rust_aocr(
@@ -370,7 +376,7 @@ async def aocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        if isinstance(e, ValueError):
+        if _is_rust_ocr_input_error(e):
             _raise_ocr_input_error(
                 e, model=model, custom_llm_provider=custom_llm_provider
             )
@@ -638,7 +644,7 @@ def ocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        if isinstance(e, ValueError):
+        if _is_rust_ocr_input_error(e):
             _raise_ocr_input_error(
                 e, model=model, custom_llm_provider=custom_llm_provider
             )

@@ -56,6 +56,21 @@ _UNSET: Final[_Unset] = _Unset()
 
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
+_rust_ocr_input_error_override: type[BaseException] | None | _Unset = _UNSET
+
+
+def _set_rust_ocr_input_error_type(
+    error_type: type[BaseException] | None | _Unset = _UNSET,
+) -> None:
+    """Inject the exception type treated as a client-input rejection (tests only).
+
+    Mirrors ``_set_rust_ocr_bridge`` so the native extension does not need to be
+    compiled to exercise the input-error mapping. Passing ``None`` clears a prior
+    override; omitting the argument preserves it.
+    """
+    global _rust_ocr_input_error_override
+    if not isinstance(error_type, _Unset):
+        _rust_ocr_input_error_override = error_type
 
 
 def _set_rust_ocr_bridge(
@@ -102,3 +117,24 @@ def load_rust_aocr() -> RustAocr | None:
     if native_bridge is None:
         return None
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
+
+
+def rust_ocr_input_error_type() -> type[BaseException] | None:
+    """Return the native exception raised for client-input rejections, if available.
+
+    The Rust bridge raises this dedicated type only for request-input problems
+    (SSRF-rejected URLs, malformed documents, unsafe polling targets); unrelated
+    internal failures surface as other exceptions and must not be downgraded to a
+    client error.
+    """
+    if not isinstance(_rust_ocr_input_error_override, _Unset):
+        return _rust_ocr_input_error_override
+    from litellm.rust_bridge import get_native_bridge
+
+    native_bridge = get_native_bridge()
+    if native_bridge is None:
+        return None
+    error_type = getattr(native_bridge, "RustOcrInputError", None)
+    if isinstance(error_type, type) and issubclass(error_type, BaseException):
+        return error_type
+    return None

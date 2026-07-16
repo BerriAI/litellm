@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -171,3 +172,10 @@ class TestRustOcrGateway:
 
         assert response.status_code == 400, response.text
         assert "SSRF protection" in response.text
+        # Public SSRF errors must be data-minimized: never echo the rejected
+        # URL, its host, or query back to the caller.
+        parsed = urlparse(document_url)
+        assert document_url not in response.text
+        assert parsed.netloc not in response.text
+        if parsed.query:
+            assert parsed.query not in response.text

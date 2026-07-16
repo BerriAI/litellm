@@ -36,6 +36,14 @@ class CapturedException(Exception):
     pass
 
 
+class FakeRustOcrInputError(ValueError):
+    """Stands in for the native ``RustOcrInputError`` the compiled bridge raises.
+
+    The native wheel isn't built in CI, so inject this type via
+    ``_set_rust_ocr_input_error_type`` to exercise the input-error mapping.
+    """
+
+
 class RecordingBridge:
     """A fake ``RustOcr`` callable that records the args it was handed."""
 
@@ -142,9 +150,8 @@ class SsrfRejectingBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
     ) -> dict[str, object]:
-        raise ValueError(
-            "invalid request: OCR document URL rejected by SSRF protection: "
-            "http://169.254.169.254/latest/meta-data/"
+        raise FakeRustOcrInputError(
+            "invalid request: OCR document URL rejected by SSRF protection"
         )
 
 
@@ -160,10 +167,26 @@ class SsrfRejectingAsyncBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
     ) -> dict[str, object]:
-        raise ValueError(
-            "invalid request: OCR document URL rejected by SSRF protection: "
-            "http://169.254.169.254/latest/meta-data/"
+        raise FakeRustOcrInputError(
+            "invalid request: OCR document URL rejected by SSRF protection"
         )
+
+
+class UnrelatedValueErrorBridge:
+    """Raises a plain ``ValueError`` unrelated to request input (e.g. an internal bug)."""
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise ValueError("some internal invariant broke")
 
 
 class RecordingLogging:
@@ -190,9 +213,11 @@ class RecordingLogging:
 def _reset_rust_bridge():
     """Keep the global bridge state isolated between tests."""
     rust_bridge._set_rust_ocr_bridge(ocr=None, aocr=None)
+    rust_bridge._set_rust_ocr_input_error_type(None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
     rust_bridge._set_rust_ocr_bridge(ocr=None, aocr=None)
+    rust_bridge._set_rust_ocr_input_error_type(None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
@@ -492,6 +517,7 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
 
 
 def test_ocr_input_rejection_maps_to_bad_request():
+    rust_bridge._set_rust_ocr_input_error_type(FakeRustOcrInputError)
     rust_bridge._set_rust_ocr_bridge(ocr=SsrfRejectingBridge())
 
     with pytest.raises(litellm.BadRequestError) as exc_info:
@@ -511,6 +537,7 @@ def test_ocr_input_rejection_maps_to_bad_request():
 
 @pytest.mark.asyncio
 async def test_aocr_input_rejection_maps_to_bad_request():
+    rust_bridge._set_rust_ocr_input_error_type(FakeRustOcrInputError)
     rust_bridge._set_rust_ocr_bridge(aocr=SsrfRejectingAsyncBridge())
 
     with pytest.raises(litellm.BadRequestError) as exc_info:
@@ -544,6 +571,27 @@ def test_ocr_provider_runtime_error_is_not_downgraded_to_bad_request(
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert captured["original_exception"].__class__ is RuntimeError
+
+
+def test_ocr_unrelated_value_error_is_not_downgraded_to_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only the dedicated Rust input error becomes a 400; an unrelated internal
+    ValueError must stay a server error and flow through exception_type."""
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    rust_bridge._set_rust_ocr_input_error_type(FakeRustOcrInputError)
+    rust_bridge._set_rust_ocr_bridge(ocr=UnrelatedValueErrorBridge())
+
+    with pytest.raises(CapturedException):
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert captured["original_exception"].__class__ is ValueError
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):
