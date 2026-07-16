@@ -142,6 +142,47 @@ async def test_async_filter_deployments_resolves_provider_once_per_deployment(
 
 
 @pytest.mark.asyncio
+async def test_async_filter_deployments_keeps_provider_without_max_budget(
+    disable_budget_sync, monkeypatch
+):
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(budget_duration="1d"),
+        },
+    )
+
+    healthy_deployments = [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    monkeypatch.setattr(
+        provider_budget,
+        "_get_llm_provider_for_deployment",
+        lambda deployment: "openai",
+    )
+
+    filtered_deployments = await provider_budget.async_filter_deployments(
+        model="gpt-4o-mini",
+        healthy_deployments=healthy_deployments,
+        messages=[],
+        request_kwargs={},
+        parent_otel_span=None,
+    )
+
+    assert filtered_deployments == healthy_deployments
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_does_not_recompute_provider_when_resolved_none(
     disable_budget_sync, monkeypatch
 ):
