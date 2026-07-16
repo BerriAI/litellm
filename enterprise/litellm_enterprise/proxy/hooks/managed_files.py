@@ -195,9 +195,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "created_by": user_api_key_dict.user_id,
                     "team_id": user_api_key_dict.team_id,
                     "api_key": user_api_key_dict.api_key or None,
-                    "request_tags": Json(request_tags) if request_tags else None,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
+                    **({"request_tags": Json(request_tags)} if request_tags else {}),
                 },
                 "update": {
                     "file_object": file_object.model_dump_json(),

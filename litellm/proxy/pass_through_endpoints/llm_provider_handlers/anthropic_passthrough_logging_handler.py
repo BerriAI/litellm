@@ -981,7 +981,7 @@ class AnthropicPassthroughLoggingHandler:
                 _request_tags = _request_metadata.get("tags")
                 user_api_key_dict = UserAPIKeyAuth(
                     user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key=_request_metadata.get("user_api_key") or "",
+                    api_key=_request_metadata.get("user_api_key") or None,
                     team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=_request_metadata.get("user_api_key_team_alias"),
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value

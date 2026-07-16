@@ -2425,8 +2425,10 @@ async def test_store_unified_object_id_persists_request_identity():
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_no_tags_stores_null_request_tags():
-    """When no request tags are present the column is left NULL rather than an empty-list Json."""
+async def test_store_unified_object_id_no_tags_omits_request_tags():
+    """When no request tags are present the request_tags key must be omitted from the create
+    payload. Passing None to a Prisma Json? field raises MissingRequiredValueError, which would
+    break every non-tagged batch/file/response store."""
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.utils import LiteLLMBatch
 
@@ -2464,7 +2466,7 @@ async def test_store_unified_object_id_no_tags_stores_null_request_tags():
     create_data = prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs[
         "data"
     ]["create"]
-    assert create_data["request_tags"] is None
+    assert "request_tags" not in create_data
     assert create_data["api_key"] == "hashed-key-abc"
 
 
