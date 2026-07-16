@@ -1,3 +1,4 @@
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,8 @@ sys.path.insert(
 
 import builtins
 import types
+
+import uvicorn
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
@@ -134,6 +137,16 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    def test_installed_uvicorn_supports_worker_flags(self):
+        params = inspect.signature(uvicorn.Config.__init__).parameters
+        assert "timeout_worker_healthcheck" in params
+        assert "limit_max_requests_jitter" in params
+
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+            "localhost", 8000, timeout_worker_healthcheck=30
+        )
+        assert args["timeout_worker_healthcheck"] == 30
 
     def test_get_reload_options_no_config_still_watches_env(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
