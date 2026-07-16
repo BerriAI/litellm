@@ -250,9 +250,8 @@ def _openapi_forwarded_extra_headers(
         return None
 
     normalized_raw_headers = {
-        str(header_name).lower(): header_value
+        header_name.lower(): header_value
         for header_name, header_value in raw_headers.items()
-        if isinstance(header_name, str)
     }
     strip_caller_authorization = _should_strip_caller_authorization(
         mcp_server=mcp_server,
@@ -262,8 +261,7 @@ def _openapi_forwarded_extra_headers(
     forwarded_headers = {
         header_name: normalized_raw_headers[header_name.lower()]
         for header_name in mcp_server.extra_headers
-        if isinstance(header_name, str)
-        and not (strip_caller_authorization and header_name.lower() == "authorization")
+        if not (strip_caller_authorization and header_name.lower() == "authorization")
         and header_name.lower() in normalized_raw_headers
     }
     return forwarded_headers or None
