@@ -1,33 +1,23 @@
-from typing import List, Optional, Union
+from typing import Any, Optional
 
-from openai.types.chat import ChatCompletionMessageToolCall
 from pydantic import BaseModel, Field
-
-from litellm.types.llms.openai import ChatCompletionToolParam, ChatCompletionToolCallChunk
 
 from .base import GuardrailConfigModel
 
 
 class SingulrGuardrailRequest(BaseModel):
     model: Optional[str] = None
-    prompts: Optional[dict[str, list[str]]] = None
-    completions: Optional[list[str]] = None
-    tools: Optional[List[ChatCompletionToolParam]] = None
-    tool_calls: Optional[
-        List[
-            Union[
-                ChatCompletionToolCallChunk,
-                ChatCompletionMessageToolCall,
-            ]
-        ]
-    ] = None
+    messages: Optional[list[dict[str, Any]]] = None
+    tools: Optional[list[dict[str, Any]]] = None
+    model_response: Optional[dict[str, Any]] = None
+    litellm_metadata: Optional[dict[str, Any]] = None
 
 
 class SingulrGuardrailPayload(BaseModel):
-    """Payload sent to the Singulr guardrail API."""
-
-    request: SingulrGuardrailRequest
+    request_data: Optional[SingulrGuardrailRequest] = None
     input_type: str
+    is_playground_request: Optional[bool] = None
+    playground_text: Optional[str] = None
 
 
 class SingulrGuardrailResponse(BaseModel):

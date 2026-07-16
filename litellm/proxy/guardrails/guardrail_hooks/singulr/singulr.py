@@ -1,13 +1,9 @@
-import json
 import os
-from collections import defaultdict
-from typing import Any, TypeAlias, Union
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 import pydantic
-from openai.types.chat import ChatCompletionMessageToolCall
-from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -18,19 +14,11 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
-)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
@@ -44,18 +32,6 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 _DEFAULT_API_BASE = "http://localhost:8003"
 _GUARD_ENDPOINT = "/api/v1/ai-gateway/litellm"
 _DEFAULT_TIMEOUT = 30.0
-
-_SingulrToolCall: TypeAlias = Union[ChatCompletionToolCallChunk, ChatCompletionMessageToolCall]
-
-
-class _LegacyFunctionDefinition(BaseModel):
-    """Validates a request_data["functions"][i] entry (the deprecated
-    top-level functions[] field) before it is re-shaped into a
-    ChatCompletionToolParam, instead of casting an untyped dict."""
-
-    name: str
-    description: str | None = None
-    parameters: dict | None = None
 
 
 class SingulrGuardrail(CustomGuardrail):
@@ -116,146 +92,35 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
-    @staticmethod
-    def _extract_texts_by_role(
-        inputs: GenericGuardrailAPIInputs,
-    ) -> dict[str, list[str]]:
-        structured_messages = inputs.get("structured_messages")
-        if not structured_messages:
-            return {}
-
-        result: dict[str, list[str]] = {}
-
-        for message in structured_messages:
-            role = message.get("role")
-            if not role:
-                continue
-
-            text = convert_content_list_to_str(message=message)
-            if not text:
-                continue
-
-            result.setdefault(role, []).append(text)
-
-        return result
-
-    @staticmethod
-    def _legacy_functions_as_tools(
-        request_data: dict[str, Any],
-    ) -> list[ChatCompletionToolParam]:
-        functions = request_data.get("functions")
-        if not isinstance(functions, list):
-            return []
-
-        tools: list[ChatCompletionToolParam] = []
-        for fn in functions:
-            try:
-                validated = _LegacyFunctionDefinition.model_validate(fn)
-            except pydantic.ValidationError:
-                continue
-
-            function: ChatCompletionToolParamFunctionChunk = {"name": validated.name}
-            if validated.description is not None:
-                function["description"] = validated.description
-            if validated.parameters is not None:
-                function["parameters"] = validated.parameters
-
-            tools.append({"type": "function", "function": function})
-        return tools
-
-    @staticmethod
-    def _response_format_schema_prompt(request_data: dict[str, Any]) -> str | None:
-        response_format = request_data.get("response_format")
-        if not isinstance(response_format, dict):
-            return None
-
-        json_schema = response_format.get("json_schema")
-        if not isinstance(json_schema, dict):
-            return None
-
-        return json.dumps(json_schema)
-
-    @staticmethod
-    def reconstruct_tool_calls(
-        tool_call_chunks: list[ChatCompletionToolCallChunk],
-    ) -> list[ChatCompletionMessageToolCall]:
-
-        aggregated: dict[int, dict[str, Any]] = defaultdict(
-            lambda: {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": "",
-                    "arguments": "",
-                },
-            }
-        )
-
-        for chunk in tool_call_chunks:
-            index = chunk.get("index", 0)
-            current = aggregated[index]
-
-            if chunk.get("id"):
-                current["id"] = chunk["id"]
-
-            if chunk.get("type"):
-                current["type"] = chunk["type"]
-
-            function = chunk.get("function") or {}
-
-            name = function.get("name")
-            if name:
-                current["function"]["name"] = name
-
-            arguments = function.get("arguments")
-            if arguments:
-                current["function"]["arguments"] += arguments
-
-        return [ChatCompletionMessageToolCall(**tool_call) for _, tool_call in sorted(aggregated.items())]
-
     def _build_payload(
         self,
         request_data: dict[str, Any],
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> dict[str, Any]:
-        messages = self._extract_texts_by_role(inputs=inputs)
-        model_response = inputs.get("texts") or []
+        if not request_data:
+            texts = inputs.get("texts", [])
 
-        # Guardrail playground sends only texts
-        if input_type == "request" and not messages:
-            messages["user"] = model_response
+            payload = SingulrGuardrailPayload(
+                input_type=input_type,
+                is_playground_request=True,
+                playground_text=texts[0] if texts else None,
+            )
+        else:
+            response = request_data.get("response")
+            singulr_req_object = SingulrGuardrailRequest(
+                model=request_data.get("model"),
+                messages=request_data.get("messages"),
+                tools=request_data.get("tools"),
+                model_response=response.model_dump(mode="json") if input_type == "response" and response else None,
+                litellm_metadata=request_data.get("litellm_metadata"),
+            )
+            payload = SingulrGuardrailPayload(
+                request_data=singulr_req_object,
+                input_type=input_type,
+            )
 
-        schema_prompt = self._response_format_schema_prompt(request_data) if input_type == "request" else None
-        if schema_prompt:
-            messages.setdefault("system", []).append(schema_prompt)
-
-        tools: list[ChatCompletionToolParam] = list(inputs.get("tools") or [])
-        if input_type == "request":
-            tools.extend(self._legacy_functions_as_tools(request_data))
-
-        raw_tool_calls = inputs.get("tool_calls") or []
-
-        tool_calls: list[_SingulrToolCall] = []
-        if raw_tool_calls and isinstance(raw_tool_calls[0], ChatCompletionMessageToolCall):
-            tool_calls = raw_tool_calls
-        elif raw_tool_calls:
-            tool_calls = self.reconstruct_tool_calls(raw_tool_calls)
-
-        singulr_request = SingulrGuardrailRequest(
-            model=inputs.get("model") or request_data.get("model"),
-            prompts=messages if input_type == "request" else None,
-            completions=model_response if input_type == "response" else None,
-            tools=tools,
-            tool_calls=tool_calls,
-        )
-
-        payload = SingulrGuardrailPayload(
-            request=singulr_request,
-            input_type=input_type,
-        )
-
-        return payload.model_dump(exclude_none=True)
+        return payload.model_dump(mode="json")
 
     def _build_headers(self) -> dict[str, str]:
         return dict(
@@ -328,7 +193,6 @@ class SingulrGuardrail(CustomGuardrail):
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         payload = self._build_payload(request_data, inputs, input_type)
-        # verbose_proxy_logger.debug("Singulr: payload=%s", payload)
         if not payload:
             return inputs
 
