@@ -2697,6 +2697,10 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     #   hints). Lets dashboards split rate-limit failures by cause without
     #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
+    error_budget_entity_type: Optional[str]
+    error_budget_entity_id: Optional[str]
+    error_budget_limit: Optional[float]
+    error_budget_spend: Optional[float]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3146,6 +3150,7 @@ all_litellm_params = (
         "use_client",
         "id",
         "fallbacks",
+        "routing_strategy",
         "azure",
         "headers",
         "model_list",
