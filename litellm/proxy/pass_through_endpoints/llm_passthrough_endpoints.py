@@ -2309,7 +2309,7 @@ async def gigachat_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008 # FastAPI depends
 ):
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
