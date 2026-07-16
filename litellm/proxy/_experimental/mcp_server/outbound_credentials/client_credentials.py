@@ -260,7 +260,8 @@ class ClientCredentialsTokenSource:
             if expires_in is not None
             else self._default_ttl_seconds
         )
-        await self._backend.set(grant.identity_key, server_id, token, ttl)
+        if ttl > 0:
+            await self._backend.set(grant.identity_key, server_id, token, ttl)
         return Ok(token)
 
 
