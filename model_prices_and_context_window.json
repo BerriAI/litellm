@@ -15353,6 +15353,21 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "elevenlabs/scribe_v2": {
+        "input_cost_per_second": 6.11e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.22/hour = $0.00366/minute = $0.0000611 per second",
+            "notes": "ElevenLabs Scribe v2 - batch speech-to-text model released January 2026, lowest word error rate on industry benchmarks with 99 language support",
+            "original_pricing_per_hour": 0.22
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "elevenlabs/scribe_v1_experimental": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
