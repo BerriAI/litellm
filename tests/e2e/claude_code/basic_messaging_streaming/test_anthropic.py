@@ -25,15 +25,17 @@ sees three rows for this (feature, provider).
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 
 
+@pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
 def test_basic_messaging_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).
