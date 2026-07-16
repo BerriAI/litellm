@@ -1196,6 +1196,7 @@ class TestMCPServerManager:
             built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
         assert built.issuer == "https://idp.example.com"
+        assert built.issuer_is_anchored is False
         assert built.authorization_url == "https://idp.example.com/authorize"
 
     @pytest.mark.asyncio
@@ -1326,6 +1327,7 @@ class TestMCPServerManager:
         anchored.assert_awaited_once_with("https://idp.example.com", "https://up.example.com/mcp")
         resource_rooted.assert_not_awaited()
         assert built.issuer == "https://idp.example.com"
+        assert built.issuer_is_anchored is True
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.registration_url == "https://idp.example.com/register"
@@ -5869,11 +5871,12 @@ class TestMCPServerTimestamps:
         assert same_authorize.registration_url == "https://idp.example.com/register"
 
     def test_carry_forward_does_not_restore_endpoints_for_issuer_anchored_server(self):
-        """When an issuer is configured the endpoints come solely from the §3.3-validated issuer
+        """When the server is issuer-anchored the endpoints come solely from the §3.3-validated issuer
         document, so a failed issuer fetch (token_url None) must stay fail-closed. Carry-forward must
         NOT resurrect the previous registry entry's token endpoint, or the very attacker-controlled
         endpoint the issuer anchor distrusts would keep being served across rebuilds. Resource-driven
-        scopes still carry as last-known-good."""
+        scopes still carry as last-known-good. Anchoring is keyed on the explicit issuer_is_anchored
+        flag, not on issuer truthiness, so a discovered issuer does not trip this fail-closed branch."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             _carry_forward_resolved_oauth_endpoints,
         )
@@ -5885,6 +5888,7 @@ class TestMCPServerTimestamps:
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
             issuer="https://idp.example.com",
+            issuer_is_anchored=True,
             authorization_url="https://idp.example.com/authorize",
             token_url="https://idp.example.com/token",
             registration_url="https://idp.example.com/register",
@@ -5897,6 +5901,7 @@ class TestMCPServerTimestamps:
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
             issuer="https://idp.example.com",
+            issuer_is_anchored=True,
         )
 
         _carry_forward_resolved_oauth_endpoints(new_server=failed_rebuild, previous_server=previous)
@@ -5905,6 +5910,47 @@ class TestMCPServerTimestamps:
         assert failed_rebuild.token_url is None
         assert failed_rebuild.registration_url is None
         assert failed_rebuild.scopes == ["read"]
+
+    def test_carry_forward_restores_endpoints_for_discovered_issuer_not_anchored(self):
+        """A server that merely DISCOVERED its issuer trust-on-first-use is not anchored: issuer is set
+        for token identity but the endpoints are resource-rooted, so on a transient discovery blip they
+        must still carry forward as last-known-good, the same as any resource-rooted server. This is the
+        regression the explicit issuer_is_anchored flag prevents: keying fail-closed on issuer truthiness
+        alone would drop the working endpoints the moment the server learned its issuer."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _carry_forward_resolved_oauth_endpoints,
+        )
+
+        previous = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            issuer_is_anchored=False,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            scopes=["read"],
+        )
+        blipped_rebuild = MCPServer(
+            server_id="s1",
+            name="s1",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            issuer="https://idp.example.com",
+            issuer_is_anchored=False,
+            authorization_url=None,
+        )
+
+        _carry_forward_resolved_oauth_endpoints(new_server=blipped_rebuild, previous_server=previous)
+
+        assert blipped_rebuild.authorization_url == "https://idp.example.com/authorize"
+        assert blipped_rebuild.token_url == "https://idp.example.com/token"
+        assert blipped_rebuild.registration_url == "https://idp.example.com/register"
+        assert blipped_rebuild.scopes == ["read"]
 
     def test_normalized_authorize_endpoint_treats_default_port_and_slash_as_identity(self):
         """The corroboration check must not fail on formatting-only differences an IdP legitimately
