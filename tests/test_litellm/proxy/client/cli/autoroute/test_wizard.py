@@ -6,7 +6,6 @@ import click
 import pytest
 import yaml
 from click.testing import CliRunner
-from InquirerPy.base.control import Choice
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
@@ -215,10 +214,10 @@ def _drive_fuzzy_pick(
     multiselect: bool,
     key_events: List[Tuple[str, float]],
 ) -> List[str]:
-    """Drives the real InquirerPy fuzzy prompt through prompt_toolkit's own test input/output,
+    """Drives the real fuzzy-picker widget through prompt_toolkit's own test input/output,
     exercising the actual widget (filtering, tab-to-toggle, enter-to-confirm) rather than mocking
     it away. asyncio.to_thread propagates the create_app_session context into the worker thread
-    running _fuzzy_pick's synchronous .execute() call."""
+    running fuzzy_pick's synchronous Application.run() call."""
 
     async def _run() -> List[str]:
         with create_pipe_input() as pipe_input:
@@ -267,10 +266,19 @@ class TestFuzzyPickWidget:
         )
         assert set(result) == {"model-3", "model-15"}
 
-    def test_choice_wraps_name_and_value_to_the_same_model_name(self):
-        model = DiscoveredModel(name="only-model")
-        choice = Choice(value=model.name, name=model.name)
-        assert choice.value == choice.name == "only-model"
+    def test_down_arrow_moves_the_highlighted_match(self):
+        result = _drive_fuzzy_pick(
+            self._models(),
+            "test",
+            multiselect=False,
+            key_events=[("model-1", 0.3), ("\x1b[B", 0.1), ("\r", 0.1)],
+        )
+        # "model-1" fuzzy-matches model-1, model-10..19; one Down moves off model-1 to model-10
+        assert result == ["model-10"]
+
+    def test_raises_keyboard_interrupt_on_ctrl_c(self):
+        with pytest.raises(KeyboardInterrupt):
+            _drive_fuzzy_pick(self._models(), "test", multiselect=False, key_events=[("model-13", 0.3), ("\x03", 0.1)])
 
 
 class TestRenderAndPromptForModelWrappers:

@@ -66,7 +66,7 @@ proxy = [
     "litellm-enterprise==0.1.50",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
-    "InquirerPy>=0.3.4,<1.0",
+    "prompt-toolkit>=3.0.36,<4.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
@@ -80,7 +80,7 @@ cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
-    "InquirerPy>=0.3.4,<1.0",
+    "prompt-toolkit>=3.0.36,<4.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",

@@ -3,8 +3,6 @@ from pathlib import Path
 
 import click
 import yaml
-from InquirerPy import inquirer
-from InquirerPy.base.control import Choice
 
 from .... import Client
 from .config import (
@@ -22,6 +20,7 @@ from .config import (
     parse_discovered_models,
     validate_config,
 )
+from .fuzzy_picker import fuzzy_pick
 from .process import CONFIG_PATH, secure_create
 
 
@@ -30,26 +29,19 @@ def _is_interactive() -> bool:
 
 
 def _fuzzy_pick(models: tuple[DiscoveredModel, ...], prompt_label: str, multiselect: bool) -> list[str]:
-    """Type-to-filter picker over a (possibly huge) model pool, using InquirerPy's fzf-style fuzzy prompt.
+    """Type-to-filter picker over a (possibly huge) model pool.
 
     A plain numbered table + typed index does not scale past a handful of models -- proxies with
     hundreds of model groups made that interaction unusable. This lets the user narrow the pool by
     typing a substring instead of scrolling/counting.
 
     Assumes the caller already checked interactivity (run_configure_wizard does, once, up front) --
-    checking here too would check the wrong thing under test, where InquirerPy is driven through its
-    own injected input/output rather than the real process stdin.
+    checking here too would check the wrong thing under test, where the picker is driven through
+    prompt_toolkit's own injected input/output rather than the real process stdin.
     """
-    choices = [Choice(value=model.name, name=model.name) for model in models]
-    toggle_hint = "tab to toggle, " if multiselect else ""
+    choices = tuple(model.name for model in models)
     while True:
-        result = inquirer.fuzzy(
-            message=f"{prompt_label}: type to filter, {toggle_hint}enter to confirm",
-            choices=choices,
-            multiselect=multiselect,
-            max_height="70%",
-        ).execute()
-        selected = result if multiselect else [result]
+        selected = fuzzy_pick(choices, prompt_label, multiselect)
         if selected:
             return selected
         click.echo("Select at least one model.")
