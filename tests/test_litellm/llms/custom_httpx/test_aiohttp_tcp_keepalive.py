@@ -86,7 +86,7 @@ def test_tcp_keepalive_socket_factory_sets_socket_options():
     )[0]
     sock = http_handler_module._tcp_keepalive_socket_factory(addr_info)
     try:
-        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 1
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) != 0
         tcp_idle_option = getattr(
             socket, "TCP_KEEPIDLE", getattr(socket, "TCP_KEEPALIVE", None)
         )

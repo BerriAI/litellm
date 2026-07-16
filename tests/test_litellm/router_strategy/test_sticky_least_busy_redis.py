@@ -257,8 +257,9 @@ class TestDeploymentSelection:
         result1 = handler._select_deployment(MG, deployments, request_counts, sticky_key)
         assert result1["model_info"]["id"] == "dep-1"
 
-        # Second request: dep-0 is now least busy, but should still route to dep-1 (sticky)
-        request_counts = {"dep-0": 1, "dep-1": 5, "dep-2": 5}
+        # Second request: dep-0 is now least busy, but dep-1 is still below the
+        # rebalance threshold and should remain sticky.
+        request_counts = {"dep-0": 1, "dep-1": 2, "dep-2": 5}
         result2 = handler._select_deployment(MG, deployments, request_counts, sticky_key)
         assert result2["model_info"]["id"] == "dep-1"
 
