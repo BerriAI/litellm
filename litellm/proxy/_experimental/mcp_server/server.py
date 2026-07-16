@@ -3577,6 +3577,11 @@ if MCP_AVAILABLE:
         """
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
+            if server is not None:
+                # Same request-time oauth2_flow backstop the listing and tool-call
+                # paths apply, so the challenge classifies a null-flow M2M-shape row
+                # exactly as egress will.
+                server = MCPServerManager.resolve_oauth2_flow_for_request(server)
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
                 # preemptive challenge and let downstream authorization
@@ -3587,25 +3592,26 @@ if MCP_AVAILABLE:
                 # a stored token actually exists for this user+server pair.
                 # If no stored token exists, fail fast with 401 so clients can
                 # kick off PKCE/interactive OAuth flow immediately.
-                if server.needs_user_oauth_token:
-                    if getattr(server, "delegate_auth_to_upstream", False) is True:
-                        # Delegate-auth servers run upstream PKCE: challenge with
-                        # the proxied resource_metadata (RFC 9728), not the
-                        # gateway authorization_uri below which would authorize
-                        # against the gateway instead of the upstream IdP.
-                        www_authenticate = _get_passthrough_www_authenticate(
-                            scope=scope,
-                            server_name=server_name,
-                        )
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Unauthorized",
-                            headers={"www-authenticate": www_authenticate},
-                        )
-                    # The v2 resolver owns the existence check, so every authorization_code
-                    # resolution (egress and this discovery challenge) runs through it.
-                    if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
-                        continue
+                if not server.needs_user_oauth_token:
+                    continue
+                if getattr(server, "delegate_auth_to_upstream", False) is True:
+                    # Delegate-auth servers run upstream PKCE: challenge with
+                    # the proxied resource_metadata (RFC 9728), not the
+                    # gateway authorization_uri below which would authorize
+                    # against the gateway instead of the upstream IdP.
+                    www_authenticate = _get_passthrough_www_authenticate(
+                        scope=scope,
+                        server_name=server_name,
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": www_authenticate},
+                    )
+                # The v2 resolver owns the existence check, so every authorization_code
+                # resolution (egress and this discovery challenge) runs through it.
+                if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
+                    continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)
