@@ -14,6 +14,7 @@ only the single authenticated call and the cache.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 import weakref
@@ -33,6 +34,7 @@ from litellm.constants import (
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
     MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
 )
+from litellm.exceptions import Timeout
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
 )
@@ -83,6 +85,18 @@ class TokenEndpointClient:
             )
             return Error(
                 CredError.of_upstream_unavailable(f"token exchange failed with status {exc.response.status_code}")
+            )
+        except (httpx.RequestError, Timeout) as exc:
+            verbose_proxy_logger.warning("MCP token endpoint %s unreachable: %s", endpoint, type(exc).__name__)
+            return Error(
+                CredError.of_upstream_unavailable(
+                    f"token exchange failed: token endpoint unreachable ({type(exc).__name__})"
+                )
+            )
+        except json.JSONDecodeError:
+            verbose_proxy_logger.warning("MCP token endpoint %s returned a non-JSON response", endpoint)
+            return Error(
+                CredError.of_upstream_unavailable("token exchange failed: token endpoint returned a non-JSON response")
             )
         if raw is None:
             verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
@@ -153,7 +167,10 @@ def _cache_ttl_seconds(expires_in: int | None) -> int:
 async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
     # litellm's httpx handler and httpx.Response are only partially typed; the token endpoint
     # returns a JSON object that `_TokenEndpointResponse` validates, so the untyped boundary is
-    # contained here. A non-2xx raises `httpx.HTTPStatusError` for `fetch` to map to a CredError.
+    # contained here. A non-2xx raises `httpx.HTTPStatusError`, an unreachable endpoint raises
+    # `httpx.RequestError` (or litellm's `Timeout`, which the handler substitutes for
+    # `httpx.TimeoutException`), and a non-JSON body raises `json.JSONDecodeError`; `fetch` maps
+    # each to a CredError.
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
     response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm http handler is untyped
     if response is None:

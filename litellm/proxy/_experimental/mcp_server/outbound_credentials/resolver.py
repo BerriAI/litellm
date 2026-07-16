@@ -49,11 +49,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
+    ClientAuth,
     ClientCredentialsConfig,
+    ClientSecretAuth,
     CredError,
     IdJagConfig,
     NoneConfig,
     PassthroughConfig,
+    PrivateKeyJwtAuth,
     ServerSpec,
     SharedKey,
     Subject,
@@ -168,7 +171,7 @@ class UpstreamCredentialProvider:
                 )
             )
         token = subject.inbound_token.get_secret_value()
-        cache_key = hashlib.sha256(f"{token}:{server.server_id}".encode()).hexdigest()
+        cache_key = _id_jag_cache_key(token, server.server_id, config)
 
         async def _exchange() -> Result[ExchangedToken, CredError]:
             leg1_params = {
@@ -259,6 +262,42 @@ class UpstreamCredentialProvider:
             return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
+
+
+def _id_jag_cache_key(subject_token: str, server_id: str, config: IdJagConfig) -> str:
+    """Bind the cached leg-2 bearer to the caller token, the server, AND the config that minted it.
+
+    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, client
+    auth), so a server update that changes any of them must change the key; otherwise the old bearer,
+    authorized under the old policy, keeps being served until its TTL. Everything is hashed, so no
+    secret is held in the key.
+    """
+    material = "\x00".join(
+        (
+            subject_token,
+            server_id,
+            config.org_token_endpoint,
+            config.resource_token_endpoint,
+            config.client_id,
+            _client_auth_fingerprint(config.client_auth),
+            config.subject_token_type,
+            config.audience or "",
+            config.resource or "",
+            " ".join(config.scopes),
+        )
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
+    match client_auth:
+        case PrivateKeyJwtAuth() as auth:
+            return "\x00".join(
+                ("private_key_jwt", auth.private_key.get_secret_value(), auth.key_id or "", auth.signing_alg)
+            )
+        case ClientSecretAuth() as auth:
+            return "\x00".join(("client_secret", auth.client_secret.get_secret_value()))
+    assert_never(client_auth)
 
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:

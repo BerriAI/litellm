@@ -418,3 +418,72 @@ async def test_id_jag_propagates_a_leg2_error():
     assert result.error.tag == "upstream_unavailable"
     assert "leg2 forbidden" in result.error.summary
     assert len(endpoint.calls) == 2
+
+
+def _two_leg_ok(bearer: str) -> list:
+    return [
+        Ok(ExchangedToken(access_token="the-id-jag", expires_in=300)),
+        Ok(ExchangedToken(access_token=bearer, expires_in=3600)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_id_jag_reuses_the_cached_bearer_for_an_unchanged_config():
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("first-bearer"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+
+    first = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
+    second = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
+
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert _emitted(second.ok)["Authorization"] == "Bearer first-bearer"
+    assert len(endpoint.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        _id_jag_config().model_copy(update={"audience": "api://other"}),
+        _id_jag_config().model_copy(update={"resource": "https://other.example.com/mcp"}),
+        _id_jag_config().model_copy(update={"scopes": ("mcp.read", "mcp.write")}),
+        _id_jag_config().model_copy(update={"org_token_endpoint": "https://idp.example.com/v2/token"}),
+        _id_jag_config().model_copy(update={"resource_token_endpoint": "https://mcp-as.example.com/v2/token"}),
+        _id_jag_config().model_copy(update={"client_id": "litellm-rotated"}),
+        _id_jag_config().model_copy(update={"client_auth": ClientSecretAuth(client_secret=SecretStr("rotated"))}),
+        _id_jag_config().model_copy(update={"subject_token_type": "urn:ietf:params:oauth:token-type:saml2"}),
+    ],
+    ids=[
+        "audience",
+        "resource",
+        "scopes",
+        "org_token_endpoint",
+        "resource_token_endpoint",
+        "client_id",
+        "client_auth",
+        "subject_token_type",
+    ],
+)
+async def test_id_jag_config_change_forces_a_fresh_exchange(changed):
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("old-policy-bearer") + _two_leg_ok("new-policy-bearer"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+
+    before = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
+    after = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(changed))
+
+    assert isinstance(before, Ok) and isinstance(after, Ok)
+    assert _emitted(after.ok)["Authorization"] == "Bearer new-policy-bearer"
+    assert len(endpoint.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_id_jag_does_not_share_the_cached_bearer_across_caller_tokens():
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("alice-bearer") + _two_leg_ok("bob-bearer"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+
+    alice = await provider.resolve_credentials(_with_inbound("alice-id-token"), _spec(_id_jag_config()))
+    bob = await provider.resolve_credentials(_with_inbound("bob-id-token"), _spec(_id_jag_config()))
+
+    assert isinstance(alice, Ok) and isinstance(bob, Ok)
+    assert _emitted(bob.ok)["Authorization"] == "Bearer bob-bearer"
+    assert len(endpoint.calls) == 4

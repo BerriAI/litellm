@@ -7,10 +7,12 @@ cache's hit/single-flight behavior. Each assertion fails under a real mutation o
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
+import litellm
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -145,6 +147,55 @@ async def test_fetch_http_error_maps_to_upstream_unavailable_with_status():
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
     assert "403" in result.error.summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised",
+    [
+        httpx.ConnectError("connection refused", request=MagicMock()),
+        httpx.ReadTimeout("timed out", request=MagicMock()),
+        litellm.Timeout(
+            message="Connection timed out",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+    ],
+)
+async def test_fetch_network_error_maps_to_upstream_unavailable(raised):
+    client = AsyncMock()
+    client.post.side_effect = raised
+    with patch(_PATCH_TARGET, return_value=client):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_invalid_json_maps_to_upstream_unavailable():
+    bad = MagicMock()
+    bad.raise_for_status = MagicMock()
+    bad.json.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+    with patch(_PATCH_TARGET, return_value=_client(bad)):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+    assert _ENDPOINT not in result.error.summary
+    assert "idp.example.com" not in result.error.summary
 
 
 @pytest.mark.asyncio
