@@ -583,13 +583,11 @@ def _build_control_gateway(proxy: ProxyConfig):
     control plane transport is what /model/new lives on; SplitTransport
     routes it correctly for both monolithic and split deployments.
 
-    The endpoints come from the *resolved* proxy, not from ``e2e_config``'s
-    own env read: this suite also accepts the legacy ``LITELLM_PROXY_BASE_URL``
-    / ``LITELLM_PROXY_API_KEY`` spelling, and under that spelling
-    ``e2e_config`` sees nothing and falls back to http://localhost:4000 with
-    sk-1234 — registering models on a different host and key than the cells
-    then call. Both planes get the one URL the cells use; the deployment is
-    fronted by a single address that routes management and LLM paths itself."""
+    The endpoints come from the *resolved* proxy, not from a second
+    independent env read, so registration and the cells always hit the
+    same host and key. Both planes get the one URL the cells use; the
+    deployment is fronted by a single address that routes management
+    and LLM paths itself."""
     from e2e_gateway import build_gateway
 
     return build_gateway(

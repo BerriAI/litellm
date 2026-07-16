@@ -1,10 +1,10 @@
 """Regression tests for ``claude_code/_env.py``.
 
 Pin the resolution rules so a future edit cannot silently reintroduce
-the ``LITELLM_PROXY_BASE_URL`` / ``LITELLM_PROXY_API_KEY`` naming drift
-that made every ``claude_code`` cell fail with "not configured" even
-when the surrounding e2e suite had a live proxy configured under the
-suite-wide ``LITELLM_PROXY_URL`` / ``LITELLM_MASTER_KEY`` names.
+a private spelling that makes every ``claude_code`` cell fail with
+"not configured" even when the surrounding e2e suite has a live proxy
+configured under the suite-wide ``LITELLM_PROXY_URL`` /
+``LITELLM_MASTER_KEY`` names.
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ from __future__ import annotations
 import pytest
 
 from claude_code._env import (
-    LEGACY_API_KEY_ENV,
-    LEGACY_BASE_URL_ENV,
     PRIMARY_API_KEY_ENV,
     PRIMARY_BASE_URL_ENV,
     ProxyConfig,
@@ -33,7 +31,7 @@ class _CompatResultStub:
 
 
 def test_primary_env_names_match_suite_wide_config() -> None:
-    """The primary names claude_code reads must exactly match the ones
+    """The names claude_code reads must exactly match the ones
     ``e2e_config.py`` reads for the rest of the suite. Anything else
     silently reintroduces the drift this refactor cleaned up."""
     assert PRIMARY_BASE_URL_ENV == "LITELLM_PROXY_URL"
@@ -64,43 +62,20 @@ def test_primary_pair_resolves() -> None:
     assert cfg == ProxyConfig("http://localhost:4000", "sk-1234")
 
 
-def test_legacy_pair_resolves_when_primary_missing() -> None:
-    """Existing CI wiring that only exports the legacy names must keep
-    working — otherwise this refactor breaks stage on the way in."""
-    cfg = resolve_proxy_from(
-        {
-            LEGACY_BASE_URL_ENV: "http://legacy:4000",
-            LEGACY_API_KEY_ENV: "sk-legacy",
-        }
+def test_legacy_pair_is_ignored() -> None:
+    """``LITELLM_PROXY_BASE_URL`` / ``LITELLM_PROXY_API_KEY`` are not
+    accepted. A runner that only exports those must fail closed rather
+    than silently use a private spelling that the rest of the suite
+    does not know about."""
+    assert (
+        resolve_proxy_from(
+            {
+                "LITELLM_PROXY_BASE_URL": "http://legacy:4000",
+                "LITELLM_PROXY_API_KEY": "sk-legacy",
+            }
+        )
+        is None
     )
-    assert cfg == ProxyConfig("http://legacy:4000", "sk-legacy")
-
-
-def test_primary_wins_over_legacy_when_both_set() -> None:
-    """When both spellings are present, the suite-wide names take
-    precedence. Otherwise a stale legacy export in the environment
-    would silently override a caller who set the primary names."""
-    cfg = resolve_proxy_from(
-        {
-            PRIMARY_BASE_URL_ENV: "http://primary:4000",
-            LEGACY_BASE_URL_ENV: "http://legacy:4000",
-            PRIMARY_API_KEY_ENV: "sk-primary",
-            LEGACY_API_KEY_ENV: "sk-legacy",
-        }
-    )
-    assert cfg == ProxyConfig("http://primary:4000", "sk-primary")
-
-
-def test_mixed_url_primary_key_legacy_resolves() -> None:
-    """One spelling per var is fine — mixing across pairs must still
-    resolve, so a partial migration doesn't strand a caller."""
-    cfg = resolve_proxy_from(
-        {
-            PRIMARY_BASE_URL_ENV: "http://primary:4000",
-            LEGACY_API_KEY_ENV: "sk-legacy",
-        }
-    )
-    assert cfg == ProxyConfig("http://primary:4000", "sk-legacy")
 
 
 def test_empty_string_env_is_treated_as_unset() -> None:
@@ -117,16 +92,17 @@ def test_empty_string_env_is_treated_as_unset() -> None:
 
 
 def test_require_proxy_fails_with_helpful_message_when_env_empty() -> None:
-    """The error the user sees must name BOTH the primary and legacy
-    env vars — otherwise they can't tell why the test is failing when
-    they only set the legacy pair, or vice versa."""
+    """The error the user sees must name the suite-wide env vars so
+    they know exactly what to export."""
     compat = _CompatResultStub()
     with pytest.raises(pytest.fail.Exception) as excinfo:
         require_proxy(compat, env={})
     assert PRIMARY_BASE_URL_ENV in str(excinfo.value)
     assert PRIMARY_API_KEY_ENV in str(excinfo.value)
     assert compat.calls and compat.calls[0]["status"] == "fail"
-    assert LEGACY_BASE_URL_ENV in compat.calls[0]["error"]
+    assert PRIMARY_BASE_URL_ENV in compat.calls[0]["error"]
+    assert PRIMARY_API_KEY_ENV in compat.calls[0]["error"]
+    assert "LITELLM_PROXY_BASE_URL" not in compat.calls[0]["error"]
 
 
 def test_require_proxy_returns_config_when_primary_env_supplied() -> None:
@@ -140,47 +116,35 @@ def test_require_proxy_returns_config_when_primary_env_supplied() -> None:
     assert cfg == ProxyConfig("http://localhost:4000", "sk-1234")
 
 
-def test_require_proxy_returns_config_when_only_legacy_env_supplied() -> None:
-    cfg = require_proxy(
-        _CompatResultStub(),
-        env={
-            LEGACY_BASE_URL_ENV: "http://legacy:4000",
-            LEGACY_API_KEY_ENV: "sk-legacy",
-        },
-    )
-    assert cfg == ProxyConfig("http://legacy:4000", "sk-legacy")
-
-
 class TestControlGatewayFollowsResolvedProxy:
     """The session fixture that registers the compat deployments must talk
     to the *same* proxy the cells do.
 
-    It turns on whenever ``resolve_proxy()`` succeeds, which includes the
-    legacy-only spelling. Building its Gateway off ``e2e_config``'s own env
-    read instead would send ``/model/new`` to http://localhost:4000 with
-    sk-1234 (that module only knows the primary names), while the cells drive
-    the legacy host — so registration silently lands somewhere else and every
-    cell 400s with "Invalid model name" against a proxy that looks configured.
+    Building its Gateway off ``e2e_config``'s own env read instead of the
+    resolved ``ProxyConfig`` would send ``/model/new`` to whatever
+    ``e2e_config`` defaults to when the process env is empty, while the
+    cells drive a different host — so registration silently lands
+    somewhere else and every cell 400s with "Invalid model name".
     """
 
-    LEGACY = ProxyConfig("http://legacy-alb.internal:4000", "sk-legacy")
+    RESOLVED = ProxyConfig("http://eks-alb.internal:4000", "sk-eks")
 
     def _gateway(self):
         from claude_code.conftest import _build_control_gateway
 
-        return _build_control_gateway(self.LEGACY)
+        return _build_control_gateway(self.RESOLVED)
 
     def test_management_calls_go_to_the_resolved_host_and_key(self) -> None:
         control = self._gateway().transport.control
-        assert control.base_url == self.LEGACY.base_url
-        assert control.master_key == self.LEGACY.api_key
+        assert control.base_url == self.RESOLVED.base_url
+        assert control.master_key == self.RESOLVED.api_key
 
     def test_both_planes_share_the_one_address_the_cells_use(self) -> None:
         """The deployment is fronted by a single address that routes
         management and LLM paths itself, so a resolved proxy pins both."""
         transport = self._gateway().transport
-        assert transport.data.base_url == self.LEGACY.base_url
-        assert transport.data.master_key == self.LEGACY.api_key
+        assert transport.data.base_url == self.RESOLVED.base_url
+        assert transport.data.master_key == self.RESOLVED.api_key
         assert transport.control.base_url == transport.data.base_url
 
 

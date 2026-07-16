@@ -21,8 +21,6 @@ from typing import Any, Dict, List, Mapping, Optional
 import pytest
 
 from claude_code._env import (
-    LEGACY_API_KEY_ENV,
-    LEGACY_BASE_URL_ENV,
     PRIMARY_API_KEY_ENV,
     PRIMARY_BASE_URL_ENV,
 )
@@ -41,11 +39,6 @@ from claude_code.cli_driver import ClaudeCLIError, DriverResult
 PROXY_ENV = {
     PRIMARY_BASE_URL_ENV: "http://localhost:4000",
     PRIMARY_API_KEY_ENV: "sk-test",
-}
-
-LEGACY_PROXY_ENV = {
-    LEGACY_BASE_URL_ENV: "http://localhost:4000",
-    LEGACY_API_KEY_ENV: "sk-test",
 }
 
 
@@ -88,11 +81,10 @@ def test_env_missing_guard_reports_fail_and_aborts():
     assert PRIMARY_API_KEY_ENV in fake_result.single["error"]
 
 
-def test_primary_env_alone_reaches_the_proxy():
-    """EKS / suite-wide wiring exports only LITELLM_PROXY_URL +
-    LITELLM_MASTER_KEY. Passthrough cells must not still require the
-    legacy LITELLM_PROXY_BASE_URL spelling or the whole passthrough row
-    fails before it ever hits the ALB."""
+def test_suite_wide_env_reaches_the_proxy():
+    """Passthrough cells resolve via the same suite-wide env names as
+    every other e2e cell, so EKS wiring that only exports
+    LITELLM_PROXY_URL + LITELLM_MASTER_KEY reaches the ALB."""
     fake_result = _FakeResult()
     captured: Dict[str, Any] = {}
     outcome = DriverResult(text="pong")
@@ -103,26 +95,6 @@ def test_primary_env_alone_reaches_the_proxy():
         prompt="ping",
         run_models=_fake_run_models({"claude-haiku-4-5": outcome}, captured),
         env=PROXY_ENV,
-    )
-
-    assert captured["base_url"] == "http://localhost:4000"
-    assert captured["api_key"] == "sk-test"
-    assert fake_result.rows == [{"status": "pass"}]
-
-
-def test_legacy_env_alone_still_reaches_the_proxy():
-    """Stage CI that has not yet flipped to the suite-wide names keeps
-    working through the legacy fallback in require_proxy."""
-    fake_result = _FakeResult()
-    captured: Dict[str, Any] = {}
-    outcome = DriverResult(text="pong")
-
-    run_passthrough_cell(
-        compat_result=fake_result,
-        models=["claude-haiku-4-5"],
-        prompt="ping",
-        run_models=_fake_run_models({"claude-haiku-4-5": outcome}, captured),
-        env=LEGACY_PROXY_ENV,
     )
 
     assert captured["base_url"] == "http://localhost:4000"

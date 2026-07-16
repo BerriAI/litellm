@@ -11,10 +11,9 @@
 #   4. If a provider has `rate_limited > 0`, halve its rate; else, double it.
 #   5. Repeat until the highest no-429 rate is found.
 #
-# Required env (proxy connection). Either the primary suite-wide names
-# or the legacy claude_code-specific names; primary wins on tie.
-#   LITELLM_PROXY_URL        e.g. http://localhost:4000  (or LITELLM_PROXY_BASE_URL)
-#   LITELLM_MASTER_KEY       e.g. sk-1234                (or LITELLM_PROXY_API_KEY)
+# Required env (proxy connection), same names as the rest of tests/e2e:
+#   LITELLM_PROXY_URL        e.g. http://localhost:4000
+#   LITELLM_MASTER_KEY       e.g. sk-1234
 #
 # Optional env (rate limits, all default to 5 req/s; 0 disables a column):
 #   LITELLM_COMPAT_RATE_ANTHROPIC
@@ -33,14 +32,10 @@
 
 set -euo pipefail
 
-proxy_base_url="${LITELLM_PROXY_URL:-${LITELLM_PROXY_BASE_URL:-}}"
-proxy_api_key="${LITELLM_MASTER_KEY:-${LITELLM_PROXY_API_KEY:-}}"
-if [[ -z "$proxy_base_url" || -z "$proxy_api_key" ]]; then
-    echo "error: LITELLM_PROXY_URL and LITELLM_MASTER_KEY (or the legacy LITELLM_PROXY_BASE_URL and LITELLM_PROXY_API_KEY) must be set" >&2
+if [[ -z "${LITELLM_PROXY_URL:-}" || -z "${LITELLM_MASTER_KEY:-}" ]]; then
+    echo "error: LITELLM_PROXY_URL and LITELLM_MASTER_KEY must be set" >&2
     exit 64
 fi
-export LITELLM_PROXY_URL="$proxy_base_url"
-export LITELLM_MASTER_KEY="$proxy_api_key"
 
 # Reset the cross-process rate-limiter state from any prior run. Stale
 # token-bucket files would let a previous run's accumulated budget bleed
