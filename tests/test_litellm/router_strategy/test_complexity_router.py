@@ -2387,6 +2387,16 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
+    def test_returns_empty_dict_for_missing_metadata(self):
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        for absent in (None, {}):
+            result = _classifier_call_metadata(absent)
+            assert result == {}
+            assert isinstance(result, dict)
+
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.router_strategy.complexity_router.complexity_router import (

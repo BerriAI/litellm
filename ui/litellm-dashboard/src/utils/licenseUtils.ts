@@ -49,3 +49,11 @@ export const formatExpiryDate = (expirationDate: string): string => {
   }
   return date.toLocaleDateString("en-US", EXPIRY_DATE_FORMAT);
 };
+
+export const formatExpirationStatus = (expirationDate: string | null, now: Date = new Date()): string => {
+  const days = getDaysUntilExpiration(expirationDate, now);
+  if (expirationDate === null || days === null) {
+    return "No expiration";
+  }
+  return days < 0 ? `Expired ${formatExpiryDate(expirationDate)}` : `Expires ${formatExpiryDate(expirationDate)}`;
+};
