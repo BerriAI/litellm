@@ -19,10 +19,52 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr.rust_bridge import (
     RustAocr,
     RustOcr,
+    RustOcrError,
     load_rust_aocr,
     load_rust_ocr,
 )
 from litellm.utils import client, filter_out_litellm_params
+
+
+def _rust_ocr_error_to_public_exception(
+    err: RustOcrError, model: str, custom_llm_provider: str | None
+) -> Exception:
+    """Map a typed Rust OCR failure onto the public ``litellm`` exception contract.
+
+    This is the single host mapping for the Rust OCR path: it preserves
+    AuthenticationError/401, NotFoundError/404, Timeout, BadRequestError for the
+    remaining 4xx, and InternalServerError for 5xx, so the proxy and SDK return
+    the same status and type they did on the Python path. A ``None`` status is a
+    connection-level failure with no upstream status.
+    """
+    provider = custom_llm_provider or "mistral"
+    status_code = err.status_code
+    message = err.message
+    if status_code is None:
+        return litellm.APIConnectionError(
+            message=message, llm_provider=provider, model=model
+        )
+    if status_code == 401:
+        return litellm.AuthenticationError(
+            message=message, llm_provider=provider, model=model
+        )
+    if status_code == 404:
+        return litellm.NotFoundError(
+            message=message, model=model, llm_provider=provider
+        )
+    if status_code == 408:
+        return litellm.Timeout(message=message, model=model, llm_provider=provider)
+    if 400 <= status_code < 500:
+        return litellm.BadRequestError(
+            message=message, model=model, llm_provider=provider
+        )
+    if status_code >= 500:
+        return litellm.InternalServerError(
+            message=message, model=model, llm_provider=provider
+        )
+    return litellm.APIError(
+        status_code=status_code, message=message, llm_provider=provider, model=model
+    )
 
 
 def _timeout_to_seconds(
@@ -356,6 +398,8 @@ async def aocr(
             timeout=effective_timeout,
             litellm_logging_obj=litellm_logging_obj,
         )
+    except RustOcrError as e:
+        raise _rust_ocr_error_to_public_exception(e, model, custom_llm_provider)
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -620,6 +664,8 @@ def ocr(
             timeout=effective_timeout,
             litellm_logging_obj=litellm_logging_obj,
         )
+    except RustOcrError as e:
+        raise _rust_ocr_error_to_public_exception(e, model, custom_llm_provider)
     except Exception as e:
         raise litellm.exception_type(
             model=model,

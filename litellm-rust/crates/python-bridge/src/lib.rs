@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
 use litellm_core::error::CoreError;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
@@ -29,15 +29,26 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (encoded,))?.unbind())
 }
 
-fn core_error_to_pyerr(err: CoreError) -> PyErr {
-    match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
-    }
+fn core_error_to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
+    let status_code = err.public_status_code();
+    let message = err.to_string();
+    build_rust_ocr_error(py, &message, status_code).unwrap_or_else(|import_err| import_err)
+}
+
+/// Surface a typed core error to Python as ``litellm.ocr.rust_bridge.RustOcrError``
+/// carrying the public status code. The Python OCR host maps that status to the
+/// matching public exception; the message is already bounded/sanitized by
+/// ``CoreError``.
+fn build_rust_ocr_error(
+    py: Python<'_>,
+    message: &str,
+    status_code: Option<u16>,
+) -> PyResult<PyErr> {
+    let exc_type = py
+        .import("litellm.ocr.rust_bridge")?
+        .getattr("RustOcrError")?;
+    let instance = exc_type.call1((message, status_code))?;
+    Ok(PyErr::from_value(instance))
 }
 
 fn optional_object_to_map(
@@ -120,7 +131,7 @@ fn ocr(
 
     match result {
         Ok(value) => json_to_py(py, value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+        Err(err) => Err(core_error_to_pyerr(py, err)),
     }
 }
 
@@ -159,7 +170,7 @@ fn aocr(
             timeout,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
+        .map_err(|err| Python::with_gil(|py| core_error_to_pyerr(py, err)))?;
 
         Python::with_gil(|py| json_to_py(py, value))
     })

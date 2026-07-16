@@ -21,10 +21,36 @@ pub enum CoreError {
     Auth(String),
     #[error("OCR request failed with status {status}: {body}")]
     Http { status: u16, body: String },
+    #[error("OCR request timed out")]
+    Timeout,
     #[error("OCR network error: {0}")]
     Network(String),
     #[error("routing error: {0}")]
     Routing(String),
+}
+
+impl CoreError {
+    /// Public HTTP status this error maps to, or `None` for connection-level
+    /// failures that have no upstream status (surfaced as a connection error).
+    ///
+    /// This is the single source of truth for turning a typed core error into
+    /// a public status/exception contract; hosts (the Python bridge, a future
+    /// axum route) build their exception or HTTP response from it. The match is
+    /// exhaustive with no wildcard so a new variant fails to compile until it
+    /// is classified here.
+    pub fn public_status_code(&self) -> Option<u16> {
+        match self {
+            CoreError::Http { status, .. } => Some(*status),
+            CoreError::Auth(_) => Some(401),
+            CoreError::InvalidType { .. }
+            | CoreError::MissingField(_)
+            | CoreError::InvalidProvider(_)
+            | CoreError::InvalidRequest(_) => Some(400),
+            CoreError::Timeout => Some(408),
+            CoreError::InvalidResponse(_) | CoreError::Routing(_) => Some(500),
+            CoreError::Network(_) => None,
+        }
+    }
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
@@ -35,5 +61,60 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_status_code_preserves_public_contracts() {
+        assert_eq!(
+            CoreError::Http {
+                status: 404,
+                body: "not found".to_string()
+            }
+            .public_status_code(),
+            Some(404)
+        );
+        assert_eq!(
+            CoreError::Auth("bad key".to_string()).public_status_code(),
+            Some(401)
+        );
+        assert_eq!(CoreError::Timeout.public_status_code(), Some(408));
+        assert_eq!(
+            CoreError::InvalidRequest("bad".to_string()).public_status_code(),
+            Some(400)
+        );
+        assert_eq!(
+            CoreError::MissingField("document.type").public_status_code(),
+            Some(400)
+        );
+        assert_eq!(
+            CoreError::InvalidType {
+                expected: "object",
+                actual: "string"
+            }
+            .public_status_code(),
+            Some(400)
+        );
+        assert_eq!(
+            CoreError::InvalidResponse("empty".to_string()).public_status_code(),
+            Some(500)
+        );
+        assert_eq!(
+            CoreError::Routing("no deployment".to_string()).public_status_code(),
+            Some(500)
+        );
+        assert_eq!(
+            CoreError::Network("dns".to_string()).public_status_code(),
+            None
+        );
+    }
+
+    #[test]
+    fn timeout_message_is_data_minimized() {
+        assert_eq!(CoreError::Timeout.to_string(), "OCR request timed out");
     }
 }

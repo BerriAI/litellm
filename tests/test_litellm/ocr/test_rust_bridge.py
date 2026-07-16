@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.ocr.rust_bridge import RustOcrError
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -128,6 +129,46 @@ class RaisingAsyncBridge:
         timeout_seconds: float | None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
+
+
+class RustErrorBridge:
+    """A fake ``RustOcr`` that fails with a typed ``RustOcrError`` like the native bridge."""
+
+    def __init__(self, message: str, status_code: int | None) -> None:
+        self.message = message
+        self.status_code = status_code
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RustOcrError(self.message, self.status_code)
+
+
+class RustErrorAsyncBridge:
+    def __init__(self, message: str, status_code: int | None) -> None:
+        self.message = message
+        self.status_code = status_code
+
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RustOcrError(self.message, self.status_code)
 
 
 class RecordingLogging:
@@ -317,6 +358,7 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "timeout_seconds": 12.5,
     }
 
+
 def test_run_rust_ocr_runs_pre_call_logging():
     """The Rust shortcut must run pre_call so callbacks and spend tracking fire."""
     logging_obj = RecordingLogging()
@@ -480,3 +522,69 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert "Rust OCR bridge is required" in str(exc_info.value)
+
+
+# The Rust bridge surfaces provider/transport failures as a typed ``RustOcrError``
+# carrying the public status code; the host must translate each onto the matching
+# public ``litellm`` exception (with its canonical status_code) so proxy and SDK
+# callers keep the same contract they had on the Python path.
+RUST_OCR_ERROR_CASES = [
+    pytest.param(401, litellm.AuthenticationError, 401, id="401_authentication"),
+    pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
+    pytest.param(400, litellm.BadRequestError, 400, id="400_bad_request"),
+    pytest.param(422, litellm.BadRequestError, 400, id="422_bad_request"),
+    pytest.param(408, litellm.Timeout, 408, id="408_timeout"),
+    pytest.param(500, litellm.InternalServerError, 500, id="500_internal"),
+    pytest.param(503, litellm.InternalServerError, 500, id="503_internal"),
+    pytest.param(None, litellm.APIConnectionError, 500, id="none_connection"),
+]
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+def test_rust_ocr_error_maps_to_public_exception(status_code, expected_exception, expected_status):
+    exc = ocr_main._rust_ocr_error_to_public_exception(
+        RustOcrError("upstream boom", status_code),
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+    )
+
+    assert isinstance(exc, expected_exception)
+    assert exc.status_code == expected_status
+    assert exc.llm_provider == "mistral"
+    assert exc.model == "mistral-ocr-latest"
+    assert "upstream boom" in str(exc)
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+def test_ocr_raises_typed_exception_from_rust_error(status_code, expected_exception, expected_status):
+    rust_bridge._set_rust_ocr_bridge(ocr=RustErrorBridge("upstream boom", status_code))
+
+    with pytest.raises(expected_exception) as exc_info:
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.llm_provider == "mistral"
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+@pytest.mark.asyncio
+async def test_aocr_raises_typed_exception_from_rust_error(status_code, expected_exception, expected_status):
+    rust_bridge._set_rust_ocr_bridge(aocr=RustErrorAsyncBridge("upstream boom", status_code))
+
+    with pytest.raises(expected_exception) as exc_info:
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.llm_provider == "mistral"
+
+
+def test_rust_ocr_error_message_is_preserved_bounded():
+    """The host must not expand the bridge's already-bounded message."""
+    bounded = "x" * 256 + "... (truncated)"
+    exc = ocr_main._rust_ocr_error_to_public_exception(
+        RustOcrError(bounded, 500),
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+    )
+
+    assert bounded in str(exc)
