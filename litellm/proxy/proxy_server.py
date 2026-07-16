@@ -219,6 +219,7 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     DAYS_IN_A_MONTH,
+    DEFAULT_HEALTH_CHECK_CONCURRENCY,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
@@ -2718,6 +2719,15 @@ def _rss_mb_for_log() -> str:
     return f"{rss_mb:.2f}"
 
 
+def _get_background_health_check_concurrency(
+    general_settings: dict,
+) -> Optional[int]:
+    configured_concurrency = general_settings.get("health_check_concurrency")
+    if configured_concurrency is None:
+        return DEFAULT_HEALTH_CHECK_CONCURRENCY
+    return configured_concurrency
+
+
 async def _run_direct_health_check_with_instrumentation(
     model_list: list,
     details: Optional[bool],
@@ -2981,7 +2991,7 @@ async def _run_background_health_check():
         ):
             expected_peak_in_flight = min(model_count_enabled, health_check_concurrency)
 
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.info(
             "background_health_check_cycle_start cycle_id=%s model_count_total=%d model_count_enabled=%d interval_seconds=%s max_concurrency=%s expected_peak_in_flight=%d shared=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_total,
@@ -3050,7 +3060,7 @@ async def _run_background_health_check():
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
         cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.info(
             "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_enabled,
@@ -4267,8 +4277,8 @@ class ProxyConfig:
             health_check_interval = general_settings.get(
                 "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
             )
-            health_check_concurrency = general_settings.get(
-                "health_check_concurrency", None
+            health_check_concurrency = _get_background_health_check_concurrency(
+                general_settings
             )
             health_check_details = general_settings.get("health_check_details", True)
             # Health-check-driven routing (opt-in, passes through to Router later)
