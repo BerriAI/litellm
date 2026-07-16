@@ -3400,6 +3400,62 @@ class TestBedrockOnlyScanNewMessages:
             assert [m["content"] for m in first_scanned] == ["my ssn is 123-45-6789"]
 
     @pytest.mark.asyncio
+    async def test_generic_agent_multi_turn_scans_only_new_each_turn(self):
+        """A generic agent (not Claude Code) opts in by propagating a session id.
+
+        Agent frameworks on the OpenAI SDK carry the session through the request
+        body (metadata.session_id here), not the x-claude-code-session-id header.
+        Across a growing multi-turn conversation every turn after the first must
+        send Bedrock only the newly appended segments, never the whole context.
+        """
+        guardrail = self._guardrail()
+        session = {"metadata": {"session_id": "agent-multi-turn"}}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["system prompt", "turn 1 question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "system prompt",
+                "turn 1 question",
+            ]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["system prompt", "turn 1 question", "turn 1 answer", "turn 2 question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "turn 1 answer",
+                "turn 2 question",
+            ]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={
+                    "texts": [
+                        "system prompt",
+                        "turn 1 question",
+                        "turn 1 answer",
+                        "turn 2 question",
+                        "turn 2 answer",
+                        "turn 3 question",
+                    ]
+                },
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "turn 2 answer",
+                "turn 3 question",
+            ]
+
+    @pytest.mark.asyncio
     async def test_blocked_turn_is_rescanned_on_retry(self):
         guardrail = self._guardrail()
         session = {"litellm_session_id": "sess-bedrock-blocked"}
