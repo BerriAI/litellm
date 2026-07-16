@@ -4425,6 +4425,15 @@ class ProxyConfig:
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = litellm.default_max_internal_user_budget
+                elif key == "default_internal_user_params" and isinstance(value, dict):
+                    litellm.default_internal_user_params = (
+                        {**value, "max_budget": float(value["max_budget"])}
+                        if value.get("max_budget") is not None
+                        else value
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, litellm.default_internal_user_params, is_full_admin=False)}{reset_color_code}"
+                    )
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
@@ -5784,6 +5793,13 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -14898,6 +14914,7 @@ async def get_config_list(
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []

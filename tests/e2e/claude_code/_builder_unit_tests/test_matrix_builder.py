@@ -409,7 +409,7 @@ def test_build_matrix_6x5_grid_matches_published_sample():
 
     feature_ids = [feature["id"] for feature in manifest["features"]]
     providers = manifest["providers"]
-    models = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]
+    models = ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-7"]
 
     results = []
     for feature_id in feature_ids:

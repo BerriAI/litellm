@@ -6544,7 +6544,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - The user id of the key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -6765,7 +6765,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -6834,7 +6834,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -7024,7 +7024,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -22505,6 +22505,11 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Disable Auto Add Proxy Admin To Teams
+             * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
+             */
+            disable_auto_add_proxy_admin_to_teams?: boolean | null;
+            /**
              * Disable Budget Reservation
              * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
              */
@@ -32245,6 +32250,8 @@ export interface components {
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;

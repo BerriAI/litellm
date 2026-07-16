@@ -18,7 +18,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
@@ -28,6 +28,7 @@ from e2e_gateway import Gateway, build_gateway
 from e2e_http import (
     URL,
     AuthHeaders,
+    require_successful_call,
     NoBody,
     StreamingResponse,
     Success,
@@ -615,6 +616,21 @@ class LoggingClient:
         if gen is None or not gen.trace_id:
             return [] if gen is None else [gen]
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
+
+
+def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
+    """First successful call on a fresh key. A fresh key may briefly 401 until
+    the data plane's auth cache picks it up, so retry on 401 to a deadline; a
+    401 is rejected before the LLM call, so it cannot contaminate delivery or
+    trace assertions. Any other failure is behavior under test and fails hard."""
+    deadline = time.monotonic() + client.gateway.poll_timeout
+    while True:
+        outcome = send()
+        if outcome.ok:
+            return outcome
+        if outcome.status_code != 401 or time.monotonic() >= deadline:
+            require_successful_call(outcome)
+        time.sleep(client.gateway.poll_interval)
 
 
 def build_logging_client() -> LoggingClient:

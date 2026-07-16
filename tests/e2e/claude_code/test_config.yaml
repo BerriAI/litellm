@@ -29,76 +29,106 @@ model_list:
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-sonnet-4-6
+  - model_name: claude-sonnet-4-5
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
+      model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
   - model_name: claude-opus-4-7
     litellm_params:
       model: anthropic/claude-opus-4-7
       api_key: os.environ/ANTHROPIC_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Bedrock (InvokeModel) ----
   - model_name: claude-haiku-4-5-bedrock-invoke
     litellm_params:
       model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-6-bedrock-invoke
+  - model_name: claude-sonnet-4-5-bedrock-invoke
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-6
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
       aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
   - model_name: claude-opus-4-7-bedrock-invoke
     litellm_params:
       model: bedrock/us.anthropic.claude-opus-4-7
       aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Bedrock (Converse) ----
   - model_name: claude-haiku-4-5-bedrock-converse
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-6-bedrock-converse
+  - model_name: claude-sonnet-4-5-bedrock-converse
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0
       aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
   - model_name: claude-opus-4-7-bedrock-converse
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-opus-4-7
       aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Vertex AI ----
+  # `use_in_pass_through: true` registers each deployment's
+  # project/location/credentials with the /vertex_ai passthrough
+  # router, which the `passthrough` row needs to resolve
+  # .../models/{alias}:streamRawPredict URLs. That registration only
+  # reads the canonical `vertex_project`/`vertex_location` param names
+  # (not the `vertex_ai_*` aliases); the chat translation path accepts
+  # both.
   - model_name: claude-haiku-4-5-vertex
     litellm_params:
       model: vertex_ai/claude-haiku-4-5
-      vertex_ai_project: os.environ/VERTEXAI_PROJECT
-      vertex_ai_location: os.environ/VERTEXAI_LOCATION
-  - model_name: claude-sonnet-4-6-vertex
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      use_in_pass_through: true
+  - model_name: claude-sonnet-4-5-vertex
     litellm_params:
-      model: vertex_ai/claude-sonnet-4-6
-      vertex_ai_project: os.environ/VERTEXAI_PROJECT
-      vertex_ai_location: os.environ/VERTEXAI_LOCATION
+      model: vertex_ai/claude-sonnet-4-5
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      use_in_pass_through: true
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
   - model_name: claude-opus-4-7-vertex
     litellm_params:
       model: vertex_ai/claude-opus-4-7
-      vertex_ai_project: os.environ/VERTEXAI_PROJECT
-      vertex_ai_location: os.environ/VERTEXAI_LOCATION
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      use_in_pass_through: true
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
   - model_name: claude-haiku-4-5-azure
     litellm_params:
       model: azure_ai/claude-haiku-4-5
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
-  - model_name: claude-sonnet-4-6-azure
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: claude-sonnet-4-5-azure
     litellm_params:
-      model: azure_ai/claude-sonnet-4-6
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+      model: azure_ai/claude-sonnet-4-5
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
   - model_name: claude-opus-4-7-azure
     litellm_params:
       model: azure_ai/claude-opus-4-7
-      api_base: os.environ/AZURE_FOUNDRY_API_BASE
-      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- OpenAI (GPT-5.6) ----
   - model_name: gpt-5-6-sol-openai
