@@ -117,7 +117,7 @@ def harness():
 
     router = MagicMock(spec=Router)
     resolve_model = MagicMock(
-        side_effect=lambda model_id: RESOLVED_MODELS.get(model_id)
+        side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )
     router.resolve_model_name_from_model_id = resolve_model
 
@@ -278,7 +278,9 @@ async def test_status__model_encoded_id_full_contract(harness):
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_status"
     # provider comes from the decoded id; model_id resolved to a model name.
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(
+        VIDEO_MODEL_ID, custom_llm_provider="azure"
+    )
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
@@ -359,7 +361,9 @@ async def test_content__model_encoded_id(harness):
 
     await call_content(harness, AZURE_VIDEO_ID)
 
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(
+        VIDEO_MODEL_ID, custom_llm_provider="azure"
+    )
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
@@ -488,7 +492,9 @@ async def test_remix__model_encoded_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_remix"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(
+        VIDEO_MODEL_ID, custom_llm_provider="azure"
+    )
     assert harness.processor_data() == {
         "prompt": "new colors",
         "video_id": AZURE_VIDEO_ID,
