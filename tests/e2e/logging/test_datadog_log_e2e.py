@@ -99,8 +99,7 @@ class TestDataDogLogDelivery:
     ) -> None:
         """One successful non-streaming /chat/completions call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
-        model, the token counts, and the response cost (cost cross-checked
-        against the x-litellm-response-cost header of the same response)."""
+        model, the token counts, and the response cost."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-chat-{unique_marker()}", models=[CHEAP_ANTHROPIC_MODEL])
@@ -122,8 +121,7 @@ class TestDataDogLogDelivery:
     ) -> None:
         """One successful non-streaming /v1/messages call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
-        model, the token counts, and the response cost (cost cross-checked
-        against the x-litellm-response-cost header of the same response).
+        model, the token counts, and the response cost.
 
         This currently fails on the known /v1/messages double-log (LIT-4447)
         and serves as its regression pin; it goes green when the fix lands."""
@@ -148,8 +146,7 @@ class TestDataDogLogDelivery:
     ) -> None:
         """One successful non-streaming /v1/responses call must reach the
         DataDog logs intake as exactly one log event whose payload carries the
-        model, the token counts, and the response cost (cost cross-checked
-        against the x-litellm-response-cost header of the same response)."""
+        model, the token counts, and the response cost."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
