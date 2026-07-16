@@ -203,6 +203,37 @@ class TestUpCommand:
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == original_settings
 
+    def test_terminates_ephemeral_proxy_when_write_pid_record_fails(self, monkeypatch, tmp_path):
+        """write_pid_record runs before poll_liveliness -- if it raises (disk full, permission
+        error creating ~/.litellm/autorouter/), the just-launched proxy must still be terminated,
+        not left running with no pid record for `lite autoroute down` to ever find."""
+        config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        original_settings = {"theme": "dark"}
+        claude_settings_path.write_text(json.dumps(original_settings))
+
+        fake_process = FakeProcess(pid=888)
+        terminate_calls = []
+
+        def _raise_os_error(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
+        monkeypatch.setattr(commands_module, "write_pid_record", _raise_os_error)
+        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 34567)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert "disk full" in result.output
+        assert terminate_calls == [888]
+        assert not backup_path.exists()
+        assert json.loads(claude_settings_path.read_text()) == original_settings
+
     def test_terminates_ephemeral_proxy_when_claude_settings_is_corrupt(self, monkeypatch, tmp_path):
         """The health check can pass and the proxy can come up fine, but if
         ~/.claude/settings.json turns out to be corrupt, the just-started proxy must not be left

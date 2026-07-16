@@ -101,11 +101,11 @@ def up() -> None:
     port = allocate_free_port()
     base_url = f"http://127.0.0.1:{port}"
     process = launch_proxy(CONFIG_PATH, port, LOG_PATH)
-    write_pid_record(PidRecord(pid=process.pid, port=port, config_path=str(CONFIG_PATH), log_path=str(LOG_PATH)))
 
     try:
+        write_pid_record(PidRecord(pid=process.pid, port=port, config_path=str(CONFIG_PATH), log_path=str(LOG_PATH)))
         poll_liveliness(base_url, LOG_PATH, process)
-    except ProcessLaunchError as e:
+    except (ProcessLaunchError, OSError) as e:
         terminate(process.pid)
         clear_pid_record()
         raise click.ClickException(str(e))
