@@ -160,6 +160,8 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
+                    if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                        kwargs["ttl"] = self.default_in_memory_ttl
                     self.in_memory_cache.set_cache(key, redis_result, **kwargs)
 
                 result = redis_result
@@ -226,6 +228,8 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
+                    if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                        kwargs["ttl"] = self.default_in_memory_ttl
                     await self.in_memory_cache.async_set_cache(key, redis_result, **kwargs)
 
                 result = redis_result
@@ -312,6 +316,9 @@ class DualCache(BaseCache):
 
                     # Pre-compute key-to-index mapping for O(1) lookup
                     key_to_index = {key: i for i, key in enumerate(keys)}
+
+                    if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                        kwargs["ttl"] = self.default_in_memory_ttl
 
                     # Update both result and in-memory cache in a single loop
                     for key, value in redis_result.items():

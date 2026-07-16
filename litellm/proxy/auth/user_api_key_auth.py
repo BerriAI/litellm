@@ -1996,16 +1996,6 @@ async def _user_api_key_auth_builder(
                 raise HTTPException(401, detail="Invalid API key, no token associated")
             api_key = valid_token.token
 
-            # Add hashed token to cache
-            asyncio.create_task(
-                _cache_key_object(
-                    hashed_token=api_key,
-                    user_api_key_obj=valid_token,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            )
-
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
             # budget_throttle_pct is excluded from model_dump (it must not leak
