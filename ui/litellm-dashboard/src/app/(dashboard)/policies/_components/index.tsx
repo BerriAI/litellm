@@ -5,7 +5,7 @@ import { Alert } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
-import PolicyTable from "./policy_table";
+import PolicyTable from "./PolicyTable";
 import PolicyInfoView from "./policy_info";
 import AddPolicyForm from "./add_policy_form";
 import { FlowBuilderPage } from "./pipeline_flow_builder";
