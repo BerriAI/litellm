@@ -127,12 +127,16 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
+    DatabaseTokenAuth,
     PrismaWrapper,
     build_database_token_auth_url,
     parse_iam_endpoint_from_url,
     resolve_database_token_auth,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    build_azure_identity_credential,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2806,6 +2810,9 @@ class PrismaClient:
             iam_token_db_auth=iam_flag,
             azure_postgresql_auth=azure_postgresql_auth,
         )
+        azure_credential = (
+            build_azure_identity_credential() if database_token_auth == DatabaseTokenAuth.AZURE_ENTRA else None
+        )
         token_auth_enabled = database_token_auth is not None
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
@@ -2818,6 +2825,7 @@ class PrismaClient:
                 iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
                 database_token_auth=database_token_auth,
+                azure_credential=azure_credential,
             )
         else:
             writer_wrapper = PrismaWrapper(
@@ -2825,6 +2833,7 @@ class PrismaClient:
                 iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
                 database_token_auth=database_token_auth,
+                azure_credential=azure_credential,
             )
 
         # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
@@ -2849,7 +2858,11 @@ class PrismaClient:
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
                 if database_token_auth is not None and reader_iam_endpoint is not None:
-                    read_replica_url = build_database_token_auth_url(reader_iam_endpoint, database_token_auth)
+                    read_replica_url = build_database_token_auth_url(
+                        reader_iam_endpoint,
+                        database_token_auth,
+                        azure_credential=azure_credential,
+                    )
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Dict[str, Any] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -2864,6 +2877,7 @@ class PrismaClient:
                     recreate_uses_datasource=True,
                     log_prefix="[reader]",
                     database_token_auth=database_token_auth,
+                    azure_credential=azure_credential,
                 )
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(

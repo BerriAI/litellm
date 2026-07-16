@@ -152,6 +152,8 @@ class TestTokenExpirationParsing:
         assert wrapper._parse_token_expiration(None) is None
         assert wrapper._parse_token_expiration("no-query-params") is None
         assert wrapper._parse_token_expiration("?missing=params") is None
+        payload = base64.urlsafe_b64encode(json.dumps({"exp": 1893456000}).encode()).decode().rstrip("=")
+        assert wrapper._parse_token_expiration(f"header.{payload}.signature?missing=params") is None
 
     def test_parse_azure_postgres_jwt_expiration(self):
         from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -166,6 +168,7 @@ class TestTokenExpirationParsing:
     def test_azure_postgres_refresh_builds_database_url(self, unset_database_url):
         from litellm.proxy.db.prisma_client import DatabaseTokenAuth, IAMEndpoint, PrismaWrapper
 
+        credential = MagicMock()
         wrapper = PrismaWrapper(
             original_prisma=MagicMock(),
             iam_token_db_auth=True,
@@ -176,14 +179,16 @@ class TestTokenExpirationParsing:
                 name="litellm db",
             ),
             database_token_auth=DatabaseTokenAuth.AZURE_ENTRA,
+            azure_credential=credential,
         )
 
         with patch(
             "litellm.proxy.auth.azure_postgres_token.generate_azure_postgres_auth_token",
             return_value="AZURE_TOKEN",
-        ):
+        ) as generate_token:
             database_url = wrapper.get_rds_iam_token()
 
+        generate_token.assert_called_once_with(credential=credential)
         assert (
             database_url
             == "postgresql://user%40example.com:AZURE_TOKEN@server.postgres.database.azure.com:5432/litellm%20db"

@@ -871,9 +871,16 @@ def test_prisma_client_configures_azure_token_refresh_for_writer_and_reader(monk
     fake_prisma_module.Prisma = FakePrisma
     monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
 
-    with patch(
-        "litellm.proxy.auth.azure_postgres_token.generate_azure_postgres_auth_token",
-        return_value="AZURE_TOKEN",
+    credential = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.utils.build_azure_identity_credential",
+            return_value=credential,
+        ) as build_credential,
+        patch(
+            "litellm.proxy.auth.azure_postgres_token.generate_azure_postgres_auth_token",
+            return_value="AZURE_TOKEN",
+        ) as generate_token,
     ):
         from litellm.proxy.utils import PrismaClient
 
@@ -883,6 +890,10 @@ def test_prisma_client_configures_azure_token_refresh_for_writer_and_reader(monk
         )
 
     assert isinstance(client.db, RoutingPrismaWrapper)
+    build_credential.assert_called_once_with()
+    generate_token.assert_called_once_with(credential=credential)
+    assert client.db.writer._azure_credential is credential
+    assert client.db.reader._azure_credential is credential
     assert client.db.writer.database_token_auth == DatabaseTokenAuth.AZURE_ENTRA
     assert client.db.reader.database_token_auth == DatabaseTokenAuth.AZURE_ENTRA
     assert (

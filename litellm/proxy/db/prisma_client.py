@@ -20,6 +20,10 @@ from typing import Any, Callable, Union
 from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    AzureTokenCredential,
+    build_azure_identity_credential,
+)
 from litellm.secret_managers.main import str_to_bool
 
 
@@ -101,11 +105,12 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
 def build_database_token_auth_url(
     endpoint: IAMEndpoint,
     database_token_auth: DatabaseTokenAuth,
+    azure_credential: AzureTokenCredential | None = None,
 ) -> str:
     if database_token_auth == DatabaseTokenAuth.AZURE_ENTRA:
         from litellm.proxy.auth.azure_postgres_token import generate_azure_postgres_auth_token
 
-        token = generate_azure_postgres_auth_token()
+        token = generate_azure_postgres_auth_token(credential=azure_credential)
     else:
         from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
@@ -147,10 +152,16 @@ class PrismaWrapper:
         recreate_uses_datasource: bool = False,
         log_prefix: str = "",
         database_token_auth: DatabaseTokenAuth | None = None,
+        azure_credential: AzureTokenCredential | None = None,
     ):
         self._original_prisma = original_prisma
         self.database_token_auth = database_token_auth or (DatabaseTokenAuth.RDS_IAM if iam_token_db_auth else None)
         self.iam_token_db_auth = self.database_token_auth is not None
+        self._azure_credential = (
+            azure_credential or build_azure_identity_credential()
+            if self.database_token_auth == DatabaseTokenAuth.AZURE_ENTRA
+            else None
+        )
 
         # Per-connection knobs so the same wrapper can be used for the writer
         # (defaults: DATABASE_URL env, IAM endpoint from DATABASE_HOST/etc.,
@@ -289,6 +300,7 @@ class PrismaWrapper:
                     return token_created + timedelta(seconds=int(expires_str))
                 except ValueError as exc:
                     verbose_proxy_logger.debug("Failed to parse RDS IAM token expiration: %s", exc)
+            return None
 
         parts = token.split(".")
         if len(parts) < 2:
@@ -375,7 +387,11 @@ class PrismaWrapper:
 
         if self.database_token_auth is None:
             return None
-        db_url = build_database_token_auth_url(endpoint, self.database_token_auth)
+        db_url = build_database_token_auth_url(
+            endpoint,
+            self.database_token_auth,
+            azure_credential=self._azure_credential,
+        )
         os.environ[self._db_url_env_var] = db_url
         return db_url
 
