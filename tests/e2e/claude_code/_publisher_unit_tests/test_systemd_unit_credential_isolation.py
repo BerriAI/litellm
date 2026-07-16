@@ -23,9 +23,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVICE = (
-    REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "litellm-compat-matrix.service"
+    Path(__file__).resolve().parents[1] / "cron_vm" / "litellm-compat-matrix.service"
 )
 
 

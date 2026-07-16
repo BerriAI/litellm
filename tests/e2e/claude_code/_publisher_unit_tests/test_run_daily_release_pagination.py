@@ -32,8 +32,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-RUN_DAILY = REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "run_daily.sh"
+RUN_DAILY = Path(__file__).resolve().parents[1] / "cron_vm" / "run_daily.sh"
 
 # The extracted snippet starts AFTER `log`/`die` are defined in run_daily.sh,
 # so the test harness has to provide its own stubs. Without them, a failure

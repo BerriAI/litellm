@@ -18,8 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-RUN_DAILY = REPO_ROOT / "tests" / "e2e" / "claude_code" / "cron_vm" / "run_daily.sh"
+RUN_DAILY = Path(__file__).resolve().parents[1] / "cron_vm" / "run_daily.sh"
 
 
 def _pytest_invocation_block() -> str:
