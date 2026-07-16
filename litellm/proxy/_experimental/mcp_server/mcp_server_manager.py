@@ -1768,6 +1768,7 @@ class MCPServerManager:
             authentication_token=auth_value,
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
+            allowed_response_headers=getattr(mcp_server, "allowed_response_headers", None),
             static_headers=static_headers_dict,
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
@@ -1825,6 +1826,7 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        _warn_response_headers_unsupported_transport_if_applicable(new_server, source="database")
         if persist_discovered_endpoints:
             await self._persist_discovered_obo_token_url(
                 server_id=mcp_server.server_id,

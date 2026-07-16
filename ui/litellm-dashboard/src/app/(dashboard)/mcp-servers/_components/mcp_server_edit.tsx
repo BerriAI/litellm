@@ -295,6 +295,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
       extra_headers: mcpServer.extra_headers || [],
+      allowed_response_headers: mcpServer.allowed_response_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       dcr_bridge: Boolean(mcpServer.dcr_bridge),
       token_validation_json: mcpServer.token_validation
@@ -867,6 +868,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         alias: restValues.alias,
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
+        allowed_response_headers: restValues.allowed_response_headers || [],
         ...(toolAllowlistEnforced
           ? {
               allowed_tools: allowedTools,

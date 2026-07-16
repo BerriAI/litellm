@@ -67,6 +67,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: List[str] = Field(default_factory=list)
+    allowed_response_headers: list[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
     env_vars: Optional[List[MCPEnvVar]] = None

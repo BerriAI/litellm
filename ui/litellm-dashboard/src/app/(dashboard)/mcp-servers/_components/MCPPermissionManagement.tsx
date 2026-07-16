@@ -282,6 +282,36 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           <Form.Item
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
+                Allowed Response Headers
+                <Tooltip title="Surface these response headers from this MCP server back to the caller, on the tool result's _meta under 'ai.litellm/responseHeaders'. Streamable HTTP transport only. Credential, cookie, session and hop-by-hop headers are never forwarded.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+                {mcpServer?.allowed_response_headers && mcpServer.allowed_response_headers.length > 0 && (
+                  <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                    {mcpServer.allowed_response_headers.length} configured
+                  </span>
+                )}
+              </span>
+            }
+            name="allowed_response_headers"
+          >
+            <Select
+              mode="tags"
+              placeholder={
+                mcpServer?.allowed_response_headers && mcpServer.allowed_response_headers.length > 0
+                  ? `Currently: ${mcpServer.allowed_response_headers.join(", ")}`
+                  : "Enter header names (e.g., X-Request-Id, X-RateLimit-Remaining)"
+              }
+              className="rounded-lg"
+              size="large"
+              tokenSeparators={[","]}
+              allowClear
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
                 Static Headers
                 <Tooltip title="Send these key-value headers with every request to this MCP server.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />

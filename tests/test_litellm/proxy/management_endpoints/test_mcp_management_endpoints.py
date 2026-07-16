@@ -5376,3 +5376,30 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+def test_temporary_mcp_server_record_carries_allowed_response_headers():
+    """The pre-save 'test this server' flow builds an unpersisted record; dropping the field there
+    would make a temporary server behave differently from the one the admin is about to save."""
+    payload = NewMCPServerRequest(
+        server_name="hdr_tmp",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        allowed_response_headers=["X-Example-Header"],
+    )
+
+    record = mgmt_endpoints._build_temporary_mcp_server_record(payload, created_by="tester")
+
+    assert record.allowed_response_headers == ["X-Example-Header"]
+
+
+def test_temporary_mcp_server_record_defaults_allowed_response_headers_to_empty():
+    payload = NewMCPServerRequest(
+        server_name="hdr_tmp_none",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+    )
+
+    record = mgmt_endpoints._build_temporary_mcp_server_record(payload, created_by="tester")
+
+    assert record.allowed_response_headers == []
