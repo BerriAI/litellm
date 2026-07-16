@@ -20,9 +20,12 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterato
     AnthropicStreamWrapper,
 )
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     Delta,
+    Function,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 
 
@@ -167,9 +170,7 @@ class TestInitialBlockTypePeek:
             _make_text_chunk("The answer is 42."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="glm-5")
         events = _collect_all_events(wrapper)
 
         assert events[0]["type"] == "message_start"
@@ -189,9 +190,7 @@ class TestInitialBlockTypePeek:
             _make_text_chunk(" world"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="gpt-4o")
         events = _collect_all_events(wrapper)
 
         content_block_start = events[1]
@@ -205,9 +204,7 @@ class TestInitialBlockTypePeek:
             _make_text_chunk("Hello"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="glm-5")
         events = _collect_all_events(wrapper)
 
         content_block_start = events[1]
@@ -226,9 +223,7 @@ class TestInitialBlockTypePeek:
             _make_text_chunk("The answer is 42."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="glm-5")
         events = await _collect_all_events_async(wrapper)
 
         assert events[0]["type"] == "message_start"
@@ -248,9 +243,7 @@ class TestInitialBlockTypePeek:
             _make_text_chunk(" world"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="gpt-4o")
         events = await _collect_all_events_async(wrapper)
 
         content_block_start = events[1]
@@ -277,16 +270,13 @@ class TestBlockTransitionIncludesFirstDelta:
             _make_text_chunk("Answer text."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="glm-5")
         events = _collect_all_events(wrapper)
 
         text_deltas = [
             e
             for e in events
-            if e.get("type") == "content_block_delta"
-            and e.get("delta", {}).get("type") == "text_delta"
+            if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta"
         ]
         assert len(text_deltas) >= 1, (
             "The first text delta after a thinking→text transition must not be "
@@ -301,16 +291,13 @@ class TestBlockTransitionIncludesFirstDelta:
             _make_text_chunk("Answer text."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="glm-5")
         events = await _collect_all_events_async(wrapper)
 
         text_deltas = [
             e
             for e in events
-            if e.get("type") == "content_block_delta"
-            and e.get("delta", {}).get("type") == "text_delta"
+            if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta"
         ]
         assert len(text_deltas) >= 1, (
             "The first text delta after a thinking→text transition must not be "
@@ -337,9 +324,7 @@ class TestBlockTransitionIncludesFirstDelta:
             _make_text_chunk("Answer."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="glm-5")
         events = _collect_all_events(wrapper)
 
         types = [e["type"] for e in events]
@@ -368,9 +353,7 @@ class TestTextOnlyFullSequence:
             _make_text_chunk(" world"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="gpt-4o")
         events = _collect_all_events(wrapper)
         types = [e["type"] for e in events]
 
@@ -394,9 +377,7 @@ class TestTextOnlyFullSequence:
             _make_text_chunk(" world"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="gpt-4o")
         events = await _collect_all_events_async(wrapper)
         types = [e["type"] for e in events]
 
@@ -418,16 +399,13 @@ class TestNoDuplicateFirstDelta:
             _make_text_chunk(" world"),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="gpt-4o")
         events = _collect_all_events(wrapper)
 
         text_deltas = [
             e["delta"]["text"]
             for e in events
-            if e.get("type") == "content_block_delta"
-            and e.get("delta", {}).get("type") == "text_delta"
+            if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta"
         ]
         assert text_deltas == ["Hello", " world"]
         _assert_monotonic_indices(events)
@@ -439,9 +417,7 @@ class TestNoDuplicateFirstDelta:
             _make_text_chunk("Answer."),
             _make_stop_chunk(),
         ]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="glm-5"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="glm-5")
         events = await _collect_all_events_async(wrapper)
         _assert_monotonic_indices(events)
 
@@ -451,9 +427,7 @@ class TestStopOnlyFirstChunk:
 
     def test_sync_stop_only_first_chunk(self):
         chunks = [_make_stop_chunk()]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockSyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="gpt-4o")
         events = _collect_all_events(wrapper)
         types = [e["type"] for e in events]
 
@@ -468,9 +442,7 @@ class TestStopOnlyFirstChunk:
     @pytest.mark.asyncio
     async def test_async_stop_only_first_chunk(self):
         chunks = [_make_stop_chunk()]
-        wrapper = AnthropicStreamWrapper(
-            completion_stream=MockAsyncStream(chunks), model="gpt-4o"
-        )
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="gpt-4o")
         events = await _collect_all_events_async(wrapper)
         types = [e["type"] for e in events]
 
@@ -481,3 +453,142 @@ class TestStopOnlyFirstChunk:
             "message_delta",
             "message_stop",
         ]
+
+
+def _make_usage_chunk(prompt_tokens: int = 10, completion_tokens: int = 5) -> ModelResponseStream:
+    """Usage-only follow-up chunk (no finish_reason) after a stop-only first chunk."""
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                delta=Delta(content=""),
+                index=0,
+                finish_reason=None,
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
+def _make_tool_use_first_chunk(name: str, arguments: str = '{"x":1}') -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                delta=Delta(
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            function=Function(name=name, arguments=arguments),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+                index=0,
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+class TestPeekToolNameMapping:
+    """Greptile P2: peek path must restore truncated tool names via tool_name_mapping."""
+
+    def test_sync_peek_restores_truncated_tool_name(self):
+        truncated = "a" * 64
+        original = "very_long_anthropic_tool_name_that_exceeds_openai_sixty_four_char_limit"
+        chunks = [
+            _make_tool_use_first_chunk(truncated),
+            _make_stop_chunk(),
+        ]
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=MockSyncStream(chunks),
+            model="gpt-4o",
+            tool_name_mapping={truncated: original},
+        )
+        events = _collect_all_events(wrapper)
+
+        tool_starts = [
+            e
+            for e in events
+            if e.get("type") == "content_block_start"
+            and isinstance(e.get("content_block"), dict)
+            and e["content_block"].get("type") == "tool_use"
+        ]
+        assert len(tool_starts) == 1
+        assert tool_starts[0]["content_block"]["name"] == original
+
+    @pytest.mark.asyncio
+    async def test_async_peek_restores_truncated_tool_name(self):
+        truncated = "b" * 64
+        original = "another_very_long_anthropic_tool_name_exceeding_openai_limit_xxx"
+        chunks = [
+            _make_tool_use_first_chunk(truncated),
+            _make_stop_chunk(),
+        ]
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=MockAsyncStream(chunks),
+            model="gpt-4o",
+            tool_name_mapping={truncated: original},
+        )
+        events = await _collect_all_events_async(wrapper)
+
+        tool_starts = [
+            e
+            for e in events
+            if e.get("type") == "content_block_start"
+            and isinstance(e.get("content_block"), dict)
+            and e["content_block"].get("type") == "tool_use"
+        ]
+        assert len(tool_starts) == 1
+        assert tool_starts[0]["content_block"]["name"] == original
+
+
+class TestStopOnlyFirstChunkUsageHold:
+    """Greptile P2: stop-only first chunk must hold message_delta for usage merge."""
+
+    def test_sync_stop_only_first_chunk_merges_followup_usage(self):
+        chunks = [_make_stop_chunk(), _make_usage_chunk(prompt_tokens=42, completion_tokens=7)]
+        wrapper = AnthropicStreamWrapper(completion_stream=MockSyncStream(chunks), model="gpt-4o")
+        events = _collect_all_events(wrapper)
+        types = [e["type"] for e in events]
+
+        assert types == [
+            "message_start",
+            "content_block_start",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        message_deltas = [e for e in events if e.get("type") == "message_delta"]
+        assert len(message_deltas) == 1
+        assert message_deltas[0]["usage"]["input_tokens"] == 42
+        assert message_deltas[0]["usage"]["output_tokens"] == 7
+        # No content_block_delta after message_delta (usage must not leak as empty delta)
+        message_delta_idx = types.index("message_delta")
+        assert "content_block_delta" not in types[message_delta_idx:]
+
+    @pytest.mark.asyncio
+    async def test_async_stop_only_first_chunk_merges_followup_usage(self):
+        chunks = [_make_stop_chunk(), _make_usage_chunk(prompt_tokens=11, completion_tokens=3)]
+        wrapper = AnthropicStreamWrapper(completion_stream=MockAsyncStream(chunks), model="gpt-4o")
+        events = await _collect_all_events_async(wrapper)
+        types = [e["type"] for e in events]
+
+        assert types == [
+            "message_start",
+            "content_block_start",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        message_deltas = [e for e in events if e.get("type") == "message_delta"]
+        assert len(message_deltas) == 1
+        assert message_deltas[0]["usage"]["input_tokens"] == 11
+        assert message_deltas[0]["usage"]["output_tokens"] == 3
+        message_delta_idx = types.index("message_delta")
+        assert "content_block_delta" not in types[message_delta_idx:]

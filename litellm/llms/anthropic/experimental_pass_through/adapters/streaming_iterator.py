@@ -390,6 +390,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
                         choices=first_chunk.choices
                     )
+                    content_block_start = self._restore_tool_name_mapping(block_type, content_block_start)
                     self.current_content_block_type = block_type
                     self.current_content_block_start = content_block_start
                     if block_type == "thinking":
@@ -411,8 +412,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             current_content_block_index=self.current_content_block_index,
                         )
                     )
-                    # Empty / stop-only first chunk: close the block before the
-                    # terminal message_delta so the sequence stays spec-compliant.
+                    # Empty / stop-only first chunk: close the block, then hold
+                    # the message_delta so a subsequent usage-only chunk can be
+                    # merged (same gate as the main loop).
                     if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
@@ -421,7 +423,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        self.chunk_queue.append(processed_first)
+                        if processed_first.get("delta", {}).get("stop_reason") is not None:
+                            self.holding_stop_reason_chunk = processed_first
+                        else:
+                            processed_first = self._augment_message_delta_usage(processed_first)
+                            self.chunk_queue.append(processed_first)
                     elif self._trigger_delta_has_content(processed_first):
                         self.chunk_queue.append(processed_first)
                 else:
@@ -642,6 +648,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
                         choices=first_chunk.choices
                     )
+                    content_block_start = self._restore_tool_name_mapping(block_type, content_block_start)
                     self.current_content_block_type = block_type
                     self.current_content_block_start = content_block_start
                     if block_type == "thinking":
@@ -663,6 +670,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             current_content_block_index=self.current_content_block_index,
                         )
                     )
+                    # Empty / stop-only first chunk: close the block, then hold
+                    # the message_delta so a subsequent usage-only chunk can be
+                    # merged (same gate as the main loop).
                     if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
@@ -671,7 +681,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        self.chunk_queue.append(processed_first)
+                        if processed_first.get("delta", {}).get("stop_reason") is not None:
+                            self.holding_stop_reason_chunk = processed_first
+                        else:
+                            processed_first = self._augment_message_delta_usage(processed_first)
+                            self.chunk_queue.append(processed_first)
                     elif self._trigger_delta_has_content(processed_first):
                         self.chunk_queue.append(processed_first)
                 else:
@@ -902,6 +916,32 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return bool(delta.get("signature"))
         return False
 
+    def _restore_tool_name_mapping(
+        self,
+        block_type: Literal["text", "tool_use", "thinking"],
+        content_block_start: Any,
+    ) -> Any:
+        """Restore truncated tool names using ``tool_name_mapping``.
+
+        OpenAI's 64-char tool-name limit can truncate names during the Anthropic
+        → OpenAI request translation. The inverse mapping must be applied whenever
+        we emit a ``tool_use`` ``content_block_start`` — including the peek-first
+        path — so clients see the original Anthropic tool name.
+        """
+        if block_type != "tool_use":
+            return content_block_start
+
+        from typing import cast
+
+        from litellm.types.llms.anthropic import ToolUseBlock
+
+        tool_block = cast(ToolUseBlock, content_block_start)
+        if tool_block.get("name"):
+            truncated_name = tool_block["name"]
+            original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+            tool_block["name"] = original_name
+        return content_block_start
+
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
         Determine if we should start a new content block based on the processed chunk.
@@ -926,19 +966,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             choices=chunk.choices  # type: ignore
         )
 
-        # Restore original tool name if it was truncated for OpenAI's 64-char limit
-        if block_type == "tool_use":
-            # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
-            from typing import cast
-
-            from litellm.types.llms.anthropic import ToolUseBlock
-
-            tool_block = cast(ToolUseBlock, content_block_start)
-
-            if tool_block.get("name"):
-                truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
-                tool_block["name"] = original_name
+        content_block_start = self._restore_tool_name_mapping(block_type, content_block_start)
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
