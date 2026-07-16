@@ -13,60 +13,61 @@ import pytest
 from claude_code.conftest import CompatResult
 
 
-def test_set_pass_is_accepted():
+def test_set_pass_is_accepted() -> None:
     r = CompatResult()
     r.set({"status": "pass"})
     assert r.value == {"status": "pass"}
 
 
-def test_set_fail_requires_error():
+def test_set_fail_requires_error() -> None:
     r = CompatResult()
     with pytest.raises(ValueError, match="requires 'error'"):
         r.set({"status": "fail"})
 
 
-def test_set_fail_with_error_is_accepted():
+def test_set_fail_with_error_is_accepted() -> None:
     r = CompatResult()
     r.set({"status": "fail", "error": "boom"})
     assert r.value == {"status": "fail", "error": "boom"}
 
 
-def test_set_not_applicable_requires_reason():
+def test_set_not_applicable_requires_reason() -> None:
     r = CompatResult()
     with pytest.raises(ValueError, match="requires 'reason'"):
         r.set({"status": "not_applicable"})
 
 
-def test_set_not_applicable_with_reason_is_accepted():
+def test_set_not_applicable_with_reason_is_accepted() -> None:
     r = CompatResult()
     r.set({"status": "not_applicable", "reason": "Bedrock has no /thinking"})
     assert r.value == {"status": "not_applicable", "reason": "Bedrock has no /thinking"}
 
 
-def test_set_not_tested_is_accepted():
+def test_set_not_tested_is_accepted() -> None:
     r = CompatResult()
     r.set({"status": "not_tested"})
     assert r.value == {"status": "not_tested"}
 
 
-def test_set_rejects_unknown_status():
+def test_set_rejects_unknown_status() -> None:
     r = CompatResult()
     with pytest.raises(ValueError, match="status must be one of"):
         r.set({"status": "maybe"})
 
 
-def test_set_rejects_non_dict():
+def test_set_rejects_non_dict() -> None:
     r = CompatResult()
     with pytest.raises(TypeError):
-        r.set("pass")  # type: ignore[arg-type]
+        r.set("pass")  # pyright: ignore[reportArgumentType]  # deliberately wrong type to assert the TypeError
 
 
-def test_set_copies_input():
+def test_set_copies_input() -> None:
     """Mutating the dict after set() must not change the stored value."""
     r = CompatResult()
     payload = {"status": "fail", "error": "x"}
     r.set(payload)
     payload["error"] = "mutated"
+    assert r.value is not None
     assert r.value["error"] == "x"
 
 
@@ -80,7 +81,7 @@ def test_set_copies_input():
 # ---------------------------------------------------------------------------
 
 
-def test_add_appends_each_call_to_values():
+def test_add_appends_each_call_to_values() -> None:
     r = CompatResult()
     r.add({"status": "pass"})
     r.add({"status": "fail", "error": "bad"})
@@ -90,7 +91,7 @@ def test_add_appends_each_call_to_values():
     ]
 
 
-def test_add_validates_like_set():
+def test_add_validates_like_set() -> None:
     """The add() and set() validators are the same; both must reject bad payloads."""
     r = CompatResult()
     with pytest.raises(ValueError, match="requires 'error'"):
@@ -100,10 +101,10 @@ def test_add_validates_like_set():
     with pytest.raises(ValueError, match="status must be one of"):
         r.add({"status": "maybe"})
     with pytest.raises(TypeError):
-        r.add("pass")  # type: ignore[arg-type]
+        r.add("pass")  # pyright: ignore[reportArgumentType]  # deliberately wrong type to assert the TypeError
 
 
-def test_add_copies_input():
+def test_add_copies_input() -> None:
     """Same defensive copy contract as set()."""
     r = CompatResult()
     payload = {"status": "fail", "error": "x"}
@@ -112,21 +113,21 @@ def test_add_copies_input():
     assert r.values[0]["error"] == "x"
 
 
-def test_collected_returns_values_when_added():
+def test_collected_returns_values_when_added() -> None:
     r = CompatResult()
     r.add({"status": "pass"})
     r.add({"status": "pass"})
     assert r.collected() == [{"status": "pass"}, {"status": "pass"}]
 
 
-def test_collected_returns_single_value_when_only_set_called():
+def test_collected_returns_single_value_when_only_set_called() -> None:
     """Legacy single-result tests should still surface their one outcome."""
     r = CompatResult()
     r.set({"status": "pass"})
     assert r.collected() == [{"status": "pass"}]
 
 
-def test_collected_prefers_added_values_over_set_value():
+def test_collected_prefers_added_values_over_set_value() -> None:
     """If both are populated, the per-tier list wins — that's the multi-model shape."""
     r = CompatResult()
     r.set({"status": "pass"})
@@ -134,5 +135,5 @@ def test_collected_prefers_added_values_over_set_value():
     assert r.collected() == [{"status": "fail", "error": "tier-2 broke"}]
 
 
-def test_collected_returns_empty_when_nothing_reported():
+def test_collected_returns_empty_when_nothing_reported() -> None:
     assert CompatResult().collected() == []

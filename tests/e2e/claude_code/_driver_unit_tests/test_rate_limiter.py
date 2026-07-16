@@ -25,13 +25,11 @@ fixtures + xdist already do that for the integration suite.
 
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
-from typing import List
 
 import pytest
 
+from claude_code.json_types import JSON_OBJECT_ADAPTER
 from claude_code.rate_limiter import (
     ALL_PROVIDERS,
     BURST_ENV,
@@ -69,22 +67,22 @@ from claude_code.rate_limiter import (
         ("claude-haiku-4-5-bedrock-invoke", PROVIDER_BEDROCK_INVOKE),
     ],
 )
-def test_infer_provider_maps_alias_suffix_to_column(model, expected):
+def test_infer_provider_maps_alias_suffix_to_column(model: str, expected: str) -> None:
     assert infer_provider(model) == expected
 
 
-def test_infer_provider_bedrock_converse_beats_bedrock_invoke_lookup_order():
+def test_infer_provider_bedrock_converse_beats_bedrock_invoke_lookup_order() -> None:
     """Both bedrock suffixes contain `bedrock`; the more-specific suffix wins."""
     assert infer_provider("claude-foo-bedrock-converse") == PROVIDER_BEDROCK_CONVERSE
     assert infer_provider("claude-foo-bedrock-invoke") == PROVIDER_BEDROCK_INVOKE
 
 
-def test_infer_provider_rejects_empty_string():
+def test_infer_provider_rejects_empty_string() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         infer_provider("")
 
 
-def test_infer_provider_is_case_insensitive():
+def test_infer_provider_is_case_insensitive() -> None:
     """Aliases in the proxy config sometimes drift between cases; we
     should still route them to the right column."""
     assert infer_provider("CLAUDE-OPUS-4-7-AZURE") == PROVIDER_AZURE
@@ -95,14 +93,14 @@ def test_infer_provider_is_case_insensitive():
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_uses_default_rate_when_env_absent():
+def test_load_config_uses_default_rate_when_env_absent() -> None:
     cfg = load_config(env={})
     for provider in ALL_PROVIDERS:
         assert cfg[provider].rate_per_sec == DEFAULT_RATE
         assert cfg[provider].burst == DEFAULT_RATE
 
 
-def test_load_config_reads_per_provider_rate():
+def test_load_config_reads_per_provider_rate() -> None:
     cfg = load_config(
         env={
             "LITELLM_COMPAT_RATE_ANTHROPIC": "10",
@@ -114,12 +112,12 @@ def test_load_config_reads_per_provider_rate():
     assert cfg[PROVIDER_VERTEX_AI].rate_per_sec == DEFAULT_RATE
 
 
-def test_load_config_zero_rate_disables_provider():
+def test_load_config_zero_rate_disables_provider() -> None:
     cfg = load_config(env={"LITELLM_COMPAT_RATE_BEDROCK_INVOKE": "0"})
     assert cfg[PROVIDER_BEDROCK_INVOKE].enabled is False
 
 
-def test_load_config_burst_override_applies_to_every_provider():
+def test_load_config_burst_override_applies_to_every_provider() -> None:
     cfg = load_config(
         env={
             "LITELLM_COMPAT_RATE_ANTHROPIC": "5",
@@ -130,12 +128,12 @@ def test_load_config_burst_override_applies_to_every_provider():
         assert cfg[provider].burst == 20.0
 
 
-def test_load_config_falls_back_on_malformed_value():
+def test_load_config_falls_back_on_malformed_value() -> None:
     cfg = load_config(env={"LITELLM_COMPAT_RATE_ANTHROPIC": "not-a-number"})
     assert cfg[PROVIDER_ANTHROPIC].rate_per_sec == DEFAULT_RATE
 
 
-def test_load_config_burst_floors_at_one_when_rate_is_low():
+def test_load_config_burst_floors_at_one_when_rate_is_low() -> None:
     """A 0.5/s rate with no burst override must still allow at least
     one immediate request — otherwise the very first call would block."""
     cfg = load_config(env={"LITELLM_COMPAT_RATE_ANTHROPIC": "0.5"})
@@ -147,8 +145,21 @@ def test_load_config_burst_floors_at_one_when_rate_is_low():
 # ---------------------------------------------------------------------------
 
 
+class _Clock:
+    def __init__(self) -> None:
+        self.now: float = 1_000.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 @pytest.fixture
-def fake_clock():
+def fake_clock() -> _Clock:
     """A controllable monotonic clock + sleep for the limiter under test.
 
     Tests advance `clock.now` to simulate elapsed wall time. `sleep`
@@ -156,23 +167,12 @@ def fake_clock():
     sleeping, so a "wait 200ms" code path runs in microseconds and
     is deterministic.
     """
-
-    class Clock:
-        def __init__(self):
-            self.now = 1_000.0
-            self.sleeps: List[float] = []
-
-        def __call__(self):
-            return self.now
-
-        def sleep(self, seconds: float) -> None:
-            self.sleeps.append(seconds)
-            self.now += seconds
-
-    return Clock()
+    return _Clock()
 
 
-def _make_limiter(tmp_path: Path, fake_clock, *, rate=10.0, burst=None):
+def _make_limiter(
+    tmp_path: Path, fake_clock: _Clock, *, rate: float = 10.0, burst: float | None = None
+) -> RateLimiter:
     cfg = {
         p: ProviderConfig(rate_per_sec=rate, burst=burst if burst is not None else rate)
         for p in ALL_PROVIDERS
@@ -185,7 +185,7 @@ def _make_limiter(tmp_path: Path, fake_clock, *, rate=10.0, burst=None):
     )
 
 
-def test_acquire_first_call_does_not_wait(tmp_path, fake_clock):
+def test_acquire_first_call_does_not_wait(tmp_path: Path, fake_clock: _Clock) -> None:
     """A freshly-initialized bucket starts full; the first acquire is free."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=10.0, burst=10.0)
     waited = limiter.acquire(PROVIDER_ANTHROPIC)
@@ -193,7 +193,7 @@ def test_acquire_first_call_does_not_wait(tmp_path, fake_clock):
     assert fake_clock.sleeps == []
 
 
-def test_acquire_disabled_provider_returns_immediately(tmp_path, fake_clock):
+def test_acquire_disabled_provider_returns_immediately(tmp_path: Path, fake_clock: _Clock) -> None:
     """rate=0 ⇒ no throttling, even if every other provider is throttled."""
     cfg = {p: ProviderConfig(rate_per_sec=0.0, burst=0.0) for p in ALL_PROVIDERS}
     limiter = RateLimiter(
@@ -204,7 +204,7 @@ def test_acquire_disabled_provider_returns_immediately(tmp_path, fake_clock):
     assert fake_clock.sleeps == []
 
 
-def test_acquire_burns_through_burst_then_throttles(tmp_path, fake_clock):
+def test_acquire_burns_through_burst_then_throttles(tmp_path: Path, fake_clock: _Clock) -> None:
     """`burst` immediate requests succeed; the next one waits 1/rate seconds."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=2.0, burst=3.0)
 
@@ -213,10 +213,10 @@ def test_acquire_burns_through_burst_then_throttles(tmp_path, fake_clock):
 
     # Bucket is empty; next call must sleep ~0.5s to earn one token at 2/s.
     waited = limiter.acquire(PROVIDER_ANTHROPIC)
-    assert waited == pytest.approx(0.5, abs=0.01)
+    assert waited == pytest.approx(0.5, abs=0.01)  # pyright: ignore[reportUnknownMemberType]  # untyped upstream
 
 
-def test_acquire_refills_with_elapsed_time(tmp_path, fake_clock):
+def test_acquire_refills_with_elapsed_time(tmp_path: Path, fake_clock: _Clock) -> None:
     """Advancing the clock between calls credits tokens at the configured rate."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=4.0, burst=1.0)
 
@@ -225,7 +225,7 @@ def test_acquire_refills_with_elapsed_time(tmp_path, fake_clock):
     assert limiter.acquire(PROVIDER_ANTHROPIC) == 0.0
 
 
-def test_acquire_caps_refill_at_burst(tmp_path, fake_clock):
+def test_acquire_caps_refill_at_burst(tmp_path: Path, fake_clock: _Clock) -> None:
     """A long quiet period must not let the bucket grow past `burst`."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=10.0, burst=2.0)
 
@@ -237,7 +237,7 @@ def test_acquire_caps_refill_at_burst(tmp_path, fake_clock):
     assert waited > 0
 
 
-def test_acquire_independent_buckets_per_provider(tmp_path, fake_clock):
+def test_acquire_independent_buckets_per_provider(tmp_path: Path, fake_clock: _Clock) -> None:
     """Anthropic exhaustion must not throttle Azure (each column has its own bucket)."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=2.0, burst=1.0)
 
@@ -246,7 +246,7 @@ def test_acquire_independent_buckets_per_provider(tmp_path, fake_clock):
     assert limiter.acquire(PROVIDER_AZURE) == 0.0
 
 
-def test_acquire_persists_state_across_limiter_instances(tmp_path):
+def test_acquire_persists_state_across_limiter_instances(tmp_path: Path) -> None:
     """A fresh RateLimiter must read the on-disk state, not start fresh.
 
     This is the property that makes the limiter cross-process: an
@@ -254,26 +254,23 @@ def test_acquire_persists_state_across_limiter_instances(tmp_path):
     workers, instead of getting its own private bucket.
     """
     cfg = {p: ProviderConfig(rate_per_sec=10.0, burst=2.0) for p in ALL_PROVIDERS}
-    state = {"now": 1_000.0, "sleeps": []}
+    shared_clock = _Clock()
 
-    def clock():
-        return state["now"]
-
-    def sleep(seconds):
-        state["sleeps"].append(seconds)
-        state["now"] += seconds
-
-    first = RateLimiter(config=cfg, state_dir=tmp_path, clock=clock, sleep=sleep)
+    first = RateLimiter(
+        config=cfg, state_dir=tmp_path, clock=shared_clock, sleep=shared_clock.sleep
+    )
     first.acquire(PROVIDER_ANTHROPIC)
     first.acquire(PROVIDER_ANTHROPIC)
     # bucket is now empty
 
-    second = RateLimiter(config=cfg, state_dir=tmp_path, clock=clock, sleep=sleep)
+    second = RateLimiter(
+        config=cfg, state_dir=tmp_path, clock=shared_clock, sleep=shared_clock.sleep
+    )
     waited = second.acquire(PROVIDER_ANTHROPIC)
     assert waited > 0  # had to wait, didn't see a fresh full bucket
 
 
-def test_acquire_recovers_from_corrupt_state_file(tmp_path, fake_clock):
+def test_acquire_recovers_from_corrupt_state_file(tmp_path: Path, fake_clock: _Clock) -> None:
     """A truncated/garbage state file must not crash the test session."""
     state_file = tmp_path / f"{PROVIDER_ANTHROPIC}.json"
     state_file.write_text("not-json {{")
@@ -282,7 +279,7 @@ def test_acquire_recovers_from_corrupt_state_file(tmp_path, fake_clock):
     assert limiter.acquire(PROVIDER_ANTHROPIC) == 0.0
 
 
-def test_acquire_handles_clock_going_backward(tmp_path, fake_clock):
+def test_acquire_handles_clock_going_backward(tmp_path: Path, fake_clock: _Clock) -> None:
     """Across a host suspend/resume the monotonic clock can briefly
     go backward; we must not interpret that as removing tokens."""
     limiter = _make_limiter(tmp_path, fake_clock, rate=1.0, burst=2.0)
@@ -297,7 +294,7 @@ def test_acquire_handles_clock_going_backward(tmp_path, fake_clock):
 # ---------------------------------------------------------------------------
 
 
-def test_use_limiter_swaps_default_for_block(tmp_path):
+def test_use_limiter_swaps_default_for_block(tmp_path: Path) -> None:
     sentinel_cfg = {
         p: ProviderConfig(rate_per_sec=0.0, burst=0.0) for p in ALL_PROVIDERS
     }
@@ -319,11 +316,11 @@ def test_use_limiter_swaps_default_for_block(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_state_file_is_json_after_acquire(tmp_path, fake_clock):
+def test_state_file_is_json_after_acquire(tmp_path: Path, fake_clock: _Clock) -> None:
     limiter = _make_limiter(tmp_path, fake_clock, rate=5.0, burst=5.0)
     limiter.acquire(PROVIDER_ANTHROPIC)
     state_file = tmp_path / f"{PROVIDER_ANTHROPIC}.json"
-    payload = json.loads(state_file.read_text())
+    payload = JSON_OBJECT_ADAPTER.validate_json(state_file.read_text())
     assert "tokens" in payload
     assert "last_refill" in payload
-    assert payload["tokens"] == pytest.approx(4.0)
+    assert payload["tokens"] == pytest.approx(4.0)  # pyright: ignore[reportUnknownMemberType]  # untyped upstream

@@ -43,13 +43,16 @@ from __future__ import annotations
 
 import contextlib
 import json
-import math
 import os
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, Mapping, Optional
+from typing import Callable, Dict, Generator, Mapping, Optional
+
+from pydantic import ValidationError
+
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONValue
 
 # `fcntl` is POSIX-only; the suite is Linux/macOS only, so we don't
 # attempt a Windows fallback. Importing at module load fails fast on
@@ -165,6 +168,17 @@ def _state_dir(env: Optional[Mapping[str, str]] = None) -> Path:
     return Path(tempfile.gettempdir()) / DEFAULT_STATE_DIR_NAME
 
 
+def _state_float(value: JSONValue) -> float:
+    """Convert a JSON state value the way `float(...)` would, for the
+    caller's corrupt-state handling: numeric and numeric-string values
+    convert, everything else raises into the caller's except clause."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"cannot convert {type(value).__name__} to float")
+
+
 class RateLimiter:
     """Cross-process token bucket per provider.
 
@@ -192,8 +206,8 @@ class RateLimiter:
         self,
         config: Optional[Mapping[str, ProviderConfig]] = None,
         state_dir: Optional[Path] = None,
-        clock: Optional[callable] = None,
-        sleep: Optional[callable] = None,
+        clock: Optional[Callable[[], float]] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
         self._config = dict(config) if config is not None else load_config()
         self._state_dir = Path(state_dir) if state_dir is not None else _state_dir()
@@ -269,7 +283,7 @@ class RateLimiter:
             os.close(fd)
 
     @staticmethod
-    def _read_state(fd: int, cfg: ProviderConfig, now: float) -> tuple:
+    def _read_state(fd: int, cfg: ProviderConfig, now: float) -> tuple[float, float]:
         """Read {tokens, last_refill} from `fd`, defaulting to a full
         bucket on a missing/empty/corrupt file.
 
@@ -283,17 +297,17 @@ class RateLimiter:
         if not raw.strip():
             return cfg.burst, now
         try:
-            obj = json.loads(raw)
-            tokens = float(obj.get("tokens", cfg.burst))
-            last_refill = float(obj.get("last_refill", now))
+            obj = JSON_OBJECT_ADAPTER.validate_json(raw)
+            tokens = _state_float(obj.get("tokens", cfg.burst))
+            last_refill = _state_float(obj.get("last_refill", now))
             return tokens, last_refill
-        except (ValueError, TypeError):
+        except (ValidationError, ValueError, TypeError):
             return cfg.burst, now
 
     @staticmethod
     def _refill(
         tokens: float, last_refill: float, now: float, cfg: ProviderConfig
-    ) -> tuple:
+    ) -> tuple[float, float]:
         """Apply elapsed time to the bucket, capped at burst.
 
         Negative elapsed (clock went backward, e.g. across host
@@ -341,7 +355,7 @@ def reset_default_limiter() -> None:
 
 
 @contextlib.contextmanager
-def use_limiter(limiter: RateLimiter) -> Iterator[RateLimiter]:
+def use_limiter(limiter: RateLimiter) -> Generator[RateLimiter]:
     """Temporarily install `limiter` as the process default.
 
     The driver's `run_claude` calls `get_default_limiter()`; tests that

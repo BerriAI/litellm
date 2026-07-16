@@ -49,8 +49,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Mapping, Optional, Sequence
 
 import pytest
 
@@ -59,6 +58,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -75,7 +76,7 @@ AZURE_MODELS = [
 # integer schema gives every tier (including Haiku) enough headroom
 # that schema satisfaction is essentially deterministic, isolating
 # failures to the proxy / transport.
-SCHEMA = {
+SCHEMA: dict[str, JSONValue] = {
     "type": "object",
     "properties": {"answer": {"type": "integer"}},
     "required": ["answer"],
@@ -91,8 +92,8 @@ PROMPT = "What is 2 + 2? Reply only via the structured output."
 
 
 def _extract_structured_output(
-    events: Sequence[Mapping[str, Any]],
-) -> Optional[Mapping[str, Any]]:
+    events: Sequence[Mapping[str, JSONValue]],
+) -> Optional[Mapping[str, JSONValue]]:
     """Return the `structured_output` payload from the last `result` event.
 
     Claude Code emits its terminal stream-json line as
@@ -113,7 +114,7 @@ def _extract_structured_output(
 
 
 def _validate_against_schema(
-    payload: Mapping[str, Any], schema: Mapping[str, Any]
+    payload: Mapping[str, JSONValue], schema: Mapping[str, JSONValue]
 ) -> Optional[str]:
     """Tiny shape validator covering the subset we actually need.
 
@@ -125,7 +126,7 @@ def _validate_against_schema(
     not a LiteLLM-proxy bug, so a deeper check would only add false
     failures on the wrong axis.
     """
-    type_map = {
+    type_map: dict[str, type[object] | tuple[type[object], ...]] = {
         "integer": int,
         "number": (int, float),
         "string": str,
@@ -133,13 +134,17 @@ def _validate_against_schema(
         "array": list,
         "object": Mapping,
     }
-    required = schema.get("required") or []
-    properties = schema.get("properties") or {}
+    raw_required = schema.get("required")
+    required: list[JSONValue] = raw_required if isinstance(raw_required, list) else []
+    raw_properties = schema.get("properties")
+    properties: dict[str, JSONValue] = raw_properties if isinstance(raw_properties, dict) else {}
     for key in required:
-        if key not in payload:
+        if not isinstance(key, str) or key not in payload:
             return f"missing required key {key!r}"
-        expected = (properties.get(key) or {}).get("type")
-        if expected and expected in type_map:
+        prop = properties.get(key)
+        prop_schema: dict[str, JSONValue] = prop if isinstance(prop, dict) else {}
+        expected = prop_schema.get("type")
+        if isinstance(expected, str) and expected in type_map:
             if not isinstance(payload[key], type_map[expected]):
                 return (
                     f"key {key!r} has wrong type: "
@@ -152,7 +157,7 @@ def _validate_against_schema(
     return None
 
 
-def test_structured_outputs_azure(compat_result):
+def test_structured_outputs_azure(compat_result: CompatResult) -> None:
     """Drive `claude --json-schema ...` against the LiteLLM proxy and
     assert the trailing `result` event contains a schema-conforming
     `structured_output`."""
@@ -181,7 +186,7 @@ def test_structured_outputs_azure(compat_result):
         extra_args=["--json-schema", SCHEMA_JSON],
     )
 
-    failures = []
+    failures: list[str] = []
     for model in AZURE_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

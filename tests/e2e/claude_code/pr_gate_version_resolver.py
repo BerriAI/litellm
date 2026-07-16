@@ -22,11 +22,13 @@ Code version is logged in the CI output").
 
 from __future__ import annotations
 
-import json
 import sys
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPResponse
 from typing import Callable, Mapping, Optional
+
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONValue
 
 PACKAGE_NAME = "@anthropic-ai/claude-code"
 NPM_REGISTRY_URL = "https://registry.npmjs.org/{package}"
@@ -51,7 +53,13 @@ def _parse_npm_timestamp(value: str) -> datetime:
     return parsed
 
 
-def _default_fetcher(package_name: str) -> dict:
+def _urlopen(request: urllib.request.Request) -> HTTPResponse:
+    return urllib.request.urlopen(  # noqa: S310 — registry URL is constant  # pyright: ignore[reportAny]  # urlopen is typed as Any in typeshed; https URLs yield HTTPResponse
+        request, timeout=DEFAULT_FETCH_TIMEOUT_SECONDS
+    )
+
+
+def _default_fetcher(package_name: str) -> dict[str, JSONValue]:
     """Fetch the npm packument for ``package_name`` over HTTPS.
 
     Uses urllib (stdlib) so this module has no extra dependencies in the
@@ -61,17 +69,15 @@ def _default_fetcher(package_name: str) -> dict:
     # npm registry expects literally; do a minimal hand-roll instead.
     url = NPM_REGISTRY_URL.format(package=package_name.replace("/", "%2F"))
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(  # noqa: S310 — registry URL is constant
-        req, timeout=DEFAULT_FETCH_TIMEOUT_SECONDS
-    ) as response:
+    with _urlopen(req) as response:
         body = response.read().decode("utf-8")
-    return json.loads(body)
+    return JSON_OBJECT_ADAPTER.validate_json(body)
 
 
 def resolve_pr_gate_version(
     *,
-    metadata: Optional[Mapping] = None,
-    fetcher: Optional[Callable[[str], Mapping]] = None,
+    metadata: Optional[Mapping[str, JSONValue]] = None,
+    fetcher: Optional[Callable[[str], Mapping[str, JSONValue]]] = None,
     as_of: Optional[datetime] = None,
     min_age: timedelta = DEFAULT_MIN_AGE,
     package_name: str = PACKAGE_NAME,
@@ -100,7 +106,8 @@ def resolve_pr_gate_version(
         fetch = fetcher or _default_fetcher
         metadata = fetch(package_name)
 
-    times = metadata.get("time") or {}
+    times_value = metadata.get("time")
+    times: dict[str, JSONValue] = times_value if isinstance(times_value, dict) else {}
     if as_of is None:
         as_of = datetime.now(timezone.utc)
     cutoff = as_of - min_age

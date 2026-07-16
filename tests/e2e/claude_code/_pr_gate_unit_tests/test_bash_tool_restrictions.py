@@ -49,6 +49,10 @@ BASH_FEATURE_DIRS = (
 )
 
 
+def _cell_id(path: Path) -> str:
+    return str(path.relative_to(REPO_ROOT))
+
+
 def _bash_cells() -> Iterable[Path]:
     for feature in BASH_FEATURE_DIRS:
         feature_dir = CLAUDE_CODE_DIR / feature
@@ -73,9 +77,7 @@ def _has_bare_bash_token(text: str) -> bool:
     return '"Bash"' in text.replace('"Bash(echo pong)"', "")
 
 
-@pytest.mark.parametrize(
-    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(REPO_ROOT))
-)
+@pytest.mark.parametrize("cell", list(_bash_cells()), ids=_cell_id)
 def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
     """The cell must pass `Bash(echo pong)` as the allow rule, not the
     unrestricted `Bash` value that was originally flagged."""
@@ -101,7 +103,7 @@ def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
     )
 
 
-def test_has_bare_bash_token_flags_unrestricted_value():
+def test_has_bare_bash_token_flags_unrestricted_value() -> None:
     """A file that allows the bare `"Bash"` token alongside the
     exact-match rule must be flagged. Without this guard the security
     pin reverts to the dead-code `or` it had originally, which let
@@ -111,7 +113,7 @@ def test_has_bare_bash_token_flags_unrestricted_value():
     assert _has_bare_bash_token(text)
 
 
-def test_has_bare_bash_token_accepts_only_exact_match():
+def test_has_bare_bash_token_accepts_only_exact_match() -> None:
     """The standard pattern — only the exact-match allow rule, no bare
     `"Bash"` — must be accepted. This is the shape every Bash-using
     cell in the suite is required to take.
@@ -120,7 +122,7 @@ def test_has_bare_bash_token_accepts_only_exact_match():
     assert not _has_bare_bash_token(text)
 
 
-def test_has_bare_bash_token_ignores_unrelated_substrings():
+def test_has_bare_bash_token_ignores_unrelated_substrings() -> None:
     """`Bash(echo pong)` is the only allowed shape; substrings like
     `BashTool` or `Bashing` are unrelated identifiers and must not be
     confused with the bare `"Bash"` token (i.e. the exact quoted
@@ -129,9 +131,7 @@ def test_has_bare_bash_token_ignores_unrelated_substrings():
     assert not _has_bare_bash_token(text)
 
 
-@pytest.mark.parametrize(
-    "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(REPO_ROOT))
-)
+@pytest.mark.parametrize("cell", list(_bash_cells()), ids=_cell_id)
 def test_bash_cell_uses_dontask_permission_mode(cell: Path) -> None:
     """The cell must pair the allow rule with `--permission-mode dontAsk`
     so tool calls that don't match the allow rule are auto-denied (as

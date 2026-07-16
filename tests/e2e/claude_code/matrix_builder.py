@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 import yaml
+from pydantic import ValidationError
+
+from claude_code.json_types import JSON_OBJECT_ADAPTER, JSONValue
 
 SCHEMA_VERSION = "1"
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
@@ -31,14 +34,15 @@ class ResultsError(ValueError):
     """Raised when the pytest results artifact is malformed."""
 
 
-def load_manifest(path: Path) -> Dict[str, Any]:
+def load_manifest(path: Path) -> dict[str, JSONValue]:
     """Load and validate `manifest.yaml`.
 
     Returns a dict with keys: schema_version, providers, features. Raises
     ManifestError on missing fields or schema mismatch.
     """
-    raw = yaml.safe_load(path.read_text())
-    if not isinstance(raw, dict):
+    try:
+        raw = JSON_OBJECT_ADAPTER.validate_python(yaml.safe_load(path.read_text()))
+    except ValidationError:
         raise ManifestError(f"manifest at {path} is not a mapping")
     schema_version = str(raw.get("schema_version", ""))
     if schema_version != SCHEMA_VERSION:
@@ -60,22 +64,26 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     return raw
 
 
-def load_results(path: Path) -> List[Dict[str, Any]]:
+def load_results(path: Path) -> list[JSONValue]:
     """Load the pytest results artifact and return its `results` list."""
-    raw = json.loads(path.read_text())
-    if not isinstance(raw, dict) or not isinstance(raw.get("results"), list):
+    try:
+        raw = JSON_OBJECT_ADAPTER.validate_python(json.loads(path.read_text()))
+    except ValidationError:
         raise ResultsError(f"results artifact at {path} has no `results` list")
-    return raw["results"]
+    results = raw.get("results")
+    if not isinstance(results, list):
+        raise ResultsError(f"results artifact at {path} has no `results` list")
+    return results
 
 
 def build_matrix(
     *,
-    manifest: Mapping[str, Any],
-    results: Sequence[Mapping[str, Any]],
+    manifest: Mapping[str, JSONValue],
+    results: Sequence[JSONValue],
     litellm_version: str,
     claude_code_version: str,
     generated_at: str,
-) -> Dict[str, Any]:
+) -> dict[str, JSONValue]:
     """Build the published matrix JSON from pre-loaded inputs.
 
     Empty cells (no test ran for a (feature, provider) and no
@@ -85,26 +93,40 @@ def build_matrix(
     to `pass` only if every model passed; otherwise `fail` with the first
     breaking model surfaced in the error.
     """
-    providers: List[str] = list(manifest["providers"])
-    feature_specs: List[Dict[str, Any]] = list(manifest["features"])
+    providers_value = manifest["providers"]
+    providers: list[str] = (
+        [str(provider) for provider in providers_value]
+        if isinstance(providers_value, list)
+        else []
+    )
+    features_value = manifest["features"]
+    feature_specs: list[dict[str, JSONValue]] = (
+        [spec for spec in features_value if isinstance(spec, dict)]
+        if isinstance(features_value, list)
+        else []
+    )
 
-    grouped: Dict[tuple, List[Dict[str, Any]]] = {}
+    grouped: dict[tuple[str, str], list[dict[str, JSONValue]]] = {}
     for entry in results:
-        if not isinstance(entry, Mapping):
+        if not isinstance(entry, dict):
             continue
         feature_id = entry.get("feature_id")
         provider = entry.get("provider")
         result = entry.get("result")
-        if not feature_id or not provider or not isinstance(result, Mapping):
+        if not isinstance(feature_id, str) or not feature_id:
+            continue
+        if not isinstance(provider, str) or not provider:
+            continue
+        if not isinstance(result, dict):
             continue
         if result.get("status") not in VALID_STATUSES:
             continue
         grouped.setdefault((feature_id, provider), []).append(dict(result))
 
-    features_out: List[Dict[str, Any]] = []
+    features_out: list[JSONValue] = []
     for spec in feature_specs:
-        feature_id = spec["id"]
-        cells: Dict[str, Dict[str, Any]] = {}
+        feature_id = str(spec["id"])
+        cells: dict[str, JSONValue] = {}
         for provider in providers:
             cell_results = grouped.get((feature_id, provider), [])
             cells[provider] = _aggregate_cell(cell_results)
@@ -121,12 +143,12 @@ def build_matrix(
         "generated_at": generated_at,
         "litellm_version": litellm_version,
         "claude_code_version": claude_code_version,
-        "providers": providers,
+        "providers": list[JSONValue](providers),
         "features": features_out,
     }
 
 
-def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+def _aggregate_cell(results: Sequence[Mapping[str, JSONValue]]) -> dict[str, JSONValue]:
     """Aggregate a list of per-model results into a single cell status.
 
     Order of precedence (most informative wins):
@@ -182,7 +204,7 @@ def build_from_paths(
     claude_code_version: str,
     generated_at: str,
     output_path: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, JSONValue]:
     """I/O wrapper around build_matrix used by the publisher script."""
     manifest = load_manifest(manifest_path)
     results = load_results(results_path)

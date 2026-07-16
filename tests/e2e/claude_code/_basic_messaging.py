@@ -28,7 +28,7 @@ collecting this module as a test file.
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -37,6 +37,8 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.conftest import CompatResult
+from claude_code.json_types import JSONValue
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -53,7 +55,7 @@ PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 MIN_STREAM_DELTA_EVENTS = 2
 
 
-def _count_stream_event_deltas(events: Sequence[Mapping[str, Any]]) -> int:
+def _count_stream_event_deltas(events: Sequence[Mapping[str, JSONValue]]) -> int:
     """Count `stream_event` records that carry an SSE event payload.
 
     With `--include-partial-messages`, Claude Code wraps every upstream
@@ -75,7 +77,7 @@ def _count_stream_event_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 
 def run_basic_messaging_cell(
     *,
-    compat_result,
+    compat_result: CompatResult,
     models: Sequence[str],
     prompt: str,
     verify_streaming: bool = False,
@@ -128,7 +130,7 @@ def run_basic_messaging_cell(
         extra_args=extra_args,
     )
 
-    failures = []
+    failures: list[str] = []
     for model in models:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):

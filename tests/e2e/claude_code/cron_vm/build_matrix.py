@@ -15,11 +15,26 @@ from __future__ import annotations
 import argparse
 import datetime
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import TypeAdapter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from claude_code.matrix_builder import build_from_paths  # noqa: E402  # import needs the sys.path bootstrap above
+
+
+@dataclass(frozen=True, slots=True)
+class _Args:
+    manifest: Path
+    results: Path
+    output: Path
+    litellm_version: str
+    claude_code_version: str
+
+
+_ARGS_ADAPTER = TypeAdapter[_Args](_Args)
 
 
 def main() -> int:
@@ -29,7 +44,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--litellm-version", required=True)
     parser.add_argument("--claude-code-version", required=True)
-    args = parser.parse_args()
+    args = _ARGS_ADAPTER.validate_python(vars(parser.parse_args()))
 
     generated_at = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
