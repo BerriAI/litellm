@@ -2091,6 +2091,34 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        rust_messages_response = await self._maybe_rust_anthropic_messages(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            stream=stream or False,
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            request_body=request_body,
+            timeout=self._resolve_anthropic_messages_timeout(
+                litellm_params=litellm_params,
+                stream=stream or False,
+                custom_llm_provider=custom_llm_provider,
+            ),
+        )
+        if rust_messages_response is not None:
+            return await self._finalize_anthropic_messages_response(
+                initial_response=rust_messages_response,
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                kwargs=kwargs,
+            )
+
         response = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2165,6 +2193,31 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
 
+        return await self._finalize_anthropic_messages_response(
+            initial_response=initial_response,
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            api_key=api_key,
+            kwargs=kwargs,
+        )
+
+    async def _finalize_anthropic_messages_response(
+        self,
+        *,
+        initial_response: AnthropicMessagesResponse,
+        model: str,
+        messages: list[dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+        api_key: str | None,
+        kwargs: dict,
+    ) -> AnthropicMessagesResponse | AsyncIterator:
         # Inject api_key into kwargs so follow-up calls in agentic hooks can
         # authenticate. api_key is a named param here (not in kwargs), so
         # _prepare_followup_kwargs would miss it otherwise.
@@ -2187,6 +2240,40 @@ class BaseLLMHTTPHandler:
             logging_obj,
             "anthropic_messages",
         )
+
+    @staticmethod
+    async def _maybe_rust_anthropic_messages(
+        *,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        stream: bool,
+        model: str,
+        api_key: str | None,
+        api_base: str | None,
+        headers: dict,
+        request_body: dict,
+        timeout: float | httpx.Timeout | None,
+    ) -> AnthropicMessagesResponse | None:
+        if stream or custom_llm_provider != "azure_ai" or litellm_params.get("rust") is not True:
+            return None
+
+        from litellm.rust_bridge import messages as rust_messages_bridge
+
+        rust_response = await rust_messages_bridge.amessages(
+            model=model,
+            body=request_body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=headers,
+            timeout=timeout,
+        )
+        if rust_response is None:
+            return None
+
+        response_obj = cast(AnthropicMessagesResponse, dict(rust_response))
+        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
+        return response_obj
 
     def anthropic_messages_handler(
         self,

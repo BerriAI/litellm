@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use litellm_ai_gateway::io::messages::{messages as run_messages, MessagesRequest};
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
 use litellm_core::error::CoreError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -171,6 +172,92 @@ fn aocr(
     })
 }
 
+type MarshaledMessagesInputs = (Value, Option<Map<String, Value>>, Option<Duration>);
+
+fn marshal_messages_inputs(
+    py: Python<'_>,
+    body: Py<PyAny>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<MarshaledMessagesInputs> {
+    let body = py_to_json(py, body.bind(py))?;
+    if !body.is_object() {
+        return Err(PyValueError::new_err("body must be a dict"));
+    }
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    Ok((body, extra_headers, optional_timeout(timeout_seconds)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn messages(
+    py: Python<'_>,
+    model: String,
+    body: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let (body, extra_headers, timeout) =
+        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
+
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
+            model: &model,
+            body,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        }))
+    });
+
+    match result {
+        Ok(value) => json_to_py(py, value),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn amessages(
+    py: Python<'_>,
+    model: String,
+    body: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let (body, extra_headers, timeout) =
+        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let value = run_messages(MessagesRequest {
+            model: &model,
+            body,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        })
+        .await
+        .map_err(core_error_to_pyerr)?;
+
+        Python::with_gil(|py| json_to_py(py, value))
+    })
+}
+
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
@@ -182,6 +269,8 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
+    module.add_function(wrap_pyfunction!(messages, module)?)?;
+    module.add_function(wrap_pyfunction!(amessages, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
 }
