@@ -9254,7 +9254,23 @@ class Router:
         if not all_models:
             return None
 
-        # First pass: exact matches (non-wildcard)
+        # First pass: provider-qualified exact match when provider is known.
+        # Prefer litellm_params.model == "{provider}/{model_id}" so a Vertex id
+        # does not resolve to a Gemini alias (or any other provider) that only
+        # shares the same model suffix.
+        if custom_llm_provider:
+            qualified_model = f"{custom_llm_provider}/{model_id}"
+            for deployment in all_models:
+                litellm_params = deployment.get("litellm_params", {})
+                actual_model = litellm_params.get("model")
+                if actual_model and actual_model.endswith("/*"):
+                    continue
+                if actual_model == qualified_model:
+                    model_name = deployment.get("model_name")
+                    if model_name:
+                        return model_name
+
+        # Second pass: provider-agnostic exact / suffix matches (non-wildcard)
         for deployment in all_models:
             litellm_params = deployment.get("litellm_params", {})
             actual_model = litellm_params.get("model")
