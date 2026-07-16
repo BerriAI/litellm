@@ -376,3 +376,18 @@ class TestGetAzureCredential:
 
         assert credential is mock_credential_instance
         mock_default_azure_credential.assert_called_once_with()
+
+    @patch.dict(os.environ, {"AZURE_CREDENTIAL": "AzureCliCredential"}, clear=True)
+    @patch("azure.identity.AzureCliCredential")
+    def test_unknown_credential_name_falls_back_to_azure_identity_class(
+        self, mock_azure_cli_credential
+    ):
+        """An AZURE_CREDENTIAL value that isn't in AzureCredentialType is resolved
+        as a class name on azure.identity."""
+        mock_credential_instance = MagicMock()
+        mock_azure_cli_credential.return_value = mock_credential_instance
+
+        credential = get_azure_credential()
+
+        assert credential is mock_credential_instance
+        mock_azure_cli_credential.assert_called_once_with()
