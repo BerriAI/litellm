@@ -2069,6 +2069,58 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     )
 
 
+@pytest.mark.asyncio
+async def test_new_vector_store_preserves_missing_field_http_400():
+    user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    user_api_key.team_id = None
+    user_api_key.user_id = None
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+        new=AsyncMock(),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await new_vector_store(
+                vector_store={"custom_llm_provider": "openai"},
+                user_api_key_dict=user_api_key,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "vector_store_id and custom_llm_provider are required"
+
+
+@pytest.mark.asyncio
+async def test_new_vector_store_preserves_duplicate_store_http_400():
+    user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    user_api_key.team_id = None
+    user_api_key.user_id = None
+    duplicate_error = HTTPException(
+        status_code=400, detail="Vector store with ID vs-existing already exists"
+    )
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+            new=AsyncMock(side_effect=duplicate_error),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await new_vector_store(
+                vector_store={
+                    "vector_store_id": "vs-existing",
+                    "custom_llm_provider": "openai",
+                },
+                user_api_key_dict=user_api_key,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == duplicate_error.detail
+
+
 def test_resolve_embedding_config_from_router():
     """Test that _resolve_embedding_config_from_router correctly extracts credentials from config-defined models."""
     from litellm.types.router import Deployment, LiteLLM_Params

@@ -541,6 +541,8 @@ async def new_vector_store(
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
             "vector_store": response_vs,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
