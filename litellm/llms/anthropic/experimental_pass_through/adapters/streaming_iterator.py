@@ -13,7 +13,10 @@ from typing import (
     List,
     Literal,
     Optional,
+    get_args,
 )
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -21,6 +24,7 @@ from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContextManagementResponse,
+    StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
 )
@@ -28,6 +32,23 @@ from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
+
+
+_STREAMING_DELTA_TYPES = frozenset(get_args(StreamingContentBlockDeltaType))
+
+
+def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
+    match delta_type:
+        case "text_delta":
+            return "text"
+        case "input_json_delta":
+            return "partial_json"
+        case "thinking_delta":
+            return "thinking"
+        case "signature_delta":
+            return "signature"
+        case _:
+            assert_never(delta_type)
 
 
 class _CombinedChunkSplitter:
@@ -428,7 +449,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         else:
                             processed_first = self._augment_message_delta_usage(processed_first)
                             self.chunk_queue.append(processed_first)
-                    elif self._trigger_delta_has_content(processed_first):
+                    elif self._delta_has_content(processed_first):
                         self.chunk_queue.append(processed_first)
                 else:
                     self.chunk_queue.append(
@@ -500,11 +521,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # 3. If the trigger chunk carries delta content, queue it
                     # so the first delta of the new block is not silently dropped.
-                    if self._trigger_delta_has_content(processed_chunk):
+                    if self._delta_has_content(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
 
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
+
+                if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(processed_chunk):
+                    continue
 
                 if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     # Queue both the content_block_stop and the message_delta
@@ -686,7 +710,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         else:
                             processed_first = self._augment_message_delta_usage(processed_first)
                             self.chunk_queue.append(processed_first)
-                    elif self._trigger_delta_has_content(processed_first):
+                    elif self._delta_has_content(processed_first):
                         self.chunk_queue.append(processed_first)
                 else:
                     self.chunk_queue.append(
@@ -749,10 +773,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
-                        if self._trigger_delta_has_content(processed_chunk):
+
+                        # 3. If the trigger chunk carries delta content, queue it
+                        # so the first delta of the new block is not silently dropped.
+                        if self._delta_has_content(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
                         self.sent_content_block_finish = False
                         return self.chunk_queue.popleft()
+
+                    if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(
+                        processed_chunk
+                    ):
+                        continue
 
                     if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
@@ -885,20 +917,33 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_index += 1
 
     @staticmethod
-    def _trigger_delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
-        """Return True if a translated trigger chunk carries a non-empty
-        ``content_block_delta`` payload that must be re-emitted after a
-        block transition.
+    def _delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
+        """Return True if a translated chunk carries a non-empty
+        ``content_block_delta`` payload.
 
-        When an upstream chunk both *triggers* a new content block (its type
-        differs from the active block) and *carries* delta content, that
-        content belongs to the new block. The synthesized
-        ``content_block_start`` only ever carries an empty body — see
+        Gates every ``content_block_delta`` emission. An empty delta carries
+        no information, and the translate fallback types empty deltas as
+        ``text_delta`` regardless of the active block's type — emitting one
+        into an open ``thinking`` block (e.g. Bedrock Converse sends an empty
+        reasoning delta mid-block) crashes strict Anthropic SDK clients with
+        "Content block is not a text block".
+
+        Also gates re-emission after a block transition: when an upstream
+        chunk both *triggers* a new content block (its type differs from the
+        active block) and *carries* delta content, that content belongs to
+        the new block. The synthesized ``content_block_start`` only ever
+        carries an empty body — see
         ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
         which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
         so the trigger chunk's delta must be re-queued or the first token of
         the new block (the first non-empty text/thinking delta, or bundled
         tool arguments) is silently dropped.
+
+        Delta types outside ``StreamingContentBlockDeltaType`` — the closed
+        set the translate layer can produce — are treated as empty. The
+        per-type payload lookup is exhaustively matched against that set in
+        ``_delta_payload_field``, so extending the translate layer with a new
+        delta type fails type-checking here until it is handled.
         """
         if processed_chunk.get("type") != "content_block_delta":
             return False
@@ -906,15 +951,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if not isinstance(delta, dict):
             return False
         delta_type = delta.get("type")
-        if delta_type == "text_delta":
-            return bool(delta.get("text"))
-        if delta_type == "input_json_delta":
-            return bool(delta.get("partial_json"))
-        if delta_type == "thinking_delta":
-            return bool(delta.get("thinking"))
-        if delta_type == "signature_delta":
-            return bool(delta.get("signature"))
-        return False
+        if delta_type not in _STREAMING_DELTA_TYPES:
+            return False
+        return bool(delta.get(_delta_payload_field(delta_type)))
 
     def _restore_tool_name_mapping(
         self,

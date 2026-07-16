@@ -536,6 +536,7 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -581,6 +582,7 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -686,6 +688,7 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            issuer=payload.issuer,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
@@ -1475,6 +1478,7 @@ if MCP_AVAILABLE:
             temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
                 temp_record,
                 credentials_are_encrypted=False,
+                persist_discovered_endpoints=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,

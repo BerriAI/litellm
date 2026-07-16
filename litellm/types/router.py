@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hi
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict
+from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
 
@@ -117,6 +117,7 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    enable_tag_filtering: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -852,6 +853,7 @@ class RoutingContext(BaseModel):
     signals: dict[str, Any] = Field(default_factory=dict)
 
 
+@runtime_checkable
 class RoutingPlugin(Protocol):
     """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
 

@@ -209,6 +209,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
+    input_cost_per_video_token: Optional[float]  # for gemini omni models with video input
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -234,6 +235,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_video_token: Optional[float]  # for gemini omni models with video output
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -1796,14 +1798,17 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        usage_to_set = None
         if "usage" in kwargs and kwargs["usage"] is not None:
             if isinstance(kwargs["usage"], dict):
-                kwargs["usage"] = Usage(**kwargs["usage"])
+                usage_to_set = Usage(**kwargs["usage"])
+                kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
                 dump = (
                     kwargs["usage"].model_dump() if hasattr(kwargs["usage"], "model_dump") else kwargs["usage"].dict()
                 )
-                kwargs["usage"] = Usage(**dump)
+                usage_to_set = Usage(**dump)
+                kwargs["usage"] = usage_to_set
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1811,6 +1816,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage_to_set is not None:
+            self.usage = usage_to_set
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2467,6 +2475,10 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_user_spend: Optional[float]
+    user_api_key_user_max_budget: Optional[float]
+    user_api_key_team_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
@@ -2685,6 +2697,10 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     #   hints). Lets dashboards split rate-limit failures by cause without
     #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
+    error_budget_entity_type: Optional[str]
+    error_budget_entity_id: Optional[str]
+    error_budget_limit: Optional[float]
+    error_budget_spend: Optional[float]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3046,6 +3062,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
+    output_cost_per_video_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -3055,6 +3072,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
     input_cost_per_image_token: Optional[float] = None
+    input_cost_per_video_token: Optional[float] = None
     input_cost_per_token_above_272k_tokens: Optional[float] = None
     input_cost_per_token_above_512k_tokens: Optional[float] = None
     output_cost_per_token_above_272k_tokens: Optional[float] = None
@@ -3132,6 +3150,7 @@ all_litellm_params = (
         "use_client",
         "id",
         "fallbacks",
+        "routing_strategy",
         "azure",
         "headers",
         "model_list",
@@ -3203,6 +3222,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
         "_litellm_rate_limit_descriptors",
@@ -3774,3 +3794,6 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+    stream_holdback_chars: List[
+        int
+    ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)

@@ -26,6 +26,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    FrozenSet,
     Generator,
     List,
     Literal,
@@ -108,6 +109,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -247,6 +249,15 @@ else:
     AdaptiveRouter = Any
     QualityRouter = Any
     PreRoutingHookResponse = Any
+
+
+def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class RoutingArgs(enum.Enum):
@@ -494,6 +505,7 @@ class Router:
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
+        self.team_public_model_names: FrozenSet[str] = frozenset()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # touches *before* the first ``set_model_list`` below (which calls
@@ -619,6 +631,8 @@ class Router:
                 routing_strategy_args=routing_strategy_args,
             )
         self._init_routing_groups(self._routing_groups_input)
+        self._override_selectors: dict[str, Any] = {}
+        self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
@@ -890,7 +904,9 @@ class Router:
 
         self._unregister_router_selectors(
             [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
+            + list(getattr(self, "_override_selectors", {}).values())
         )
+        self._override_selectors = {}
 
         self.leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
         self.lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
@@ -980,12 +996,67 @@ class Router:
                 {strategy_value: group_selector} if group_selector is not None else {}
             )
 
-    def _get_routing_context(self, model: str) -> Tuple[Optional[str], Optional[Any]]:
+    _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
+
+    def _get_request_routing_strategy_override(self, request_kwargs: Optional[dict]) -> Optional[str]:
+        """
+        Reads a per-request `routing_strategy` override (forwarded by the proxy
+        from key/team `router_settings`) out of the request kwargs.
+
+        Only strategies with a per-request-capable selector are honored;
+        anything else (unknown strings, `lar1`, `provider-budget-routing`) is
+        ignored with a warning so a bad value stored on a key or team can
+        never take down that caller's traffic.
+        """
+        if not request_kwargs:
+            return None
+        raw_strategy = request_kwargs.get("routing_strategy")
+        if raw_strategy is None:
+            return None
+        strategy = self._normalize_strategy(raw_strategy) if isinstance(raw_strategy, (str, RoutingStrategy)) else None
+        if not isinstance(strategy, str) or strategy not in self._OVERRIDABLE_ROUTING_STRATEGIES:
+            verbose_router_logger.warning(
+                "Ignoring per-request routing_strategy override '%s'; supported overrides: %s.",
+                raw_strategy,
+                sorted(self._OVERRIDABLE_ROUTING_STRATEGIES),
+            )
+            return None
+        return strategy
+
+    def _get_override_strategy_selector(self, strategy: str) -> Optional[Any]:
+        """
+        Returns the selector for a per-request strategy override.
+
+        Reuses the default group's selector when the override matches the
+        router's configured strategy (so shared state keeps accumulating in
+        one place); otherwise lazily builds one selector per strategy and
+        caches it for the router's lifetime so its usage/latency state
+        persists across requests.
+        """
+        if strategy == self._normalize_strategy(self.routing_strategy):
+            attr = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy)
+            return getattr(self, attr, None) if attr is not None else None
+        with self._override_selectors_lock:
+            if strategy not in self._override_selectors:
+                self._override_selectors[strategy] = self._build_strategy_selector(
+                    strategy=strategy,
+                    routing_strategy_args={},
+                )
+            return self._override_selectors[strategy]
+
+    def _get_routing_context(
+        self, model: str, request_kwargs: Optional[dict] = None
+    ) -> tuple[Optional[str], Optional[Any]]:
         """
         Resolves the routing strategy and selector to use for the given model.
 
-        Every model belongs to exactly one group: an explicit entry from
-        `routing_groups`, or the implicit `"default"` group driven by the
+        A per-request `routing_strategy` in `request_kwargs` (forwarded by the
+        proxy from key/team `router_settings`) takes precedence over both the
+        model's routing group and the router's top-level strategy, since it is
+        the most specific expression of caller intent.
+
+        Otherwise every model belongs to exactly one group: an explicit entry
+        from `routing_groups`, or the implicit `"default"` group driven by the
         router's top-level `routing_strategy` / `routing_strategy_args`.
 
         `self.routing_strategy` may be either a string or a `RoutingStrategy`
@@ -993,6 +1064,11 @@ class Router:
         string here. Downstream call sites and `_select_deployment_*` arms
         compare against string literals.
         """
+        override = self._get_request_routing_strategy_override(request_kwargs)
+        if override is not None:
+            verbose_router_logger.debug("routing_group=request-override model=%s strategy=%s", model, override)
+            return override, self._get_override_strategy_selector(override)
+
         group_name = self._model_to_group.get(model)
         if group_name is None:
             strategy = self._normalize_strategy(self.routing_strategy)
@@ -2983,7 +3059,7 @@ class Router:
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self.cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags = deployment.get("litellm_params", {}).get("tags")
@@ -5933,7 +6009,7 @@ class Router:
         input_kwargs: dict,
     ) -> Optional[Any]:
         """Same-model-group retry after a failed deployment; returns None if not applicable."""
-        strategy, _ = self._get_routing_context(original_model_group)
+        strategy, _ = self._get_routing_context(original_model_group, kwargs)
         if strategy != "simple-shuffle":
             return None
 
@@ -7284,6 +7360,14 @@ class Router:
                     raise e
         return returned_healthy_deployments
 
+    @staticmethod
+    def _json_default_stable_id(value: object) -> str:
+        """json.dumps default= for _generate_model_id: plain str() on an arbitrary
+        object (e.g. a RoutingPlugin instance) falls back to object.__repr__'s
+        `<module.Class object at 0x...>`, so the hash -- and deployment id -- would
+        change every restart. Use the class name instead, stable across restarts."""
+        return f"{type(value).__module__}.{type(value).__qualname__}"
+
     def _generate_model_id(self, model_group: str, litellm_params: dict):
         """
         Helper function to consistently generate the same id for a deployment
@@ -7299,14 +7383,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k))
+                parts.append(json.dumps(k, default=self._json_default_stable_id))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v))
+                parts.append(json.dumps(v, default=self._json_default_stable_id))
             else:
                 parts.append(str(v))
 
@@ -7792,6 +7876,7 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
@@ -8143,6 +8228,9 @@ class Router:
                 self.team_model_to_deployment_indices[key] = updated_indices
             else:
                 del self.team_model_to_deployment_indices[key]
+        self.team_public_model_names = frozenset(
+            public_model_name for _, public_model_name in self.team_model_to_deployment_indices
+        )
 
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
@@ -8156,6 +8244,7 @@ class Router:
         team_public_model_name = (model.get("model_info") or {}).get("team_public_model_name")
         if team_id and team_public_model_name:
             key = (team_id, team_public_model_name)
+            self.team_public_model_names = self.team_public_model_names | frozenset({team_public_model_name})
             if key not in self.team_model_to_deployment_indices:
                 self.team_model_to_deployment_indices[key] = []
             if idx not in self.team_model_to_deployment_indices[key]:
@@ -8734,8 +8823,8 @@ class Router:
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
-                input_cost_per_token = db_model_info.get("input_cost_per_token")
-                output_cost_per_token = db_model_info.get("output_cost_per_token")
+                input_cost_per_token = _cost_value_as_float(db_model_info.get("input_cost_per_token"))
+                output_cost_per_token = _cost_value_as_float(db_model_info.get("output_cost_per_token"))
 
                 model_info = ModelMapInfo(
                     key=model_group,
@@ -8786,16 +8875,18 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                if model_info.get("input_cost_per_token", None) is not None and (
+                _input_cost_per_token = _cost_value_as_float(model_info.get("input_cost_per_token"))
+                if _input_cost_per_token is not None and (
                     model_group_info.input_cost_per_token is None
-                    or (model_info["input_cost_per_token"] or 0.0) > (model_group_info.input_cost_per_token or 0.0)
+                    or _input_cost_per_token > (model_group_info.input_cost_per_token or 0.0)
                 ):
-                    model_group_info.input_cost_per_token = model_info["input_cost_per_token"]
-                if model_info.get("output_cost_per_token", None) is not None and (
+                    model_group_info.input_cost_per_token = _input_cost_per_token
+                _output_cost_per_token = _cost_value_as_float(model_info.get("output_cost_per_token"))
+                if _output_cost_per_token is not None and (
                     model_group_info.output_cost_per_token is None
-                    or (model_info["output_cost_per_token"] or 0.0) > (model_group_info.output_cost_per_token or 0.0)
+                    or _output_cost_per_token > (model_group_info.output_cost_per_token or 0.0)
                 ):
-                    model_group_info.output_cost_per_token = model_info["output_cost_per_token"]
+                    model_group_info.output_cost_per_token = _output_cost_per_token
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True  # type: ignore
@@ -9110,6 +9201,7 @@ class Router:
         """
         self.model_name_to_deployment_indices.clear()
         self.team_model_to_deployment_indices.clear()
+        self.team_public_model_names = frozenset()
 
         for idx, model in enumerate(model_list):
             model_name = model.get("model_name")
@@ -9686,6 +9778,7 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_tag_filtering",
         ]
 
         for var in vars_to_include:
@@ -9722,6 +9815,7 @@ class Router:
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_tag_filtering",
         ]
 
         _int_settings = [
@@ -10018,7 +10112,10 @@ class Router:
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
     def _try_early_resolve_deployments_for_model_not_in_names(
-        self, model: str, request_team_id: Optional[str]
+        self,
+        model: str,
+        request_team_id: Optional[str],
+        include_team_models: bool = False,
     ) -> Optional[Tuple[str, Union[List, Dict]]]:
         """
         When ``model`` is not in ``self.model_names``, try team routes, pattern routes,
@@ -10031,6 +10128,30 @@ class Router:
         # so that named team deployments shadow wildcard/pattern routes.
         if request_team_id is not None:
             team_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
+            if team_deployments:
+                return model, team_deployments
+        elif include_team_models:
+            team_deployments = [
+                self.model_list[index]
+                for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
+                if public_model_name == model
+                for index in indices
+            ]
+            team_ids = {
+                team_id
+                for deployment in team_deployments
+                for team_id in [(deployment.get("model_info") or {}).get("team_id")]
+                if team_id is not None
+            }
+            if len(team_ids) > 1:
+                raise litellm.BadRequestError(
+                    message=(
+                        f"Model name '{model}' matches deployments from multiple teams. "
+                        "Specify the deployment ID directly to disambiguate."
+                    ),
+                    model=model,
+                    llm_provider="",
+                )
             if team_deployments:
                 return model, team_deployments
 
@@ -10097,7 +10218,11 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        early = self._try_early_resolve_deployments_for_model_not_in_names(model=model, request_team_id=request_team_id)
+        early = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=model,
+            request_team_id=request_team_id,
+            include_team_models=_is_proxy_admin_request(request_kwargs),
+        )
         if early is not None:
             return early
 
@@ -10414,7 +10539,7 @@ class Router:
             # Resolve the strategy and logger AFTER the pre-routing hook, since
             # the hook can replace `model` and routing-group lookup must key
             # off the final model name.
-            strategy, strategy_selector = self._get_routing_context(model)
+            strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
 
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
@@ -10558,7 +10683,7 @@ class Router:
 
             # 5. Apply load balancing strategy
             start_time = time.perf_counter()
-            strategy, strategy_selector = self._get_routing_context(model)
+            strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
             if strategy == "simple-shuffle":
                 return simple_shuffle(
                     llm_router_instance=self,
@@ -10845,7 +10970,7 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        strategy, strategy_selector = self._get_routing_context(model)
+        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         if strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
@@ -10985,7 +11110,7 @@ class Router:
             )
 
         # 6. Apply load balancing strategy
-        strategy, strategy_selector = self._get_routing_context(model)
+        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         if strategy == "simple-shuffle":
             return simple_shuffle(
                 llm_router_instance=self,

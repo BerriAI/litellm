@@ -32,6 +32,13 @@ def logging_obj():
     )
 
 
+def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
+    assert logging_obj.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
 def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
@@ -2240,6 +2247,53 @@ def test_get_error_information_prefers_message_attribute_over_str():
     assert result["error_class"] == "ProxyExceptionLike"
 
 
+def test_get_error_information_budget_exceeded_structured_fields():
+    """
+    Regression for LIT-4458: a budget-rejected request's failure
+    StandardLoggingPayload must identify WHICH budget blocked the call
+    as structured fields, not only inside the free-text error_str
+    ("ExceededBudget: User=... over budget. Spend=..., Budget=...").
+
+    Asserts get_error_information copies entity_type / entity_id /
+    max_budget / current_cost off BudgetExceededError into
+    error_budget_entity_type / error_budget_entity_id /
+    error_budget_limit / error_budget_spend, and leaves all four None
+    for non-budget exceptions.
+    """
+    from litellm.exceptions import BudgetExceededError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    exc = BudgetExceededError(
+        current_cost=3.4e-05,
+        max_budget=1e-06,
+        message="ExceededBudget: User=repro-user over budget. Spend=3.4e-05, Budget=1e-06",
+        entity_type="user",
+        entity_id="repro-user",
+    )
+
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_budget_entity_type"] == "user"
+    assert result["error_budget_entity_id"] == "repro-user"
+    assert result["error_budget_limit"] == 1e-06
+    assert result["error_budget_spend"] == 3.4e-05
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "BudgetExceededError"
+    assert result["error_rate_limit_type"] == "budget"
+
+    legacy_exc = BudgetExceededError(current_cost=2.0, max_budget=1.0)
+    legacy_result = StandardLoggingPayloadSetup.get_error_information(legacy_exc)
+    assert legacy_result["error_budget_entity_type"] is None
+    assert legacy_result["error_budget_entity_id"] is None
+    assert legacy_result["error_budget_limit"] == 1.0
+    assert legacy_result["error_budget_spend"] == 2.0
+
+    non_budget_result = StandardLoggingPayloadSetup.get_error_information(ValueError("boom"))
+    assert non_budget_result["error_budget_entity_type"] is None
+    assert non_budget_result["error_budget_entity_id"] is None
+    assert non_budget_result["error_budget_limit"] is None
+    assert non_budget_result["error_budget_spend"] is None
+
+
 def test_get_error_information_preserves_explicit_empty_message():
     """
     An exception that deliberately sets `.message = ""` must surface
@@ -3773,3 +3827,19 @@ def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
     assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
     assert payload["total_tokens"] == 0
     assert payload["completion_tokens"] == 0
+
+
+def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
+    """
+    pre_call/post_call must not stash their locals (full messages, the Logging
+    object, complete_input_dict) into module-level state. That pinned the most
+    recent request's entire payload in memory for the life of the worker,
+    which with multi-hundred-KB requests is a permanent per-worker leak.
+    """
+    litellm.error_logs.clear()
+    big_input = [{"role": "user", "content": "x" * 10_000}]
+
+    logging_obj.pre_call(input=big_input, api_key="sk-test")
+    logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
+
+    assert litellm.error_logs == {}
