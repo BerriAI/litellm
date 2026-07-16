@@ -25,8 +25,17 @@ Foundry Anthropic surface accepted the `api-key` / `Authorization:
 Bearer` headers the fallback sends (a bogus key 401s, the real key
 proceeds to deployment lookup), so a red cell here means missing
 AZURE_API_BASE/AZURE_API_KEY on the proxy, missing Foundry deployments
-for the three tiers, or a genuine forwarding regression -- not an
-auth-scheme mismatch.
+for the three tiers, or a genuine forwarding gap -- not an auth-scheme
+mismatch.
+
+Known-red at authoring time against a healthy Foundry resource: the
+`/azure` fallback assembles only its own auth headers and drops the
+rest of the client's headers, including the `anthropic-version` header
+the CLI sends, and Foundry's Anthropic surface rejects the request
+with 400 "anthropic-version: header is required" (the same request
+sent directly to Foundry with that header succeeds). This cell stays
+red until that forwarding gap is fixed, which is precisely the class
+of bug the row exists to surface.
 """
 
 from __future__ import annotations
