@@ -221,7 +221,7 @@ def up(ctx: click.Context) -> None:
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
         merged = merge_claude_settings(original_settings, base_url, api_key_helper)
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
+        with secure_create(CLAUDE_SETTINGS_PATH) as f:
             json.dump(merged, f, indent=2)
     except (AgentRunError, UpError) as e:
         raise click.ClickException(str(e))

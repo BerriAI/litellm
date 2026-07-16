@@ -324,6 +324,7 @@ class TestUpCommand:
         def fake_wait(self, timeout=None):
             captured["settings"] = json.loads(settings_path.read_text())
             captured["backup_existed"] = backup_path.exists()
+            captured["settings_mode"] = stat.S_IMODE(settings_path.stat().st_mode)
             return True
 
         with (
@@ -346,6 +347,7 @@ class TestUpCommand:
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert captured["settings"]["apiKeyHelper"] == "/usr/local/bin/lite auth print-token"
+        assert captured["settings_mode"] == 0o600
         assert json.loads(settings_path.read_text()) == original
         assert not backup_path.exists()
 
