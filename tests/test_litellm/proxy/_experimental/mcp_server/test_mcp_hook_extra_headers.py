@@ -515,6 +515,66 @@ class TestCallToolFlowsHookHeaders:
                             proxy_logging_obj=proxy_logging,
                         )
 
+    @pytest.mark.asyncio
+    async def test_openapi_server_forwards_allowlisted_client_headers(self):
+        from mcp.types import TextContent
+
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_extra_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="openapi_server",
+            server_name="openapi_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="/path/to/spec.yaml",
+            extra_headers=["Authorization", "X-Tenant-ID"],
+        )
+        manager.registry[server.server_id] = server
+        manager.tool_name_to_mcp_server_name_mapping["test_tool"] = server.name
+        manager.tool_name_to_mcp_server_name_mapping["openapi_server-test_tool"] = (
+            server.name
+        )
+
+        async def capture_headers() -> Optional[Dict[str, str]]:
+            return _request_extra_headers.get()
+
+        registered_name = "openapi_server-test_tool"
+        global_mcp_tool_registry.register_tool(
+            name=registered_name,
+            description="test",
+            input_schema={},
+            handler=capture_headers,
+        )
+
+        try:
+            forwarded_result = await manager.call_tool(
+                server_name="openapi_server",
+                name="test_tool",
+                arguments={},
+                raw_headers={
+                    "x-litellm-api-key": "sk-proxy",
+                    "authorization": "Bearer user-token",
+                    "x-tenant-id": "tenant-001",
+                    "x-unlisted": "not-forwarded",
+                },
+            )
+        finally:
+            global_mcp_tool_registry.tools.pop(registered_name)
+
+        assert forwarded_result.isError is False
+        assert isinstance(forwarded_result.content[0], TextContent)
+        assert forwarded_result.content[0].text == (
+            "{'Authorization': 'Bearer user-token', 'X-Tenant-ID': 'tenant-001'}"
+        )
+
 
 class TestHookHeaderMergePriority:
     """Tests that hook-provided headers have highest priority in _call_regular_mcp_tool."""
