@@ -47,9 +47,6 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
-/// The caller-supplied Vertex credentials: inline service-account JSON (as a
-/// string or object) or a path to a credentials file. Absent/empty means fall
-/// back to Application Default Credentials.
 fn vertex_credentials(optional_params: &Map<String, Value>) -> Option<String> {
     ["vertex_credentials", "vertex_ai_credentials"]
         .iter()
@@ -62,6 +59,17 @@ fn vertex_credentials(optional_params: &Map<String, Value>) -> Option<String> {
             Value::Object(_) => serde_json::to_string(value).ok(),
             _ => None,
         })
+}
+
+fn resolve_vertex_credentials(
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    vertex_credentials(optional_params).or_else(|| {
+        env_lookup(crate::constants::VERTEXAI_CREDENTIALS_ENV)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn upstream_headers(
@@ -107,12 +115,11 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     } else {
         Some(match config.ocr_auth() {
             OcrAuth::ProviderKey => config.resolve_api_key(request.api_key, &env_lookup)?,
-            // Classify synchronously so the non-`Send` `env_lookup` closure is
-            // not held across the mint await (keeps the returned future `Send`).
             OcrAuth::VertexOauth => match classify_vertex_bearer(request.api_key, &env_lookup)? {
                 VertexTokenSource::Explicit(token) => token,
                 VertexTokenSource::Mint => {
-                    let credentials = vertex_credentials(&request.optional_params);
+                    let credentials =
+                        resolve_vertex_credentials(&request.optional_params, &env_lookup);
                     vertex_auth::mint_vertex_bearer(credentials.as_deref()).await?
                 }
             },
@@ -395,6 +402,35 @@ mod tests {
         assert_eq!(vertex_credentials(&Map::new()), None);
     }
 
+    #[test]
+    fn resolve_vertex_credentials_prefers_optional_param_then_env() {
+        let mut params = Map::new();
+        params.insert(
+            "vertex_credentials".to_string(),
+            Value::String("/from/param.json".into()),
+        );
+        let env = |key: &str| {
+            (key == crate::constants::VERTEXAI_CREDENTIALS_ENV)
+                .then(|| "/from/env.json".to_string())
+        };
+        assert_eq!(
+            resolve_vertex_credentials(&params, &env).as_deref(),
+            Some("/from/param.json")
+        );
+
+        assert_eq!(
+            resolve_vertex_credentials(&Map::new(), &env).as_deref(),
+            Some("/from/env.json")
+        );
+
+        let blank_env = |key: &str| {
+            (key == crate::constants::VERTEXAI_CREDENTIALS_ENV).then(|| "   ".to_string())
+        };
+        assert_eq!(resolve_vertex_credentials(&Map::new(), &blank_env), None);
+
+        assert_eq!(resolve_vertex_credentials(&Map::new(), &|_| None), None);
+    }
+
     #[tokio::test]
     async fn vertex_ocr_sends_explicit_oauth_bearer_to_raw_predict_endpoint() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -478,7 +514,6 @@ mod tests {
                 "image_url": "data:image/png;base64,abc"
             }),
             api_key: Some("AIzaSyExampleApiKeyValue000000000000000"),
-            // An unroutable base: the test proves we fail before any network call.
             api_base: Some("http://192.0.2.1:9"),
             custom_llm_provider: "vertex_ai",
             extra_headers: None,

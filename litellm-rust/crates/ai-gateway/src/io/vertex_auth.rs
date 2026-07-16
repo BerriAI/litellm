@@ -1,14 +1,4 @@
-//! Host-layer Google Vertex authentication.
-//!
-//! Mints and refreshes Vertex OAuth 2.0 access tokens from service-account
-//! JSON, Application Default Credentials or `GOOGLE_APPLICATION_CREDENTIALS`
-//! using the official `google-cloud-auth` crate; no hand-rolled JWT signing.
-//! Token acquisition, caching and refresh all live here in the I/O layer so
-//! `litellm-core` stays free of network, filesystem and secret access.
-
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::{Once, OnceLock};
 
 use google_cloud_auth::credentials::service_account::AccessSpecifier;
@@ -19,15 +9,13 @@ use google_cloud_auth::credentials::{
 use litellm_core::error::CoreError;
 use litellm_core::CoreResult;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-/// OAuth scope Vertex AI requires; matches the Python client's scope.
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+use crate::constants::CLOUD_PLATFORM_SCOPE;
 
-/// `google-cloud-auth` is built without a bundled rustls provider (to keep
-/// `reqwest/default-tls` and aws-lc-rs out of the wheel), so the application
-/// must install a process-default `CryptoProvider`. Install the ring provider
-/// once; reqwest already links ring, so this adds no new crypto backend.
+type CacheKey = [u8; 32];
+
 fn ensure_crypto_provider() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -35,30 +23,23 @@ fn ensure_crypto_provider() {
     });
 }
 
-fn credentials_cache() -> &'static Mutex<HashMap<u64, AccessTokenCredentials>> {
-    static CACHE: OnceLock<Mutex<HashMap<u64, AccessTokenCredentials>>> = OnceLock::new();
+fn credentials_cache() -> &'static Mutex<HashMap<CacheKey, AccessTokenCredentials>> {
+    static CACHE: OnceLock<Mutex<HashMap<CacheKey, AccessTokenCredentials>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cache_key(credentials: Option<&str>) -> u64 {
-    let mut hasher = DefaultHasher::new();
+fn cache_key(credentials: Option<&str>) -> CacheKey {
+    let mut hasher = Sha256::new();
     match credentials {
-        None => "adc".hash(&mut hasher),
+        None => hasher.update(b"adc"),
         Some(raw) => {
-            "inline".hash(&mut hasher);
-            raw.trim().hash(&mut hasher);
+            hasher.update(b"inline:");
+            hasher.update(raw.trim().as_bytes());
         }
     }
-    hasher.finish()
+    hasher.finalize().into()
 }
 
-/// Mint (or reuse a cached, auto-refreshing) Vertex OAuth bearer token.
-///
-/// `credentials` is the resolved `vertex_credentials` value — inline
-/// service-account JSON or a path to a credentials file. `None` falls back to
-/// Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the
-/// well-known ADC file, or the metadata server), matching Python's
-/// `google.auth.default`.
 pub async fn mint_vertex_bearer(credentials: Option<&str>) -> CoreResult<String> {
     ensure_crypto_provider();
     let token = resolve_credentials(credentials)
@@ -100,7 +81,6 @@ async fn load_credentials_json(raw: &str) -> CoreResult<Value> {
             CoreError::Auth(format!("Failed to read Vertex credentials file: {err}"))
         })?
     };
-    // Deliberately opaque: a serde error can echo credential contents.
     serde_json::from_str(&contents)
         .map_err(|_| CoreError::Auth("Vertex credentials are not valid JSON".to_string()))
 }
@@ -148,6 +128,20 @@ mod tests {
             inline,
             cache_key(Some("  {\"type\":\"service_account\"}  "))
         );
+    }
+
+    #[test]
+    fn cache_key_differs_for_distinct_credential_sources() {
+        let adc = cache_key(None);
+        let first = cache_key(Some(
+            "{\"type\":\"service_account\",\"client_email\":\"a\"}",
+        ));
+        let second = cache_key(Some(
+            "{\"type\":\"service_account\",\"client_email\":\"b\"}",
+        ));
+        assert_ne!(first, second);
+        assert_ne!(adc, first);
+        assert_ne!(adc, second);
     }
 
     #[test]

@@ -21,9 +21,6 @@ rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# Official Google Cloud Rust auth library — mints/refreshes Vertex OAuth access
-# default-features off keeps OpenSSL/aws-lc-rs out for portable wheels; the host
-# installs the ring rustls provider both crates then rely on (see io::vertex_auth).
 google-cloud-auth = { version = "1.14", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 sha2 = "0.10"

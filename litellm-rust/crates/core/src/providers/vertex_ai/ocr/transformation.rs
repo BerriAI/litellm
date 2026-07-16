@@ -1,3 +1,4 @@
+use crate::constants::{GOOGLE_API_KEY_PREFIX, VERTEX_GLOBAL_API_BASE, VERTEX_GLOBAL_LOCATION};
 use crate::error::{json_type_name, CoreError, CoreResult};
 use crate::ocr::transformation::{OcrAuth, OcrProviderConfig};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
@@ -6,18 +7,12 @@ use serde_json::{json, Map, Value};
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
 const VERTEX_DEFAULT_LOCATION: &str = "us-central1";
-const VERTEX_GLOBAL_LOCATION: &str = "global";
-const VERTEX_GLOBAL_API_BASE: &str = "https://aiplatform.googleapis.com";
 const VERTEX_DEFAULT_DEEPSEEK_API_BASE: &str = VERTEX_GLOBAL_API_BASE;
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
 const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
 const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
 const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
-/// Google API keys are the fixed-shape `AIza...` browser/server keys. They are
-/// not OAuth 2.0 access tokens and Vertex `rawPredict` rejects them, so we must
-/// not silently forward one as a `Bearer` credential.
-const GOOGLE_API_KEY_PREFIX: &str = "AIza";
 
 #[rustfmt::skip]
 const DEEPSEEK_SUPPORTED_OCR_PARAMS: &[&str] = &[
@@ -46,13 +41,9 @@ pub fn is_deepseek_model(model: &str) -> bool {
     model.to_ascii_lowercase().contains("deepseek")
 }
 
-/// Where the host should get the Vertex OAuth bearer token from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VertexTokenSource {
-    /// The caller supplied an explicit OAuth 2.0 access token to send verbatim.
     Explicit(String),
-    /// No token was supplied; the host mints one from service-account JSON, ADC
-    /// or `GOOGLE_APPLICATION_CREDENTIALS`.
     Mint,
 }
 
@@ -60,13 +51,6 @@ fn is_google_api_key(token: &str) -> bool {
     token.starts_with(GOOGLE_API_KEY_PREFIX)
 }
 
-/// Decide how the host obtains the Vertex bearer token.
-///
-/// An explicit `api_key` (or the `VERTEX_AI_API_KEY`/`VERTEXAI_API_KEY`
-/// environment variables) is treated as an OAuth access token, except a
-/// Google `AIza...` API key, which is rejected rather than sent as a `Bearer`
-/// that Vertex would reject with an opaque error. Absent any token the host
-/// mints one from service-account/ADC credentials.
 pub fn classify_vertex_bearer(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
@@ -115,9 +99,6 @@ fn vertex_location(
         .unwrap_or_else(|| VERTEX_DEFAULT_LOCATION.to_string())
 }
 
-/// Regional Vertex host for `location`, mirroring Python's `get_vertex_base_url`:
-/// `global` has no regional prefix, single-token locations use the `.rep.`
-/// residency host, and hyphenated regions use the `{location}-aiplatform` host.
 fn vertex_base_url(location: &str) -> String {
     match location {
         VERTEX_GLOBAL_LOCATION => VERTEX_GLOBAL_API_BASE.to_string(),

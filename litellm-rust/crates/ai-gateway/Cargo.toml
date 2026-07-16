@@ -24,21 +24,17 @@ tokio-tungstenite.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
 base64.workspace = true
-# Vertex host-layer auth: mint/refresh Google OAuth tokens; rustls installs the
-# ring CryptoProvider google-cloud-auth needs (see io::vertex_auth).
 google-cloud-auth.workspace = true
 rustls.workspace = true
+sha2.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }
 serde = { workspace = true, optional = true }
 subtle = { workspace = true, optional = true }
-# sha2 hashes the master key into user_api_key_hash (matches the proxy's
-# SHA-256 hash_token) so the plaintext credential never enters a log payload.
-sha2 = { workspace = true, optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle", "dep:serde", "dep:sha2"]
+server = ["dep:axum", "dep:subtle", "dep:serde"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]

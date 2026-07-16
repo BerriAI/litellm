@@ -25,15 +25,9 @@ pub enum OcrResponseHandling {
     AzureDocumentIntelligencePoll,
 }
 
-/// How the host must obtain the credential it sends upstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuth {
-    /// A provider key/token resolved from the request or environment and placed
-    /// in the request header per [`OcrAuthStrategy`].
     ProviderKey,
-    /// Google Vertex OAuth: the host mints/refreshes an access token from
-    /// service-account JSON, ADC or `GOOGLE_APPLICATION_CREDENTIALS`, or accepts
-    /// an explicitly supplied OAuth access token, and sends it as a Bearer.
     VertexOauth,
 }
 
@@ -78,11 +72,6 @@ pub trait OcrProviderConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String>;
 
-    /// Resolve the provider key/token for [`OcrAuth::ProviderKey`] providers.
-    ///
-    /// [`OcrAuth::VertexOauth`] providers never call this (the host mints the
-    /// bearer), so they inherit the default that reports the wrong auth path was
-    /// taken rather than carrying an unused implementation.
     fn resolve_api_key(
         &self,
         _api_key: Option<&str>,
