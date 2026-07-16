@@ -369,6 +369,7 @@ export const processActivityData = (
 
   dailyActivity.results.forEach((day) => {
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
+      if (!modelData?.metrics) return;
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
           label:
@@ -430,6 +431,7 @@ export const processActivityData = (
         const modelData = day.breakdown[key]?.[model];
         if (modelData && "api_key_breakdown" in modelData) {
           Object.entries(modelData.api_key_breakdown || {}).forEach(([apiKey, keyData]) => {
+            if (!keyData?.metrics) return;
             if (!apiKeyBreakdown[apiKey]) {
               apiKeyBreakdown[apiKey] = {
                 api_key: apiKey,
@@ -466,7 +468,7 @@ export const processActivityData = (
         Object.entries(day.breakdown.models || {}).forEach(([modelName, modelData]) => {
           if (modelData && "api_key_breakdown" in modelData) {
             const keyDataForModel = modelData.api_key_breakdown?.[apiKeyHash];
-            if (keyDataForModel) {
+            if (keyDataForModel?.metrics) {
               if (!modelBreakdown[modelName]) {
                 modelBreakdown[modelName] = {
                   model: modelName,
