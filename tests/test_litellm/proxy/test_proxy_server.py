@@ -6188,6 +6188,32 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_value,expected",
+    [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
+)
+async def test_update_general_settings_disable_auto_add_proxy_admin_to_teams(db_value, expected):
+    """
+    Verify _update_general_settings propagates disable_auto_add_proxy_admin_to_teams
+    from the DB config into the live general_settings dict, so a UI toggle via
+    /config/field/update takes effect on the next config poll instead of
+    requiring a proxy restart.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"disable_auto_add_proxy_admin_to_teams": db_value}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["disable_auto_add_proxy_admin_to_teams"] is expected
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_store_model_in_db_string_normalization():
     """
     Verify _update_general_settings normalizes string values for store_model_in_db.
