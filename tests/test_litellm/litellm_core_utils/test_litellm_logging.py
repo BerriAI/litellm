@@ -798,29 +798,23 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
-def test_is_sync_litellm_request():
-    assert LitellmLogging._is_sync_litellm_request({}, call_type=None) is True
-    assert (
-        LitellmLogging._is_sync_litellm_request({"acompletion": True}, call_type=None)
-        is False
-    )
-    assert (
-        LitellmLogging._is_sync_litellm_request(
-            {"allm_passthrough_route": True}, call_type=None
-        )
-        is False
-    )
-    assert LitellmLogging._is_sync_litellm_request({}, call_type="completion") is True
-    assert (
-        LitellmLogging._is_sync_litellm_request({}, call_type="anthropic_messages")
-        is False
-    )
+def test_is_sync_litellm_request(logging_obj):
+    assert logging_obj.is_async_entrypoint is None
+    assert logging_obj._is_sync_litellm_request({}) is True
+    assert logging_obj._is_sync_litellm_request({"acompletion": True}) is False
+    assert logging_obj._is_sync_litellm_request({"allm_passthrough_route": True}) is False
+
+    logging_obj.is_async_entrypoint = True
+    assert logging_obj._is_sync_litellm_request({}) is False
+
+    logging_obj.is_async_entrypoint = False
+    assert logging_obj._is_sync_litellm_request({"acompletion": True}) is True
 
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_success_logs_custom_logger_exactly_once(logging_obj):
-    """anthropic_messages success must reach a CustomLogger exactly once, via the async
-    hook only; the sync success_handler skips CustomLogger hooks for this call type.
+    """A request stamped async by the @client wrapper must reach a CustomLogger exactly
+    once, via the async hook only; the sync success_handler skips CustomLogger hooks.
     Regression guard for LIT-4447."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -829,6 +823,7 @@ async def test_anthropic_messages_success_logs_custom_logger_exactly_once(loggin
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
+    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
 
@@ -865,9 +860,9 @@ async def test_anthropic_messages_success_logs_custom_logger_exactly_once(loggin
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(logging_obj):
-    """anthropic_messages failure must reach a CustomLogger exactly once, via the async
-    hook only; the sync failure_handler skips CustomLogger hooks for this call type.
-    Regression guard for LIT-4447."""
+    """A request stamped async by the @client wrapper must reach a CustomLogger exactly
+    once on failure, via the async hook only; the sync failure_handler skips CustomLogger
+    hooks. Regression guard for LIT-4447."""
     from litellm.integrations.custom_logger import CustomLogger
 
     class DummyLogger(CustomLogger):
@@ -875,6 +870,7 @@ async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(loggin
 
     logging_obj.stream = False
     logging_obj.call_type = "anthropic_messages"
+    logging_obj.is_async_entrypoint = True
     logging_obj.model_call_details["litellm_params"] = {}
     logging_obj.litellm_params = {}
 
@@ -897,7 +893,90 @@ async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(loggin
     mock_sync_log.assert_not_called()
 
 
-def test_get_litellm_params_propagates_allm_passthrough_route():
+@pytest.mark.asyncio
+async def test_async_client_entrypoint_stamps_and_dedupes_flagless_call_type():
+    """End-to-end through the real @client wrapper: litellm.anthropic_messages sets no
+    `a*` flag in litellm_params, so only the wrapper-stamped is_async_entrypoint marks
+    the request async. With the executor sync dispatch open (a surviving plain-callable
+    callback, same mechanism as a legacy string callback), the CustomLogger must fire
+    via the async hook exactly once. Regression guard for LIT-4447 and LIT-4475."""
+
+    events = []
+
+    class Rec(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append(("sync", kwargs.get("call_type")))
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append(("async", kwargs.get("call_type")))
+
+    def _gate_opener(kwargs, completion_response, start_time, end_time):
+        pass
+
+    rec = Rec()
+    original_success = litellm.success_callback
+    original_async = litellm._async_success_callback
+    litellm.success_callback = [rec, _gate_opener]
+    litellm._async_success_callback = [rec]
+    try:
+        await litellm.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="claude-sonnet-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-ant-dummy",
+            mock_response="hello",
+        )
+        for _ in range(50):
+            if events:
+                break
+            await asyncio.sleep(0.1)
+        from litellm.litellm_core_utils.thread_pool_executor import executor
+
+        executor.submit(lambda: None).result()
+    finally:
+        litellm.success_callback = original_success
+        litellm._async_success_callback = original_async
+
+    assert events == [("async", "anthropic_messages")]
+
+
+@pytest.mark.asyncio
+async def test_client_wrapper_stamp_is_first_wins_across_nested_calls():
+    """An async entrypoint that internally invokes a sync @client function with the
+    shared logging object (e.g. agenerate_content delegating to generate_content) must
+    keep is_async_entrypoint=True; the inner sync wrapper must not overwrite the
+    entrypoint's stamp. Regression guard for LIT-4475 (gemini /generate_content kept
+    double-logging because the inner sync wrapper flipped the bit back to sync)."""
+    from litellm.utils import client
+
+    observed = {}
+
+    @client
+    def fake_inner_sync(model: str, messages=None, **kwargs):
+        observed["inner_bit"] = kwargs["litellm_logging_obj"].is_async_entrypoint
+        return ModelResponse(
+            model=model,
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    @client
+    async def fake_outer_async(model: str, messages=None, **kwargs):
+        result = fake_inner_sync(model=model, messages=messages, **kwargs)
+        observed["outer_bit_after_inner"] = kwargs["litellm_logging_obj"].is_async_entrypoint
+        return result
+
+    await fake_outer_async(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+
+    assert observed == {"inner_bit": True, "outer_bit_after_inner": True}
+
+    fake_inner_sync(model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+
+    assert observed["inner_bit"] is False
+
+
+def test_get_litellm_params_propagates_allm_passthrough_route(logging_obj):
     """`allm_passthrough_route=True` set on kwargs by the async passthrough entrypoint
     must land in `litellm_params` so `_is_sync_litellm_request` sees it and the
     request is classified as async. Regression guard for LIT-4192."""
@@ -905,7 +984,7 @@ def test_get_litellm_params_propagates_allm_passthrough_route():
 
     params = get_litellm_params(allm_passthrough_route=True)
     assert params.get("allm_passthrough_route") is True
-    assert LitellmLogging._is_sync_litellm_request(params, call_type=None) is False
+    assert logging_obj._is_sync_litellm_request(params) is False
 
 
 @pytest.mark.asyncio
