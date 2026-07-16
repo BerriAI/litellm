@@ -85,6 +85,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    CredError,
     IdJagConfig,
     PassthroughConfig,
     ServerSpec,
@@ -553,6 +554,25 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
         and getattr(server, "delegate_auth_to_upstream", False) is True
         and not server.has_client_credentials
     )
+
+
+def _to_server_spec_fail_closed(server: MCPServer) -> Optional[ServerSpec]:
+    """`to_server_spec`, except a half-configured `oauth2_id_jag` server refuses instead of deferring.
+
+    ID-JAG has no v1 arm, so deferring to v1 would let `resolve_mcp_auth` honor a caller x-mcp-*
+    override or fall through to the static `authentication_token`, both of which bypass the per-user
+    identity assertion the mode promises. That is an operator misconfiguration, not a fallback.
+    """
+    spec = to_server_spec(server)
+    if spec is None and server.auth_type == MCPAuth.oauth2_id_jag:
+        raise_public(
+            CredError.of_misconfigured(
+                "oauth2_id_jag requires token_exchange_endpoint, id_jag_resource_token_endpoint, "
+                "client_id, and a client_secret or client_private_key; refusing to fall back to "
+                "a static credential."
+            )
+        )
+    return spec
 
 
 def _caller_authorization_fans_out(
@@ -2641,7 +2661,7 @@ class MCPServerManager:
             Configured MCP client instance.
         """
         transport = server.transport or MCPTransport.sse
-        spec = None if transport == MCPTransport.stdio else to_server_spec(server)
+        spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(server)
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
         # so it wins - except for the modes the v2 resolver owns per-caller (authorization_code's
