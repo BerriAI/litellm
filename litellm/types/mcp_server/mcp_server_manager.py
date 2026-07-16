@@ -26,6 +26,11 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    discovered_issuer: Optional[str] = None
+    """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
+    trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
+    anchor discovery on it (RFC 8414 §3.3) and a subsequently compromised resource cannot re-point
+    it. Never overwrites an admin-configured issuer."""
     from_origin_fallback: bool = False
     """True when the metadata came from guessing the resource origin as its authorization
     server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
@@ -60,6 +65,8 @@ class MCPServer(BaseModel):
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
+    issuer: Optional[str] = None
+    issuer_is_anchored: bool = False
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None

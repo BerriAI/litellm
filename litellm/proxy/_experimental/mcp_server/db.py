@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
     {
+        "issuer",
         "authorization_url",
         "token_url",
         "registration_url",
@@ -59,6 +60,13 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
         "token_exchange_profile",
     }
 )
+
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
 
 # Token-exchange settings with dedicated columns that also exist on
 # ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
@@ -697,13 +705,15 @@ async def update_mcp_server(
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
     data_dict = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
-    # Pre-fetch existing record once if we need it for auth_type or credential logic
+    # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
     existing = None
     has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
     explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
-    if data.auth_type or has_credentials or explicit_te_write:
+    url_provided = "url" in data_dict and data_dict["url"] is not None
+    issuer_provided = "issuer" in data_dict
+    if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
     auth_type_changed = bool(
@@ -711,13 +721,30 @@ async def update_mcp_server(
         and existing
         and _credential_auth_class(existing.auth_type) != _credential_auth_class(data.auth_type)
     )
+    # A url change re-points the server at a potentially different upstream, so any discovered or
+    # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
+    url_changed = bool(url_provided and existing and existing.url != data_dict["url"])
+    old_issuer = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
+    issuer_changed = bool(
+        issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
+    )
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
 
-    if auth_type_changed:
-        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
+    if auth_type_changed or url_changed or issuer_changed:
+        # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
+        # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
+        # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
+        # resolution merge; only a genuinely new submitted value is kept.
+        data_dict.update(
+            {
+                field: None
+                for field in _AUTH_FLOW_SCOPED_FIELDS
+                if field not in data_dict or data_dict[field] == getattr(existing, field, None)
+            }
+        )
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
@@ -1181,6 +1208,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
         getattr(server, "spec_path", None),
         getattr(server, "auth_type", None),
         getattr(server, "oauth2_flow", None),
+        getattr(server, "issuer", None),
         getattr(server, "authorization_url", None),
         getattr(server, "token_url", None),
         getattr(server, "registration_url", None),

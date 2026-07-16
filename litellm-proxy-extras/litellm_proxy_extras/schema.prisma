@@ -325,6 +325,7 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  issuer             String?
   authorization_url  String?
   token_url          String?
   registration_url   String?
