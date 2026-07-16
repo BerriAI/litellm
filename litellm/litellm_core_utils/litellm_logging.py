@@ -287,6 +287,29 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+def _custom_logger_has_only_sync_success_hooks(callback: CustomLogger) -> bool:
+    """True when the logger class overrides a sync success hook but no async success hook."""
+    cls = type(callback)
+    has_async = (
+        cls.async_log_success_event is not CustomLogger.async_log_success_event
+        or cls.async_log_stream_event is not CustomLogger.async_log_stream_event
+    )
+    has_sync = (
+        cls.log_success_event is not CustomLogger.log_success_event
+        or cls.log_stream_event is not CustomLogger.log_stream_event
+    )
+    return has_sync and not has_async
+
+
+def _custom_logger_has_only_sync_failure_hook(callback: CustomLogger) -> bool:
+    """True when the logger class overrides the sync failure hook but not the async one."""
+    cls = type(callback)
+    return (
+        cls.log_failure_event is not CustomLogger.log_failure_event
+        and cls.async_log_failure_event is CustomLogger.async_log_failure_event
+    )
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -2313,7 +2336,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        and (is_sync_request or _custom_logger_has_only_sync_success_hooks(callback))
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -2850,7 +2873,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        and (is_sync_request or _custom_logger_has_only_sync_failure_hook(callback))
                         and self.call_type != CallTypes.pass_through.value
                     ):  # custom logger class
                         callback.log_failure_event(
@@ -3066,12 +3089,18 @@ class Logging(LiteLLMLoggingBaseClass):
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """
         Returns:
-            - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
+            - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`,
+              or a CustomLogger whose only success delivery path is the sync hook
         """
         _combined_sync_callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
         )
+        if any(
+            isinstance(_c, CustomLogger) and _custom_logger_has_only_sync_success_hooks(_c)
+            for _c in _combined_sync_callbacks
+        ):
+            return True
         _filtered_success_callbacks = self._remove_internal_custom_logger_callbacks(_combined_sync_callbacks)
         _filtered_success_callbacks = self._remove_internal_litellm_callbacks(_filtered_success_callbacks)
         return len(_filtered_success_callbacks) > 0

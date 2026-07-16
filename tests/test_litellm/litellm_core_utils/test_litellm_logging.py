@@ -893,6 +893,181 @@ async def test_anthropic_messages_failure_logs_custom_logger_exactly_once(loggin
     mock_sync_log.assert_not_called()
 
 
+def test_custom_logger_sync_only_hook_detection():
+    """The fallback helpers key off class-level overrides: only a logger that overrides a
+    sync hook without the matching async hook qualifies for sync delivery on async requests."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import (
+        _custom_logger_has_only_sync_failure_hook,
+        _custom_logger_has_only_sync_success_hooks,
+    )
+
+    class SyncOnlyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    class BothHooksLogger(SyncOnlyLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    class AsyncOnlyLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    assert _custom_logger_has_only_sync_success_hooks(SyncOnlyLogger()) is True
+    assert _custom_logger_has_only_sync_failure_hook(SyncOnlyLogger()) is True
+    assert _custom_logger_has_only_sync_success_hooks(BothHooksLogger()) is False
+    assert _custom_logger_has_only_sync_failure_hook(BothHooksLogger()) is False
+    assert _custom_logger_has_only_sync_success_hooks(AsyncOnlyLogger()) is False
+    assert _custom_logger_has_only_sync_failure_hook(AsyncOnlyLogger()) is False
+    assert _custom_logger_has_only_sync_success_hooks(CustomLogger()) is False
+    assert _custom_logger_has_only_sync_failure_hook(CustomLogger()) is False
+
+
+@pytest.mark.asyncio
+async def test_sync_only_custom_logger_still_logs_async_request_exactly_once(logging_obj):
+    """A CustomLogger that overrides only the sync hooks must keep receiving events for
+    async requests via the sync dispatch fallback, exactly once. Companion to the LIT-4447
+    dedupe: fixing the double-log must not silence sync-only integrations entirely."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    events = []
+
+    class SyncOnlyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("sync_success")
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("sync_failure")
+
+    logging_obj.stream = False
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.is_async_entrypoint = True
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    sync_only_logger = SyncOnlyLogger()
+
+    model_response = ModelResponse(
+        id="resp-sync-only-123",
+        model="claude-sonnet-5",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[sync_only_logger],
+    ):
+        await logging_obj.async_success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response)
+
+    assert events == ["sync_success"]
+
+    events.clear()
+    exception = ValueError("provider blew up")
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[sync_only_logger],
+    ):
+        await logging_obj.async_failure_handler(exception, "traceback")
+        logging_obj.failure_handler(exception, "traceback")
+
+    assert events == ["sync_failure"]
+
+
+def test_sync_dispatch_gate_opens_for_sync_only_custom_logger(logging_obj):
+    """The executor gate that decides whether sync callbacks run for async requests must
+    count a sync-only CustomLogger, since the sync dispatch is its only delivery path;
+    loggers with async hooks must not open it."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class SyncOnlyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    class BothHooksLogger(SyncOnlyLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    logging_obj.dynamic_success_callbacks = None
+
+    with patch.object(litellm, "success_callback", [SyncOnlyLogger()]):
+        assert logging_obj._should_run_sync_callbacks_for_async_calls() is True
+
+    with patch.object(litellm, "success_callback", [BothHooksLogger()]):
+        assert logging_obj._should_run_sync_callbacks_for_async_calls() is False
+
+    with patch.object(litellm, "success_callback", []):
+        assert logging_obj._should_run_sync_callbacks_for_async_calls() is False
+
+
+@pytest.mark.asyncio
+async def test_sync_only_logger_receives_async_event_through_dispatch_gate(logging_obj):
+    """End-to-end through the executor dispatch: a sync-only CustomLogger registered with
+    no other callbacks must receive exactly one success event for an async request; the
+    gate itself must let it through rather than relying on an unrelated callback to open it."""
+    import datetime as dt
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.thread_pool_executor import executor
+
+    events = []
+
+    class SyncOnlyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("sync_success")
+
+    logging_obj.stream = False
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.is_async_entrypoint = True
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+    logging_obj.dynamic_success_callbacks = None
+
+    sync_only_logger = SyncOnlyLogger()
+    now = dt.datetime.now()
+
+    with patch.object(litellm, "success_callback", [sync_only_logger]):
+        model_response = ModelResponse(
+            id="resp-dispatch-123",
+            model="claude-sonnet-5",
+            choices=[
+                {
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop",
+                    "index": 0,
+                }
+            ],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+        await logging_obj.async_success_handler(result=model_response, start_time=now, end_time=now)
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=model_response, start_time=now, end_time=now
+        )
+        executor.submit(lambda: None).result()
+
+    assert events == ["sync_success"]
+
+
 @pytest.mark.asyncio
 async def test_async_client_entrypoint_stamps_and_dedupes_flagless_call_type():
     """End-to-end through the real @client wrapper: litellm.anthropic_messages sets no
