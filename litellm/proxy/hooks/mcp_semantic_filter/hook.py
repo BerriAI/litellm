@@ -155,6 +155,34 @@ class SemanticToolFilterHook(CustomLogger):
 
         return await self.filter.filter_tools(query=user_query, available_tools=expanded_tools)
 
+    def _selected_tool_names(self, filtered_tools: list[dict[str, Any]]) -> list[str]:
+        """Names of the semantically selected tools, as produced by the MCP expansion."""
+        names = (self.filter._extract_tool_info(tool)[0] for tool in filtered_tools)
+        return [name for name in names if name]
+
+    @staticmethod
+    def _narrow_mcp_references(tools: list[Any], selected_tool_names: list[str]) -> list[Any]:
+        """
+        Restrict each litellm_proxy MCP reference to the semantically selected tools.
+
+        The reference block is preserved rather than replaced with expanded tools, so the
+        MCP gateway still performs the expansion. That keeps the per-endpoint tool shape
+        and tool auto-execution intact. Expansion already applied any caller-supplied
+        allowed_tools, so this selection can only narrow a block further.
+        """
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        return [
+            (
+                {**tool, "allowed_tools": selected_tool_names}
+                if isinstance(tool, dict) and LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([tool])
+                else tool
+            )
+            for tool in tools
+        ]
+
     def _is_mcp_tool(self, tool: object) -> bool:
         """
         Check whether *tool* is registered in the MCP semantic router.
@@ -261,36 +289,34 @@ class SemanticToolFilterHook(CustomLogger):
         if self._should_expand_mcp_tools(tools):
             verbose_proxy_logger.debug("Detected litellm_proxy MCP references, expanding before semantic filtering")
 
+            if not self.filter.enabled:
+                verbose_proxy_logger.debug("Semantic filter disabled, leaving MCP references untouched")
+                return None
+
             try:
                 native_tools_before_expand = [t for t in tools if not (isinstance(t, dict) and t.get("type") == "mcp")]
 
                 expanded_tools = await self._expand_mcp_tools(tools, user_api_key_dict)
 
                 if not expanded_tools:
-                    if native_tools_before_expand:
-                        data["tools"] = native_tools_before_expand
-                        verbose_proxy_logger.warning(
-                            f"No MCP tools expanded, preserving {len(native_tools_before_expand)} native tools"
-                        )
-                        return data
                     verbose_proxy_logger.warning("No tools expanded from MCP references")
                     return None
 
-                if not self.filter.enabled:
-                    data["tools"] = native_tools_before_expand + expanded_tools
-                    verbose_proxy_logger.debug("Semantic filter disabled, forwarding expanded MCP tools unfiltered")
-                    return data
-
                 filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
 
-                combined_tools = native_tools_before_expand + filtered_expanded_tools
-                data["tools"] = combined_tools
+                selected_tool_names = self._selected_tool_names(filtered_expanded_tools)
+                if not selected_tool_names:
+                    verbose_proxy_logger.warning("Semantic filter selected no MCP tools, leaving MCP references intact")
+                    return None
+
+                narrowed_tools = self._narrow_mcp_references(tools, selected_tool_names)
+                data["tools"] = narrowed_tools
                 self._emit_filter_metadata_safe(
                     data=data,
                     mcp_tools=expanded_tools,
                     filtered_mcp_tools=filtered_expanded_tools,
                     native_tools=native_tools_before_expand,
-                    filtered_tools=combined_tools,
+                    filtered_tools=narrowed_tools,
                 )
                 verbose_proxy_logger.info(
                     f"Expanded MCP references to {len(expanded_tools)} tools "
