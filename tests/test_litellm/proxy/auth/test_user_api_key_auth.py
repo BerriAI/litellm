@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -218,6 +219,103 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
     assert second_request_key is not first_request_key
     assert second_request_key.budget_reservation is None
     assert second_request_key.request_route is None
+
+
+@pytest.mark.asyncio
+async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
+    """A cache-hit auth must not write the token back into the cache.
+
+    Re-writing on every auth let a replica holding a stale in-memory token
+    republish it to shared Redis with a fresh TTL on each request, so
+    /key/update and /key/delete never propagated across replicas or regional
+    Redis while the key kept calling (stale auth re-cache feedback loop).
+    Only the DB-load paths (IdentityStore._resolve_key / get_key_object) may
+    populate the cache.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-lit-cached-key-no-rewrite"
+    hashed_key = hash_token(api_key)
+
+    key_cache = UserApiKeyCache()
+    stale_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hashed_key,
+        metadata={"model_rpm_limit": {"gpt-5.2": 3}},
+        last_refreshed_at=1000.0,
+    )
+    await key_cache.async_set_cache(
+        key=hashed_key, value=stale_token, model_type=UserAPIKeyAuth
+    )
+
+    fetch_from_db = AsyncMock(
+        side_effect=AssertionError("cache-hit auth must not touch the DB")
+    )
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {
+        attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set
+    }
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with patch(
+            "litellm.proxy.auth.resolvers.store._fetch_key_object_from_db_with_reconnect",
+            fetch_from_db,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.wait(pending, timeout=5)
+
+        assert result.token == hashed_key
+        fetch_from_db.assert_not_called()
+
+        cached_after = await key_cache.async_get_cache(
+            key=hashed_key, model_type=UserAPIKeyAuth
+        )
+        assert cached_after is not None
+        assert cached_after.last_refreshed_at == 1000.0
+        assert cached_after.metadata == {"model_rpm_limit": {"gpt-5.2": 3}}
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
 
 
 @pytest.mark.asyncio
