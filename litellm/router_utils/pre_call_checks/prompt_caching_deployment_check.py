@@ -8,12 +8,34 @@ from typing import List, Optional, cast
 
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
-from litellm.utils import is_prompt_caching_valid_prompt
+from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
 from ..prompt_caching_cache import PromptCachingCache
+
+
+def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
+    """
+    Returns the highest minimum cacheable prefix across a model group.
+
+    `model` here is the model-group alias the operator chose, not a model name, so the threshold
+    has to come from the deployments themselves. A group may mix models with different minimums,
+    and one gate decides for all of them, so take the max: a prompt is only treated as cacheable
+    when it clears every member's minimum. The errors are not symmetric. Pinning a deployment for
+    a prefix its provider will not cache costs load balancing for nothing, which is the bug this
+    guards against, while declining to pin only forfeits a cache hit.
+    """
+    return max(
+        (
+            get_prompt_cache_min_tokens(model=deployment["litellm_params"]["model"])
+            for deployment in healthy_deployments
+            if deployment.get("litellm_params", {}).get("model")
+        ),
+        default=DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    )
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
@@ -31,7 +53,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
         if messages is not None and is_prompt_caching_valid_prompt(
             messages=messages,
             model=model,
-        ):  # prompt > 1024 tokens
+            min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
+        ):
             prompt_cache = PromptCachingCache(
                 cache=self.cache,
             )
