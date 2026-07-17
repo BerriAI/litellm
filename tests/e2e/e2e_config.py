@@ -49,6 +49,11 @@ DD_SETTLE_SECONDS = float(os.environ.get("E2E_DD_SETTLE_SECONDS", "30"))
 # DataDog Logs Search `from` window (relative to now). Wide enough for a suite
 # run plus ingestion lag; override if a long CI queue needs a wider lookback.
 DD_SEARCH_FROM = os.environ.get("E2E_DD_SEARCH_FROM", "now-30m").strip() or "now-30m"
+# The Logs Search API budget is tight - 2 requests per 10s org-wide
+# (x-ratelimit-name logs_public_search_api) - so read-backs pace their search
+# calls at this interval instead of POLL_INTERVAL, and back off when a 429
+# still slips through (the budget is shared with anything else searching).
+DD_SEARCH_INTERVAL = float(os.environ.get("E2E_DD_SEARCH_INTERVAL", "10"))
 
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.

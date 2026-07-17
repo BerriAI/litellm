@@ -22,12 +22,17 @@ from e2e_config import (
     DD_API_KEY,
     DD_APP_KEY,
     DD_SEARCH_FROM,
+    DD_SEARCH_INTERVAL,
     DD_SETTLE_SECONDS,
     DD_SITE,
-    POLL_INTERVAL,
     POLL_TIMEOUT,
 )
-from e2e_http import URL, Headers, Success, post
+from e2e_http import URL, Headers, RateLimitedError, Success, post
+
+#: How many rate-limited responses in a row one search tolerates before the
+#: hard fail; each retry sleeps a full search interval, so this rides out a
+#: burst from a concurrent consumer of the org-wide search budget.
+_RATE_LIMIT_RETRIES = 5
 
 
 class _DdAuthHeaders(Headers):
@@ -87,41 +92,56 @@ class DdLogsReader:
     app_key: str
 
     def events_for_marker(self, marker: str) -> list[DdLogEvent]:
-        """Every ingested event matching the marker (full-text, exact phrase).
-        More than one hit for one call IS the duplicate-delivery bug, so this
-        never collapses to a single event."""
-        result = post(
-            URL(f"https://api.{self.site}/api/v2/logs/events/search"),
-            headers=_DdAuthHeaders(api_key=self.api_key, app_key=self.app_key),
-            json=_SearchRequest(filter=_SearchFilter(query=f'"{marker}"')),
-            response_type=_SearchResponse,
-            timeout=30.0,
+        """Every ingested event whose attributes carry the marker. DataDog
+        consumes the shipped JSON message into ``attributes`` and leaves the
+        indexed ``message`` empty, so a plain full-text query matches nothing;
+        ``*:`` extends the scan to every attribute (the marker sits in the
+        prompt, e.g. ``messages.content``, wherever the route's payload puts
+        it). More than one hit for one call IS the duplicate-delivery bug, so
+        this never collapses to a single event. A 429 backs off and retries -
+        the search budget is org-wide, so another consumer can empty it under
+        us - while any other failure stays a hard fail."""
+        for _ in range(_RATE_LIMIT_RETRIES):
+            result = post(
+                URL(f"https://api.{self.site}/api/v2/logs/events/search"),
+                headers=_DdAuthHeaders(api_key=self.api_key, app_key=self.app_key),
+                json=_SearchRequest(filter=_SearchFilter(query=f"*:*{marker}*")),
+                response_type=_SearchResponse,
+                timeout=30.0,
+            )
+            match result:
+                case Success(data=page):
+                    return [event.attributes for event in page.data]
+                case RateLimitedError(retry_after_seconds=retry_after):
+                    time.sleep(retry_after if retry_after else DD_SEARCH_INTERVAL)
+                case failure:
+                    pytest.fail(f"DataDog Logs Search API at api.{self.site} failed: {failure}")
+        pytest.fail(
+            f"DataDog Logs Search API at api.{self.site} still rate-limited after "
+            f"{_RATE_LIMIT_RETRIES} retries {DD_SEARCH_INTERVAL}s apart - the org-wide "
+            "logs_public_search_api budget (2 requests per 10s) is exhausted by another consumer"
         )
-        match result:
-            case Success(data=page):
-                return [event.attributes for event in page.data]
-            case failure:
-                pytest.fail(f"DataDog Logs Search API at api.{self.site} failed: {failure}")
 
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """Poll until at least one matching event is searchable (the callback
         flushes in periodic batches and DataDog ingestion adds seconds of lag),
         then keep re-reading for DD_SETTLE_SECONDS so a late duplicate cannot
         hide from the exactly-one assertion - real-DataDog jitter can surface
-        one call's two events tens of seconds apart. At the deadline the last
-        result is returned as-is."""
+        one call's two events tens of seconds apart. Searches pace at
+        DD_SEARCH_INTERVAL, not POLL_INTERVAL, to respect the search API's
+        request budget. At the deadline the last result is returned as-is."""
         deadline = time.monotonic() + POLL_TIMEOUT
         while time.monotonic() < deadline:
             events = self.events_for_marker(marker)
             if events:
                 return self._settled_events_for_marker(marker, events)
-            time.sleep(POLL_INTERVAL)
+            time.sleep(DD_SEARCH_INTERVAL)
         return self.events_for_marker(marker)
 
     def _settled_events_for_marker(
         self, marker: str, events: list[DdLogEvent]
     ) -> list[DdLogEvent]:
-        """Re-read at every poll interval until the settle window closes; a
+        """Re-read at every search interval until the settle window closes; a
         duplicate ends the watch early because more waiting cannot clear it.
 
         Keep the last non-empty result: a transient empty search (index lag)
@@ -130,7 +150,7 @@ class DdLogsReader:
         settle_deadline = time.monotonic() + DD_SETTLE_SECONDS
         last_nonempty = events
         while time.monotonic() < settle_deadline:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(DD_SEARCH_INTERVAL)
             latest = self.events_for_marker(marker)
             if not latest:
                 continue
