@@ -2654,3 +2654,74 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "server-uuid",
             "alias": None,
         }
+
+
+class TestRestListToolsetFiltering:
+    @pytest.mark.asyncio
+    async def test_rest_list_filters_toolset_only_key_to_toolset_tools(self, monkeypatch):
+        """A toolset-only key reaching a toolset server via REST list must see
+        only the toolset's tools; the raw catalog leaked every tool on the
+        server when the filter read object_permission directly instead of the
+        shared toolset-aware primitive"""
+        from unittest.mock import patch
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="server-a",
+            name="stubtools",
+            transport=MCPTransport.http,
+        )
+        stub_server.alias = "stubtools"
+        stub_server.server_name = "stubtools"
+        stub_server.allowed_tools = None
+        stub_server.disallowed_tools = None
+        stub_server.mcp_info = {"server_name": "stubtools"}
+
+        upstream_tools = [
+            MCPTool(name="lookup_status", inputSchema={"type": "object"}),
+            MCPTool(name="delete_everything", inputSchema={"type": "object"}),
+        ]
+
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = []
+        key_object_permission.mcp_access_groups = []
+        key_object_permission.mcp_tool_permissions = None
+        key_object_permission.mcp_toolsets = ["toolset-1"]
+
+        user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        mock_manager = MagicMock()
+        mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
+            return_value={"server-a": ["lookup_status"]}
+        )
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            AsyncMock(return_value=upstream_tools),
+        )
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await rest_endpoints._get_tools_for_single_server(
+                server=stub_server,
+                server_auth_header=None,
+                raw_headers=None,
+                user_api_key_auth=user_auth,
+            )
+
+        assert [tool.name for tool in result] == ["lookup_status"]
