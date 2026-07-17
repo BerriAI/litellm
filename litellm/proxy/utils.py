@@ -1397,7 +1397,7 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
-            parallel_guardrails: Tuple[CustomGuardrail, ...] = tuple(
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
                 cb
                 for cb in caps.resolved_callbacks
                 if isinstance(cb, CustomGuardrail)
@@ -1495,7 +1495,7 @@ class ProxyLogging:
 
     async def _run_parallel_pre_call_guardrails(
         self,
-        guardrails: Tuple[CustomGuardrail, ...],
+        guardrails: tuple[CustomGuardrail, ...],
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
@@ -1504,12 +1504,17 @@ class ProxyLogging:
         Run opted-in pre_call guardrails concurrently against one shared payload
         snapshot. These guardrails are declared block-only, so any modified data
         they return is discarded; they run for their blocking side effect (raising
-        to reject the request before it reaches the LLM). The first guardrail to
-        raise propagates out and blocks the request, preserving the pre-call
-        barrier that ``during_call`` guardrails cannot provide. Per-guardrail
-        latency is recorded by ``_process_guardrail_callback``'s own metrics.
+        to reject the request before it reaches the LLM). Every guardrail is
+        awaited to completion (``return_exceptions=True``) so a raise by one never
+        leaves the others running as unobserved background tasks. A guardrail that
+        blocks (any exception other than a reroute or passthrough) takes precedence
+        over one that only changes the request flow, so a fast reroute can never
+        let a slower block be bypassed; the request is rejected before it reaches
+        the LLM, preserving the pre-call barrier that ``during_call`` guardrails
+        cannot provide. Per-guardrail latency is recorded by
+        ``_process_guardrail_callback``'s own metrics.
         """
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(
                 self._process_guardrail_callback(
                     callback=callback,
@@ -1519,8 +1524,15 @@ class ProxyLogging:
                     event_type=GuardrailEventHooks.pre_call,
                 )
                 for callback in guardrails
-            )
+            ),
+            return_exceptions=True,
         )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def _handle_sensitive_data_route_exception(
         self,
@@ -2322,7 +2334,7 @@ class ProxyLogging:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
-            parallel_guardrails: Tuple[CustomGuardrail, ...] = tuple(
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
                 callback for callback in guardrail_callbacks if callback.run_in_parallel
             )
 
@@ -2392,7 +2404,7 @@ class ProxyLogging:
 
     async def _run_parallel_post_call_guardrails(
         self,
-        guardrails: Tuple[CustomGuardrail, ...],
+        guardrails: tuple[CustomGuardrail, ...],
         data: dict,
         guardrail_data: dict,
         response: LLMResponseTypes,
@@ -2403,19 +2415,19 @@ class ProxyLogging:
         produced by the sequential guardrails. These guardrails are declared
         block-only, so any modified response they return is discarded; they run
         for their blocking side effect (raising to reject the response before it
-        reaches the client). The first guardrail to raise propagates out and
-        blocks the response. Each per-guardrail coroutine sets
-        ``guardrail_to_apply`` immediately before awaiting, and the unified hook
-        pops it before its first suspension point, so concurrent guardrails never
-        race on that key.
+        reaches the client). Every guardrail is awaited to completion
+        (``return_exceptions=True``) so a raise by one never leaves the others
+        running as unobserved background tasks. A guardrail that blocks (any
+        exception other than a passthrough) takes precedence over one that only
+        changes the response flow, so a fast passthrough can never let a slower
+        block be bypassed. Each per-guardrail coroutine sets ``guardrail_to_apply``
+        immediately before awaiting, and the unified hook pops it before its first
+        suspension point, so concurrent guardrails never race on that key.
         """
         from litellm.types.guardrails import GuardrailEventHooks
 
         async def _run_one(callback: CustomGuardrail) -> None:
-            if (
-                callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call)
-                is not True
-            ):
+            if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
             if "apply_guardrail" in type(callback).__dict__:
                 data["guardrail_to_apply"] = callback
@@ -2439,7 +2451,16 @@ class ProxyLogging:
                     "post_call",
                 )
 
-        await asyncio.gather(*(_run_one(callback) for callback in guardrails))
+        results = await asyncio.gather(
+            *(_run_one(callback) for callback in guardrails),
+            return_exceptions=True,
+        )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def post_call_response_headers_hook(
         self,

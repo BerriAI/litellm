@@ -2798,6 +2798,108 @@ async def test_pre_call_hook_parallel_guardrail_skipped_when_should_not_run():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_block_wins_over_reroute():
+    """A slower block must win over a faster reroute so crafted input cannot bypass a block."""
+    from litellm.caching.caching import DualCache
+    from litellm.exceptions import SensitiveDataRouteException
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class FastRerouteGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="rerouter",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise SensitiveDataRouteException(route_to_model="on-prem", session_id="s1", guardrail_name="rerouter")
+
+    class SlowBlockingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="blocker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            await asyncio.sleep(0.1)
+            raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+    try:
+        litellm.callbacks = [FastRerouteGuardrail(), SlowBlockingGuardrail()]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                call_type="completion",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "blocked by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_awaits_all_when_one_blocks():
+    """A block must not orphan sibling guardrails; every parallel guardrail runs to completion."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    completed = []
+
+    class FastBlockingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="fast_blocker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail="blocked")
+
+    class SlowGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="slow",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            await asyncio.sleep(0.1)
+            completed.append("slow")
+            return None
+
+    try:
+        litellm.callbacks = [FastBlockingGuardrail(), SlowGuardrail()]
+
+        with pytest.raises(HTTPException):
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                call_type="completion",
+            )
+
+        assert completed == ["slow"], "slow guardrail was orphaned instead of awaited to completion"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 class _PostCallGuardrail(CustomGuardrail):
     """Test double for post_call guardrails; records timing and invocation."""
 
@@ -2914,6 +3016,57 @@ async def test_post_call_hook_parallel_guardrail_blocks_response():
 
         assert exc_info.value.status_code == 400
         assert "blocked response by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_parallel_awaits_all_when_one_blocks():
+    """A blocking post_call guardrail must not orphan its siblings; all run to completion."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    completed = []
+
+    class FastBlockingPostCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="fast_post_blocker",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            raise HTTPException(status_code=400, detail="blocked")
+
+    class SlowPostCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="slow_post",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            await asyncio.sleep(0.1)
+            completed.append("slow")
+            return None
+
+    try:
+        litellm.callbacks = [FastBlockingPostCall(), SlowPostCall()]
+
+        with pytest.raises(HTTPException):
+            await proxy_logging.post_call_success_hook(
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                response=litellm.ModelResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            )
+
+        assert completed == ["slow"], "slow post_call guardrail was orphaned instead of awaited to completion"
     finally:
         litellm.callbacks = original_callbacks
 
