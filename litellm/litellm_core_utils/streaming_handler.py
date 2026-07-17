@@ -962,10 +962,11 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Default - return StopIteration
-                if hasattr(model_response, "usage"):
-                    self.chunks.append(model_response)
-                raise StopIteration
+                # Don't raise StopIteration here - some providers (like OpenRouter)
+                # send usage/cost data in chunks after the finish_reason chunk
+                if hasattr(model_response, "usage") and model_response.usage is not None:
+                    return model_response
+                return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
@@ -1474,12 +1475,16 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                model_response.usage = chunk.usage
+
             ## RETURN ARG
-            return self.return_processed_chunk_logic(
+            result = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
                 model_response=model_response,  # type: ignore
                 response_obj=response_obj,
             )
+            return result
 
         except StopIteration:
             raise StopIteration
@@ -1686,6 +1691,21 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    @staticmethod
+    def _propagate_usage_cost_to_hidden_params(
+        response: "ModelResponse",
+    ) -> None:
+        """
+        If the assembled response carries a provider-reported cost on
+        usage.cost, copy it into _hidden_params so litellm's cost
+        calculator uses it instead of a token-based estimate.
+        """
+        _usage = getattr(response, "usage", None)
+        if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
+            if "additional_headers" not in response._hidden_params:
+                response._hidden_params["additional_headers"] = {}
+            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(_usage.cost)
+
     def __next__(self) -> "ModelResponseStream":
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
@@ -1741,6 +1761,10 @@ class CustomStreamWrapper:
                     # hasattr(response, "usage") is always True — must check
                     # `is not None` to avoid running this path on every chunk.
                     if getattr(response, "usage", None) is not None:
+                        usage_to_preserve = response.usage
+                        if usage_to_preserve:
+                            response._hidden_params["usage"] = usage_to_preserve
+
                         obj_dict = response.model_dump()
 
                         if "usage" in obj_dict:
@@ -1789,6 +1813,8 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
+                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+
                     setattr(
                         response,
                         "usage",
@@ -1974,97 +2000,7 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
-            if self.sent_last_chunk is True:
-                # log the final chunk with accurate streaming values
-                try:
-                    complete_streaming_response = litellm.stream_chunk_builder(
-                        chunks=self.chunks,
-                        messages=self.messages,
-                        logging_obj=self.logging_obj,
-                    )
-                except Exception as e:
-                    # see sync __next__: a raise from stream_chunk_builder inside this
-                    # except handler escapes __anext__ and drops the request from SpendLogs.
-                    # Recover best-effort usage from the raw chunks so cost is still tracked
-                    verbose_logger.warning(
-                        "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
-                        str(e),
-                    )
-                    try:
-                        complete_streaming_response = self.model_response_creator(
-                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
-                        )
-                    except Exception:
-                        complete_streaming_response = None
-
-                response = self.model_response_creator()
-                if complete_streaming_response is not None:
-                    setattr(
-                        response,
-                        "usage",
-                        getattr(complete_streaming_response, "usage"),
-                    )
-                    try:
-                        _copy = complete_streaming_response.model_copy(deep=True)
-                    except RuntimeError:
-                        _copy = complete_streaming_response.model_copy()
-                    asyncio.create_task(
-                        self.async_cache_streaming_response(
-                            processed_chunk=_copy,
-                            cache_hit=cache_hit,
-                        )
-                    )
-                # Update hidden_params with final usage from
-                # stream_chunk_builder (see sync __next__ for full comment).
-                if (
-                    self.stream_options is None
-                    and complete_streaming_response is not None
-                    and self._last_returned_hidden_params is not None
-                ):
-                    final_usage = getattr(complete_streaming_response, "usage", None)
-                    if final_usage is not None:
-                        self._last_returned_hidden_params["usage"] = final_usage
-
-                if self.sent_stream_usage is False and self.send_stream_usage is True:
-                    self.sent_stream_usage = True
-                    return response
-
-                _deferred_cb = getattr(
-                    self.logging_obj,
-                    "_on_deferred_stream_complete",
-                    None,
-                )
-                if _deferred_cb is not None:
-                    # Proxy has post-call guardrails. Store the assembled
-                    # response so the outer streaming consumer
-                    # (ProxyLogging.async_post_call_streaming_iterator_hook)
-                    # can fire the deferred callback AFTER all guardrail
-                    # end-of-stream blocks complete.  Scheduling here via
-                    # create_task would race with unified_guardrail's
-                    # end-of-stream block for short-stream providers.
-                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
-                        complete_streaming_response,
-                        cache_hit,
-                    )
-                else:
-                    # prefer_async_handlers routes CustomLogger to async_success_handler
-                    # when consumers use ``async for`` on sync-SDK streams. Legacy string
-                    # callbacks still run via executor.submit inside dispatch_success_handlers.
-                    asyncio.create_task(
-                        self.logging_obj.dispatch_success_handlers(
-                            complete_streaming_response,
-                            cache_hit=cache_hit,
-                            start_time=None,
-                            end_time=None,
-                            prefer_async_handlers=True,
-                        )
-                    )
-
-                raise StopAsyncIteration  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                return processed_chunk
+            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
@@ -2079,20 +2015,122 @@ class CustomStreamWrapper:
                 # Handle any exceptions that might occur during streaming
                 asyncio.create_task(self.logging_obj.async_failure_handler(e, traceback_exception))
             self._handle_stream_fallback_error(e)
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            if self.received_finish_reason is None:
+                self._log_stream_failure_and_raise(e)
+            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            traceback_exception = traceback.format_exc()
-            if self.logging_obj is not None:
-                self._record_partial_usage_for_failure()
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.failure_handler,
-                    args=(e, traceback_exception),
-                ).start()  # log response
-                # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
-                    self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+            self._log_stream_failure_and_raise(e)
+
+    async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        if self.sent_last_chunk is True:
+            # log the final chunk with accurate streaming values
+            try:
+                complete_streaming_response = litellm.stream_chunk_builder(
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
-            self._handle_stream_fallback_error(e)
+            except Exception as e:
+                # see sync __next__: a raise from stream_chunk_builder inside this
+                # except handler escapes __anext__ and drops the request from SpendLogs.
+                # Recover best-effort usage from the raw chunks so cost is still tracked
+                verbose_logger.warning(
+                    "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
+                    str(e),
+                )
+                try:
+                    complete_streaming_response = self.model_response_creator(
+                        chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                    )
+                except Exception:
+                    complete_streaming_response = None
+
+            response = self.model_response_creator()
+            if complete_streaming_response is not None:
+                self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+
+                setattr(
+                    response,
+                    "usage",
+                    getattr(complete_streaming_response, "usage"),
+                )
+                try:
+                    _copy = complete_streaming_response.model_copy(deep=True)
+                except RuntimeError:
+                    _copy = complete_streaming_response.model_copy()
+                asyncio.create_task(
+                    self.async_cache_streaming_response(
+                        processed_chunk=_copy,
+                        cache_hit=cache_hit,
+                    )
+                )
+            # Update hidden_params with final usage from
+            # stream_chunk_builder (see sync __next__ for full comment).
+            if (
+                self.stream_options is None
+                and complete_streaming_response is not None
+                and self._last_returned_hidden_params is not None
+            ):
+                final_usage = getattr(complete_streaming_response, "usage", None)
+                if final_usage is not None:
+                    self._last_returned_hidden_params["usage"] = final_usage
+
+            if self.sent_stream_usage is False and self.send_stream_usage is True:
+                self.sent_stream_usage = True
+                return response
+
+            _deferred_cb = getattr(
+                self.logging_obj,
+                "_on_deferred_stream_complete",
+                None,
+            )
+            if _deferred_cb is not None:
+                # Proxy has post-call guardrails. Store the assembled
+                # response so the outer streaming consumer
+                # (ProxyLogging.async_post_call_streaming_iterator_hook)
+                # can fire the deferred callback AFTER all guardrail
+                # end-of-stream blocks complete.  Scheduling here via
+                # create_task would race with unified_guardrail's
+                # end-of-stream block for short-stream providers.
+                self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                    complete_streaming_response,
+                    cache_hit,
+                )
+            else:
+                # prefer_async_handlers routes CustomLogger to async_success_handler
+                # when consumers use ``async for`` on sync-SDK streams. Legacy string
+                # callbacks still run via executor.submit inside dispatch_success_handlers.
+                asyncio.create_task(
+                    self.logging_obj.dispatch_success_handlers(
+                        complete_streaming_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                        prefer_async_handlers=True,
+                    )
+                )
+
+            raise StopAsyncIteration  # Re-raise StopIteration
+        else:
+            self.sent_last_chunk = True
+            processed_chunk = self.finish_reason_handler()
+            return processed_chunk
+
+    def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+        traceback_exception = traceback.format_exc()
+        if self.logging_obj is not None:
+            self._record_partial_usage_for_failure()
+            ## LOGGING
+            threading.Thread(
+                target=self.logging_obj.failure_handler,
+                args=(e, traceback_exception),
+            ).start()  # log response
+            # Handle any exceptions that might occur during streaming
+            asyncio.create_task(
+                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+            )
+        self._handle_stream_fallback_error(e)
 
     def _record_partial_usage_for_failure(self) -> None:
         """
@@ -2228,18 +2266,31 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    latest_usage_chunk = None
+
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+            usage = chunk["usage"]
+            latest_usage_chunk = usage
+            if "prompt_tokens" in usage:
+                prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            if "completion_tokens" in usage:
+                completion_tokens = usage.get("completion_tokens", 0) or 0
 
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
+
+    if latest_usage_chunk is not None:
+        latest_cost = (
+            latest_usage_chunk.get("cost")
+            if isinstance(latest_usage_chunk, dict)
+            else getattr(latest_usage_chunk, "cost", None)
+        )
+        if latest_cost is not None:
+            returned_usage_chunk.cost = latest_cost
 
     return returned_usage_chunk
 

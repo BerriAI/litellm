@@ -998,6 +998,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_modalities.append("IMAGE")
             elif modality == "audio":
                 response_modalities.append("AUDIO")
+            elif modality == "video":
+                response_modalities.append("VIDEO")
             else:
                 response_modalities.append("MODALITY_UNSPECIFIED")
         return response_modalities
@@ -1729,18 +1731,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Check if the candidate token count is inclusive of the thinking token count
 
-        if prompttokencount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
+        if promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
 
         else the candidate token count is exclusive of the thinking token count
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
-            "candidatesTokenCount", 0
-        ) == usage_metadata.get("totalTokenCount", 0):
-            return True
-        else:
-            return False
+        non_thinking_tokens = (
+            usage_metadata.get("promptTokenCount", 0)
+            + usage_metadata.get("candidatesTokenCount", 0)
+            + usage_metadata.get("toolUsePromptTokenCount", 0)
+        )
+        return non_thinking_tokens == usage_metadata.get("totalTokenCount", 0)
 
     @staticmethod
     def _calculate_usage(
@@ -1886,12 +1888,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details = CompletionTokensDetailsWrapper()
             response_tokens_details.reasoning_tokens = reasoning_tokens
 
+        tool_use_prompt_tokens = usage_metadata.get("toolUsePromptTokenCount") or None
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=prompt_audio_tokens,
             text_tokens=prompt_text_tokens,
             image_tokens=prompt_image_tokens,
             video_tokens=prompt_video_tokens,
+            tool_use_tokens=tool_use_prompt_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
@@ -1899,7 +1904,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0),
+            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + (tool_use_prompt_tokens or 0),
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,

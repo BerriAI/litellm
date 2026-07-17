@@ -38,6 +38,11 @@ class _FakeLoggingObj:
         self.model_call_details = {"litellm_params": {}}
 
     # Signature alignment with Logging handlers
+    async def dispatch_success_handlers(self, *args, **kwargs):
+        kwargs.pop("prefer_async_handlers", None)
+        await self.async_success_handler(*args, **kwargs)
+        self.success_handler(*args, **kwargs)
+
     def success_handler(self, *args, **kwargs):
         self.success_calls += 1
         self.last_success_kwargs = kwargs

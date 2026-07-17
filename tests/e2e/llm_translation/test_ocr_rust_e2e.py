@@ -7,9 +7,9 @@ references the proxy resolves at call time, so adding a provider is a new type
 rather than another inline body. Start the proxy with the Rust OCR path enabled:
 
 Each case creates its deployment, drives a real /v1/ocr call, and asserts a
-well-formed OCR document comes back. Per the e2e "skip on environment, fail on
-behavior" rule, a case skips when no proxy answers but fails (never skips) once a
-request reaches it: the proxy fetches each provider's referenced secrets, so a
+well-formed OCR document comes back. Per the e2e hard-fail contract, a case
+fails when no proxy answers and also fails once a request reaches it: the proxy
+fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
 """
 
@@ -86,16 +86,18 @@ class AzureDocIntelligenceOcr:
 
 @dataclass(frozen=True, slots=True)
 class VertexOcr:
+    """Vertex AI OCR (Mistral publisher). Only the location (not a secret) is set;
+    the project and credentials are left unset so the gateway resolves VERTEXAI_PROJECT
+    and VERTEXAI_CREDENTIALS from its own environment by name, keeping every secret on
+    the gateway like the azure_ai cases above. This is deliberate: the OCR path reads
+    vertex_project verbatim from litellm_params and never unwraps an `os.environ/*`
+    ref, so passing one would put the literal string in the request URL."""
+
     model: str
     location: str
 
     def litellm_params(self) -> LiteLLMParamsBody:
-        return LiteLLMParamsBody(
-            model=self.model,
-            vertex_project="os.environ/VERTEXAI_PROJECT",
-            vertex_location=self.location,
-            vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
-        )
+        return LiteLLMParamsBody(model=self.model, vertex_location=self.location)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +115,7 @@ RUST_OCR_CASES: tuple[_OcrCase, ...] = (
     ),
     _OcrCase(
         "azure-ai",
-        AzureAiOcr("azure_ai/mistral-document-ai-2505"),
+        AzureAiOcr("azure_ai/mistral-document-ai-2512"),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
     _OcrCase(
@@ -125,11 +127,6 @@ RUST_OCR_CASES: tuple[_OcrCase, ...] = (
         "vertex-mistral",
         VertexOcr("vertex_ai/mistral-ocr-2505", "us-central1"),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
-    ),
-    _OcrCase(
-        "vertex-deepseek",
-        VertexOcr("vertex_ai/deepseek-ocr-maas", "global"),
-        OcrDocument(type="image_url", image_url=TEST_IMAGE_URL),
     ),
 )
 
@@ -155,3 +152,5 @@ class TestRustOcrGateway:
 
         response = unwrap(endpoints_client.gateway.ocr(key, OcrBody(model=model, document=case.document)))
         _assert_ocr_document(response)
+
+

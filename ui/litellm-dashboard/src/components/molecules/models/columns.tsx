@@ -1,8 +1,9 @@
 import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
-import { Badge, Button, Icon } from "@tremor/react";
+import { Badge, Icon } from "@tremor/react";
 import { Divider, Flex, Popover, Space, Switch, Tooltip, Typography } from "antd";
+import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -65,19 +66,9 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return (
-        <Tooltip title={model.model_info.id}>
-          <Text
-            ellipsis
-            className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer w-full block"
-            style={{ fontSize: 14, padding: "1px 8px" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedModelId(model.model_info.id);
-            }}
-          >
-            {model.model_info.id}
-          </Text>
-        </Tooltip>
+        <div onClick={(e) => e.stopPropagation()}>
+          <IdCell value={model.model_info.id} onClick={setSelectedModelId} />
+        </div>
       );
     },
   },
@@ -235,11 +226,7 @@ export const columns = (
     minSize: 80,
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <span className="text-xs">
-          {model.model_info.updated_at ? new Date(model.model_info.updated_at).toLocaleDateString() : "-"}
-        </span>
-      );
+      return <DateCell value={model.model_info.updated_at} precision="date" />;
     },
   },
   {
@@ -282,20 +269,8 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return model.model_info.team_id ? (
-        <div className="overflow-hidden w-full">
-          <Tooltip title={model.model_info.team_id}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate w-full"
-              onClick={(e: React.MouseEvent) => {
-                e.stopPropagation();
-                setSelectedTeamId(model.model_info.team_id);
-              }}
-            >
-              {model.model_info.team_id.slice(0, 7)}...
-            </Button>
-          </Tooltip>
+        <div onClick={(e) => e.stopPropagation()}>
+          <IdCell value={model.model_info.team_id} onClick={setSelectedTeamId} />
         </div>
       ) : (
         "-"
@@ -370,15 +345,10 @@ export const columns = (
     minSize: 80,
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <div
-          className={`
-          inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-          ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
-        `}
-        >
-          {model.model_info.db_model ? "DB Model" : "Config Model"}
-        </div>
+      return model.model_info.db_model ? (
+        <StatusBadge tone="info" label="DB Model" />
+      ) : (
+        <StatusBadge tone="neutral" label="Config Model" />
       );
     },
   },

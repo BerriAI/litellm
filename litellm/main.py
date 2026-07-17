@@ -92,7 +92,10 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import (
+    AWS_CREDENTIAL_KWARGS_KEYS,
+    OPTIONAL_KWARGS_KEYS,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -507,6 +510,20 @@ async def acompletion(
     #########################################################
     #########################################################
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=kwargs,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
@@ -1080,6 +1097,54 @@ def _build_custom_pricing_entry(
                 entry.setdefault(key, model_info[key])
 
     return entry
+
+
+def _get_router_deployment_id(kwargs: dict) -> Optional[str]:
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = kwargs.get(metadata_key) or {}
+        if not isinstance(metadata, dict):
+            continue
+        deployment_model_info = metadata.get("model_info") or {}
+        if not isinstance(deployment_model_info, dict):
+            continue
+        deployment_id = deployment_model_info.get("id")
+        if deployment_id is not None:
+            return str(deployment_id)
+    return None
+
+
+def _register_custom_pricing_for_request(
+    model: str,
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: Optional[dict],
+) -> None:
+    """Register per-request custom pricing in litellm.model_cost.
+
+    Router-originated requests (identified by the deployment id the router puts
+    in metadata) get their full pricing registered under that unique id only;
+    the shared ``{provider}/{model}`` key receives the entry with pricing fields
+    stripped, mirroring Router._create_deployment. This keeps one deployment's
+    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
+    pricing used by sibling deployments of the same backend model. Direct SDK
+    calls keep the legacy behavior of registering the shared key with pricing.
+    """
+    entry = _build_custom_pricing_entry(
+        custom_llm_provider=custom_llm_provider,
+        kwargs=kwargs,
+        model_info=model_info,
+    )
+    shared_key = f"{custom_llm_provider}/{model}"
+    deployment_id = _get_router_deployment_id(kwargs)
+    if deployment_id is None:
+        litellm.register_model({shared_key: entry})
+        return
+    litellm.register_model(
+        {
+            deployment_id: entry,
+            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
+        }
+    )
 
 
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -5004,6 +5069,19 @@ def completion(  # type: ignore
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=non_default_params,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
@@ -5108,14 +5186,11 @@ def completion(  # type: ignore
         if (
             input_cost_per_token is not None and output_cost_per_token is not None
         ) or input_cost_per_second is not None:
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
-                        model_info=model_info,
-                    )
-                }
+            _register_custom_pricing_for_request(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+                model_info=model_info,
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}  # type: ignore
@@ -5277,7 +5352,7 @@ def completion(  # type: ignore
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
-            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -5959,14 +6034,11 @@ def embedding(
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (input_cost_per_token is not None and output_cost_per_token is not None) or input_cost_per_second is not None:
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                    model_info=kwargs.get("model_info"),
-                )
-            }
+        _register_custom_pricing_for_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+            model_info=kwargs.get("model_info"),
         )
 
     litellm_params_dict = get_litellm_params(**kwargs)

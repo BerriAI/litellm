@@ -3,7 +3,7 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Button, Switch, Tooltip } from "antd";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import { TimeCell } from "./view_logs/time_cell";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
@@ -461,7 +461,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
               paginated.map((tool) => (
                 <TableRow key={tool.tool_id} id={`tool-row-${tool.tool_id}`} className="h-8 hover:bg-gray-50">
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <TimeCell utcTime={tool.created_at ?? ""} />
+                    <DateCell value={tool.created_at} />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden">
                     <button
@@ -498,16 +498,10 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                     </div>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.team_id ?? "-"}>
-                      <span className="max-w-[15ch] truncate block">{tool.team_id ?? "-"}</span>
-                    </Tooltip>
+                    <IdCell value={tool.team_id} variant="plain" />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.key_hash ?? "-"}>
-                      <span className="font-mono max-w-[15ch] truncate block text-blue-600">
-                        {tool.key_hash ?? "-"}
-                      </span>
-                    </Tooltip>
+                    <IdCell value={tool.key_hash} />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.key_alias ?? "-"}>

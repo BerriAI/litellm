@@ -7,6 +7,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -19,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
@@ -328,6 +330,70 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
                 request_body=request_body, request_headers=headers
             )
         assert result == "body-user"
+
+
+def _request_dispatched_to(endpoint) -> Request:
+    """Build a minimal Request whose FastAPI-resolved endpoint is ``endpoint``,
+    mirroring what Starlette sets in ``scope`` once routing has matched."""
+    return Request(scope={"type": "http", "headers": [], "endpoint": endpoint})
+
+
+def _pass_through_endpoint():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def endpoint():  # stand-in for create_pass_through_route's handler
+        ...
+
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return endpoint
+
+
+def test_get_model_from_request_skips_pass_through_dispatched_request():
+    """When FastAPI dispatched the request to a user-defined pass-through handler,
+    the body `model` names an upstream model and must not be treated as a LiteLLM
+    model for allowlist/budget enforcement."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint",
+            request=_request_dispatched_to(_pass_through_endpoint()),
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
+    """A custom pass-through path that collides with a built-in route resolves to the
+    built-in handler (no marker), so the body `model` must still be extracted and
+    enforced. Same request path as above, but dispatched to a non-pass-through
+    endpoint: the model must NOT be suppressed."""
+
+    def builtin_chat_completions():
+        ...
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=_request_dispatched_to(builtin_chat_completions),
+        )
+        == "gpt-4o"
+    )
+
+
+def test_get_model_from_request_no_request_extracts_model():
+    """Callers without a request object (e.g. budget reservation) still extract the
+    model; the pass-through suppression only applies to a dispatched pass-through
+    handler."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+        )
+        == "gpt-4o"
+    )
 
 
 def test_get_model_from_request_supports_google_model_names_with_slashes():
@@ -658,7 +724,16 @@ def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
 
 
 def test_abbreviate_api_key():
-    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
+    assert abbreviate_api_key("sk-test-1234-abcdefgh") == "sk-...efgh"
+    assert abbreviate_api_key("sk-abcdefghijklm") == "sk-...jklm"
+
+
+def test_abbreviate_api_key_short_key_is_fully_masked():
+    """Regression test for LIT-4355: for keys shorter than the enforced minimum,
+    showing the last 4 characters can reveal the entire key (sk-1234 -> sk-...1234)."""
+    assert abbreviate_api_key("sk-1234") == "sk-..."
+    assert abbreviate_api_key("sk-test-1234") == "sk-..."
+    assert abbreviate_api_key("") == "sk-..."
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
@@ -2393,3 +2468,17 @@ class TestIsRequestBodySafeBlocksModelList:
             )
             is True
         )
+
+
+class TestGetKeyTagRateLimits:
+    """Tests for get_key_tag_rpm_limit."""
+
+    def test_reads_tag_rpm_limit_from_metadata(self):
+        key = UserAPIKeyAuth(
+            api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}}
+        )
+        assert get_key_tag_rpm_limit(key) == {"cell-1": 5}
+
+    def test_returns_none_when_unset(self):
+        key = UserAPIKeyAuth(api_key="sk-123")
+        assert get_key_tag_rpm_limit(key) is None
