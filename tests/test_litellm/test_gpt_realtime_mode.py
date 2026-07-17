@@ -68,7 +68,10 @@ def test_realtime_only_gpt_4o_models_are_mode_realtime(model):
     assert _load_cost_map()[model]["mode"] == "realtime"
 
 
-def test_get_model_info_reports_realtime_mode():
+def test_get_model_info_reports_realtime_mode(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # pragma: allowlist secret
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
     assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
 
 
