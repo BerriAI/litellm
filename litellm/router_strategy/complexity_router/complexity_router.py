@@ -142,6 +142,8 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
+        tags: list[str] | None = None,
+        model_id: str | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -151,8 +153,14 @@ class ComplexityRouter(CustomLogger):
             litellm_router_instance: The LiteLLM Router instance.
             complexity_router_config: Optional configuration dict from proxy config.
             default_model: Optional default model to use if tier cannot be determined.
+            tags: The deployment's tags, used to pick the right router when several
+                complexity-router deployments share a model_name (tag-based routing).
+            model_id: The deployment's model_info id, used to evict the exact router
+                when its backing deployment is deleted.
         """
         self.model_name = model_name
+        self.tags = tags
+        self.model_id = model_id
         self.litellm_router_instance = litellm_router_instance
 
         # Parse config - always create a new instance to avoid singleton mutation
