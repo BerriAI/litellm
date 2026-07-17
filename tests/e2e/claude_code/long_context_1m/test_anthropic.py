@@ -66,10 +66,11 @@ from claude_code.cli_driver import (
 )
 
 
-# Haiku 4.5 is excluded (200k window). Sonnet 4.5 is also 200k-capped on
-# the Anthropic API; long_context uses sonnet-4-6 (1M) + opus-4-7.
+# Haiku 4.5 is excluded -- only Sonnet 4.6 and Opus 4.7 support the
+# 1M-context beta. See module docstring for the per-cell-aggregator
+# rationale.
 ANTHROPIC_MODELS: Sequence[str] = (
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 )
 

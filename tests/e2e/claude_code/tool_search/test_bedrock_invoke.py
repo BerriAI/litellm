@@ -52,12 +52,10 @@ from claude_code.http_probe import (
 )
 
 
-# Haiku omitted: Bedrock server-side tool search is only on Sonnet/Opus 4.5+.
-# Opus 4.7 on Bedrock also rejects tool_search (LIT-4522 notes + product allowlist).
-# Probe Sonnet 4.5 only until messages-path type normalize (LIT-4522) lands and
-# AWS documents Opus 4.7 support.
 BEDROCK_INVOKE_MODELS = [
+    "claude-haiku-4-5-bedrock-invoke",
     "claude-sonnet-4-5-bedrock-invoke",
+    "claude-opus-4-7-bedrock-invoke",
 ]
 
 

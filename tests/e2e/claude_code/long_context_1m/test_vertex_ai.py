@@ -70,7 +70,7 @@ from claude_code.cli_driver import (
 # 1M-context beta. See module docstring for the per-cell-aggregator
 # rationale.
 VERTEX_AI_MODELS: Sequence[str] = (
-    "claude-sonnet-4-6-vertex",
+    "claude-sonnet-4-5-vertex",
     "claude-opus-4-7-vertex",
 )
 

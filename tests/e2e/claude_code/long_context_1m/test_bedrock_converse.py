@@ -70,7 +70,7 @@ from claude_code.cli_driver import (
 # 1M-context beta. See module docstring for the per-cell-aggregator
 # rationale.
 BEDROCK_CONVERSE_MODELS: Sequence[str] = (
-    "claude-sonnet-4-6-bedrock-converse",
+    "claude-sonnet-4-5-bedrock-converse",
     "claude-opus-4-7-bedrock-converse",
 )
 
