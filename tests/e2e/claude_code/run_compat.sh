@@ -21,7 +21,15 @@
 #   LITELLM_COMPAT_RATE_VERTEX_AI
 #   LITELLM_COMPAT_RATE_BEDROCK_CONVERSE
 #   LITELLM_COMPAT_RATE_BEDROCK_INVOKE
+#   LITELLM_COMPAT_RATE_OPENAI
+#   LITELLM_COMPAT_RATE_AZURE_OPENAI
+#   LITELLM_COMPAT_RATE_BEDROCK_MANTLE
 #   LITELLM_COMPAT_RATE_BURST            override per-bucket burst
+#
+# Optional env (GPT-5.6 columns):
+#   COMPAT_MANTLE_CELLS=1                 opt the Bedrock Mantle GPT-5.6
+#                                         cells in; without it they skip
+#                                         and publish as not_tested
 #
 # Optional env (parallelism):
 #   COMPAT_XDIST_WORKERS                  passed to `pytest -n` (default: auto)
@@ -57,7 +65,7 @@ results_path="${COMPAT_RESULTS_PATH:-compat-results.json}"
 summary_path="${COMPAT_RATE_LIMIT_SUMMARY_PATH:-compat-rate-limit-summary.json}"
 
 echo "[run_compat] rates:"
-for provider in ANTHROPIC AZURE VERTEX_AI BEDROCK_CONVERSE BEDROCK_INVOKE; do
+for provider in ANTHROPIC AZURE VERTEX_AI BEDROCK_CONVERSE BEDROCK_INVOKE OPENAI AZURE_OPENAI BEDROCK_MANTLE; do
     var="LITELLM_COMPAT_RATE_${provider}"
     echo "  ${provider}=${!var:-default(5/s)}"
 done
