@@ -449,11 +449,69 @@ def test_ocr_filters_internal_litellm_params_before_rust(fake_bridge):
         document=DOCUMENT,
         api_key="sk-test",
         include_image_base64=True,
-        original_generic_function=lambda: None,
+        original_generic_function="litellm-internal-should-be-filtered",
         litellm_metadata={"trace": "internal"},
     )
 
     assert fake_bridge.calls[0]["optional_params"] == {"include_image_base64": True}
+
+
+def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id="ocr-req-9",
+        pages=[0, 1],
+        include_image_base64=True,
+        table_format="html",
+        metadata={"trace": "internal"},
+        litellm_metadata={"trace": "internal"},
+        litellm_session_id="sess-internal",
+        tags=["internal"],
+        num_retries=3,
+        original_generic_function="litellm-internal-should-be-filtered",
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert optional_params["id"] == "ocr-req-9"
+    assert optional_params["pages"] == [0, 1]
+    assert optional_params["include_image_base64"] is True
+    assert optional_params["table_format"] == "html"
+    for internal in (
+        "metadata",
+        "litellm_metadata",
+        "litellm_session_id",
+        "tags",
+        "num_retries",
+        "original_generic_function",
+    ):
+        assert internal not in optional_params
+
+
+def test_ocr_omits_reserved_id_when_none(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id=None,
+        include_image_base64=True,
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert "id" not in optional_params
+    assert optional_params["include_image_base64"] is True
+
+
+def test_ocr_omits_reserved_id_when_absent(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        include_image_base64=True,
+    )
+
+    assert "id" not in fake_bridge.calls[0]["optional_params"]
 
 
 def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
