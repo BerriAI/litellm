@@ -1435,6 +1435,68 @@ def test_reset_budget_for_users_invalidates_redis_counter(
     )
 
 
+def test_reset_budget_for_proxy_budget_row_invalidates_global_spend_cache(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Regression for LIT-4309: resetting the proxy-wide budget aggregate row
+    ("litellm-proxy-budget") must also drop the cached global-spend
+    accumulator ("{admin}:spend") that _global_proxy_budget_check enforces
+    against. Without the invalidation, the cached value survives the DB reset
+    and the global cap keeps blocking requests for the whole next window."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    sys.modules["litellm.proxy.proxy_server"].litellm_proxy_admin_name = "default_user_id"
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 150.0,
+                "budget_duration": "30d",
+                "budget_reset_at": now,
+                "id": "row-1",
+                "user_id": "litellm-proxy-budget",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    counter_cache.user_api_key_cache.async_delete_cache.assert_any_call(key="default_user_id:spend")
+
+
+def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """The global-spend accumulator must only be dropped when the proxy
+    budget aggregate row itself resets, not on every user reset."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    sys.modules["litellm.proxy.proxy_server"].litellm_proxy_admin_name = "default_user_id"
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 50.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "id": "user-1",
+                "user_id": "alice",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    assert not any(
+        call.kwargs.get("key") == "default_user_id:spend"
+        for call in counter_cache.user_api_key_cache.async_delete_cache.call_args_list
+    )
+
+
 def test_reset_budget_for_teams_invalidates_redis_counter(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):

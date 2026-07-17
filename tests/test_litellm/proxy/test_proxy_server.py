@@ -2388,6 +2388,11 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
     This validates that generate_key_helper_fn is called with table_name="user"
     which should prevent key creation in LiteLLM_VerificationToken table.
+
+    Also guards the row identity: the budget must land on the proxy-wide
+    aggregate row "litellm-proxy-budget" (the one the spend writer increments
+    per request), not the admin user's own row ("default_user_id"). Budgeting
+    the admin row leaves the global budget without a resettable counter.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2416,7 +2421,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
     ):
         # Call the function under test
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
 
         # Allow async task to complete
         import asyncio
@@ -2442,9 +2447,13 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
     rows that pre-existed without a reset schedule. Without this, the proxy
-    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    budget row stays at NULL and reset_budget_for_litellm_users never matches
     it (NULL < now() is unknown in SQL), so the global proxy budget never
     resets.
+
+    The same conditional update must zero spend: a row that was never on a
+    reset schedule holds lifetime accrual, which must not gate the first
+    duration window.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2495,6 +2504,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
     assert isinstance(backfilled_reset_at, datetime)
     assert backfilled_reset_at > datetime.now(timezone.utc)
+
+    assert backfill_call.kwargs["data"]["spend"] == 0
 
 
 @pytest.mark.asyncio

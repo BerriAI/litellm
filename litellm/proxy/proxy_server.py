@@ -228,6 +228,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
+    LITELLM_PROXY_BUDGET_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
@@ -1041,7 +1042,7 @@ async def proxy_startup_event(app: FastAPI):
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name=litellm_proxy_admin_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
         asyncio.create_task(
             ProxyStartupEvent._warm_global_spend_cache(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -1981,7 +1982,7 @@ health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 background_health_check_loop_active = False
 background_health_check_cycle_seq = 0
 queue: List = []
-litellm_proxy_budget_name = "litellm-proxy-budget"
+litellm_proxy_budget_name = LITELLM_PROXY_BUDGET_NAME
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
@@ -7650,24 +7651,27 @@ class ProxyStartupEvent:
         )
 
     @classmethod
-    def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
+    def _add_proxy_budget_to_db(cls):
         """Adds a global proxy budget to db"""
         if litellm.budget_duration is None:
             raise Exception("budget_duration not set on Proxy. budget_duration is required to use max_budget.")
 
-        asyncio.create_task(cls._upsert_proxy_budget_with_reset_at_backfill(litellm_proxy_budget_name))
+        asyncio.create_task(cls._upsert_proxy_budget_with_reset_at_backfill(LITELLM_PROXY_BUDGET_NAME))
 
     @classmethod
     async def _upsert_proxy_budget_with_reset_at_backfill(cls, litellm_proxy_budget_name: str) -> None:
         """
-        Upsert the proxy admin user row with the configured max_budget /
-        budget_duration, then backfill budget_reset_at if currently NULL.
+        Upsert the proxy budget aggregate user row with the configured
+        max_budget / budget_duration, then backfill budget_reset_at if
+        currently NULL.
 
         The backfill uses `WHERE budget_reset_at IS NULL` so it only fires
         when the row pre-existed without a reset schedule (e.g. row created
         via a different path before the proxy budget was configured). On
         subsequent restarts it no-ops, so an active reset window is never
-        slid forward.
+        slid forward. It also zeroes spend at that moment: a row that was
+        never on a reset schedule holds lifetime accrual, which must not
+        gate the first duration window.
         """
         await generate_key_helper_fn(  # type: ignore
             request_type="user",
@@ -7698,7 +7702,10 @@ class ProxyStartupEvent:
                         "user_id": litellm_proxy_budget_name,
                         "budget_reset_at": None,
                     },
-                    data={"budget_reset_at": get_budget_reset_time(budget_duration=litellm.budget_duration)},
+                    data={
+                        "budget_reset_at": get_budget_reset_time(budget_duration=litellm.budget_duration),
+                        "spend": 0,
+                    },
                 )
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to backfill budget_reset_at on proxy admin row: %s", e)
