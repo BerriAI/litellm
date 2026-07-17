@@ -37,11 +37,7 @@ class CapturedException(Exception):
 
 
 class FakeRustOcrInputError(ValueError):
-    """Stands in for the native ``RustOcrInputError`` the compiled bridge raises.
-
-    The native wheel isn't built in CI, so inject this type via
-    ``_set_rust_ocr_input_error_type`` to exercise the input-error mapping.
-    """
+    pass
 
 
 class RecordingBridge:
@@ -173,8 +169,6 @@ class SsrfRejectingAsyncBridge:
 
 
 class UnrelatedValueErrorBridge:
-    """Raises a plain ``ValueError`` unrelated to request input (e.g. an internal bug)."""
-
     def __call__(
         self,
         model: str,
@@ -378,6 +372,7 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "timeout_seconds": 12.5,
     }
 
+
 def test_run_rust_ocr_runs_pre_call_logging():
     """The Rust shortcut must run pre_call so callbacks and spend tracking fire."""
     logging_obj = RecordingLogging()
@@ -576,8 +571,6 @@ def test_ocr_provider_runtime_error_is_not_downgraded_to_bad_request(
 def test_ocr_unrelated_value_error_is_not_downgraded_to_bad_request(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Only the dedicated Rust input error becomes a 400; an unrelated internal
-    ValueError must stay a server error and flow through exception_type."""
     captured: dict[str, object] = {}
 
     def fake_exception_type(**kwargs: object) -> CapturedException:

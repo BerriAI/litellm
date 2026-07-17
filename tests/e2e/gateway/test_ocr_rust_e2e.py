@@ -63,9 +63,7 @@ RUST_OCR_GATEWAY_CASES = [
 SSRF_BLOCKED_DOCUMENT_URLS = [
     pytest.param("http://127.0.0.1/secret", id="loopback"),
     pytest.param("http://10.0.0.5/internal", id="rfc1918"),
-    pytest.param(
-        "http://169.254.169.254/latest/meta-data/", id="link_local_metadata"
-    ),
+    pytest.param("http://169.254.169.254/latest/meta-data/", id="link_local_metadata"),
     pytest.param("http://100.64.0.1/internal", id="cgnat"),
     pytest.param("http://198.18.0.1/internal", id="benchmark"),
     pytest.param("http://[::1]/secret", id="ipv6_loopback"),
@@ -172,8 +170,6 @@ class TestRustOcrGateway:
 
         assert response.status_code == 400, response.text
         assert "SSRF protection" in response.text
-        # Public SSRF errors must be data-minimized: never echo the rejected
-        # URL, its host, or query back to the caller.
         parsed = urlparse(document_url)
         assert document_url not in response.text
         assert parsed.netloc not in response.text

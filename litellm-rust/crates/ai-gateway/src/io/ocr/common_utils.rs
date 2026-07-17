@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -31,6 +31,9 @@ const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
+const ERROR_BODY_MAX_BYTES: usize = ERROR_BODY_MAX_CHARS * 4;
+const MAX_DOCUMENT_CLIENTS: usize = 128;
+const DOCUMENT_FETCH_TIMEOUT_SECS: u64 = 600;
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -38,6 +41,23 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     }
     let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
     format!("{truncated}... (truncated)")
+}
+
+pub(super) async fn read_error_body(mut response: reqwest::Response) -> String {
+    let mut collected: Vec<u8> = Vec::new();
+    while collected.len() < ERROR_BODY_MAX_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let take = (ERROR_BODY_MAX_BYTES - collected.len()).min(chunk.len());
+                collected.extend_from_slice(&chunk[..take]);
+                if take < chunk.len() {
+                    break;
+                }
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+    truncate_error_body(&String::from_utf8_lossy(&collected))
 }
 
 pub(super) fn ocr_provider_config(
@@ -151,6 +171,25 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
             let is_link_local = (first_segment & 0xffc0) == 0xfe80;
             let is_site_local = (first_segment & 0xffc0) == 0xfec0;
             let is_documentation = first_segment == 0x2001 && segments[1] == 0x0db8;
+            let is_discard =
+                first_segment == 0x0100 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
+            let is_teredo = first_segment == 0x2001 && segments[1] == 0x0000;
+            let is_benchmarking =
+                first_segment == 0x2001 && segments[1] == 0x0002 && segments[2] == 0x0000;
+            let is_orchid = first_segment == 0x2001 && (segments[1] & 0xfff0) == 0x0010;
+            let is_orchidv2 = first_segment == 0x2001 && (segments[1] & 0xfff0) == 0x0020;
+            let is_nat64_wellknown = first_segment == 0x0064
+                && segments[1] == 0xff9b
+                && segments[2] == 0
+                && segments[3] == 0
+                && segments[4] == 0
+                && segments[5] == 0;
+            let is_nat64_local =
+                first_segment == 0x0064 && segments[1] == 0xff9b && segments[2] == 1;
+            let is_6to4_embedded_blocked =
+                first_segment == 0x2002 && embedded_ipv4_blocked(segments[1], segments[2]);
+            let is_nat64_embedded_blocked =
+                is_nat64_wellknown && embedded_ipv4_blocked(segments[6], segments[7]);
             ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_multicast()
@@ -158,6 +197,14 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || is_link_local
                 || is_site_local
                 || is_documentation
+                || is_discard
+                || is_teredo
+                || is_benchmarking
+                || is_orchid
+                || is_orchidv2
+                || is_nat64_local
+                || is_nat64_embedded_blocked
+                || is_6to4_embedded_blocked
                 || ip
                     .to_ipv4_mapped()
                     .or_else(|| ip.to_ipv4())
@@ -165,6 +212,16 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                     .unwrap_or(false)
         }
     }
+}
+
+fn embedded_ipv4_blocked(hi: u16, lo: u16) -> bool {
+    let v4 = Ipv4Addr::new(
+        (hi >> 8) as u8,
+        (hi & 0xff) as u8,
+        (lo >> 8) as u8,
+        (lo & 0xff) as u8,
+    );
+    is_blocked_ip(IpAddr::V4(v4))
 }
 
 fn blocked_url_error() -> CoreError {
@@ -219,6 +276,61 @@ impl Resolve for PinnedResolver {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DocumentClientKey {
+    scheme: String,
+    host: String,
+    port: u16,
+    addresses: Vec<SocketAddr>,
+}
+
+fn document_client_cache() -> &'static Mutex<HashMap<DocumentClientKey, reqwest::Client>> {
+    static CACHE: OnceLock<Mutex<HashMap<DocumentClientKey, reqwest::Client>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn document_fetch_client(url: &Url, addresses: &[SocketAddr]) -> CoreResult<reqwest::Client> {
+    let host = url.host_str().ok_or_else(blocked_url_error)?.to_owned();
+    let port = url.port_or_known_default().ok_or_else(blocked_url_error)?;
+    let mut sorted = addresses.to_vec();
+    sorted.sort();
+    let key = DocumentClientKey {
+        scheme: url.scheme().to_owned(),
+        host: host.clone(),
+        port,
+        addresses: sorted.clone(),
+    };
+    let cache = document_client_cache();
+    if let Some(client) = cache
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+        .cloned()
+    {
+        return Ok(client);
+    }
+
+    let mut pins = HashMap::new();
+    pins.insert(host, sorted);
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(DOCUMENT_FETCH_TIMEOUT_SECS))
+        .dns_resolver(Arc::new(PinnedResolver {
+            pins: Arc::new(Mutex::new(pins)),
+        }))
+        .build()
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+
+    let mut guard = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if guard.len() >= MAX_DOCUMENT_CLIENTS {
+        if let Some(evicted) = guard.keys().next().cloned() {
+            guard.remove(&evicted);
+        }
+    }
+    guard.insert(key, client.clone());
+    Ok(client)
+}
+
 fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url> {
     let location = response
         .headers()
@@ -238,27 +350,17 @@ async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)
     .await
 }
 
-async fn fetch_with_redirects<P, Fut>(url: &str, pin: P) -> CoreResult<(Url, reqwest::Response)>
+async fn fetch_with_redirects<P, Fut>(url: &str, resolve: P) -> CoreResult<(Url, reqwest::Response)>
 where
     P: Fn(Url) -> Fut,
     Fut: std::future::Future<Output = CoreResult<Vec<SocketAddr>>>,
 {
-    let pins: PinnedAddrs = Arc::new(Mutex::new(HashMap::new()));
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .dns_resolver(Arc::new(PinnedResolver { pins: pins.clone() }))
-        .build()
-        .map_err(|err| CoreError::Network(err.to_string()))?;
     let mut current_url = Url::parse(url)
         .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
 
     for _ in 0..MAX_SAFE_FETCH_REDIRECTS {
-        let addresses = pin(current_url.clone()).await?;
-        if let Some(host) = current_url.host_str() {
-            pins.lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(host.to_owned(), addresses);
-        }
+        let addresses = resolve(current_url.clone()).await?;
+        let client = document_fetch_client(&current_url, &addresses)?;
         let response = client
             .get(current_url.clone())
             .send()
@@ -326,10 +428,9 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
     let (_final_url, response) = safe_get_document_url(url).await?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&body),
+            body: read_error_body(response).await,
         });
     }
     let content_type = response
@@ -425,16 +526,16 @@ async fn upload_reducto_bytes(
         .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
     let status = response.status();
+    if !status.is_success() {
+        return Err(CoreError::Http {
+            status: status.as_u16(),
+            body: read_error_body(response).await,
+        });
+    }
     let text = response
         .text()
         .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
-    if !status.is_success() {
-        return Err(CoreError::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
-    }
     let response_json: Value = serde_json::from_str(&text).map_err(|err| {
         CoreError::InvalidResponse(format!("invalid Reducto upload response JSON: {err}"))
     })?;
@@ -568,16 +669,16 @@ pub(super) async fn poll_document_intelligence(
             .map_err(|err| CoreError::Network(err.to_string()))?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Http {
+                status: status.as_u16(),
+                body: read_error_body(response).await,
+            });
+        }
         let text = response
             .text()
             .await
             .map_err(|err| CoreError::Network(err.to_string()))?;
-        if !status.is_success() {
-            return Err(CoreError::Http {
-                status: status.as_u16(),
-                body: truncate_error_body(&text),
-            });
-        }
         let response_json: Value = serde_json::from_str(&text).map_err(|err| {
             CoreError::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
         })?;
@@ -663,6 +764,17 @@ mod tests {
             "http://[::ffff:10.0.0.1]/x",
             "http://[::ffff:100.64.0.1]/x",
             "http://[::ffff:198.18.0.1]/x",
+            "http://[2001:db8::1]/x",
+            "http://[100::1]/x",
+            "http://[2001::1]/x",
+            "http://[2001:2::1]/x",
+            "http://[2001:10::1]/x",
+            "http://[2001:20::1]/x",
+            "http://[2002:c0a8:101::1]/x",
+            "http://[2002:a9fe:a9fe::1]/x",
+            "http://[64:ff9b:1::1]/x",
+            "http://[64:ff9b::192.168.1.1]/x",
+            "http://[64:ff9b::169.254.169.254]/x",
             "ftp://8.8.8.8/x",
         ];
         for raw in blocked {
@@ -679,6 +791,19 @@ mod tests {
             pin_validated_url(&allowed).await.unwrap(),
             vec![SocketAddr::from(([8, 8, 8, 8], 80))]
         );
+
+        let allowed_v6 = [
+            "http://[2606:4700:4700::1111]/x",
+            "http://[64:ff9b::8.8.8.8]/x",
+            "http://[2002:808:808::1]/x",
+        ];
+        for raw in allowed_v6 {
+            let url = Url::parse(raw).unwrap();
+            assert!(
+                pin_validated_url(&url).await.is_ok(),
+                "{raw} should be allowed"
+            );
+        }
     }
 
     #[tokio::test]
@@ -858,6 +983,25 @@ mod tests {
         assert_eq!(bytes.len(), 512);
     }
 
+    #[tokio::test]
+    async fn oversized_error_body_without_content_length_is_bounded() {
+        let mut raw = b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n".to_vec();
+        raw.extend_from_slice(&vec![b'a'; 100_000]);
+        let server = spawn_counting_server(raw).await;
+        let url_str = format!("http://127.0.0.1:{}/err", server.addr.port());
+        let response = reqwest::Client::new().get(&url_str).send().await.unwrap();
+        assert!(response.content_length().is_none());
+        assert!(!response.status().is_success());
+
+        let body = read_error_body(response).await;
+
+        let prefix = body
+            .strip_suffix("... (truncated)")
+            .expect("oversized error body must be truncated to the cap");
+        assert_eq!(prefix.chars().count(), ERROR_BODY_MAX_CHARS);
+        assert!(prefix.chars().all(|c| c == 'a'));
+    }
+
     #[test]
     fn blocks_private_and_metadata_ips() {
         assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
@@ -909,10 +1053,6 @@ mod tests {
         ))
         .await;
         let pinned_addr = server.addr;
-        // `.invalid` is guaranteed non-resolvable (RFC 6761), so the connection can only
-        // land on the server if the request used the pinned SocketAddr instead of a second
-        // DNS lookup. This is the anti-rebinding contract: the connect uses exactly the
-        // validated address set, never an ambient resolver answer.
         let url = format!("http://pinned.invalid:{}/doc", pinned_addr.port());
 
         let (_final_url, response) =
@@ -922,6 +1062,70 @@ mod tests {
 
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(server.connection_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn redirect_across_ports_repins_without_reusing_stale_client() {
+        let second = spawn_counting_server(http_response(
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\n",
+            b"second",
+        ))
+        .await;
+        let second_addr = second.addr;
+        let first = spawn_counting_server(http_response(
+            &format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://pinned.invalid:{}/next\r\nContent-Length: 0\r\n\r\n",
+                second_addr.port()
+            ),
+            b"",
+        ))
+        .await;
+        let first_addr = first.addr;
+        let start_url = format!("http://pinned.invalid:{}/start", first_addr.port());
+
+        let (final_url, response) = fetch_with_redirects(&start_url, move |candidate| async move {
+            match candidate.port() {
+                Some(port) if port == first_addr.port() => Ok(vec![first_addr]),
+                Some(port) if port == second_addr.port() => Ok(vec![second_addr]),
+                _ => Err(blocked_url_error()),
+            }
+        })
+        .await
+        .expect("redirect across ports must repin to the second server");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(final_url.port(), Some(second_addr.port()));
+        assert_eq!(first.connection_count(), 1);
+        assert_eq!(second.connection_count(), 1);
+    }
+
+    #[test]
+    fn document_client_key_distinguishes_scheme_port_and_addresses() {
+        let addr_a = SocketAddr::from(([203, 0, 113, 1], 443));
+        let addr_b = SocketAddr::from(([203, 0, 113, 2], 443));
+        let base = DocumentClientKey {
+            scheme: "https".to_string(),
+            host: "docs.example".to_string(),
+            port: 443,
+            addresses: vec![addr_a],
+        };
+        let other_scheme = DocumentClientKey {
+            scheme: "http".to_string(),
+            ..base.clone()
+        };
+        let other_port = DocumentClientKey {
+            port: 8443,
+            ..base.clone()
+        };
+        let other_addrs = DocumentClientKey {
+            addresses: vec![addr_a, addr_b],
+            ..base.clone()
+        };
+
+        assert_ne!(base, other_scheme);
+        assert_ne!(base, other_port);
+        assert_ne!(base, other_addrs);
+        assert_eq!(base, base.clone());
     }
 
     #[tokio::test]

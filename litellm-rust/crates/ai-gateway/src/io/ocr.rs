@@ -18,7 +18,7 @@ mod common_utils;
 
 use common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body, upload_reducto_document,
+    read_error_body, string_headers, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -141,17 +141,17 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             .into_json());
     }
 
+    if !status.is_success() {
+        return Err(CoreError::Http {
+            status: status.as_u16(),
+            body: read_error_body(response).await,
+        });
+    }
+
     let text = response
         .text()
         .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
-
-    if !status.is_success() {
-        return Err(CoreError::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
-    }
 
     let response_json: Value = serde_json::from_str(&text)
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
@@ -163,6 +163,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::common_utils::truncate_error_body;
     use super::*;
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
