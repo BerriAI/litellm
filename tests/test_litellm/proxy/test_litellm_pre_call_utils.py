@@ -281,6 +281,28 @@ async def test_add_litellm_data_to_request_merges_org_level_spend_logs_metadata(
     assert spend_logs_metadata["shared"] == "key"
 
 
+def test_merge_spend_logs_metadata_branches():
+    """Directly exercise every branch of the shared merge helper."""
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    # No spend_logs_metadata on the source -> no-op
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({}, data, "metadata")
+    assert "spend_logs_metadata" not in data["metadata"]
+
+    # Non-dict spend_logs_metadata is ignored
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": "nope"}, data, "metadata")
+    assert "spend_logs_metadata" not in data["metadata"]
+
+    # No existing target -> assigned directly
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": {"a": 1}}, data, "metadata")
+    assert data["metadata"]["spend_logs_metadata"] == {"a": 1}
+
+    # Existing target -> merge without overriding present keys
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": {"a": 2, "b": 3}}, data, "metadata")
+    assert data["metadata"]["spend_logs_metadata"] == {"a": 1, "b": 3}
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_admin_injection_slots():
     """User-supplied user_api_key_metadata / user_api_key_team_metadata /
