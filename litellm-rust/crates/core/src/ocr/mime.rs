@@ -18,9 +18,6 @@ pub fn sniff_document_mime(bytes: &[u8]) -> Option<&'static str> {
     {
         return Some("image/tiff");
     }
-    if bytes.starts_with(b"BM") {
-        return Some("image/bmp");
-    }
     None
 }
 
@@ -71,7 +68,12 @@ mod tests {
             sniff_document_mime(&[0x4d, 0x4d, 0x00, 0x2a]),
             Some("image/tiff")
         );
-        assert_eq!(sniff_document_mime(b"BMxxxx"), Some("image/bmp"));
+    }
+
+    #[test]
+    fn sniff_document_mime_does_not_detect_bmp_by_magic_bytes() {
+        assert_eq!(sniff_document_mime(b"BMxxxx"), None);
+        assert_eq!(sniff_document_mime(b"BM\x36\x00\x00\x00random"), None);
     }
 
     #[test]

@@ -85,8 +85,9 @@ class TestSniffMimeTypeFromBytes:
         assert _sniff_mime_type_from_bytes(b"II*\x00 rest") == "image/tiff"
         assert _sniff_mime_type_from_bytes(b"MM\x00* rest") == "image/tiff"
 
-    def test_should_detect_bmp_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"BM rest") == "image/bmp"
+    def test_should_not_sniff_bmp_from_magic_bytes(self) -> None:
+        assert _sniff_mime_type_from_bytes(b"BM rest") is None
+        assert _sniff_mime_type_from_bytes(b"BM\x00\x00\x00\x00random") is None
 
     def test_should_return_none_for_unknown_prefix(self):
         assert _sniff_mime_type_from_bytes(b"not a known file") is None
@@ -333,17 +334,118 @@ class TestConvertFileDocumentToUrlDocument:
         with pytest.raises(ValueError, match="Unsupported file input type"):
             convert_file_document_to_url_document({"type": "file", "file": 12345})
 
-    def test_should_raise_error_for_invalid_mime_type(self):
-        """MIME types with special characters should be rejected."""
+    def test_should_reject_malformed_mime_type(self) -> None:
         content = b"some content"
-        with pytest.raises(ValueError, match="Invalid MIME type"):
+        with pytest.raises(ValueError, match="not a valid MIME type"):
             convert_file_document_to_url_document(
                 {
                     "type": "file",
                     "file": content,
-                    "mime_type": "text/html; charset=utf-8\nX-Injected: true",
+                    "mime_type": "text/html\r\nX-Injected: true",
                 }
             )
+
+    def test_should_reject_blank_mime_type(self) -> None:
+        content = b"%PDF-1.4 content"
+        with pytest.raises(ValueError, match="not a valid MIME type"):
+            convert_file_document_to_url_document(
+                {"type": "file", "file": content, "mime_type": "   "}
+            )
+
+    def test_should_reject_non_string_mime_type(self) -> None:
+        content = b"%PDF-1.4 content"
+        with pytest.raises(ValueError, match="must be a string"):
+            convert_file_document_to_url_document(
+                {"type": "file", "file": content, "mime_type": 123}
+            )
+
+    def test_should_not_echo_raw_mime_value_in_error(self) -> None:
+        content = b"some content"
+        secret_marker = "X-Injected: super-secret"
+        with pytest.raises(ValueError) as exc_info:
+            convert_file_document_to_url_document(
+                {
+                    "type": "file",
+                    "file": content,
+                    "mime_type": f"text/html\r\n{secret_marker}",
+                }
+            )
+        assert secret_marker not in str(exc_info.value)
+
+    def test_should_strip_parameters_from_explicit_mime_type(self) -> None:
+        content = b"raw bytes"
+        result = convert_file_document_to_url_document(
+            {
+                "type": "file",
+                "file": content,
+                "mime_type": "application/pdf; charset=utf-8",
+            }
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_normalize_explicit_mime_casing(self) -> None:
+        content = b"raw bytes"
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": content, "mime_type": "Application/PDF"}
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_sniff_when_explicit_mime_is_uppercase_octet_stream(self) -> None:
+        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": content, "mime_type": "Application/Octet-Stream"}
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_sniff_when_explicit_mime_is_binary_octet_stream(self) -> None:
+        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": content, "mime_type": "Binary/Octet-Stream"}
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_treat_generic_octet_stream_with_parameters_as_ambiguous(
+        self,
+    ) -> None:
+        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
+        result = convert_file_document_to_url_document(
+            {
+                "type": "file",
+                "file": content,
+                "mime_type": "application/octet-stream; charset=binary",
+            }
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_not_sniff_bmp_from_raw_bytes(self) -> None:
+        content = b"BM\x36\x00\x00\x00 fake bitmap header"
+        result = convert_file_document_to_url_document(
+            {"type": "file", "file": content}
+        )
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith(
+            "data:application/octet-stream;base64,"
+        )
+
+    def test_should_resolve_bmp_from_extension(self) -> None:
+        content = b"BM\x36\x00\x00\x00 fake bitmap header"
+        with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as f:
+            f.write(content)
+            f.flush()
+            tmp_path = Path(f.name)
+        try:
+            result = convert_file_document_to_url_document(
+                {"type": "file", "file": tmp_path}
+            )
+            assert result["type"] == "image_url"
+            assert result["image_url"].startswith("data:image/bmp;base64,")
+        finally:
+            os.unlink(str(tmp_path))
 
     def test_should_override_mime_type_for_pathlib_path(self):
         """Explicit mime_type should override auto-detection from extension."""
@@ -488,6 +590,30 @@ class TestBuildDocumentFromUpload:
             file_content=content,
             filename="img.png",
             content_type="image/png; charset=utf-8; boundary=something",
+        )
+
+        assert result["type"] == "image_url"
+        assert result["image_url"].startswith("data:image/png;base64,")
+
+    def test_should_detect_mime_from_filename_for_uppercase_octet_stream(self) -> None:
+        content = b"pdf content"
+
+        result = self._build(
+            file_content=content,
+            filename="report.pdf",
+            content_type="APPLICATION/OCTET-STREAM",
+        )
+
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_detect_mime_from_filename_for_binary_octet_stream(self) -> None:
+        content = b"png content"
+
+        result = self._build(
+            file_content=content,
+            filename="image.png",
+            content_type="binary/octet-stream",
         )
 
         assert result["type"] == "image_url"

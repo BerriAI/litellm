@@ -27,10 +27,10 @@ def _build_document_from_upload(
     Delegates to convert_file_document_to_url_document after resolving MIME type
     from the upload's content_type header or filename.
     """
-    mime_type = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
+    mime_type = content_type.split(";")[0].strip().lower() if content_type else None
+    generic_mime_types = ("application/octet-stream", "binary/octet-stream")
+    if (not mime_type or mime_type in generic_mime_types) and filename:
+        mime_type = get_mime_type(filename)
 
     return convert_file_document_to_url_document(
         {

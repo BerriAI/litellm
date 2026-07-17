@@ -290,13 +290,13 @@ fn resolve_document_mime(
         if !header.eq_ignore_ascii_case("application/octet-stream")
             && !header.eq_ignore_ascii_case("binary/octet-stream")
         {
-            return header.clone();
+            return header.to_ascii_lowercase();
         }
     }
     sniff_document_mime(bytes)
         .or_else(|| mime_from_file_name(url_path))
         .map(str::to_string)
-        .or(header_content_type)
+        .or_else(|| header_content_type.map(|header| header.to_ascii_lowercase()))
         .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
@@ -620,6 +620,26 @@ mod tests {
         assert_eq!(
             resolve_document_mime(Some("image/png".to_string()), b"%PDF-1.4", "/x.pdf"),
             "image/png"
+        );
+    }
+
+    #[test]
+    fn resolve_document_mime_normalizes_specific_header_casing() {
+        assert_eq!(
+            resolve_document_mime(Some("Application/PDF".to_string()), b"%PDF-1.4", "/x"),
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn resolve_document_mime_sniffs_when_header_is_binary_octet_stream() {
+        assert_eq!(
+            resolve_document_mime(
+                Some("Binary/Octet-Stream".to_string()),
+                b"%PDF-1.4 payload",
+                "/x"
+            ),
+            "application/pdf"
         );
     }
 

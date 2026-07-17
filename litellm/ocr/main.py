@@ -372,6 +372,8 @@ async def aocr(
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 
+_GENERIC_MIME_TYPES = frozenset({"application/octet-stream", "binary/octet-stream"})
+
 _RUST_BRIDGE_INTERNAL_PARAMS = {"original_generic_function"}
 
 _MIME_TYPE_MAP = {
@@ -414,9 +416,25 @@ def _sniff_mime_type_from_bytes(data: bytes) -> str | None:
         return "image/webp"
     if data.startswith((b"II*\x00", b"MM\x00*")):
         return "image/tiff"
-    if data.startswith(b"BM"):
-        return "image/bmp"
     return None
+
+
+def _normalize_mime_type(value: str) -> str | None:
+    normalized = value.split(";", 1)[0].strip().lower()
+    if not _MIME_PATTERN.match(normalized):
+        return None
+    return normalized
+
+
+def _resolve_declared_mime_type(raw: object) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("OCR document 'mime_type' must be a string when provided")
+    normalized = _normalize_mime_type(raw)
+    if normalized is None:
+        raise ValueError("OCR document 'mime_type' is not a valid MIME type")
+    return normalized
 
 
 def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str, str]:
@@ -488,24 +506,25 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     if not file_bytes:
         raise ValueError("File is empty or could not be read")
 
-    raw_mime = document.get("mime_type")
-    explicit_mime = raw_mime if isinstance(raw_mime, str) else None
-    resolved_mime = next(
+    declared_mime = (
+        _resolve_declared_mime_type(cast(object, document["mime_type"]))
+        if "mime_type" in document
+        else None
+    )
+    filename_mime = _normalize_mime_type(mime_type)
+    specific_mime = next(
         (
             candidate
-            for candidate in (explicit_mime, mime_type)
-            if candidate and candidate != "application/octet-stream"
+            for candidate in (declared_mime, filename_mime)
+            if candidate is not None and candidate not in _GENERIC_MIME_TYPES
         ),
         None,
     )
     mime_type = (
-        resolved_mime
+        specific_mime
         or _sniff_mime_type_from_bytes(file_bytes)
         or "application/octet-stream"
     )
-
-    if not _MIME_PATTERN.match(mime_type):
-        raise ValueError(f"Invalid MIME type: {mime_type}")
 
     base64_data = base64.b64encode(file_bytes).decode("utf-8")
     data_uri = f"data:{mime_type};base64,{base64_data}"

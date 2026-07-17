@@ -11,13 +11,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
 import yaml
 
-from litellm.proxy.ocr_endpoints.endpoints import _build_document_from_upload
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 TEST_PDF_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
@@ -34,12 +33,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PDF = REPO_ROOT / "tests" / "llm_translation" / "fixtures" / "dummy.pdf"
 FIXTURE_IMAGE = REPO_ROOT / "tests" / "image_gen_tests" / "test_image.png"
 
-RUST_OCR_UPLOAD_CASES = [
-    pytest.param(FIXTURE_PDF, "application/pdf", "document_url", id="pdf_octet_stream"),
-    pytest.param(FIXTURE_IMAGE, "image/png", "image_url", id="image_octet_stream"),
-]
+RUST_OCR_UPLOAD_CASES = (
+    pytest.param(FIXTURE_PDF, id="pdf_octet_stream"),
+    pytest.param(FIXTURE_IMAGE, id="image_octet_stream"),
+)
 
-RUST_OCR_GATEWAY_CASES = [
+RUST_OCR_GATEWAY_CASES = (
     pytest.param(
         "rust-ocr-mistral",
         {"type": "document_url", "document_url": TEST_PDF_URL},
@@ -68,7 +67,7 @@ RUST_OCR_GATEWAY_CASES = [
         },
         id="vertex_deepseek",
     ),
-]
+)
 
 CONFIG_PATH = Path(__file__).with_name("litellm-config.yml")
 
@@ -103,7 +102,9 @@ class OcrGateway:
                 json={"model": model, "document": document},
             )
 
-    def ocr_upload(self, model: str, content: bytes, upload_name: str) -> httpx.Response:
+    def ocr_upload(
+        self, model: str, content: bytes, upload_name: str
+    ) -> httpx.Response:
         with httpx.Client(
             timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120"))
         ) as client:
@@ -135,13 +136,13 @@ def resources() -> OcrResources:
     )
 
 
-def _assert_ocr_response_shape(response_json: dict[str, Any]) -> None:
-    assert response_json["object"] == "ocr"
-    assert response_json["model"]
-    assert isinstance(response_json["pages"], list)
-    assert len(response_json["pages"]) > 0
-    assert "index" in response_json["pages"][0]
-    assert "markdown" in response_json["pages"][0]
+def _assert_ocr_response(response: httpx.Response) -> None:
+    assert response.status_code == 200, response.text
+    parsed = OCRResponse.model_validate(response.json())
+    assert parsed.object == "ocr"
+    assert parsed.model
+    assert len(parsed.pages) > 0
+    assert any(page.markdown.strip() for page in parsed.pages)
 
 
 class TestRustOcrGateway:
@@ -166,29 +167,17 @@ class TestRustOcrGateway:
     ) -> None:
         response = resources.gateway.ocr(model, document)
 
-        assert response.status_code == 200, response.text
-        _assert_ocr_response_shape(response.json())
+        _assert_ocr_response(response)
 
-    @pytest.mark.parametrize(
-        ("fixture_path", "expected_mime", "expected_document_type"),
-        RUST_OCR_UPLOAD_CASES,
-    )
+    @pytest.mark.parametrize("fixture_path", RUST_OCR_UPLOAD_CASES)
     def test_rust_ocr_octet_stream_upload_response(
         self,
         resources: OcrResources,
         fixture_path: Path,
-        expected_mime: str,
-        expected_document_type: str,
     ) -> None:
-        if not fixture_path.is_file():
-            pytest.skip(f"Missing OCR fixture: {fixture_path}")
+        assert fixture_path.is_file(), f"Missing committed OCR fixture: {fixture_path}"
 
         content = fixture_path.read_bytes()
-        document = _build_document_from_upload(content, "document", "application/octet-stream")
-        assert document["type"] == expected_document_type
-        assert document[expected_document_type].startswith(f"data:{expected_mime};base64,")
-
         response = resources.gateway.ocr_upload("rust-ocr-mistral", content, "document")
 
-        assert response.status_code == 200, response.text
-        _assert_ocr_response_shape(response.json())
+        _assert_ocr_response(response)
