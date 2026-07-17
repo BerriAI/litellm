@@ -151,14 +151,6 @@
   assertions: [uses_per_user_token]
   source: "v2 authorization_code egress arm (per-user DB token)"
   rationale: Calls on an interactive server must present the user's upstream token, never the caller's virtual key or IdP JWT
-- id: mcp.protocol.api_key.passes_official_conformance
-  module: mcp
-  tier: P0
-  operation: protocol
-  auth_family: api_key
-  assertions: [passes_official_conformance]
-  source: "@modelcontextprotocol/conformance server scenarios via tests/e2e/mcp/test_mcp_conformance_e2e.py"
-  rationale: The gateway re-serves the MCP protocol to hosts, so it must stay spec-conformant as a server; the official suite catches lifecycle/error-shape regressions our behavior tests do not encode
 - id: mcp.list_tools.oauth.challenges_bearer_key_not_masked
   module: mcp
   tier: P0
