@@ -508,6 +508,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 def test_create_model_info_response_does_not_call_router_group_info():
     router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
 
     response = create_model_info_response(
         model_id="some-model",
@@ -520,6 +521,39 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
     router.get_model_group_info.assert_not_called()
     assert response["max_input_tokens"] == 128000
+
+
+def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (32000, 8000)
+
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["max_input_tokens"] == 32000
+    assert response["max_output_tokens"] == 8000
+
+
+def test_create_model_info_response_deployment_limits_override_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (200000, None)
+
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert response["max_input_tokens"] == 200000
+    assert response["max_output_tokens"] == 16384
 
 
 def test_create_model_info_response_emits_integer_token_counts():

@@ -6129,13 +6129,28 @@ def create_model_info_response(
             e,
         )
         model_cost_info = None
+
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
     if model_cost_info is not None:
-        max_input_tokens = model_cost_info.get("max_input_tokens")
-        if max_input_tokens is not None:
-            base["max_input_tokens"] = int(max_input_tokens)
-        max_output_tokens = model_cost_info.get("max_output_tokens")
-        if max_output_tokens is not None:
-            base["max_output_tokens"] = int(max_output_tokens)
+        cost_map_input = model_cost_info.get("max_input_tokens")
+        if cost_map_input is not None:
+            max_input_tokens = int(cost_map_input)
+        cost_map_output = model_cost_info.get("max_output_tokens")
+        if cost_map_output is not None:
+            max_output_tokens = int(cost_map_output)
+
+    if llm_router is not None:
+        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
+        if configured_input is not None:
+            max_input_tokens = configured_input
+        if configured_output is not None:
+            max_output_tokens = configured_output
+
+    if max_input_tokens is not None:
+        base["max_input_tokens"] = max_input_tokens
+    if max_output_tokens is not None:
+        base["max_output_tokens"] = max_output_tokens
 
     if not include_metadata:
         return base
