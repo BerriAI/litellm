@@ -10,6 +10,7 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
@@ -61,12 +62,14 @@ class AggregateToolListing(NamedTuple):
     outcomes: dict[str, ServerOutcome]
 
 
-def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
-    """Walk the exception tree (``__cause__``/``__context__``/ExceptionGroup members) for an
-    ``httpx.Response``, mirroring how upstream failures surface through the MCP SDK's task groups.
-    Explicit links are searched first: each node's ``raise ... from`` cause, then group members in
-    raise order, then the incidental ``__context__`` chain, so a response raised while handling the
-    real failure can never shadow the response on the explicit causal chain."""
+def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response]:
+    """Yield every ``httpx.Response`` in the exception tree (``__cause__``/``__context__``/
+    ExceptionGroup members) in deliberate order, mirroring how upstream failures surface through the
+    MCP SDK's task groups. Explicit links come first: each node's ``raise ... from`` cause, then
+    group members in raise order, then the incidental ``__context__`` chain, so a response raised
+    while handling the real failure can never shadow one on the explicit causal chain. Consumers
+    apply their own predicate over the stream: selecting the first response and THEN testing it
+    would miss a causal auth response sitting behind an unrelated earlier one."""
     seen: set[int] = set()
     stack = [exc]
     while stack:
@@ -76,7 +79,7 @@ def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
         seen.add(id(current))
         response = getattr(current, "response", None)
         if isinstance(response, httpx.Response):
-            return response
+            yield response
         if current.__context__ is not None:
             stack.append(current.__context__)
         exceptions = getattr(current, "exceptions", None)
@@ -84,17 +87,22 @@ def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
             stack.extend(reversed(exceptions))
         if current.__cause__ is not None:
             stack.append(current.__cause__)
-    return None
+
+
+def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
+    return next(_iter_upstream_responses(exc), None)
 
 
 def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None:
-    """The upstream 401/403 and its ``WWW-Authenticate`` challenge, both read from the SAME response
-    the deliberate-order traversal selects, so the status that picks the carrier channel and the
-    challenge that rides with it can never come from two different responses in the tree."""
-    response = _find_upstream_response(exc)
-    if response is None or response.status_code not in (401, 403):
-        return None
-    return response.status_code, response.headers.get("www-authenticate")
+    """The first upstream 401/403 in deliberate order and its ``WWW-Authenticate`` challenge, both
+    read from the SAME response, so the status that picks the carrier channel and the challenge that
+    rides with it can never come from two different responses in the tree. Non-auth responses do not
+    end the scan: a causal 401 behind an unrelated 5xx must still be found, or the client never
+    receives the challenge it needs to re-authenticate."""
+    for response in _iter_upstream_responses(exc):
+        if response.status_code in (401, 403):
+            return response.status_code, response.headers.get("www-authenticate")
+    return None
 
 
 def raise_classified_list_failure(
@@ -131,12 +139,15 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
         return ServerListFault(tag="unreachable")
+    auth = upstream_auth_challenge(exc)
+    if auth is not None:
+        status_code, _ = auth
+        return ServerListFault(
+            tag="forbidden" if status_code == 403 else "auth_required",
+            status_code=status_code,
+        )
     response = _find_upstream_response(exc)
     if response is not None:
-        if response.status_code == 401:
-            return ServerListFault(tag="auth_required", status_code=401)
-        if response.status_code == 403:
-            return ServerListFault(tag="forbidden", status_code=403)
         return ServerListFault(tag="upstream_error", status_code=response.status_code)
     if isinstance(exc, (httpx.TimeoutException,)):
         return ServerListFault(tag="timeout")
