@@ -107,10 +107,7 @@ impl OcrProviderConfig for MistralOcrConfig {
     ) -> CoreResult<OcrResponseData> {
         let response_object = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
 
         let pages = response_object
             .get("pages")
@@ -255,6 +252,15 @@ mod tests {
                 actual: "string",
             }
         );
+    }
+
+    #[test]
+    fn transform_ocr_response_rejects_non_object_as_invalid_response() {
+        let err = transform_ocr_response("mistral-ocr-latest", json!("boom"))
+            .expect_err("non-object provider response should be rejected");
+
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
+        assert_eq!(err.public_status_code(), Some(500));
     }
 
     #[test]
