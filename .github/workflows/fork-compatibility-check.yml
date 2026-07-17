@@ -83,10 +83,10 @@ jobs:
           echo "pr_url=" >> "$GITHUB_OUTPUT"
           echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
 
-          gh label create upstream-sync --description "Upstream stable sync" --color "0E8A16" 2>/dev/null || true
-          gh label create fork-compatibility --description "Fork Mantle compatibility" --color "D93F0B" 2>/dev/null || true
-          gh label create ci-alert --description "CI alert" --color "B60205" 2>/dev/null || true
-          gh label create needs-conflict-resolution --description "Sync PR has unresolved conflict markers" --color "E4E669" 2>/dev/null || true
+          gh label create upstream-sync --description "Upstream stable sync" --color "0E8A16" --force 2>/dev/null || true
+          gh label create fork-compatibility --description "Fork Mantle compatibility" --color "D93F0B" --force 2>/dev/null || true
+          gh label create ci-alert --description "CI alert" --color "B60205" --force 2>/dev/null || true
+          gh label create needs-conflict-resolution --description "Sync PR has unresolved conflict markers" --color "E4E669" --force 2>/dev/null || true
 
           git checkout -B "$BRANCH" origin/litellm_internal_staging
           SHORTLOG=$(git log --oneline "HEAD..${STABLE_TAG}" | head -40 || true)
@@ -165,32 +165,29 @@ jobs:
           )
           BODY=$(printf '%s\n' "$BODY" | sed 's/^          //')
 
+          # Create/update the PR first without labels so a missing label cannot fail the job.
           EXISTING_PR=$(gh pr list --base litellm_internal_staging --head "$BRANCH" --state open --json number,url --jq '.[0].url // empty')
           if [ -n "$EXISTING_PR" ]; then
             PR_NUM=$(gh pr list --base litellm_internal_staging --head "$BRANCH" --state open --json number --jq '.[0].number')
             gh pr edit "$PR_NUM" --title "$TITLE" --body "$BODY"
-            gh pr edit "$PR_NUM" --add-label upstream-sync || true
-            if [ "$HAS_CONFLICTS" = "true" ]; then
-              gh pr edit "$PR_NUM" --add-label needs-conflict-resolution || true
-            else
-              gh pr edit "$PR_NUM" --remove-label needs-conflict-resolution || true
-            fi
             echo "pr_url=$EXISTING_PR" >> "$GITHUB_OUTPUT"
             echo "Refreshed PR: $EXISTING_PR"
           else
-            CREATE_ARGS=(
-              --base litellm_internal_staging
-              --head "$BRANCH"
-              --title "$TITLE"
-              --label upstream-sync
-              --body "$BODY"
-            )
-            if [ "$HAS_CONFLICTS" = "true" ]; then
-              CREATE_ARGS+=(--label needs-conflict-resolution)
-            fi
-            PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
+            PR_URL=$(gh pr create \
+              --base litellm_internal_staging \
+              --head "$BRANCH" \
+              --title "$TITLE" \
+              --body "$BODY")
+            PR_NUM="${PR_URL##*/}"
             echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
             echo "Created PR: $PR_URL"
+          fi
+
+          gh pr edit "$PR_NUM" --add-label upstream-sync || true
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            gh pr edit "$PR_NUM" --add-label needs-conflict-resolution || true
+          else
+            gh pr edit "$PR_NUM" --remove-label needs-conflict-resolution || true
           fi
 
       - name: Set up Python
@@ -312,13 +309,18 @@ jobs:
           See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
           EOF
           )
-          EXISTING_URL=$(gh issue list --label fork-compatibility --state open --search "Mantle failed in:title" --json number,url --jq '.[0].url // empty')
+          EXISTING_URL=$(gh issue list --label fork-compatibility --state open --search "Mantle failed in:title" --json number,url --jq '.[0].url // empty' || true)
           if [ -n "$EXISTING_URL" ]; then
             NUM=$(gh issue list --label fork-compatibility --state open --search "Mantle failed in:title" --json number --jq '.[0].number')
             gh issue comment "$NUM" --body "$BODY"
             echo "Updated issue: $EXISTING_URL"
           else
-            gh issue create --title "$TITLE" --label fork-compatibility --label ci-alert --body "$BODY"
+            # Prefer unlabeled create if labels are missing in the repo
+            ISSUE_URL=$(gh issue create --title "$TITLE" --body "$BODY")
+            ISSUE_NUM="${ISSUE_URL##*/}"
+            gh issue edit "$ISSUE_NUM" --add-label fork-compatibility || true
+            gh issue edit "$ISSUE_NUM" --add-label ci-alert || true
+            echo "Created issue: $ISSUE_URL"
           fi
 
       - name: Job summary
@@ -355,19 +357,14 @@ jobs:
       - name: Send Slack notification
         if: steps.slack-check.outputs.enabled == 'true'
         continue-on-error: true
-        uses: slackapi/slack-github-action@v1.24.0
+        uses: slackapi/slack-github-action@v2.1.1
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
-            {
-              "text": "LiteLLM fork sync: stable ${{ needs.sync-and-check.outputs.stable_tag }} (needs_sync=${{ needs.sync-and-check.outputs.needs_sync }}, conflicts=${{ needs.sync-and-check.outputs.has_conflicts }}, mantle_ok=${{ needs.sync-and-check.outputs.mantle_ok }})",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*LiteLLM fork sync PR* (review and merge manually)\n• Stable: `${{ needs.sync-and-check.outputs.stable_tag }}`\n• Needs sync: `${{ needs.sync-and-check.outputs.needs_sync }}`\n• Conflicts: `${{ needs.sync-and-check.outputs.has_conflicts }}`\n• Mantle OK: `${{ needs.sync-and-check.outputs.mantle_ok }}`\n• PR: ${{ needs.sync-and-check.outputs.sync_pr_url || 'none' }}\n• <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Logs>"
-                  }
-                }
-              ]
-            }
+            text: "LiteLLM fork sync: stable ${{ needs.sync-and-check.outputs.stable_tag }} (needs_sync=${{ needs.sync-and-check.outputs.needs_sync }}, conflicts=${{ needs.sync-and-check.outputs.has_conflicts }}, mantle_ok=${{ needs.sync-and-check.outputs.mantle_ok }})"
+            blocks:
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "*LiteLLM fork sync PR* (review and merge manually)\n• Stable: `${{ needs.sync-and-check.outputs.stable_tag }}`\n• Needs sync: `${{ needs.sync-and-check.outputs.needs_sync }}`\n• Conflicts: `${{ needs.sync-and-check.outputs.has_conflicts }}`\n• Mantle OK: `${{ needs.sync-and-check.outputs.mantle_ok }}`\n• PR: ${{ needs.sync-and-check.outputs.sync_pr_url || 'none' }}\n• <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Logs>"
