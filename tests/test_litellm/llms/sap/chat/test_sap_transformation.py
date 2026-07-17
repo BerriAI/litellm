@@ -639,3 +639,86 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+class TestGeminiReasoningNormalization:
+    """Unit tests for _normalize_gemini_reasoning.
+
+    Verifies that list-shaped reasoning_content from Gemini is coerced to str
+    before model_validate is called, without touching other shapes.
+    """
+
+    def _make_final_result(self, reasoning_content):
+        """Helper: build a minimal final_result dict with given reasoning_content."""
+        result = {
+            "id": "test-id",
+            "object": "chat.completion",
+            "model": "gemini-2.0-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        if reasoning_content is not None:
+            result["choices"][0]["message"]["reasoning_content"] = reasoning_content
+        return result
+
+    def test_list_shaped_is_joined_to_string(self):
+        """Gemini list of thought dicts is joined into a newline-separated string."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        final_result = self._make_final_result(
+            [
+                {"thought": "First thought.", "signature": "sig1"},
+                {"thought": "Second thought.", "signature": "sig2"},
+            ]
+        )
+        GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
+        assert (
+            final_result["choices"][0]["message"]["reasoning_content"]
+            == "First thought.\n\nSecond thought."
+        )
+
+    def test_string_reasoning_content_is_untouched(self):
+        """A reasoning_content that is already a str is left as-is."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        final_result = self._make_final_result("already a string")
+        GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
+        assert final_result["choices"][0]["message"]["reasoning_content"] == "already a string"
+
+    def test_missing_reasoning_content_is_untouched(self):
+        """A message without reasoning_content is left unchanged."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        final_result = self._make_final_result(None)
+        # reasoning_content key is absent — _make_final_result(None) does not add it
+        assert "reasoning_content" not in final_result["choices"][0]["message"]
+        GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
+        assert "reasoning_content" not in final_result["choices"][0]["message"]
+
+    def test_empty_list_becomes_none(self):
+        """An empty list collapses to None so model_validate sees no reasoning."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        final_result = self._make_final_result([])
+        GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
+        assert final_result["choices"][0]["message"]["reasoning_content"] is None
+
+    def test_model_validate_succeeds_after_normalization(self):
+        """model_validate no longer raises after normalisation."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        from litellm.types.utils import ModelResponse
+
+        final_result = self._make_final_result(
+            [{"thought": "Thinking hard.", "signature": "abc"}]
+        )
+        GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
+        response = ModelResponse.model_validate(final_result)
+        assert response.choices[0].message.reasoning_content == "Thinking hard."
