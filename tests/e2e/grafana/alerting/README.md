@@ -57,6 +57,14 @@ The 1m interval sits well inside the 5m lookback, so each failing line is seen b
 several consecutive evaluations and a boundary or late-ingested line is never
 missed.
 
+The `{service_name="litellm-e2e"}` stream selector has to match the label the
+scrape actually attaches to the e2e runner's stdout, or the query matches nothing
+and the rule silently never fires. If your scrape does not set `service_name`,
+swap the selector for the pod-based fallback the status-history panels already
+use (`{cluster="berrie-litellm-stage", pod=~"litellm-e2e-.+"}`, see
+`../status_history_panels.md`) in both `alert_rules.yaml` and the drill-down
+annotation.
+
 `contact_points.yaml` defines the `devin-e2e-remediation` Slack contact point.
 The rule routes straight to it through `notification_settings.receiver` (Grafana
 simplified routing, v11+), so no change to the org's root notification policy
