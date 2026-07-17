@@ -46,7 +46,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     as `<property>` entries, on every outcome including skips and setup errors.
     Downstream (Loki/Grafana) reads outcome and duration from the standard report
     and these properties for package rollups and coverage drill-down. See
-    junit_properties.py and grafana/status_history_panels.md."""
+    junit_properties.py."""
     for item in items:
         attach_result_properties(item)
 
