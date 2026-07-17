@@ -24,6 +24,7 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
     ChatBody,
     ChatResponse,
     CustomerDeleteBody,
@@ -226,6 +227,9 @@ class Gateway:
 
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
         return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
+
+    def messages_stream(self, key: str, body: AnthropicMessagesBody) -> StreamingResponse:
+        return self.transport.stream("/v1/messages", headers=self.transport.bearer(key), json=body)
 
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(

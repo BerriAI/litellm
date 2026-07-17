@@ -66,6 +66,11 @@ configs:
             model: openai/text-embedding-3-small
             api_key: os.environ/OPENAI_API_KEY
 
+        - model_name: openai-responses-codex
+          litellm_params:
+            model: openai/gpt-5.3-codex
+            api_key: os.environ/OPENAI_API_KEY
+
         # v2 auto-router with the LLM complexity classifier. SIMPLE stays on the
         # openai backend; every higher tier routes to the anthropic backend, so the
         # served deployment (read back from the spend log's model) reveals whether
