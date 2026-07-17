@@ -98,6 +98,20 @@ def test_prompt_cache_activity_requires_dates(client, monkeypatch):
     assert response.status_code == 400
 
 
+def test_prompt_cache_activity_rejects_bad_date_format(client, monkeypatch):
+    query_raw = AsyncMock(return_value=[])
+    _set_prisma(monkeypatch, query_raw)
+
+    response = client.get(
+        "/global/activity/cache_hits/prompt_caching",
+        params={"start_date": "07/10/2026", "end_date": "2026-07-18"},
+    )
+
+    assert response.status_code == 400
+    assert "start_date must be in YYYY-MM-DD format" in response.text
+    query_raw.assert_not_awaited()
+
+
 def test_prompt_cache_activity_no_prisma(client, monkeypatch):
     monkeypatch.setattr(proxy_server, "prisma_client", None)
 

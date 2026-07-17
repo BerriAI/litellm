@@ -143,6 +143,15 @@ async def get_prompt_cache_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
+    for label, value in (("start_date", start_date), ("end_date", end_date)):
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"{label} must be in YYYY-MM-DD format"},
+            )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
