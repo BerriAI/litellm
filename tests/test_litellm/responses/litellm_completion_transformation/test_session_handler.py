@@ -389,6 +389,40 @@ async def test_should_check_cold_storage_for_full_payload():
 
 
 @pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_is_bounded(monkeypatch):
+    """
+    Regression test for the unbounded SELECT * over LiteLLM_SpendLogs during
+    Responses API session reconstruction (query-engine OOM).
+
+    The reconstruction query must be capped to the most recent
+    MAX_SPEND_LOGS_PER_RESPONSES_SESSION rows via a LIMIT, and that bound must be
+    passed to the query engine so it cannot buffer an entire session into memory.
+    """
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm.constants, "MAX_SPEND_LOGS_PER_RESPONSES_SESSION", 7)
+
+    mock_prisma = AsyncMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        "chatcmpl-bounded-test"
+    )
+
+    mock_prisma.db.query_raw.assert_awaited_once()
+    call_args = mock_prisma.db.query_raw.await_args
+    query = call_args.args[0]
+
+    # The query must bind a LIMIT so the query engine never buffers the whole session
+    assert "LIMIT $2" in query
+    assert "ORDER BY \"endTime\" DESC" in query
+
+    # The configured cap must be the value passed to the query engine
+    assert call_args.args[2] == 7
+
+
+@pytest.mark.asyncio
 async def test_get_chat_completion_message_history_empty_response_dict():
     """
     Test that empty response dict is handled correctly without processing.

@@ -252,13 +252,16 @@ class ResponsesSessionHandler:
         previous_response_id: str,
     ) -> List[SpendLogsPayload]:
         """
-        Get all spend logs for a previous response id
-
+        Get the spend logs for a previous response id, bounded to the most recent
+        ``MAX_SPEND_LOGS_PER_RESPONSES_SESSION`` rows so a single ``/v1/responses`` request
+        cannot make the query engine buffer an unbounded amount of ``LiteLLM_SpendLogs`` data.
 
         SQL query
 
-        SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
+        SELECT session_id FROM spend_logs WHERE request_id = previous_response_id, then the
+        most recent N rows for that session, returned in ascending endTime order.
         """
+        from litellm.constants import MAX_SPEND_LOGS_PER_RESPONSES_SESSION
         from litellm.proxy.proxy_server import prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
@@ -273,14 +276,20 @@ class ResponsesSessionHandler:
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
                 WHERE request_id = $1
+            ),
+            recent_logs AS (
+                SELECT *
+                FROM "LiteLLM_SpendLogs"
+                WHERE session_id IN (SELECT session_id FROM matching_session)
+                ORDER BY "endTime" DESC
+                LIMIT $2
             )
             SELECT *
-            FROM "LiteLLM_SpendLogs"
-            WHERE session_id IN (SELECT session_id FROM matching_session)
+            FROM recent_logs
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs = await prisma_client.db.query_raw(query, previous_response_id)
+        spend_logs = await prisma_client.db.query_raw(query, previous_response_id, MAX_SPEND_LOGS_PER_RESPONSES_SESSION)
 
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",

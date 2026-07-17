@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_non
 
 DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
+MAX_SPEND_LOGS_PER_RESPONSES_SESSION = get_env_int("MAX_SPEND_LOGS_PER_RESPONSES_SESSION", 1000)
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
