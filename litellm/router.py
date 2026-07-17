@@ -86,7 +86,10 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
-from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_strategy.tag_based_routing import (
+    get_deployments_for_tag,
+    select_index_by_tags,
+)
 from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
     add_fallback_headers_to_response,
@@ -177,6 +180,7 @@ from litellm.types.router import (
     OptionalPreCallChecks,
     RetryPolicy,
     RouterCacheEnum,
+    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
@@ -488,7 +492,7 @@ class Router:
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
-        self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
+        self.complexity_routers: dict[str, list["ComplexityRouter"]] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
@@ -7657,12 +7661,10 @@ class Router:
             default_model=default_model,
             litellm_router_instance=self,
             complexity_router_config=complexity_router_config,
+            tags=deployment.litellm_params.tags,
+            model_id=deployment.model_info.id if deployment.model_info else None,
         )
-        if deployment.model_name in self.complexity_routers:
-            raise ValueError(
-                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.complexity_routers[deployment.model_name] = complexity_router
+        self.complexity_routers.setdefault(deployment.model_name, []).append(complexity_router)
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -7698,12 +7700,13 @@ class Router:
                 continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        for model_name, complexity_router in self.complexity_routers.items():
-            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
-                continue
-            adaptive_router = complexity_router._ensure_adaptive_router()
-            if adaptive_router is not None:
-                self.adaptive_routers[model_name] = adaptive_router
+        for model_name, complexity_routers in self.complexity_routers.items():
+            for complexity_router in complexity_routers:
+                if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
+                    continue
+                adaptive_router = complexity_router._ensure_adaptive_router()
+                if adaptive_router is not None:
+                    self.adaptive_routers[model_name] = adaptive_router
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
@@ -10832,9 +10835,10 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
+        complexity_router = self._select_complexity_router(model=model, request_kwargs=request_kwargs)
         router_strategy = (
             self.auto_routers.get(model)
-            or self.complexity_routers.get(model)
+            or complexity_router
             or self.adaptive_routers.get(model)
             or self.quality_routers.get(model)
         )
@@ -10857,14 +10861,64 @@ class Router:
         # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
         # not here.
         if pre_routing_hook_response is not None:
-            alias_index = self.model_name_to_deployment_indices.get(model, [])
-            if alias_index:
-                alias_litellm_params = self.model_list[alias_index[0]].get("litellm_params", {})
+            selected_model_id = complexity_router.model_id if complexity_router is router_strategy else None
+            alias_index = self._resolve_alias_index(model=model, selected_model_id=selected_model_id)
+            if alias_index is not None:
+                alias_litellm_params = self.model_list[alias_index].get("litellm_params", {})
                 for key, value in alias_litellm_params.items():
                     if key != "model" and value is not None:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    def _resolve_alias_index(self, model: str, selected_model_id: str | None) -> int | None:
+        """Index into `model_list` of the alias deployment whose params to apply.
+
+        When several deployments share `model` (tag-based complexity routing), prefer the
+        one whose model_info id matches the router the hook actually selected so the right
+        tags/params are applied, falling back to the first alias.
+        """
+        alias_indices = self.model_name_to_deployment_indices.get(model, [])
+        if not alias_indices:
+            return None
+        if selected_model_id is not None:
+            for index in alias_indices:
+                model_info = self.model_list[index].get("model_info") or {}
+                if model_info.get("id") == selected_model_id:
+                    return index
+        return alias_indices[0]
+
+    def _select_complexity_router(self, model: str, request_kwargs: dict) -> "ComplexityRouter | None":
+        """Pick the complexity router for `model`, honouring tag-based routing.
+
+        Multiple complexity-router deployments can share a model_name while carrying
+        different tags. When tag filtering is active, select the router whose tags match
+        the request's tags (same semantics as deployment tag routing); raise the standard
+        tag-routing error when nothing matches so callers get a clear 401 instead of being
+        silently routed through the wrong tier config.
+        """
+        routers = self.complexity_routers.get(model)
+        if not routers:
+            return None
+        if len(routers) == 1:
+            return routers[0]
+
+        request_enable_tag_filtering = request_kwargs.get("enable_tag_filtering")
+        if request_enable_tag_filtering is not True and self.enable_tag_filtering is not True:
+            return routers[0]
+
+        metadata_variable_name = self._get_metadata_variable_name_from_kwargs(request_kwargs)
+        request_tags = (request_kwargs.get(metadata_variable_name) or {}).get("tags") or []
+        selected_index = select_index_by_tags(
+            tags_per_candidate=[router.tags for router in routers],
+            request_tags=request_tags,
+            match_any=self.tag_filtering_match_any,
+        )
+        if selected_index is None:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+            )
+        return routers[selected_index]
 
     def get_available_deployment(
         self,

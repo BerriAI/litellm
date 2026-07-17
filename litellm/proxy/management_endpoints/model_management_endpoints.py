@@ -13,10 +13,15 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from litellm.router_strategy.complexity_router.complexity_router import (
+        ComplexityRouter,
+    )
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -1056,6 +1061,27 @@ def _deployment_name_and_model(deployment: Optional[Union[Deployment, Dict[str, 
     return deployment.model_name, str(getattr(deployment.litellm_params, "model", "") or "")
 
 
+def _evict_complexity_router(
+    complexity_routers: dict[str, list["ComplexityRouter"]],
+    model_name: str,
+    model_id: str | None,
+) -> None:
+    """Drop only the complexity router backed by `model_id`.
+
+    Several complexity routers may be registered under one model_name (tag-based
+    routing), so evict just the deleted deployment's router and keep the siblings; pop
+    the whole entry only once the last one is gone.
+    """
+    existing = complexity_routers.get(model_name)
+    if not existing:
+        return
+    remaining = [router for router in existing if router.model_id != model_id]
+    if remaining:
+        complexity_routers[model_name] = remaining
+    else:
+        complexity_routers.pop(model_name, None)
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -1137,7 +1163,7 @@ async def delete_model(
                 deleted_name, deleted_model = _deployment_name_and_model(deleted_deployment)
                 if deleted_name is not None and deleted_model.startswith("auto_router/"):
                     llm_router.auto_routers.pop(deleted_name, None)
-                    llm_router.complexity_routers.pop(deleted_name, None)
+                    _evict_complexity_router(llm_router.complexity_routers, deleted_name, model_info.id)
                     llm_router.adaptive_routers.pop(deleted_name, None)
                     llm_router.quality_routers.pop(deleted_name, None)
 

@@ -114,6 +114,51 @@ def _match_deployment(
     return None
 
 
+def select_index_by_tags(
+    tags_per_candidate: list[list[str] | None],
+    request_tags: list[str],
+    match_any: bool,
+) -> int | None:
+    """
+    Pick the single best candidate index for tag-based routing among candidates that
+    share a model group (e.g. several complexity-router deployments registered under
+    the same model_name, each carrying different tags).
+
+    Mirrors get_deployments_for_tag's selection semantics for the single-pick case:
+      - `!tag` entries exclude a candidate outright.
+      - a positive request tag selects the first candidate whose tags match
+        (match_any / match_all per `match_any`); if none match, a `default`-tagged
+        candidate wins; otherwise there is no match.
+      - an untagged request prefers a `default`-tagged candidate, else the first
+        remaining candidate.
+
+    Returns the chosen index, or None when request tags are given but neither a tag
+    match nor a default candidate exists (caller decides how to surface that).
+    """
+    positive_tags, excluded_patterns = _split_tags(request_tags or [])
+    excluded_set = frozenset(excluded_patterns)
+    allowed = [i for i, tags in enumerate(tags_per_candidate) if not excluded_set.intersection(tags or [])]
+
+    if not positive_tags:
+        default_index = next((i for i in allowed if "default" in (tags_per_candidate[i] or [])), None)
+        if default_index is not None:
+            return default_index
+        return allowed[0] if allowed else None
+
+    matched_index = next(
+        (
+            i
+            for i in allowed
+            if tags_per_candidate[i] and is_valid_deployment_tag(tags_per_candidate[i] or [], positive_tags, match_any)
+        ),
+        None,
+    )
+    if matched_index is not None:
+        return matched_index
+
+    return next((i for i in allowed if "default" in (tags_per_candidate[i] or [])), None)
+
+
 def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
     positive = [t for t in tags if not t.startswith("!")]
     excluded = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]

@@ -668,8 +668,10 @@ class TestDeleteModelClearsRouterRegistry:
                 "model_info": {"id": model_id},
             }
         )
+        deleted_complexity_router = MagicMock()
+        deleted_complexity_router.model_id = model_id
         mock_router.auto_routers = {"smart-router": MagicMock()}
-        mock_router.complexity_routers = {"smart-router": MagicMock()}
+        mock_router.complexity_routers = {"smart-router": [deleted_complexity_router]}
 
         _PS = "litellm.proxy.proxy_server"
         with (
@@ -749,6 +751,27 @@ class TestDeleteModelClearsRouterRegistry:
 
         mock_router.delete_deployment.assert_called_once_with(id=model_id)
         assert mock_router.complexity_routers.get("shared-name") is config_router
+
+    def test_evict_complexity_router_keeps_sibling_tagged_routers(self):
+        """Several complexity routers can share a model_name via different tags. Deleting
+        one deployment must evict only its router (matched by model_id) and keep the rest,
+        popping the whole entry only when the last sibling is gone.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _evict_complexity_router,
+        )
+
+        cn_router = MagicMock()
+        cn_router.model_id = "cn-id"
+        row_router = MagicMock()
+        row_router.model_id = "row-id"
+        registry = {"smart-router": [cn_router, row_router]}
+
+        _evict_complexity_router(registry, "smart-router", "cn-id")
+        assert registry["smart-router"] == [row_router]
+
+        _evict_complexity_router(registry, "smart-router", "row-id")
+        assert "smart-router" not in registry
 
 
 class TestUpdateModel:

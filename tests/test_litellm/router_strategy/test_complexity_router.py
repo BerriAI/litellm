@@ -1517,6 +1517,117 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["drop_params"] is True
 
 
+class TestComplexityRouterTagBasedRouting:
+    """
+    Regression tests for: two complexity-router deployments sharing a model_name but
+    carrying different tags used to collapse to the first-registered config (or raise
+    "already exists"), so a request whose key had the second tag was silently routed
+    through the wrong tier config. Each tag must resolve to its own config.
+    """
+
+    def _make_router(self, **router_kwargs) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "model_info": {"id": "cn-router"},
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "tags": ["cn"],
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "cn-simple", "MEDIUM": "cn-medium"}
+                        },
+                        "complexity_router_default_model": "cn-medium",
+                    },
+                },
+                {
+                    "model_name": "smart-router",
+                    "model_info": {"id": "row-router"},
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "tags": ["row"],
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "row-simple", "MEDIUM": "row-medium"}
+                        },
+                        "complexity_router_default_model": "row-medium",
+                    },
+                },
+                {"model_name": "cn-simple", "litellm_params": {"model": "openai/cn-simple"}},
+                {"model_name": "row-simple", "litellm_params": {"model": "openai/row-simple"}},
+            ],
+            **router_kwargs,
+        )
+
+    def test_both_tagged_routers_are_registered(self):
+        router = self._make_router(enable_tag_filtering=True)
+        routers = router.complexity_routers["smart-router"]
+        assert len(routers) == 2
+        assert {tuple(r.tags or []) for r in routers} == {("cn",), ("row",)}
+
+    @pytest.mark.asyncio
+    async def test_request_tag_selects_matching_config(self):
+        router = self._make_router(enable_tag_filtering=True)
+
+        cn_kwargs: Dict = {"metadata": {"tags": ["cn"]}}
+        cn_result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=cn_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert cn_result is not None
+        assert cn_result.model == "cn-simple"
+
+        row_kwargs: Dict = {"metadata": {"tags": ["row"]}}
+        row_result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=row_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert row_result is not None
+        assert row_result.model == "row-simple"
+
+    @pytest.mark.asyncio
+    async def test_unmatched_tag_raises_tag_routing_error(self):
+        from litellm.types.router import RouterErrors
+
+        router = self._make_router(enable_tag_filtering=True)
+        with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+            await router.async_pre_routing_hook(
+                model="smart-router",
+                request_kwargs={"metadata": {"tags": ["eu"]}},
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_tag_filtering_disabled_falls_back_to_first(self):
+        router = self._make_router(enable_tag_filtering=False)
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"tags": ["row"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "cn-simple"
+
+    def test_select_complexity_router_picks_by_tag(self):
+        router = self._make_router(enable_tag_filtering=True)
+
+        assert router._select_complexity_router(model="unknown", request_kwargs={}) is None
+
+        selected = router._select_complexity_router(
+            model="smart-router", request_kwargs={"metadata": {"tags": ["row"]}}
+        )
+        assert selected is not None
+        assert selected.model_id == "row-router"
+
+    def test_resolve_alias_index_matches_selected_model_id(self):
+        router = self._make_router(enable_tag_filtering=True)
+
+        assert router._resolve_alias_index(model="smart-router", selected_model_id="row-router") == 1
+        assert router._resolve_alias_index(model="smart-router", selected_model_id=None) == 0
+        assert router._resolve_alias_index(model="unknown", selected_model_id=None) is None
+
+
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
         config = ComplexityRouterConfig(
