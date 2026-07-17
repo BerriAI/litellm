@@ -989,7 +989,7 @@ class CustomStreamWrapper:
                 )
 
             if _is_delta_empty:
-                model_response.choices[0].delta = Delta(content=None)  # ensure empty delta chunk returned
+                model_response.choices[0].delta = Delta(content=self._consume_pending_think_close_tag())
                 # get any function call arguments
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
@@ -1015,32 +1015,33 @@ class CustomStreamWrapper:
 
 
         """
-        if self.merge_reasoning_content_in_choices is True:
-            reasoning_content = getattr(model_response.choices[0].delta, "reasoning_content", None)
-            if reasoning_content:
-                if self.sent_first_thinking_block is False:
-                    # Ensure content is not None before concatenation
-                    if model_response.choices[0].delta.content is None:
-                        model_response.choices[0].delta.content = ""
-                    model_response.choices[0].delta.content += "<think>" + reasoning_content
-                    self.sent_first_thinking_block = True
-                elif (
-                    self.sent_first_thinking_block is True
-                    and hasattr(model_response.choices[0].delta, "reasoning_content")
-                    and model_response.choices[0].delta.reasoning_content
-                ):
-                    model_response.choices[0].delta.content = reasoning_content
-            elif (
-                self.sent_first_thinking_block is True
-                and not self.sent_last_thinking_block
-                and model_response.choices[0].delta.content
-            ):
-                model_response.choices[0].delta.content = "</think>" + (model_response.choices[0].delta.content or "")
-                self.sent_last_thinking_block = True
+        if self.merge_reasoning_content_in_choices is not True:
+            return
+        delta = model_response.choices[0].delta
+        reasoning_content: str = getattr(delta, "reasoning_content", None) or ""
+        visible_content: str = delta.content or ""
+        if hasattr(delta, "reasoning_content"):
+            del delta.reasoning_content
+        if not reasoning_content and not visible_content:
+            return
+        inside_think_block = self.sent_first_thinking_block and not self.sent_last_thinking_block
+        opening_tag = "<think>" if reasoning_content and not inside_think_block else ""
+        closing_tag = "</think>" if visible_content and (reasoning_content or inside_think_block) else ""
+        delta.content = opening_tag + reasoning_content + closing_tag + visible_content
+        self.sent_first_thinking_block = self.sent_first_thinking_block or bool(reasoning_content)
+        self.sent_last_thinking_block = self.sent_first_thinking_block and bool(
+            visible_content or not reasoning_content
+        )
 
-            if hasattr(model_response.choices[0].delta, "reasoning_content"):
-                del model_response.choices[0].delta.reasoning_content
-        return
+    def _consume_pending_think_close_tag(self) -> Optional[str]:
+        if (
+            self.merge_reasoning_content_in_choices
+            and self.sent_first_thinking_block
+            and not self.sent_last_thinking_block
+        ):
+            self.sent_last_thinking_block = True
+            return "</think>"
+        return None
 
     def _dispatch_provider_chunk(
         self,
@@ -1678,6 +1679,9 @@ class CustomStreamWrapper:
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
+        closing_think_tag = self._consume_pending_think_close_tag()
+        if closing_think_tag is not None:
+            model_response.choices[0].delta.content = closing_think_tag
         _finish_reason = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
