@@ -402,6 +402,11 @@ class CallTypes(str, Enum):
     vector_store_search = "vector_store_search"
     avector_store_search = "avector_store_search"
 
+    ingest = "ingest"
+    aingest = "aingest"
+    query = "query"
+    aquery = "aquery"
+
     #########################################################
     # Container Call Types
     #########################################################
