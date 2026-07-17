@@ -55,6 +55,14 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
+def _resolve_pricing_model(model: str) -> str:
+    try:
+        get_model_info(model=model, custom_llm_provider="fireworks_ai")
+    except Exception:
+        return get_base_model_for_pricing(model_name=model)
+    return model
+
+
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -66,11 +74,4 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## check if model mapped, else resolve to the size-based pricing bucket
-    try:
-        get_model_info(model=model, custom_llm_provider="fireworks_ai")
-        pricing_model = model
-    except Exception:
-        pricing_model = get_base_model_for_pricing(model_name=model)
-
-    return generic_cost_per_token(model=pricing_model, usage=usage, custom_llm_provider="fireworks_ai")
+    return generic_cost_per_token(model=_resolve_pricing_model(model), usage=usage, custom_llm_provider="fireworks_ai")
