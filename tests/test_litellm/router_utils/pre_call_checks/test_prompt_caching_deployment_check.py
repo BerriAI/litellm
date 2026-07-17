@@ -26,9 +26,21 @@ def local_model_cost_map(monkeypatch):
     """
     The remote cost map does not carry `prompt_cache_min_tokens` yet, so a test that reads the
     default map would pass here and flake in CI. Force the in-repo map.
+
+    `get_model_info` is lru_cached, so swapping `model_cost` is not enough on its own: an earlier
+    test that resolved these models against the remote map leaves entries with no
+    `prompt_cache_min_tokens`, and the stale hit resolves to the default. Clear on the way out too,
+    so the entries these tests warm against the local map do not leak into later tests.
     """
+    original_model_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 def _deployments(*models: str) -> List[dict]:
@@ -156,3 +168,23 @@ async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is
     )
 
     assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost_map):
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "sk-fake"},
+                "model_info": {"id": "wild-1"},
+            }
+        ]
+    )
+
+    deployments = await router.async_get_healthy_deployments(model="anthropic/claude-opus-4-6", request_kwargs={})
+
+    assert deployments[0]["litellm_params"]["model"] == "anthropic/claude-opus-4-6"
+    assert _get_min_token_count_for_deployments(deployments) == 4096
