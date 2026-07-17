@@ -302,9 +302,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # legitimately points at a client-side tool we left alone.
         if "tool_choice" in kwargs:
             rewritten_names = collect_rewritten_tool_names(tools)
-            kwargs["tool_choice"] = rewrite_web_search_tool_choice(
-                kwargs["tool_choice"], rewritten_names
-            )
+            kwargs["tool_choice"] = rewrite_web_search_tool_choice(kwargs["tool_choice"], rewritten_names)
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
@@ -479,9 +477,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # has to be applied here too (issue #30822).
         if "tool_choice" in kwargs:
             rewritten_names = collect_rewritten_tool_names(tools)
-            kwargs["tool_choice"] = rewrite_web_search_tool_choice(
-                kwargs["tool_choice"], rewritten_names
-            )
+            kwargs["tool_choice"] = rewrite_web_search_tool_choice(kwargs["tool_choice"], rewritten_names)
 
         # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
