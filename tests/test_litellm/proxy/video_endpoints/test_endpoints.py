@@ -654,3 +654,121 @@ async def test_extension__extracts_nested_video_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+# =========================================================================== #
+#   Deployment pinning: the returned video id must carry the router-selected   #
+#   deployment id, not the client-facing model group name, so status/content   #
+#   round-trips pin to the deployment that owns the job (issue #33740).         #
+# =========================================================================== #
+
+# What a provider transformation produces before the router attaches the
+# deployment id: the client-facing group name ("sora-2") sits in the model_id
+# slot of the encoded video id.
+GROUP_ENCODED_ID = encode_video_id_with_provider("video_raw", "azure", "sora-2")
+# What the round-trip needs instead: the same raw id pinned to the deployment.
+DEPLOYMENT_ENCODED_ID = encode_video_id_with_provider(
+    "video_raw", "azure", VIDEO_MODEL_ID
+)
+
+
+@pytest.mark.asyncio
+async def test_generation__repins_video_id_to_deployment_from_hidden_params(harness):
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"},
+    }
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    # the group name in the id is replaced by the deployment id the router picked.
+    assert resp["id"] == DEPLOYMENT_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_generation__repins_from_litellm_metadata_model_info_id(harness):
+    """The reporter's core ask: fall back to litellm_metadata.model_info.id (via
+    _get_model_id_from_response), never to the client-facing data['model']. Here
+    _hidden_params carries no model_id, so a data['model'] fallback would re-stamp
+    the group name; only the metadata lookup yields the deployment id."""
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {},
+    }
+
+    resp = await call_generation(
+        harness,
+        body={
+            "model": "sora-2",
+            "prompt": "x",
+            "litellm_metadata": {"model_info": {"id": VIDEO_MODEL_ID}},
+        },
+    )
+
+    assert resp["id"] == DEPLOYMENT_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_generation__no_deployment_id_leaves_video_id_untouched(harness):
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {},
+    }
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    # nothing to pin to -> the id is left exactly as the transformation made it.
+    assert resp["id"] == GROUP_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_generation__repins_video_object_response(harness):
+    from litellm.types.videos.main import VideoObject
+
+    video = VideoObject(id=GROUP_ENCODED_ID, object="video", status="processing")
+    video._hidden_params = {"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"}
+    harness.base_process.return_value = video
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    assert resp.id == DEPLOYMENT_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_remix__repins_video_id_to_deployment(harness):
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"},
+    }
+
+    resp = await call_remix(harness, AZURE_VIDEO_ID, body={"prompt": "new colors"})
+
+    assert resp["id"] == DEPLOYMENT_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_edit__repins_video_id_to_deployment(harness):
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"},
+    }
+
+    resp = await call_edit(
+        harness, body={"prompt": "brighter", "video": {"id": AZURE_VIDEO_ID}}
+    )
+
+    assert resp["id"] == DEPLOYMENT_ENCODED_ID
+
+
+@pytest.mark.asyncio
+async def test_extension__repins_video_id_to_deployment(harness):
+    harness.base_process.return_value = {
+        "id": GROUP_ENCODED_ID,
+        "_hidden_params": {"model_id": VIDEO_MODEL_ID, "custom_llm_provider": "azure"},
+    }
+
+    resp = await call_extension(
+        harness, body={"prompt": "continue", "video": {"id": AZURE_VIDEO_ID}}
+    )
+
+    assert resp["id"] == DEPLOYMENT_ENCODED_ID

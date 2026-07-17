@@ -2,7 +2,11 @@ from typing import Any, Dict, Optional
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> Optional[str]:
@@ -51,4 +55,49 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
             provider=custom_llm_provider,
             model_id=model_id,
         )
+    return response
+
+
+def reencode_video_id_with_model_id(response: Any, custom_llm_provider: str | None, model_id: str | None) -> Any:
+    """
+    Re-encode a returned video id so it carries the router-selected deployment id.
+
+    The provider transformation layer encodes the client-facing model/group name
+    into the video id because it runs before the router attaches the deployment id
+    to ``_hidden_params``. That is enough for single-deployment groups, but for a
+    group backed by several deployments the status/content round-trip decodes the
+    group name and re-routes through load balancing instead of pinning to the
+    deployment that created the job. Preferring ``model_id`` (the deployment id)
+    here keeps the follow-up calls on the deployment that owns the video
+    """
+    if not model_id:
+        return response
+
+    if isinstance(response, dict):
+        current_id = response.get("id")
+    else:
+        current_id = getattr(response, "id", None)
+
+    if not isinstance(current_id, str) or not current_id:
+        return response
+
+    decoded = decode_video_id_with_provider(current_id)
+    if decoded.get("model_id") == model_id:
+        return response
+
+    provider = decoded.get("custom_llm_provider") or custom_llm_provider
+    if not provider:
+        return response
+
+    raw_video_id = decoded.get("video_id") or current_id
+    new_id = encode_video_id_with_provider(
+        video_id=raw_video_id,
+        provider=provider,
+        model_id=model_id,
+    )
+
+    if isinstance(response, dict):
+        response["id"] = new_id
+    else:
+        response.id = new_id
     return response
