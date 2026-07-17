@@ -46,8 +46,14 @@ def _models_dropdown_texts(page: Page, must_contain: str) -> list[str]:
 
 
 def _open_create_key_modal(page: Page) -> None:
-    page.goto(f"{UI_BASE_URL}/ui/api-keys/?create=true")
-    expect(page.locator(".ant-modal").first).to_be_visible()
+    # Avoid /ui/api-keys/?create=true: on stage the SPA auth redirect often
+    # aborts that navigation mid-flight ("interrupted by another navigation").
+    # Land on the list, wait for the shell, then open create via the button.
+    page.goto(f"{UI_BASE_URL}/ui/api-keys/", wait_until="domcontentloaded")
+    create_btn = page.get_by_role("button", name="+ Create New Key")
+    expect(create_btn).to_be_visible(timeout=60_000)
+    create_btn.click()
+    expect(page.locator(".ant-modal").first).to_be_visible(timeout=15_000)
 
 
 def _select_team(page: Page, alias: str) -> None:
