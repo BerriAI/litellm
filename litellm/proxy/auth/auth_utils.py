@@ -14,6 +14,7 @@ from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
+from litellm.proxy.pass_through_endpoints import route_registry
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
@@ -1489,6 +1490,17 @@ def get_model_from_request(
     request_query_params: Optional[Mapping[str, Any]] = None,
     llm_router: Optional[Router] = None,
 ) -> Optional[Union[str, List[str]]]:
+    """Resolve the model(s) a request targets, for model-access and budget checks.
+
+    Returns ``None`` for user-defined pass-through routes: their request body is
+    forwarded verbatim to the configured upstream, so a ``model`` field there
+    names an upstream model, not a LiteLLM-managed one, and enforcing key/team
+    model allowlists against it would reject valid requests. Built-in provider
+    passthrough routes (``/vertex_ai``, ``/gemini``, ...) are unaffected.
+    """
+    if route_registry.is_registered_custom_pass_through_route(route):
+        return None
+
     candidates = _extract_model_candidates_from_request(
         request_data=request_data,
         route=route,

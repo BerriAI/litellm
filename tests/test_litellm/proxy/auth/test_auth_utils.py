@@ -331,6 +331,77 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
         assert result == "body-user"
 
 
+def _register_custom_pass_through_route(monkeypatch, route_key: str, path: str, route_type: str):
+    from litellm.proxy.pass_through_endpoints.route_registry import (
+        registered_pass_through_routes,
+    )
+
+    monkeypatch.setitem(
+        registered_pass_through_routes,
+        route_key,
+        {
+            "endpoint_id": "test-endpoint",
+            "path": path,
+            "type": route_type,
+            "methods": ["POST"],
+            "auth": True,
+            "passthrough_params": {},
+        },
+    )
+
+
+def test_get_model_from_request_skips_user_defined_pass_through_route(monkeypatch):
+    """The body of a user-defined pass-through request is forwarded verbatim, so a
+    `model` field there names an upstream model and must not be treated as a
+    LiteLLM model for allowlist/budget enforcement."""
+    _register_custom_pass_through_route(
+        monkeypatch, "test-endpoint:exact:/my-custom-endpoint:POST", "/my-custom-endpoint", "exact"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint",
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_skips_user_defined_pass_through_subpath(monkeypatch):
+    _register_custom_pass_through_route(
+        monkeypatch, "test-endpoint:subpath:/my-custom-endpoint:POST", "/my-custom-endpoint", "subpath"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint/v1/generate",
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_unrelated_route_unaffected_by_pass_through_registry(monkeypatch):
+    _register_custom_pass_through_route(
+        monkeypatch, "test-endpoint:exact:/my-custom-endpoint:POST", "/my-custom-endpoint", "exact"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+        )
+        == "gpt-4o"
+    )
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint-other",
+        )
+        == "upstream-special-model"
+    )
+
+
 def test_get_model_from_request_supports_google_model_names_with_slashes():
     assert (
         get_model_from_request(

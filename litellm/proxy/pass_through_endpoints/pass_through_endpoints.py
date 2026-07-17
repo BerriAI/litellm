@@ -62,6 +62,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints import route_registry
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -79,9 +80,6 @@ from .success_handler import PassThroughEndpointLogging
 router = APIRouter()
 
 pass_through_endpoint_logging = PassThroughEndpointLogging()
-
-# Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Dict[str, Dict[str, Union[str, bool, List[str], Dict[str, Any]]]] = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -2448,7 +2446,7 @@ class InitPassThroughEndpointHelpers:
         route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
 
         # Check if this exact route is already registered
-        if route_key in _registered_pass_through_routes:
+        if route_key in route_registry.registered_pass_through_routes:
             verbose_proxy_logger.debug(
                 "Updating duplicate exact pass through endpoint: %s with methods %s (already registered)",
                 path,
@@ -2484,7 +2482,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Always register/update the route metadata (headers, target) even if FastAPI route exists
-        _registered_pass_through_routes[route_key] = {
+        route_registry.registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "exact",
@@ -2531,7 +2529,7 @@ class InitPassThroughEndpointHelpers:
         route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
 
         # Check if this subpath route is already registered
-        if route_key in _registered_pass_through_routes:
+        if route_key in route_registry.registered_pass_through_routes:
             verbose_proxy_logger.debug(
                 "Updating duplicate wildcard pass through endpoint: %s with methods %s (already registered)",
                 wildcard_path,
@@ -2568,7 +2566,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Register the route to prevent duplicates only if it was added
-        _registered_pass_through_routes[route_key] = {
+        route_registry.registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "subpath",
@@ -2592,10 +2590,12 @@ class InitPassThroughEndpointHelpers:
         """Remove all routes for a specific endpoint ID from the registry
         and clean up corresponding entries from LiteLLMRoutes.openai_routes."""
         keys_to_remove = [
-            key for key, value in _registered_pass_through_routes.items() if value["endpoint_id"] == endpoint_id
+            key
+            for key, value in route_registry.registered_pass_through_routes.items()
+            if value["endpoint_id"] == endpoint_id
         ]
         for key in keys_to_remove:
-            route_info = _registered_pass_through_routes[key]
+            route_info = route_registry.registered_pass_through_routes[key]
             path = route_info.get("path")
             if isinstance(path, str):
                 openai_routes = LiteLLMRoutes.openai_routes.value
@@ -2605,18 +2605,18 @@ class InitPassThroughEndpointHelpers:
                     wildcard_path = path.rstrip("/") + "/*"
                     if wildcard_path in openai_routes:
                         openai_routes.remove(wildcard_path)
-            del _registered_pass_through_routes[key]
+            del route_registry.registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
 
     @staticmethod
     def clear_all_pass_through_routes():
         """Clear all pass-through routes from the registry"""
-        _registered_pass_through_routes.clear()
+        route_registry.registered_pass_through_routes.clear()
 
     @staticmethod
     def get_all_registered_pass_through_routes() -> List[str]:
         """Get all registered pass-through endpoints from the registry"""
-        return list(_registered_pass_through_routes.keys())
+        return list(route_registry.registered_pass_through_routes.keys())
 
     @staticmethod
     def _route_for_registry_lookup(route: str) -> str:
@@ -2652,29 +2652,13 @@ class InitPassThroughEndpointHelpers:
                     return True
 
         comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
-
-        # Fast path: check if any registered route key contains this path
-        # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
-        # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
-        # Extract unique paths from keys for quick checking
-        for key in _registered_pass_through_routes.keys():
-            parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
-            if len(parts) >= 3:
-                route_type = parts[1]
-                registered_path = parts[2]
-                if route_type == "exact" and comparison_route == registered_path:
-                    return True
-                elif route_type == "subpath":
-                    if comparison_route == registered_path or comparison_route.startswith(registered_path + "/"):
-                        return True
-
-        return False
+        return route_registry.is_registered_custom_pass_through_route(comparison_route)
 
     @staticmethod
     def get_registered_pass_through_route(route: str, method: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
         comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
-        for key in _registered_pass_through_routes.keys():
+        for key in route_registry.registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
@@ -2683,7 +2667,7 @@ class InitPassThroughEndpointHelpers:
                 # Get the methods for this route. Prefer the registered metadata,
                 # but keep supporting test fixtures / older registry entries that
                 # only encoded methods in the route key.
-                methods_entry = _registered_pass_through_routes[key].get("methods", [])
+                methods_entry = route_registry.registered_pass_through_routes[key].get("methods", [])
                 route_methods: List[str] = methods_entry if isinstance(methods_entry, list) else []
                 if not route_methods and len(parts) == 4:
                     route_methods = parts[3].split(",")
@@ -2699,7 +2683,7 @@ class InitPassThroughEndpointHelpers:
                 # If path matches and method filter is provided, check if method is allowed
                 if path_matches:
                     if method is None or not route_methods or method in route_methods:
-                        return _registered_pass_through_routes[key]
+                        return route_registry.registered_pass_through_routes[key]
 
         return None
 
@@ -2875,7 +2859,7 @@ async def initialize_pass_through_endpoints(
     # is still owned by the live endpoint that was just re-registered under a new id this same cycle.
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
-            _registered_pass_through_routes.pop(endpoint_key, None)
+            route_registry.registered_pass_through_routes.pop(endpoint_key, None)
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:

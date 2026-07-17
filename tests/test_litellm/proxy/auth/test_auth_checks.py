@@ -2048,6 +2048,78 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
 
 
 @pytest.mark.asyncio
+async def test_common_checks_auth_enforced_pass_through_ignores_upstream_model(monkeypatch):
+    """An auth-enforced (`auth: true`) user-defined pass-through endpoint must
+    authenticate the key but forward the body unchanged; a body `model` naming an
+    upstream-only model must not be rejected against the team/key model allowlist.
+    The same body on a managed LLM route must still be enforced."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.pass_through_endpoints.route_registry import (
+        registered_pass_through_routes,
+    )
+
+    monkeypatch.setitem(
+        registered_pass_through_routes,
+        "test-endpoint:exact:/my-custom-endpoint:POST",
+        {
+            "endpoint_id": "test-endpoint",
+            "path": "/my-custom-endpoint",
+            "type": "exact",
+            "methods": ["POST"],
+            "auth": True,
+            "passthrough_params": {},
+        },
+    )
+
+    mock_request = MagicMock(spec=Request)
+    team_object = LiteLLM_TeamTable(team_id="team-1", models=["gpt-4o"])
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        team_id="team-1",
+        models=[],
+        metadata={"allowed_passthrough_routes": ["/my-custom-endpoint"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body={"model": "upstream-special-model", "prompt": "hi"},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/my-custom-endpoint",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+        )
+        assert result is True
+
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body={"model": "upstream-special-model", "prompt": "hi"},
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=valid_token,
+                request=mock_request,
+            )
+        assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
     alert_triggered = False
