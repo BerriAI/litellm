@@ -1909,7 +1909,7 @@ def test_auth_with_aws_role_irsa_environment():
 
 
 def test_auth_with_aws_role_same_role_irsa():
-    """Test that when IRSA role matches the requested role, we skip assumption"""
+    """Test that when IRSA role matches the requested role and no explicit session name is given, we skip assumption"""
     base_llm = BaseAWSLLM()
 
     # Set IRSA environment variables
@@ -1935,7 +1935,7 @@ def test_auth_with_aws_role_same_role_irsa():
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
                 aws_role_name="arn:aws:iam::111111111111:role/LitellmRole",  # Same as AWS_ROLE_ARN
-                aws_session_name="test-session",
+                aws_session_name=None,
                 aws_region_name="us-east-1",
             )
 
@@ -1944,6 +1944,46 @@ def test_auth_with_aws_role_same_role_irsa():
 
             # Verify the returned credentials
             assert creds.access_key == "irsa-access-key"
+
+
+def test_get_credentials_same_role_irsa_explicit_session_name_assumes_role():
+    """When IRSA role matches the requested role but an explicit session name is given,
+    the role must be assumed so RoleSessionName reflects the caller's request."""
+    base_llm = BaseAWSLLM()
+
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/LitellmRole",
+            "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
+        },
+    ):
+        mock_sts_client = MagicMock()
+        mock_sts_client.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed-access-key",
+                "SecretAccessKey": "assumed-secret-key",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+
+        with patch.object(base_llm, "_auth_with_env_vars") as mock_env_auth:
+            with patch("boto3.client", return_value=mock_sts_client):
+                creds = base_llm.get_credentials(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_role_name="arn:aws:iam::111111111111:role/LitellmRole",
+                    aws_session_name="caller-attribution-session",
+                    aws_region_name="us-east-1",
+                )
+
+                mock_sts_client.assume_role.assert_called_once_with(
+                    RoleArn="arn:aws:iam::111111111111:role/LitellmRole",
+                    RoleSessionName="caller-attribution-session",
+                )
+                mock_env_auth.assert_not_called()
+                assert creds.access_key == "assumed-access-key"
 
 
 def test_assume_role_with_external_id():
@@ -2284,6 +2324,56 @@ def test_get_credentials_ecs_same_role_skips_assume_role():
                 mock_env_auth.assert_called_once()
                 mock_role_auth.assert_not_called()
                 assert credentials.access_key == "ecs-access-key"
+
+
+def test_get_credentials_same_role_explicit_session_name_assumes_role():
+    """
+    End-to-end test: even when already running as the target role (ECS/EC2), an
+    explicitly requested aws_session_name must trigger AssumeRole with that
+    RoleSessionName instead of returning ambient credentials.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    env_without_irsa = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
+    }
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+    }
+
+    with patch.dict(os.environ, env_without_irsa, clear=True):
+        with patch.object(
+            base_aws_llm,
+            "_is_already_running_as_role",
+            return_value=True,
+        ) as mock_already_running:
+            with patch.object(
+                base_aws_llm,
+                "_auth_with_env_vars",
+            ) as mock_env_auth:
+                with patch("boto3.client", return_value=mock_sts_client):
+                    credentials = base_aws_llm.get_credentials(
+                        aws_role_name="arn:aws:iam::123456789012:role/MyEcsTaskRole",
+                        aws_session_name="caller-attribution-session",
+                        aws_region_name="us-east-1",
+                    )
+
+                    mock_sts_client.assume_role.assert_called_once_with(
+                        RoleArn="arn:aws:iam::123456789012:role/MyEcsTaskRole",
+                        RoleSessionName="caller-attribution-session",
+                    )
+                    mock_already_running.assert_not_called()
+                    mock_env_auth.assert_not_called()
+                    assert credentials.access_key == "assumed-access-key"
 
 
 def test_get_credentials_role_second_call_not_same_role_uses_assume_not_env_cache():
