@@ -4871,3 +4871,151 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     },
                     call_type="acompletion",
                 )
+
+
+class _RecordingSuccessLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.success_events = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+
+
+class TestStreamingClientDisconnectBilling:
+    """
+    A client disconnect throws GeneratorExit into the proxy streaming
+    generator; neither the success nor failure logging callback fires from the
+    stream wrapper, so without disconnect-time finalization the chunks already
+    streamed (and any sub-call cost folded into the logging object) never
+    reach spend tracking.
+    """
+
+    async def _start_partial_stream(self):
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "tell me a story"}],
+            mock_response="The codename is AZURE-FALCON-42 and the story is long.",
+            stream=True,
+            api_key="test-key",
+        )
+        stream_iter = response.__aiter__()
+        await stream_iter.__anext__()
+        await stream_iter.__anext__()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_streamed_spend(self):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            logging_obj = response.logging_obj
+            logging_obj.model_call_details["additional_response_cost"] = 0.002
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+        standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["total_tokens"] > 0
+        assert standard_logging_object["response_cost"] >= 0.002
+
+    @pytest.mark.asyncio
+    async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello there",
+                stream=True,
+                api_key="test-key",
+            )
+            async for _ in response:
+                pass
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_spend_for_router_stream(self):
+        """
+        The router wraps streamed responses in FallbackStreamWrapper, whose
+        __anext__ bypasses the base class, so its own chunk list stays empty
+        unless it aliases the inner stream's chunks; without the alias the
+        disconnect path sees no chunks and bills nothing for router requests,
+        which is every proxy request.
+        """
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                }
+            ]
+        )
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await router.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "tell me a story"}],
+                mock_response="The codename is AZURE-FALCON-42 and the story is long.",
+                stream=True,
+            )
+            stream_iter = response.__aiter__()
+            await stream_iter.__anext__()
+            await stream_iter.__anext__()
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+        standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["total_tokens"] > 0
