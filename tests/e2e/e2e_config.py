@@ -36,6 +36,33 @@ OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").
 # service records every intake POST and replays them on GET /requests).
 DD_SINK_URL = os.environ.get("E2E_DD_SINK_URL", "http://localhost:9915").rstrip("/")
 
+# The MCP upstream the mcp suite registers on the proxy: the mcp-stub compose
+# service, addressed by service name on the compose network. It must be
+# reachable from the proxy, not from pytest; override when the proxy under
+# test runs somewhere the compose stub is not visible from.
+MCP_STUB_URL = os.environ.get("E2E_MCP_STUB_URL", "http://mcp-stub:8765/mcp")
+
+# The stub's sibling surfaces (see mcp/stub/stub_server.py): a Bearer-guarded
+# upstream for the interactive OAuth flow, plus the stub IdP's token endpoint.
+# Derived from MCP_STUB_URL so one override relocates the whole stub.
+_MCP_STUB_BASE = MCP_STUB_URL.removesuffix("/mcp")
+MCP_STUB_CONFORMANCE_URL = f"{_MCP_STUB_BASE}/conformance/mcp"
+MCP_STUB_OAUTHUSER_URL = f"{_MCP_STUB_BASE}/oauthuser/mcp"
+MCP_STUB_TOKEN_URL = f"{_MCP_STUB_BASE}/oauth/token"
+
+# The stub's authorization endpoint is dereferenced by the browser (pytest
+# playing that role from the host), never by the proxy, so unlike the URLs
+# above it needs the host-visible address of the stub: the compose file
+# publishes mcp-stub on host port 8765 for exactly this hop.
+MCP_STUB_AUTHORIZE_BROWSER_URL = os.environ.get(
+    "E2E_MCP_STUB_AUTHORIZE_BROWSER_URL", "http://localhost:8765/oauth/authorize"
+)
+
+# Deterministic test-only credentials; must mirror mcp/stub/stub_server.py.
+MCP_STUB_OAUTH_USER_CLIENT_ID = "e2e-stub-user-client-id"
+MCP_STUB_OAUTH_USER_CLIENT_SECRET = "e2e-stub-user-client-secret"
+MCP_STUB_OAUTH_USER_ACCESS_TOKEN = "e2e-stub-user-access-token"
+
 # Writes on the proxy are eventually consistent (e.g. spend rows flush on
 # proxy_batch_write_at, ~60s). Read-backs poll to this deadline, never sleep-once.
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))

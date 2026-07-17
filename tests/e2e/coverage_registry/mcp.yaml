@@ -47,6 +47,22 @@
   assertions: [succeeds]
   source: "server.py:886"
   rationale: Bearer token forwarding for tool invocation
+- id: mcp.list_tools.api_key.rejects_unknown_key
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [rejects_unknown_key]
+  source: "auth/user_api_key_auth_mcp.py:141 process_mcp_request"
+  rationale: An unrecognized virtual key must be refused with 401 at session establishment, before any upstream traffic
+- id: mcp.list_tools.bearer.rejects_unknown_key
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: bearer
+  assertions: [rejects_unknown_key]
+  source: "auth/user_api_key_auth_mcp.py:141 process_mcp_request"
+  rationale: The Authorization header form must be refused identically to x-litellm-api-key; the two ingress styles share one contract
 - id: mcp.list_tools.oauth.succeeds
   module: mcp
   tier: P1
@@ -79,6 +95,14 @@
   assertions: [succeeds]
   source: "rest_endpoints.py:305-334"
   rationale: No upstream auth required; demo servers
+- id: mcp.call_tool.api_key.caps_concurrency
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [caps_concurrency]
+  source: "mcp_server_manager.py:3751"
+  rationale: Per-server max_concurrent_requests semaphore bounds in-flight upstream tool calls; excess calls queue
 - id: mcp.get_prompt.api_key.succeeds
   module: mcp
   tier: P1
@@ -111,3 +135,35 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_tools.oauth.completes_authorization_code_flow
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: oauth
+  assertions: [completes_authorization_code_flow]
+  source: "auth/user_api_key_auth_mcp.py preemptive 401 challenge + discoverable_endpoints.py gateway AS"
+  rationale: The interactive per-user flow real MCP hosts run (401 challenge, discovery, DCR, PKCE authorize dance, token exchange); the path desktop-client re-auth incidents live on
+- id: mcp.call_tool.oauth.uses_per_user_token
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: oauth
+  assertions: [uses_per_user_token]
+  source: "v2 authorization_code egress arm (per-user DB token)"
+  rationale: Calls on an interactive server must present the user's upstream token, never the caller's virtual key or IdP JWT
+- id: mcp.protocol.api_key.passes_official_conformance
+  module: mcp
+  tier: P0
+  operation: protocol
+  auth_family: api_key
+  assertions: [passes_official_conformance]
+  source: "@modelcontextprotocol/conformance server scenarios via tests/e2e/mcp/test_mcp_conformance_e2e.py"
+  rationale: The gateway re-serves the MCP protocol to hosts, so it must stay spec-conformant as a server; the official suite catches lifecycle/error-shape regressions our behavior tests do not encode
+- id: mcp.list_tools.oauth.challenges_bearer_key_not_masked
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: oauth
+  assertions: [challenges_bearer_key_not_masked]
+  source: "server.py _raise_preemptive_401_for_unauthenticated_servers (mode-aware oauth2 gate)"
+  rationale: A virtual key in the Authorization header on a gateway-managed authorization_code server must get the 401 OAuth challenge, not a masked 200+empty tool list; the full round-trip is unreachable via this header (the OAuth token claims the slot) so the challenge is the guardable contract, and the masking regression (fixed by the mode-aware gate) is the bug it pins

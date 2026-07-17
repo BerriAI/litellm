@@ -39,6 +39,13 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
 
 
+class KeyObjectPermission(BaseModel):
+    """object_permission on /key/generate: the MCP servers (by server_id) a key
+    may list and call. A key without one only reaches allow_all_keys servers."""
+
+    mcp_servers: list[str] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -57,6 +64,7 @@ class KeyGenerateBody(BaseModel):
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: KeyObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -93,6 +101,53 @@ class KeyInfo(BaseModel):
 
 class KeyInfoResponse(BaseModel):
     info: KeyInfo
+
+
+# ---------- mcp servers ----------
+
+
+class McpServerCredentials(BaseModel):
+    """The `credentials` blob on /v1/mcp/server: `auth_value` is the static
+    secret for the shared-key auth types (api_key, bearer_token, ...);
+    `client_id`/`client_secret`/`scopes` drive the OAuth2 client_credentials
+    exchange. Stored encrypted and redacted (nulled) in every read-back."""
+
+    auth_value: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    scopes: list[str] | None = None
+
+
+class McpServerCreateBody(BaseModel):
+    """POST /v1/mcp/server. `allow_all_keys` opts the server out of per-key
+    object_permission grants so any virtual key on the proxy may use it."""
+
+    alias: str
+    url: str
+    transport: str = "http"
+    allow_all_keys: bool = True
+    max_concurrent_requests: int | None = None
+    auth_type: str | None = None
+    credentials: McpServerCredentials | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+
+
+class McpServerInfo(BaseModel):
+    """Response of POST /v1/mcp/server and GET /v1/mcp/server/{server_id}."""
+
+    server_id: str
+    alias: str | None = None
+    url: str | None = None
+    transport: str | None = None
+    allow_all_keys: bool | None = None
+    max_concurrent_requests: int | None = None
+    auth_type: str | None = None
+    credentials: McpServerCredentials | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+    oauth2_flow: str | None = None
 
 
 # ---------- customers ----------
