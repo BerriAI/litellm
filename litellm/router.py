@@ -7001,6 +7001,18 @@ class Router:
         verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
         try:
             exception = kwargs.get("exception", None)
+
+            from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+                is_advisor_sub_call_failure,
+            )
+
+            if is_advisor_sub_call_failure(exception):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Failure originated from an advisor sub-call, not the selected deployment."
+                )
+                return False
+
             exception_status = getattr(exception, "status_code", "")
 
             # Cache litellm_params to avoid repeated dict lookups

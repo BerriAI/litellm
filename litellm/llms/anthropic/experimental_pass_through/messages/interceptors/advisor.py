@@ -37,6 +37,26 @@ class AdvisorMaxIterationsError(Exception):
     """Raised when the advisor loop exceeds max_uses."""
 
 
+_ADVISOR_SUB_CALL_FAILURE_ATTR = "_litellm_advisor_sub_call_failure"
+
+
+def mark_advisor_sub_call_failure(exception: BaseException) -> None:
+    """Tag an exception as originating from an advisor sub-call.
+
+    The advisor sub-call targets a different provider/credentials than the
+    deployment the router selected, so its failure must not be attributed to
+    (and cool down) that otherwise-healthy deployment. The exception object is
+    tagged rather than wrapped so its type is preserved and the router's
+    retry/fallback classification and the client-facing error are unchanged.
+    """
+    setattr(exception, _ADVISOR_SUB_CALL_FAILURE_ATTR, True)
+
+
+def is_advisor_sub_call_failure(exception: BaseException | None) -> bool:
+    """Whether ``exception`` was tagged by ``mark_advisor_sub_call_failure``."""
+    return bool(getattr(exception, _ADVISOR_SUB_CALL_FAILURE_ATTR, False))
+
+
 class AdvisorOrchestrationHandler(MessagesInterceptor):
     """Orchestrates the advisor tool loop for non-native providers."""
 
@@ -133,21 +153,25 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
-            advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                model=advisor_model,
-                messages=advisor_messages,
-                tools=None,
-                stream=False,
-                max_tokens=max_tokens,
-                custom_llm_provider=None,  # let litellm resolve from model name
-                metadata={
-                    **metadata_base,
-                    "advisor_sub_call": True,
-                    "parent_request_id": parent_request_id,
-                },
-                api_key=advisor_api_key,
-                api_base=advisor_api_base,
-            )
+            try:
+                advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
+                    model=advisor_model,
+                    messages=advisor_messages,
+                    tools=None,
+                    stream=False,
+                    max_tokens=max_tokens,
+                    custom_llm_provider=None,  # let litellm resolve from model name
+                    metadata={
+                        **metadata_base,
+                        "advisor_sub_call": True,
+                        "parent_request_id": parent_request_id,
+                    },
+                    api_key=advisor_api_key,
+                    api_base=advisor_api_base,
+                )
+            except Exception as advisor_sub_call_exception:
+                mark_advisor_sub_call_failure(advisor_sub_call_exception)
+                raise
 
             advisor_text = _extract_response_text(advisor_response)
 

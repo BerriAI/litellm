@@ -919,3 +919,87 @@ def test_resolve_advisor_credentials_allows_real_public_ip_address():
     ):
         result = _resolve_advisor_credentials(tool)
     assert result == ("sk-other", "https://8.8.8.8")
+
+
+# ---------------------------------------------------------------------------
+# 14. Advisor sub-call failures are tagged so the router does not cool down the
+#     (healthy) parent deployment; executor failures are NOT tagged (regression
+#     for LIT-4565).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_sub_call_failure_is_tagged():
+    """When the advisor sub-call raises, the exception that propagates out of
+    handle() must be tagged as an advisor sub-call failure."""
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+        is_advisor_sub_call_failure,
+    )
+
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_advisor_tool_use_response()  # executor: calls advisor
+        raise litellm.AuthenticationError(  # advisor sub-call: 401
+            message="x-api-key header is required",
+            llm_provider="anthropic",
+            model=model,
+        )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            await h.handle(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+            )
+
+    assert call_count == 2
+    assert is_advisor_sub_call_failure(exc_info.value) is True
+
+
+@pytest.mark.asyncio
+async def test_executor_failure_is_not_tagged():
+    """A failure of the executor call (not the advisor sub-call) must NOT be
+    tagged — the selected deployment genuinely failed and should cool down."""
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+        is_advisor_sub_call_failure,
+    )
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        raise litellm.AuthenticationError(  # executor (first call) fails
+            message="invalid deployment credentials",
+            llm_provider="openai",
+            model=model,
+        )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            await h.handle(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+            )
+
+    assert is_advisor_sub_call_failure(exc_info.value) is False
