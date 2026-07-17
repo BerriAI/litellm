@@ -1425,13 +1425,7 @@ class MCPRequestHandler:
                 key_object_permission.mcp_access_groups or []
             )
 
-            # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
-                global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
-            )
-
-            # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for key: {str(e)}")
@@ -1502,13 +1496,7 @@ class MCPRequestHandler:
                 object_permissions.mcp_access_groups or []
             )
 
-            tool_perm_servers = list(
-                global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
-            )
-
-            all_servers = (
-                direct_mcp_servers + legacy_access_group_servers + tool_perm_servers + team_access_group_servers
-            )
+            all_servers = direct_mcp_servers + legacy_access_group_servers + team_access_group_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for team: {str(e)}")
@@ -1587,11 +1575,7 @@ class MCPRequestHandler:
                 object_permissions.mcp_access_groups or []
             )
 
-            tool_perm_servers = list(
-                global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
-            )
-
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for org: {str(e)}")
@@ -1648,15 +1632,7 @@ class MCPRequestHandler:
                 end_user_obj.object_permission.mcp_access_groups or []
             )
 
-            # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
-                global_mcp_server_manager.expand_tool_permissions(
-                    end_user_obj.object_permission.mcp_tool_permissions
-                ).keys()
-            )
-
-            # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for end_user: {str(e)}")
