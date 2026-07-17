@@ -150,7 +150,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   };
 
   useEffect(() => {
-    console.log("DATA IN CACHE DASHBOARD", data);
     let newData: cacheDataItem[] = data;
     if (selectedApiKeys.length > 0) {
       newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
@@ -180,16 +179,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     //     }
     // ]
 
-    console.log("before processed data in cache dashboard", newData);
-
     let llm_api_requests = 0;
     let cache_hits = 0;
     let cached_tokens = 0;
     const processedData = newData.reduce((acc: uiData[], item) => {
-      console.log("Processing item:", item);
-
       if (!item.call_type) {
-        console.log("Item has no call_type:", item);
         item.call_type = "Unknown";
       }
 
@@ -227,8 +221,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     }
 
     setFilteredData(processedData);
-
-    console.log("PROCESSED DATA IN CACHE DASHBOARD", processedData);
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
   const handleRefreshClick = () => {
@@ -242,7 +234,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       NotificationsManager.info("Running cache health check...");
       setHealthCheckResponse("");
       const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
-      console.log("CACHING HEALTH CHECK RESPONSE", response);
       setHealthCheckResponse(response);
     } catch (error: any) {
       console.error("Error running health check:", error);

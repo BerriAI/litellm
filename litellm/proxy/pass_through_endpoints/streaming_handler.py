@@ -89,7 +89,11 @@ class PassThroughStreamingHandler:
             # GeneratorExit (raised on client disconnect) is not caught by
             # `except Exception`; the finally block ensures partial usage
             # still gets logged for spend tracking. See LIT-2642.
-            if not logging_scheduled and raw_bytes:
+            # Upstream 4xx/5xx responses are already logged as a failure by
+            # the caller before this generator starts (see
+            # _log_passthrough_upstream_failure); logging them again here as
+            # a success would double-log the same request.
+            if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(

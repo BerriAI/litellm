@@ -312,9 +312,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             },
           }));
         }
-      } catch (dbError) {
-        console.debug("Could not fetch updated status from database (non-critical):", dbError);
-      }
+      } catch (dbError) {}
     } catch (error) {
       const currentTime = new Date().toLocaleString();
       const rawError = error instanceof Error ? error.message : String(error);

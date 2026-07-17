@@ -4,7 +4,7 @@
 
 ## Linear ticket
 
-<!-- if you are an internal contributor (e.g., your username is postfixed with -berri or -berriai), add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to magically link the Linear ticket to the GitHub PR -->
+<!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
 
 ## Pre-Submission checklist
 

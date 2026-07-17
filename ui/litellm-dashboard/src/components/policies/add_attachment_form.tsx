@@ -6,6 +6,7 @@ import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpact
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { buildAttachmentData } from "./build_attachment_data";
+import { getInvalidTeamEntries } from "./scope_validation";
 import ImpactPreviewAlert from "./impact_preview_alert";
 
 const { Text } = Typography;
@@ -31,6 +32,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scopeType, setScopeType] = useState<"global" | "specific">("global");
   const [availableTeams, setAvailableTeams] = useState<string[]>([]);
+  const [teamsLoaded, setTeamsLoaded] = useState(false);
   const [availableKeys, setAvailableKeys] = useState<string[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
@@ -52,11 +54,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
     // Load teams — teamListCall returns a plain array of team objects
     setIsLoadingTeams(true);
+    setTeamsLoaded(false);
     try {
       const teamsResponse = await teamListCall(accessToken, null, userId);
       const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : teamsResponse?.data || [];
       const teamAliases = teamsArray.map((t: any) => t.team_alias).filter(Boolean);
       setAvailableTeams(teamAliases);
+      setTeamsLoaded(true);
     } catch (error) {
       console.error("Failed to load teams:", error);
     } finally {
@@ -226,6 +230,20 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
               name="teams"
               label="Teams"
               tooltip="Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)"
+              rules={[
+                {
+                  validator: async (_rule, value?: string[]) => {
+                    if (!teamsLoaded) return;
+                    const invalid = getInvalidTeamEntries(value ?? [], availableTeams);
+                    if (invalid.length > 0) {
+                      throw new Error(
+                        `These teams don't exist: ${invalid.join(", ")}. ` +
+                          `Choose an existing team, or use a wildcard like "team-*" to match by prefix.`,
+                      );
+                    }
+                  },
+                },
+              ]}
             >
               <Select
                 mode="tags"

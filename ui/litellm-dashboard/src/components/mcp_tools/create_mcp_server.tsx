@@ -397,8 +397,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             args: actualConfig.args,
             env: actualConfig.env,
           };
-
-          console.log("Parsed stdio config:", stdioFields);
         } catch (error) {
           NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
           return;
@@ -455,8 +453,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
       }
-
-      console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
         const response = isAdmin
@@ -607,9 +603,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);

@@ -77,6 +77,10 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock"
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def __init__(self, **kwargs):
@@ -93,26 +97,48 @@ class AmazonAnthropicClaudeMessagesConfig(
             return [{"type": "text", "text": value}]
         return [value]
 
-    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
-        some Claude aliases; Anthropic Messages carries that content in the
-        top-level ``system`` field. Move any such entries into ``system`` before
-        the Invoke request is built."""
+    @staticmethod
+    def _is_system_role_message(message: Any) -> bool:
+        return isinstance(message, dict) and message.get("role") == "system"
+
+    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict, model: str) -> None:
+        """Bedrock Invoke validates ``role: "system"`` entries inside ``messages``
+        per model. Models carrying ``supports_mid_conversation_system`` in the
+        cost map (the Opus 4.8 family) only reject a leading run ("messages.0:
+        use the top-level 'system' parameter for the initial system prompt") and
+        accept mid-conversation entries (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) in place, where they
+        MUST stay: hoisting one mutates the ``system`` prefix and invalidates the
+        prompt cache for the entire message history. Older Claude models (Opus
+        4.7, Sonnet 4.6, Haiku 4.5, ...) reject the role in every position
+        ("role 'system' is not supported on this model"), so without the flag
+        every system entry is hoisted into the top-level ``system`` field.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted."""
         messages = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
-        if not system_role_messages:
-            return
-
-        anthropic_messages_request["messages"] = [
-            m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
-        ]
+        if _supports_factory(
+            model=model,
+            custom_llm_provider="bedrock",
+            key="supports_mid_conversation_system",
+        ):
+            leading_count = next(
+                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+                len(messages),
+            )
+            hoisted = messages[:leading_count]
+            remaining = messages[leading_count:]
+        else:
+            hoisted = [m for m in messages if self._is_system_role_message(m)]
+            remaining = [m for m in messages if not self._is_system_role_message(m)]
+        if hoisted:
+            anthropic_messages_request["messages"] = remaining
         system_content = [
             block
             for source in (
                 anthropic_messages_request.get("system"),
-                *(m.get("content") for m in system_role_messages),
+                *(m.get("content") for m in hoisted),
             )
             for block in self._as_system_content_blocks(source)
         ]
@@ -247,7 +273,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports extended thinking on Bedrock
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return True
 
         model_lower = model.lower()
@@ -297,7 +323,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
-        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(model)
+        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
 
         thinking = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
@@ -553,6 +579,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             mcp_server_used=anthropic_model_info.is_mcp_server_used(
                 anthropic_messages_optional_request_params.get("mcp_servers")
             ),
+            custom_llm_provider="bedrock",
         )
         beta_set.update(auto_betas)
 
@@ -619,7 +646,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         path degrades ``xhigh`` -> ``max`` rather than 400-ing. Non-adaptive models
         and models without a ceiling are left untouched.
         """
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return
         effort = optional_params.get("reasoning_effort")
         if not isinstance(effort, str):
@@ -648,7 +675,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request)
+        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
@@ -707,7 +734,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 custom_llm_provider="bedrock",
                 key="supports_output_config",
             )
-            or AnthropicConfig._model_supports_effort_param(model)
+            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             if anthropic_messages_request.pop("output_config", None) is not None:
                 verbose_logger.warning(
@@ -744,7 +771,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if (
             litellm.drop_params is True
             and "output_config" in anthropic_messages_request
-            and not AnthropicConfig._model_supports_effort_param(model)
+            and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,

@@ -520,13 +520,28 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
+    @staticmethod
+    def error_tool_result(exc: Exception) -> MCPCallToolResult:
+        """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
+        return MCPCallToolResult(
+            content=[TextContent(type="text", text=f"{type(exc).__name__}: {str(exc)}")],
+            isError=True,
+        )
+
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Optional[Callable] = None,
+        raise_on_error: bool = False,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
+
+        Args:
+            raise_on_error: When True, re-raise the underlying exception instead of returning an
+                ``isError=True`` result. The token-exchange (OBO) tool-call path uses this to detect
+                an upstream 401 so it can re-mint the exchanged token and retry once; every other
+                caller keeps the default and gets graceful ``isError`` degradation.
         """
         verbose_logger.info(f"MCP client calling tool '{call_tool_request_params.name}'")
 
@@ -579,11 +594,10 @@ class MCPClient:
                     "MCP client detected broken connection/stream - "
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
+            if raise_on_error:
+                raise
             # Return a default error result instead of raising
-            return MCPCallToolResult(
-                content=[TextContent(type="text", text=f"{error_type}: {str(e)}")],  # Empty content for error case
-                isError=True,
-            )
+            return self.error_tool_result(e)
 
     async def list_prompts(self) -> List[Prompt]:
         """List available prompts from the server."""

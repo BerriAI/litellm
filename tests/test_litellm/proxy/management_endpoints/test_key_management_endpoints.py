@@ -765,6 +765,58 @@ async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_helper_fn_with_budget_fallbacks(monkeypatch):
+    """Regression: /key/generate must accept `budget_fallbacks` end-to-end.
+
+    generate_key_helper_fn previously had no `budget_fallbacks` parameter, so
+    passing it via /key/generate (which unpacks the full request body as
+    kwargs) raised "unexpected keyword argument" before ever reaching the DB.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id=None)
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token_budget_fallbacks",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_id="test-user",
+        budget_fallbacks={"anthropic-haiku-4-5": ["gpt-5.5"]},
+    )
+
+    assert json.loads(captured_key_data["budget_fallbacks"]) == {
+        "anthropic-haiku-4-5": ["gpt-5.5"]
+    }
+
+
+@pytest.mark.asyncio
 async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     """
     Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
@@ -4279,6 +4331,7 @@ def test_transform_verification_tokens_to_deleted_records():
         permissions={"permission": True},
         metadata={},
         model_max_budget={"gpt-4": {"budget_limit": 100.0}},
+        budget_fallbacks={"gpt-4": ["gpt-4o-mini"]},
         model_spend={},
         soft_budget_cooldown=False,
         allowed_routes=[],
@@ -4317,6 +4370,8 @@ def test_transform_verification_tokens_to_deleted_records():
     record2 = records[1]
     assert record2["token"] == "hashed-token-2"
     assert isinstance(record2["model_max_budget"], str)
+    assert isinstance(record2["budget_fallbacks"], str)
+    assert json.loads(record2["budget_fallbacks"]) == {"gpt-4": ["gpt-4o-mini"]}
 
 
 def test_transform_verification_tokens_to_deleted_records_empty_list():

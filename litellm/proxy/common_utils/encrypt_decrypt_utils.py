@@ -150,7 +150,7 @@ def decrypt_value_helper(
             verbose_proxy_logger.debug(error_message)
             return value if return_original_value else None
 
-        verbose_proxy_logger.debug(f"Unable to decrypt value={value} for key: {key}, returning None")
+        verbose_proxy_logger.debug(f"Unable to decrypt value for key: {key}, returning None")
         if return_original_value:
             return value
         else:

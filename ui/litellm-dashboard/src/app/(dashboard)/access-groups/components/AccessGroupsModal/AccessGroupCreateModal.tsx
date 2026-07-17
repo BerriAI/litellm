@@ -38,9 +38,7 @@ export function AccessGroupCreateModal({ visible, onCancel, onSuccess }: AccessG
           },
         });
       })
-      .catch((info) => {
-        console.log("Validate Failed:", info);
-      });
+      .catch((info) => {});
   };
 
   return (

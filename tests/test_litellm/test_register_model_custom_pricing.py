@@ -303,8 +303,9 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
 
 def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key():
     """Registering a custom override under a key shape that
-    ``get_model_info`` cannot resolve (e.g. a double provider prefix like
-    ``bedrock/bedrock/us.anthropic.claude-sonnet-4-6``) must still inherit
+    ``get_model_info`` cannot resolve (e.g. a triple provider prefix like
+    ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6``; a double
+    prefix now resolves like a routing prefix) must still inherit
     the built-in cache pricing for the underlying model.
 
     Before the fix ``register_model`` fell back to an empty ``existing_model``
@@ -324,7 +325,7 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     builtin_key = "us.anthropic.claude-sonnet-4-6"
-    registered_key = f"bedrock/bedrock/{builtin_key}"
+    registered_key = f"bedrock/bedrock/bedrock/{builtin_key}"
     builtin = litellm.model_cost[builtin_key]
 
     assert builtin["cache_creation_input_token_cost"] > 0

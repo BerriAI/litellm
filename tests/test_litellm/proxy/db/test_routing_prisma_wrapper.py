@@ -885,3 +885,111 @@ def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
         "Failed to initialize read replica Prisma client" in r.getMessage()
         for r in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_connect_degrades_writer_when_reader_available():
+    """A writer connect failure with a healthy reader must NOT abort proxy
+    startup (LIT-3792): startup swallows the raise when
+    allow_requests_on_db_unavailable is set, leaving the proxy with no Prisma
+    client at all, so DB-stored models never load and every request 400s.
+    Degrading instead keeps reads (key auth, model loads) on the replica."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.connect = AsyncMock(side_effect=RuntimeError("primary unreachable"))
+    reader_inner.connect = AsyncMock()
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    # Must not raise — writer failure is non-fatal while the reader is up.
+    await routing.connect()
+
+    assert routing.writer_unavailable is True
+    assert routing.reader_unavailable is False
+    writer_inner.connect.assert_awaited_once()
+    reader_inner.connect.assert_awaited_once()
+
+    # Reads keep routing to the reader.
+    assert routing.query_raw is reader_inner.query_raw
+
+
+@pytest.mark.asyncio
+async def test_connect_raises_when_writer_and_reader_both_fail():
+    """Full DB outage: with neither side reachable the wrapper must raise the
+    writer's error so existing allow_requests_on_db_unavailable startup
+    handling applies unchanged."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.connect = AsyncMock(side_effect=RuntimeError("primary down"))
+    reader_inner.connect = AsyncMock(side_effect=RuntimeError("replica down"))
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    with pytest.raises(RuntimeError, match="primary down"):
+        await routing.connect()
+
+
+@pytest.mark.asyncio
+async def test_connect_logs_writer_degradation(caplog):
+    """Operators need a clear signal that the proxy booted without a writer."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.connect = AsyncMock(side_effect=RuntimeError("primary unreachable"))
+    reader_inner.connect = AsyncMock()
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await routing.connect()
+
+    assert any(
+        "Failed to connect to primary (writer) DB" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_recreate_clears_writer_unavailable():
+    """A successful writer recreate (health watchdog reconnect once the
+    primary is back) must clear the degraded-writer flag."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer = MagicMock()
+    writer.recreate_prisma_client = AsyncMock(return_value=True)
+    reader = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock()
+
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+
+    with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+        await routing.recreate_prisma_client("writer-url")
+
+    assert routing.writer_unavailable is False
+
+
+@pytest.mark.asyncio
+async def test_recreate_keeps_writer_unavailable_when_writer_recreate_fails():
+    """While the primary is still down, a failed writer recreate must leave
+    the degraded flag set so the watchdog keeps retrying."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer = MagicMock()
+    writer.recreate_prisma_client = AsyncMock(
+        side_effect=RuntimeError("primary still down")
+    )
+    reader = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock()
+
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+
+    with (
+        patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}),
+        pytest.raises(RuntimeError, match="primary still down"),
+    ):
+        await routing.recreate_prisma_client("writer-url")
+
+    assert routing.writer_unavailable is True
