@@ -25,6 +25,7 @@ vi.mock("./networking", async (importOriginal) => {
     }),
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
+    skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
     getUiConfig: vi.fn().mockResolvedValue({}),
   };
 });
