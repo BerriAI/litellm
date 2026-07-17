@@ -120,7 +120,7 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python3 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
+      apk add --no-cache python3 bash openssl tzdata libsndfile nodejs tini && break || sleep 5; \
     done
 
 # Copy only what runtime needs. The application is installed inside the venv;
@@ -172,5 +172,5 @@ RUN prisma generate --schema=./schema.prisma
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]

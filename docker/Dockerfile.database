@@ -94,7 +94,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile tini
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
@@ -124,5 +124,5 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["docker/prod_entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
