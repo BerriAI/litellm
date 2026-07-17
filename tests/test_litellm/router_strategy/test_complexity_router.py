@@ -2658,34 +2658,6 @@ class TestSessionAffinity:
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
-    @pytest.mark.parametrize(
-        ("request_kwargs", "expected_session_id"),
-        [
-            (
-                {
-                    "metadata": {
-                        "user_id": "user_abc_account_uuid_session_e96634a3-fa28-4083-b354-55542e2dca01"
-                    }
-                },
-                "e96634a3-fa28-4083-b354-55542e2dca01",
-            ),
-            (
-                {
-                    "litellm_metadata": {"user_id": "user_abc_account_uuid_session_fallback"},
-                    "metadata": {"session_id": "explicit-session"},
-                },
-                "explicit-session",
-            ),
-            ({"metadata": {"user_id": "user_abc_account_uuid"}}, None),
-            ({"metadata": {"user_id": "user_abc_account_uuid_session_"}}, None),
-            ({"metadata": {"user_id": "user_abc_account_uuid_session_invalid!"}}, None),
-        ],
-    )
-    def test_resolves_anthropic_metadata_user_id_session(
-        self, request_kwargs: Dict, expected_session_id: str | None
-    ):
-        assert ComplexityRouter._get_session_id_from_request_kwargs(request_kwargs) == expected_session_id
-
     @pytest.mark.asyncio
     async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
         """Regression: session_affinity defaults to True, so a shared session_id pins the

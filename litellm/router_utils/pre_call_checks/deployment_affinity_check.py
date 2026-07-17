@@ -21,7 +21,6 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import get_anthropic_session_id_from_metadata
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -275,10 +274,6 @@ class DeploymentAffinityCheck(CustomLogger):
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
-            if session_id is not None:
-                return session_id
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            session_id = get_anthropic_session_id_from_metadata(metadata)
             if session_id is not None:
                 return session_id
         return None

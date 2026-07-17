@@ -24,7 +24,6 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_utils.common_utils import get_anthropic_session_id_from_metadata
 from litellm.types.utils import ModelResponse
 
 from .config import (
@@ -861,10 +860,6 @@ class ComplexityRouter(CustomLogger):
             session_id = metadata.get("session_id")
             if session_id is not None:
                 return str(session_id)
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            session_id = get_anthropic_session_id_from_metadata(metadata)
-            if session_id is not None:
-                return session_id
         return None
 
     @staticmethod
