@@ -4,6 +4,8 @@ use crate::CoreResult;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
+pub const OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM: &[&str] = &["id"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
     Bearer,
@@ -36,13 +38,15 @@ pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
-        let mut mapped_params = Map::new();
-        for (param, value) in non_default_params {
-            if self.supported_ocr_params().contains(&param.as_str()) {
-                mapped_params.insert(param.clone(), value.clone());
-            }
-        }
-        mapped_params
+        non_default_params
+            .iter()
+            .filter(|(param, value)| {
+                self.supported_ocr_params().contains(&param.as_str())
+                    && !(value.is_null()
+                        && OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM.contains(&param.as_str()))
+            })
+            .map(|(param, value)| (param.clone(), value.clone()))
+            .collect()
     }
 
     fn transform_ocr_request(

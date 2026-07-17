@@ -10,37 +10,18 @@ from __future__ import annotations
 
 import json
 import os
-import queue
-import re
-import socket
-import subprocess
-import sys
-import threading
-import time
-from contextlib import closing
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Iterator, Literal, TextIO, cast
+from typing import Literal, cast
 
 import httpx
 import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.rust_bridge import native_bridge_available
+from ocr_capture_proxy import CaptureProxy, capture_proxy
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
-_SECRET_PATTERN = re.compile(r"(sk-[A-Za-z0-9_\-]+|Bearer\s+\S+)")
-
-_CAPTURE_RESPONSE_BODY: bytes = json.dumps(
-    {
-        "pages": [{"index": 0, "markdown": "captured"}],
-        "model": "mistral-ocr-latest",
-        "usage_info": {"pages_processed": 1},
-    }
-).encode()
+__all__ = ["capture_proxy"]
 
 
 class OcrDocument(BaseModel):
@@ -405,138 +386,13 @@ class TestRustOcrGateway:
             assert parsed.usage_info.pages_processed >= 1
 
 
-def _make_capture_handler(
-    captures: queue.Queue[bytes],
-) -> type[BaseHTTPRequestHandler]:
-    class _CaptureHandler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            length = int(self.headers.get("content-length", "0"))
-            captures.put(self.rfile.read(length))
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(_CAPTURE_RESPONSE_BODY)))
-            self.end_headers()
-            self.wfile.write(_CAPTURE_RESPONSE_BODY)
-
-        def log_message(self, format: str, *args: object) -> None:
-            return
-
-    return _CaptureHandler
-
-
-def _free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-        sock.bind(("127.0.0.1", 0))
-        _, port = cast(tuple[str, int], sock.getsockname())
-        return port
-
-
-def _wait_for_liveness(base_url: str, deadline: float) -> bool:
-    while time.monotonic() < deadline:
-        try:
-            resp = httpx.get(f"{base_url}/health/liveliness", timeout=2)
-            if resp.status_code == 200:
-                return True
-        except httpx.HTTPError:
-            pass
-        time.sleep(0.5)
-    return False
-
-
-@dataclass(frozen=True)
-class _CaptureProxy:
-    proxy_url: str
-    captures: queue.Queue[bytes]
-
-
-def _sanitize(text: str) -> str:
-    return _SECRET_PATTERN.sub("[redacted]", text)
-
-
-@pytest.fixture
-def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
-    if not native_bridge_available():
-        pytest.skip("compiled Rust OCR bridge is required for the capture E2E")
-
-    captures: queue.Queue[bytes] = queue.Queue()
-    capture_port = _free_port()
-    capture_server = HTTPServer(
-        ("127.0.0.1", capture_port), _make_capture_handler(captures)
-    )
-    server_thread = threading.Thread(target=capture_server.serve_forever, daemon=True)
-    server_thread.start()
-
-    proxy: subprocess.Popen[bytes] | None = None
-    proxy_log: TextIO | None = None
-    proxy_log_path = tmp_path / "capture-proxy.log"
-    try:
-        proxy_port = _free_port()
-        config = {
-            "model_list": [
-                {
-                    "model_name": "rust-ocr-mistral-capture",
-                    "litellm_params": {
-                        "model": "mistral/mistral-ocr-latest",
-                        "api_key": "sk-capture-test",
-                        "api_base": f"http://127.0.0.1:{capture_port}",
-                    },
-                }
-            ],
-            "general_settings": {"master_key": "sk-1234"},
-            "litellm_settings": {"drop_params": False},
-        }
-        config_path = tmp_path / "capture-config.yml"
-        config_path.write_text(yaml.safe_dump(config))
-
-        proxy_log = proxy_log_path.open("w")
-        proxy = subprocess.Popen(
-            [
-                sys.executable,
-                str(REPO_ROOT / "litellm" / "proxy" / "proxy_cli.py"),
-                "--config",
-                str(config_path),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(proxy_port),
-                "--num_workers",
-                "1",
-            ],
-            cwd=str(REPO_ROOT),
-            stdout=proxy_log,
-            stderr=subprocess.STDOUT,
-        )
-        proxy_url = f"http://127.0.0.1:{proxy_port}"
-        if not _wait_for_liveness(proxy_url, time.monotonic() + 90):
-            proxy_log.flush()
-            tail = _sanitize(proxy_log_path.read_text()[-4000:])
-            pytest.fail(
-                f"capture proxy did not become live while the Rust bridge is available; "
-                f"sanitized proxy log at {proxy_log_path}\n{tail}"
-            )
-        yield _CaptureProxy(proxy_url=proxy_url, captures=captures)
-    finally:
-        if proxy is not None:
-            proxy.terminate()
-            try:
-                proxy.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proxy.kill()
-                proxy.wait()
-        if proxy_log is not None:
-            proxy_log.close()
-        capture_server.shutdown()
-        capture_server.server_close()
-        server_thread.join(timeout=5)
-
-
 def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
-    capture_proxy: _CaptureProxy,
+    capture_proxy: CaptureProxy,
 ) -> None:
     response = httpx.post(
         f"{capture_proxy.proxy_url}/v1/ocr",
         headers={
-            "Authorization": "Bearer sk-1234",
+            "Authorization": f"Bearer {capture_proxy.master_key}",
             "content-type": "application/json",
         },
         content=_wire_payload(

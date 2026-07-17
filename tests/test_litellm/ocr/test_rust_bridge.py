@@ -373,7 +373,7 @@ def test_ocr_filters_internal_litellm_params_before_rust(fake_bridge):
         document=DOCUMENT,
         api_key="sk-test",
         include_image_base64=True,
-        original_generic_function=lambda: None,
+        original_generic_function="litellm-internal-should-be-filtered",
         litellm_metadata={"trace": "internal"},
     )
 
@@ -391,8 +391,10 @@ def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
         table_format="html",
         metadata={"trace": "internal"},
         litellm_metadata={"trace": "internal"},
+        litellm_session_id="sess-internal",
+        tags=["internal"],
         num_retries=3,
-        original_generic_function=lambda: None,
+        original_generic_function="litellm-internal-should-be-filtered",
     )
 
     optional_params = fake_bridge.calls[0]["optional_params"]
@@ -403,6 +405,8 @@ def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
     for internal in (
         "metadata",
         "litellm_metadata",
+        "litellm_session_id",
+        "tags",
         "num_retries",
         "original_generic_function",
     ):

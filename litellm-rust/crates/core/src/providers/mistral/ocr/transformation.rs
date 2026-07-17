@@ -239,6 +239,63 @@ mod tests {
     }
 
     #[test]
+    fn map_ocr_params_omits_id_when_absent() {
+        let params = json!({
+            "pages": [0, 1],
+            "include_image_base64": true
+        });
+        let mapped = map_ocr_params(params.as_object().unwrap());
+
+        assert!(!mapped.contains_key("id"));
+        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
+    }
+
+    #[test]
+    fn map_ocr_params_omits_id_when_null() {
+        let params = json!({
+            "id": null,
+            "pages": [0, 1],
+            "include_image_base64": true
+        });
+        let mapped = map_ocr_params(params.as_object().unwrap());
+
+        assert!(
+            !mapped.contains_key("id"),
+            "null id must be dropped for the standalone Axum path"
+        );
+        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
+        assert_eq!(mapped.get("include_image_base64"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn transform_ocr_request_omits_null_id_from_serialized_body() {
+        let document = json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        });
+        let supplied = json!({
+            "id": null,
+            "pages": [0],
+            "include_image_base64": true
+        });
+        let filtered = map_ocr_params(supplied.as_object().unwrap());
+
+        let result = transform_ocr_request("mistral-ocr-latest", document.clone(), filtered)
+            .expect("request should transform");
+
+        assert_eq!(
+            result.data,
+            json!({
+                "model": "mistral-ocr-latest",
+                "document": document,
+                "pages": [0],
+                "include_image_base64": true
+            })
+        );
+        assert!(result.data.get("id").is_none());
+    }
+
+    #[test]
     fn transform_ocr_request_serializes_full_supported_contract() {
         let document = json!({
             "type": "document_url",
