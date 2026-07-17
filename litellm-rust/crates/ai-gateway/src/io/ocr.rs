@@ -17,13 +17,14 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
-use crate::io::vertex_auth;
+use crate::io::vertex_ai::VertexAiBase;
 
 mod common_utils;
 
 use common_utils::{
-    convert_document_url_to_data_uri, has_header, header_values, ocr_provider_config,
-    poll_document_intelligence, string_headers, truncate_error_body, upload_reducto_document,
+    classify_reqwest_error, convert_document_url_to_data_uri, has_header, header_values,
+    ocr_provider_config, poll_document_intelligence, string_headers, truncate_error_body,
+    upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -44,31 +45,6 @@ fn http_client() -> &'static reqwest::Client {
             .timeout(Duration::from_secs(OCR_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client")
-    })
-}
-
-fn vertex_credentials(optional_params: &Map<String, Value>) -> Option<String> {
-    ["vertex_credentials", "vertex_ai_credentials"]
-        .iter()
-        .find_map(|key| optional_params.get(*key))
-        .and_then(|value| match value {
-            Value::String(raw) => {
-                let trimmed = raw.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Value::Object(_) => serde_json::to_string(value).ok(),
-            _ => None,
-        })
-}
-
-fn resolve_vertex_credentials(
-    optional_params: &Map<String, Value>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
-    vertex_credentials(optional_params).or_else(|| {
-        env_lookup(crate::constants::VERTEXAI_CREDENTIALS_ENV)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
     })
 }
 
@@ -104,8 +80,12 @@ pub struct OcrRequest<'a> {
 /// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let model = request.model;
-    let config = ocr_provider_config(request.custom_llm_provider, model)
-        .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.to_string()))?;
+    let config = ocr_provider_config(request.custom_llm_provider, model).ok_or_else(|| {
+        CoreError::InvalidProvider(format!(
+            "no OCR provider '{}' registered for model '{model}'",
+            request.custom_llm_provider
+        ))
+    })?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers = string_headers(request.extra_headers)?;
@@ -124,9 +104,13 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             OcrAuth::VertexOauth => match classify_vertex_bearer(request.api_key, &env_lookup)? {
                 VertexTokenSource::Explicit(token) => token,
                 VertexTokenSource::Mint => {
-                    let credentials =
-                        resolve_vertex_credentials(&request.optional_params, &env_lookup);
-                    vertex_auth::mint_vertex_bearer(credentials.as_deref()).await?
+                    let credentials = VertexAiBase::resolve_credential_source(
+                        &request.optional_params,
+                        &env_lookup,
+                    );
+                    VertexAiBase::shared()
+                        .get_access_token(credentials.as_deref())
+                        .await?
                 }
             },
         })
@@ -164,7 +148,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let response = request_builder
         .send()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(classify_reqwest_error)?;
 
     let status = response.status();
     if config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -189,16 +173,19 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             .into_json());
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+    let text = response.text().await.map_err(classify_reqwest_error)?;
 
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
+    }
+
+    if text.trim().is_empty() {
+        return Err(CoreError::InvalidResponse(
+            "OCR provider returned an empty success response".to_string(),
+        ));
     }
 
     let response_json: Value = serde_json::from_str(&text)
@@ -374,67 +361,6 @@ mod tests {
                 || request.contains("Authorization: Bearer sk-from-python"),
             "{request}"
         );
-    }
-
-    #[test]
-    fn vertex_credentials_reads_string_object_and_treats_blank_as_absent() {
-        let mut inline = Map::new();
-        inline.insert(
-            "vertex_credentials".to_string(),
-            Value::String("  /path/to/sa.json  ".into()),
-        );
-        assert_eq!(
-            vertex_credentials(&inline).as_deref(),
-            Some("/path/to/sa.json")
-        );
-
-        let mut object = Map::new();
-        object.insert(
-            "vertex_credentials".to_string(),
-            json!({"type": "service_account"}),
-        );
-        assert_eq!(
-            vertex_credentials(&object).as_deref(),
-            Some("{\"type\":\"service_account\"}")
-        );
-
-        let mut blank = Map::new();
-        blank.insert(
-            "vertex_credentials".to_string(),
-            Value::String("   ".into()),
-        );
-        assert_eq!(vertex_credentials(&blank), None);
-
-        assert_eq!(vertex_credentials(&Map::new()), None);
-    }
-
-    #[test]
-    fn resolve_vertex_credentials_prefers_optional_param_then_env() {
-        let mut params = Map::new();
-        params.insert(
-            "vertex_credentials".to_string(),
-            Value::String("/from/param.json".into()),
-        );
-        let env = |key: &str| {
-            (key == crate::constants::VERTEXAI_CREDENTIALS_ENV)
-                .then(|| "/from/env.json".to_string())
-        };
-        assert_eq!(
-            resolve_vertex_credentials(&params, &env).as_deref(),
-            Some("/from/param.json")
-        );
-
-        assert_eq!(
-            resolve_vertex_credentials(&Map::new(), &env).as_deref(),
-            Some("/from/env.json")
-        );
-
-        let blank_env = |key: &str| {
-            (key == crate::constants::VERTEXAI_CREDENTIALS_ENV).then(|| "   ".to_string())
-        };
-        assert_eq!(resolve_vertex_credentials(&Map::new(), &blank_env), None);
-
-        assert_eq!(resolve_vertex_credentials(&Map::new(), &|_| None), None);
     }
 
     #[tokio::test]
@@ -733,5 +659,145 @@ mod tests {
                 "OCR extra_headers.x-retry-count must be a string, got number".to_string()
             )
         );
+    }
+
+    async fn respond_once(status_line: &'static str, body: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let _ = read_http_headers(&mut socket).await;
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+        });
+        format!("http://{addr}")
+    }
+
+    async fn run_mistral_ocr(api_base: String, timeout: Duration) -> CoreResult<Value> {
+        ocr(OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: Some(&api_base),
+            custom_llm_provider: "mistral",
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(timeout),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn ocr_preserves_upstream_error_status() {
+        for status in [
+            "401 Unauthorized",
+            "404 Not Found",
+            "500 Internal Server Error",
+        ] {
+            let base = respond_once(status, r#"{"error":"nope"}"#.to_string()).await;
+            let err = run_mistral_ocr(base, Duration::from_secs(5))
+                .await
+                .expect_err("upstream error surfaces");
+            let expected = status[..3].parse::<u16>().expect("status prefix parses");
+            match err {
+                CoreError::Http { status: got, .. } => assert_eq!(got, expected),
+                other => panic!("expected Http error, got {other:?}"),
+            }
+            assert_eq!(err.public_status_code(), Some(expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn ocr_bounds_oversized_error_body() {
+        let base = respond_once("500 Internal Server Error", "x".repeat(6000)).await;
+        let err = run_mistral_ocr(base, Duration::from_secs(5))
+            .await
+            .expect_err("oversized error surfaces");
+        match err {
+            CoreError::Http { body, .. } => {
+                assert!(body.ends_with("... (truncated)"));
+                assert!(
+                    body.chars().count() < 300,
+                    "body not bounded: {} chars",
+                    body.chars().count()
+                );
+            }
+            other => panic!("expected Http error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ocr_rejects_invalid_json_success_body() {
+        let base = respond_once("200 OK", "not json".to_string()).await;
+        let err = run_mistral_ocr(base, Duration::from_secs(5))
+            .await
+            .expect_err("invalid JSON surfaces");
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
+        assert_eq!(err.public_status_code(), Some(500));
+    }
+
+    #[tokio::test]
+    async fn ocr_rejects_empty_success_body() {
+        let base = respond_once("200 OK", "   ".to_string()).await;
+        let err = run_mistral_ocr(base, Duration::from_secs(5))
+            .await
+            .expect_err("empty success surfaces");
+        match err {
+            CoreError::InvalidResponse(message) => assert!(message.contains("empty")),
+            other => panic!("expected InvalidResponse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ocr_classifies_per_request_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("listener has local addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let _ = read_http_headers(&mut socket).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+        });
+        let err = run_mistral_ocr(format!("http://{addr}"), Duration::from_millis(200))
+            .await
+            .expect_err("timeout surfaces");
+        assert_eq!(err, CoreError::Timeout);
+        assert_eq!(err.public_status_code(), Some(408));
+    }
+
+    #[tokio::test]
+    async fn ocr_maps_unregistered_provider_to_invalid_provider() {
+        let err = ocr(OcrRequest {
+            model: "some-model",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: None,
+            custom_llm_provider: "definitely-not-a-provider",
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("unregistered provider surfaces");
+        assert!(matches!(err, CoreError::InvalidProvider(_)));
+        assert_eq!(err.public_status_code(), Some(400));
+        assert_eq!(err.public_message(), "Invalid OCR request");
     }
 }
