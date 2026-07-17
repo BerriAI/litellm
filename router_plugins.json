@@ -1,0 +1,56 @@
+{
+  "language-detector": {
+    "name": "litellm-plugin-language-detector",
+    "description": "LiteLLM routing plugin that detects user-message language and writes language signals for downstream routing.",
+    "source": {
+      "source": "github",
+      "repo": "jeann2013/language-detector"
+    },
+    "homepage": "https://github.com/jeann2013/language-detector",
+    "install": {
+      "pip": "litellm-plugin-language-detector"
+    },
+    "config": {
+      "sdk": {
+        "plugins": [
+          "litellm_plugin_language_detector.LanguageDetectorPlugin"
+        ]
+      },
+      "proxy": {
+        "router_settings.plugins": [
+          "litellm_plugin_language_detector.plugin.language_detector_plugin"
+        ],
+        "complexity_router_config.plugins": [
+          "litellm_plugin_language_detector.plugin.language_detector_plugin"
+        ]
+      }
+    },
+    "signals": {
+      "language-detector": {
+        "language": "ISO-639-1 code or unknown",
+        "confidence": "float from 0.0 to 1.0",
+        "detector": "backend name"
+      }
+    },
+    "keywords": [
+      "language-detection",
+      "routing-plugin",
+      "signals",
+      "lingua"
+    ],
+    "category": "routing",
+    "min_litellm_version": "1.92.0",
+    "supported_languages": [
+      "en",
+      "es",
+      "fr",
+      "de",
+      "pt",
+      "it",
+      "nl",
+      "ja",
+      "zh",
+      "ko"
+    ]
+  }
+}
