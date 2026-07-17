@@ -132,13 +132,6 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)
 
-    try:
-        from bob_the_builder import remediate
-
-        remediate(session)
-    except Exception as exc:  # noqa: BLE001 - remediation is best-effort
-        print(f"devin remediation best-effort failed: {exc}")
-
 
 @pytest.fixture
 def resources(client: GatewayProvider) -> Iterator[ResourceManager]:
