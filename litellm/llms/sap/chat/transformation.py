@@ -14,8 +14,10 @@ from typing import (
     AsyncIterator,
     FrozenSet,
 )
-from functools import cached_property
 import os
+
+
+_UNSET = object()  # sentinel for _cached_deployment_url initialisation
 import httpx
 import litellm
 
@@ -145,6 +147,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._cached_deployment_url: object = _UNSET  # manual cache; avoids get_config() picking up @cached_property
 
     def run_env_setup(self, service_key: Optional[str] = None) -> None:
         try:
@@ -176,9 +179,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group  # type: ignore
 
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        return self._resolve_deployment_url()
+        if self._cached_deployment_url is _UNSET:
+            self._cached_deployment_url = self._resolve_deployment_url()
+        return self._cached_deployment_url  # type: ignore[return-value]
 
     def _resolve_deployment_url(self) -> str:
         """Discover the orchestration deployment URL from SAP AI Core.
