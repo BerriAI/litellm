@@ -1,0 +1,9 @@
+pub const MIME_APPLICATION_PDF: &str = "application/pdf";
+pub const MIME_IMAGE_PNG: &str = "image/png";
+pub const MIME_IMAGE_JPEG: &str = "image/jpeg";
+pub const MIME_IMAGE_GIF: &str = "image/gif";
+pub const MIME_IMAGE_WEBP: &str = "image/webp";
+pub const MIME_IMAGE_TIFF: &str = "image/tiff";
+pub const MIME_IMAGE_BMP: &str = "image/bmp";
+pub const MIME_APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
+pub const MIME_BINARY_OCTET_STREAM: &str = "binary/octet-stream";

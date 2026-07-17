@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use litellm_core::error::CoreError;
-use litellm_core::ocr::mime::{mime_from_file_name, sniff_document_mime};
+use litellm_core::ocr::mime::resolve_document_mime;
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use litellm_core::CoreResult;
 use reqwest::Url;
@@ -281,25 +281,6 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-fn resolve_document_mime(
-    header_content_type: Option<String>,
-    bytes: &[u8],
-    url_path: &str,
-) -> String {
-    if let Some(header) = &header_content_type {
-        if !header.eq_ignore_ascii_case("application/octet-stream")
-            && !header.eq_ignore_ascii_case("binary/octet-stream")
-        {
-            return header.to_ascii_lowercase();
-        }
-    }
-    sniff_document_mime(bytes)
-        .or_else(|| mime_from_file_name(url_path))
-        .map(str::to_string)
-        .or_else(|| header_content_type.map(|header| header.to_ascii_lowercase()))
-        .unwrap_or_else(|| "application/octet-stream".to_string())
-}
-
 pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
@@ -321,12 +302,13 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
         .map(str::to_string);
     let bytes = read_response_with_limit(response, &final_url).await?;
-    let content_type = resolve_document_mime(header_content_type, &bytes, final_url.path());
+    let content_type = resolve_document_mime(
+        header_content_type.as_deref(),
+        &bytes,
+        Some(final_url.path()),
+    );
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)
@@ -613,70 +595,6 @@ mod tests {
             CoreError::InvalidRequest(message)
                 if message.contains("SSRF protection")
         ));
-    }
-
-    #[test]
-    fn resolve_document_mime_prefers_specific_header() {
-        assert_eq!(
-            resolve_document_mime(Some("image/png".to_string()), b"%PDF-1.4", "/x.pdf"),
-            "image/png"
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_normalizes_specific_header_casing() {
-        assert_eq!(
-            resolve_document_mime(Some("Application/PDF".to_string()), b"%PDF-1.4", "/x"),
-            "application/pdf"
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_sniffs_when_header_is_binary_octet_stream() {
-        assert_eq!(
-            resolve_document_mime(
-                Some("Binary/Octet-Stream".to_string()),
-                b"%PDF-1.4 payload",
-                "/x"
-            ),
-            "application/pdf"
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_sniffs_when_header_is_octet_stream() {
-        assert_eq!(
-            resolve_document_mime(
-                Some("application/octet-stream".to_string()),
-                b"%PDF-1.4 payload",
-                "/x"
-            ),
-            "application/pdf"
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_uses_url_extension_when_header_and_bytes_ambiguous() {
-        assert_eq!(
-            resolve_document_mime(None, b"unrecognized bytes", "/docs/file.pdf"),
-            "application/pdf"
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_falls_back_to_octet_stream() {
-        assert_eq!(
-            resolve_document_mime(None, b"unrecognized bytes", "/docs/file"),
-            "application/octet-stream"
-        );
-        assert_eq!(
-            resolve_document_mime(
-                Some("application/octet-stream".to_string()),
-                b"unrecognized bytes",
-                "/docs/file"
-            ),
-            "application/octet-stream"
-        );
     }
 
     #[tokio::test]
