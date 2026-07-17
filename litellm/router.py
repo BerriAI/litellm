@@ -2047,6 +2047,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                inner_chunks: object = getattr(model_response, "chunks", None)
+                if isinstance(inner_chunks, list):
+                    self.chunks = inner_chunks
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
