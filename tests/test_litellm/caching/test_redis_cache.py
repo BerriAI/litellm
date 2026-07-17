@@ -853,3 +853,42 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     redis_cache.redis_client = mock_client
     redis_cache.delete_cache(key="k")
     mock_client.delete.assert_called_once_with(expected)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_serializes_datetime_dict(monkeypatch, redis_no_ping):
+    """Budget / Prisma payloads often contain datetime fields. Redis must accept them
+    so DualCache can share management objects across pods."""
+    from datetime import datetime, timezone
+    import json
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+
+    value = {
+        "budget_id": "team-Bitovi-budget-1930ed4dc63e48a5aaf62e33146b64f2",
+        "max_budget": 100.0,
+        "budget_duration": "30d",
+        "budget_reset_at": datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 7, 14, 19, 34, 3, 164000, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 7, 17, 15, 11, 7, 400000, tzinfo=timezone.utc),
+        "allowed_models": [],
+    }
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_set_cache(key="team_member_default_budget:x", value=value)
+
+    mock_redis_instance.set.assert_awaited_once()
+    kwargs = mock_redis_instance.set.await_args.kwargs
+    assert "budget_reset_at" in kwargs["value"]
+    assert "2026-08-01T00:00:00+00:00" in kwargs["value"]
+    # Must be valid JSON (regression for TypeError: Object of type datetime is not JSON serializable)
+    parsed = json.loads(kwargs["value"])
+    assert parsed["budget_id"] == value["budget_id"]
+    assert parsed["max_budget"] == 100.0
+    assert parsed["budget_reset_at"] == "2026-08-01T00:00:00+00:00"

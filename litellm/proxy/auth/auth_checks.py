@@ -958,11 +958,12 @@ async def get_team_member_default_budget(
 
     cache_key = f"team_member_default_budget:{budget_id}"
 
-    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
-    if isinstance(cached_budget, LiteLLM_BudgetTable):
+    cached_budget = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_BudgetTable,
+    )
+    if cached_budget is not None:
         return cached_budget
-    if isinstance(cached_budget, dict):
-        return LiteLLM_BudgetTable(**cached_budget)
 
     try:
         budget_record = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
@@ -971,13 +972,15 @@ async def get_team_member_default_budget(
             verbose_proxy_logger.warning(f"Team-default member budget not found in database: {budget_id}")
             return None
 
+        _budget_obj = LiteLLM_BudgetTable(**budget_record.dict())
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=budget_record.dict(),
+            value=_budget_obj,
+            model_type=LiteLLM_BudgetTable,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
 
-        return LiteLLM_BudgetTable(**budget_record.dict())
+        return _budget_obj
 
     except Exception:
         verbose_proxy_logger.exception(f"Error fetching team-default member budget {budget_id}")
