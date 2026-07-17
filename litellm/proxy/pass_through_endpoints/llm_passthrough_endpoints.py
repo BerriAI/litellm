@@ -1234,6 +1234,22 @@ async def assemblyai_proxy_route(
     return received_value
 
 
+def get_azure_ai_search_index_from_endpoint(endpoint: str) -> str | None:
+    """Return the index name in the ``/indexes/{name}`` position of an Azure AI
+    Search passthrough path, or ``None`` when the path targets no index.
+
+    Only the segment immediately after ``indexes`` is the operable target. Any
+    other segment (for example the trailing ``index`` in ``.../docs/index``) must
+    never be treated as the index, otherwise a caller authorized on one index
+    could have Azure apply the operation to a different index on the same service.
+    """
+    segments: Final = endpoint.split("?", 1)[0].strip("/").split("/")
+    for position, segment in enumerate(segments):
+        if segment == "indexes" and position + 1 < len(segments):
+            return segments[position + 1] or None
+    return None
+
+
 @router.api_route(
     "/azure_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -1263,6 +1279,8 @@ async def azure_proxy_route(
         "/"
     )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
 
+    search_index_name: Final = get_azure_ai_search_index_from_endpoint(endpoint)
+
     if len(parts) > 1 and llm_router:
         for part in parts:
             # check if LLM MODEL
@@ -1271,9 +1289,9 @@ async def azure_proxy_route(
             )
             # check if vector store index
             is_vector_store_index = (
-                (litellm.vector_store_index_registry.is_vector_store_index(vector_store_index_name=part))
-                if litellm.vector_store_index_registry is not None
-                else False
+                part == search_index_name
+                and litellm.vector_store_index_registry is not None
+                and litellm.vector_store_index_registry.is_vector_store_index(vector_store_index_name=part)
             )
 
             if is_router_model:
