@@ -937,6 +937,7 @@ def responses_api_bridge_check(
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     tools: Optional[List[Any]] = None,
     reasoning_effort: Optional[Any] = None,
+    deployment_model_info: Optional[dict] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -972,6 +973,19 @@ def responses_api_bridge_check(
         and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
         and tools
         and reasoning_effort is not None
+        and model_info.get("mode") != "responses"
+    ):
+        model_info["mode"] = "responses"
+        model = model.replace("responses/", "")
+
+    # Respect an explicit per-deployment override (`model_info: {mode: responses}`
+    # in the model_list config). This lets users force models behind
+    # OpenAI-compatible endpoints that only implement `/responses` (e.g. some
+    # gateways/proxies for newer GPT models) to bridge through the Responses API,
+    # without relying on model-name heuristics.
+    if (
+        deployment_model_info is not None
+        and deployment_model_info.get("mode") == "responses"
         and model_info.get("mode") != "responses"
     ):
         model_info["mode"] = "responses"
@@ -1378,6 +1392,7 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            deployment_model_info=model_info,
         )
 
         if not _should_allow_input_examples(
@@ -1627,6 +1642,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 tools=tools,
                 reasoning_effort=reasoning_effort,
+                deployment_model_info=model_info,
             )
 
         if responses_api_model_info.get("mode") == "responses":

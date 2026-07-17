@@ -764,6 +764,70 @@ def test_responses_api_bridge_check_handles_exception():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_check_deployment_model_info_override():
+    """Test that a per-deployment `model_info: {mode: responses}` override forces
+    the Responses API bridge, even when the model isn't otherwise flagged.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33114
+    Some OpenAI-compatible gateways (e.g. GPT-5 behind a custom api_base) only
+    implement `/responses` and not `/chat/completions`. Users can set
+    `model_info: {mode: responses}` on the model_list entry to force the bridge
+    without relying on model-name heuristics.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000, "mode": "chat"}
+
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            deployment_model_info={"mode": "responses"},
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_deployment_model_info_no_override():
+    """Test that models are unaffected when no deployment-level override is set."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000, "mode": "chat"}
+
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            deployment_model_info={"id": "some-deployment-id"},
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") != "responses"
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_completion_routes_to_responses_bridge_via_model_info_override(
+    mock_responses_completion,
+):
+    """End-to-end: litellm.completion() honors a `model_info={"mode": "responses"}`
+    kwarg (as passed by the Router from a deployment's `model_info` config) and
+    routes the call through the Responses API bridge instead of /chat/completions.
+    """
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    litellm.completion(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "hi"}],
+        model_info={"mode": "responses"},
+        api_key="fake-key",
+    )
+
+    assert mock_responses_completion.called is True
+
+
 @pytest.mark.asyncio
 async def test_async_mock_delay():
     """Use asyncio await for mock delay on acompletion"""
