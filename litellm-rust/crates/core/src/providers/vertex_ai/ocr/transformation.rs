@@ -292,10 +292,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     ) -> CoreResult<OcrResponseData> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
         let usage = response.get("usage").cloned();
         let content = first_choice_content(&response_json)?;
         let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), model);
@@ -314,10 +311,9 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             });
         }
 
-        let object = ocr_data.as_object().ok_or_else(|| CoreError::InvalidType {
-            expected: "object",
-            actual: json_type_name(&ocr_data),
-        })?;
+        let object = ocr_data
+            .as_object()
+            .ok_or_else(|| CoreError::unexpected_response_type(&ocr_data))?;
         let pages = object
             .get("pages")
             .and_then(Value::as_array)

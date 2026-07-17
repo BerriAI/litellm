@@ -478,7 +478,7 @@ fn operation_status(response_json: &Value) -> CoreResult<&str> {
     let status = response_json
         .get("status")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("status"))?;
+        .ok_or(CoreError::missing_response_field("status"))?;
     match status {
         "succeeded" => Ok("succeeded"),
         "running" | "notStarted" => Ok("running"),

@@ -695,8 +695,68 @@ def test_raise_ocr_exception_maps_input_error_to_bad_request() -> None:
             kwargs={},
         )
 
-    assert exc_info.value.status_code == 400
-    assert "Invalid document type" in str(exc_info.value)
+    exc = exc_info.value
+    assert exc.status_code == 400
+    assert "Invalid OCR request" in str(exc)
+    assert "bogus" not in str(exc)
+
+
+OCR_INPUT_CANARIES = [
+    "https://signed.example/doc.pdf",
+    "token=SECRET123",
+    "QUJDREVGYmFzZTY0",
+    "page=42",
+    "application/x-canary-mime",
+    "/var/secrets/service_account.json",
+    "sk-canary-secret",
+    "canary_document_type",
+]
+
+
+def test_raise_ocr_exception_input_error_publishes_generic_message() -> None:
+    canary = " ".join(OCR_INPUT_CANARIES)
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        ocr_main._raise_ocr_exception(
+            ocr_main._OCRInputError(canary),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
+
+
+def test_ocr_input_error_public_message_drops_canaries() -> None:
+    document = {
+        "type": " ".join(OCR_INPUT_CANARIES),
+        "document_url": "https://signed.example/doc.pdf?token=SECRET123&page=42",
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.ocr(model=MODEL, document=document, api_key="sk-test")
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
+
+
+@pytest.mark.asyncio
+async def test_aocr_input_error_public_message_drops_canaries() -> None:
+    document = {
+        "type": " ".join(OCR_INPUT_CANARIES),
+        "document_url": "https://signed.example/doc.pdf?token=SECRET123&page=42",
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
 
 
 def test_raise_ocr_exception_keeps_plain_value_error_off_bad_request(

@@ -237,10 +237,7 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
 fn transform_reducto_response(model: &str, response_json: Value) -> CoreResult<OcrResponseData> {
     let response = response_json
         .as_object()
-        .ok_or_else(|| CoreError::InvalidType {
-            expected: "object",
-            actual: json_type_name(&response_json),
-        })?;
+        .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
     let result = response.get("result").unwrap_or(&response_json);
     let usage = response.get("usage").cloned().unwrap_or_else(|| json!({}));
     Ok(OcrResponseData {

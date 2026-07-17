@@ -113,8 +113,10 @@ def _raise_ocr_exception(
         _raise_rust_ocr_exception(e, model, custom_llm_provider)
     if isinstance(e, _OCRInputError):
         raise litellm.BadRequestError(
-            message=str(e), model=model, llm_provider=custom_llm_provider or "mistral"
-        )
+            message="Invalid OCR request",
+            model=model,
+            llm_provider=custom_llm_provider or "mistral",
+        ) from e
     raise litellm.exception_type(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -545,7 +547,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise _OCRInputError("OCR file input path does not exist")
         mime_type = get_mime_type(file_path)
         file_name = os.path.basename(file_path)
         with open(file_path, "rb") as f:

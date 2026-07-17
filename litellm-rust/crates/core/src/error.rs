@@ -30,6 +30,17 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    pub fn unexpected_response_type(value: &serde_json::Value) -> Self {
+        CoreError::InvalidResponse(format!(
+            "expected object OCR response, got {}",
+            json_type_name(value)
+        ))
+    }
+
+    pub fn missing_response_field(field: &'static str) -> Self {
+        CoreError::InvalidResponse(format!("OCR response missing required field: {field}"))
+    }
+
     pub fn public_status_code(&self) -> Option<u16> {
         match self {
             CoreError::Http { status, .. } => Some(*status),
@@ -210,6 +221,25 @@ mod tests {
         assert_eq!(
             CoreError::Routing("model_list parse failed".to_string()).public_message(),
             "OCR request could not be routed"
+        );
+    }
+
+    #[test]
+    fn malformed_response_maps_to_sanitized_500() {
+        let wrong_type = CoreError::unexpected_response_type(&serde_json::json!("boom"));
+        assert!(matches!(wrong_type, CoreError::InvalidResponse(_)));
+        assert_eq!(wrong_type.public_status_code(), Some(500));
+        assert_eq!(
+            wrong_type.public_message(),
+            "OCR provider returned an invalid response"
+        );
+
+        let missing = CoreError::missing_response_field("status");
+        assert!(matches!(missing, CoreError::InvalidResponse(_)));
+        assert_eq!(missing.public_status_code(), Some(500));
+        assert_eq!(
+            missing.public_message(),
+            "OCR provider returned an invalid response"
         );
     }
 
