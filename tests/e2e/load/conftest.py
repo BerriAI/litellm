@@ -1,17 +1,3 @@
-"""Load suite's `client` fixture plus the mock deployment it hammers.
-
-The shared lifecycle (resources/scoped_key), proxy liveness skip, and e2e marker
-live in the parent tests/e2e/conftest.py. LoadClient holds the shared Gateway, so
-the `resources` fixture cleans up keys this suite creates.
-
-The throughput test drives thousands of requests, so it points them at a mock
-deployment (litellm_params.mock_response) rather than a real provider: the proxy
-short-circuits before any upstream call, so the run measures proxy overhead under
-concurrency instead of a provider's latency, cost, or rate limit. The deployment
-is registered via /model/new when the proxy does not already list it (compose has
-it in static config; stage does not), mirroring the router suite.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Iterator

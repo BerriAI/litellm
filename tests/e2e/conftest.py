@@ -45,9 +45,6 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Run `load`-marked tests last. A load test saturates the shared proxy, so
-    letting it run before a latency- or rate-limit-sensitive suite would skew that
-    suite; ordering it last keeps a whole-tree `pytest tests/e2e` run honest."""
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 

@@ -1,17 +1,3 @@
-"""Live e2e: the proxy sustains its throughput SLO on /chat/completions under
-concurrent load, so a regression that quietly slows the request path (a bad Redis
-SSL config forcing a handshake per request, a dependency bump that adds per-request
-overhead) fails here instead of in a customer's load test.
-
-CodSpeed benchmarks the SDK with no IO; this fills the gap it cannot see by driving
-real concurrent HTTP through the whole stack (proxy + Postgres + Redis) with Locust.
-Traffic hits a mock deployment (see conftest) so the number reflects proxy overhead,
-not a provider's latency or rate limit. The defaults (users, duration, and the RPS
-floor) come from e2e_config and are overridable per deployment; the assertion is the
-aggregate throughput clearing LOAD_MIN_RPS with the failure share under
-LOAD_MAX_FAILURE_RATIO, since a run that mostly errors makes the RPS meaningless.
-"""
-
 import pytest
 
 from e2e_config import (

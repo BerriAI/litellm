@@ -1,19 +1,3 @@
-"""Drive a Locust throughput load at the proxy's /chat/completions and hand back
-the aggregate stats a throughput SLO can be asserted on.
-
-Locust is run as a subprocess rather than embedded: it monkey-patches the stdlib
-with gevent at import, which deadlocks pytest's own machinery if imported in-process,
-so the generator lives in its own interpreter (see locustfile.py) and reports back
-through its `--json` summary on stdout. It is also the one place in tests/e2e that
-does not go through the shared transport - a load generator has to own its HTTP
-client to measure throughput, and FastHttpUser is the client Locust ships for it.
-
-Traffic is a real POST /chat/completions with a real bearer key against the live
-proxy, so the whole request path (auth, routing, logging, spend) runs under
-production-like concurrency; only the upstream provider is a mock deployment, so
-the number reflects proxy overhead rather than a provider's latency or rate limit.
-"""
-
 from __future__ import annotations
 
 import os

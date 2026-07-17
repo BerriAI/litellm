@@ -1,12 +1,3 @@
-"""Locust user for the throughput load test, run as a subprocess by locust_load.py.
-
-Reads the target model and bearer key from the environment (locust_load passes
-LOAD_MODEL and LOAD_API_KEY; --host carries the proxy base URL) and hammers
-/chat/completions with FastHttpUser, the high-throughput client Locust ships. The
-model is a mock deployment, so every request exercises the full proxy path without
-an upstream provider call.
-"""
-
 from __future__ import annotations
 
 import os
