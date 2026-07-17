@@ -51,7 +51,15 @@ pub(super) fn prepare_messages_call(
     }
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
-    let body = config.transform_request(request.body)?.body;
+    let typed_request = serde_json::from_value(request.body).map_err(|err| {
+        CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    })?;
+    let transformed = config.transform_request(typed_request)?;
+    let body = serde_json::to_value(transformed).map_err(|err| {
+        CoreError::InvalidRequest(format!(
+            "failed to serialize Anthropic messages request: {err}"
+        ))
+    })?;
 
     Ok(ProviderMessagesRequest {
         model,

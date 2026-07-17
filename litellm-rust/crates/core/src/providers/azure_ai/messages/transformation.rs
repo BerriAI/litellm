@@ -1,20 +1,26 @@
-use serde_json::{Map, Value};
-
-use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult};
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
-use crate::messages::types::MessagesRequestData;
+use crate::messages::types::{
+    AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
+    MessageContent, SystemPrompt,
+};
+use crate::providers::anthropic::messages::transformation::{
+    non_empty, AnthropicMessagesConfig, ANTHROPIC_MESSAGES_CONFIG,
+};
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
+const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
+const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
-pub struct AzureAnthropicMessagesConfig;
+pub struct AzureAnthropicMessagesConfig {
+    anthropic: AnthropicMessagesConfig,
+}
 
 pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
-    AzureAnthropicMessagesConfig;
-
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
+    AzureAnthropicMessagesConfig {
+        anthropic: ANTHROPIC_MESSAGES_CONFIG,
+    };
 
 pub fn resolve_azure_api_key(
     api_key: Option<&str>,
@@ -48,42 +54,32 @@ pub fn complete_azure_anthropic_url(
 
     let api_base = api_base.trim_end_matches('/');
 
-    if api_base.ends_with("/v1/messages") || api_base.ends_with("/anthropic/v1/messages") {
+    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
         return Ok(api_base.to_string());
     }
 
-    let with_anthropic = match api_base.split_once("/anthropic") {
-        Some((prefix, _)) => format!("{prefix}/anthropic"),
-        None => format!("{api_base}/anthropic"),
+    let with_anthropic = match api_base.split_once(ANTHROPIC_PATH_SEGMENT) {
+        Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
+        None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
     };
-    Ok(format!("{with_anthropic}/v1/messages"))
+    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
 }
 
-fn remove_scope_from_content_blocks(content: &mut [Value]) {
-    for item in content.iter_mut() {
-        if let Some(cache_control) = item
-            .as_object_mut()
-            .and_then(|block| block.get_mut("cache_control"))
-            .and_then(Value::as_object_mut)
-        {
-            cache_control.remove("scope");
-        }
+fn strip_scope_from_block(block: &mut ContentBlock) {
+    if let Some(cache_control) = block.cache_control.as_mut() {
+        cache_control.scope = None;
     }
 }
 
-fn remove_scope_from_cache_control(body: &mut Map<String, Value>) {
-    if let Some(Value::Array(system)) = body.get_mut("system") {
-        remove_scope_from_content_blocks(system);
+fn strip_scope_from_system(system: &mut SystemPrompt) {
+    if let SystemPrompt::Blocks(blocks) = system {
+        blocks.iter_mut().for_each(strip_scope_from_block);
     }
-    if let Some(Value::Array(messages)) = body.get_mut("messages") {
-        for message in messages.iter_mut() {
-            if let Some(Value::Array(content)) = message
-                .as_object_mut()
-                .and_then(|message| message.get_mut("content"))
-            {
-                remove_scope_from_content_blocks(content);
-            }
-        }
+}
+
+fn strip_scope_from_message(message: &mut AnthropicMessage) {
+    if let MessageContent::Blocks(blocks) = &mut message.content {
+        blocks.iter_mut().for_each(strip_scope_from_block);
     }
 }
 
@@ -106,23 +102,33 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+        self.anthropic.auth_strategy()
     }
 
-    fn transform_request(&self, body: Value) -> CoreResult<MessagesRequestData> {
-        let mut body = match body {
-            Value::Object(body) => body,
-            other => {
-                return Err(CoreError::InvalidType {
-                    expected: "object",
-                    actual: json_type_name(&other),
-                })
-            }
-        };
-        remove_scope_from_cache_control(&mut body);
-        Ok(MessagesRequestData {
-            body: Value::Object(body),
-        })
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        self.anthropic.default_headers()
+    }
+
+    fn transform_request(
+        &self,
+        mut request: AnthropicMessagesRequest,
+    ) -> CoreResult<AnthropicMessagesRequest> {
+        if let Some(system) = request.system.as_mut() {
+            strip_scope_from_system(system);
+        }
+        request
+            .messages
+            .iter_mut()
+            .for_each(strip_scope_from_message);
+        self.anthropic.transform_request(request)
+    }
+
+    fn transform_response(
+        &self,
+        model: &str,
+        response: AnthropicMessagesResponse,
+    ) -> CoreResult<AnthropicMessagesResponse> {
+        self.anthropic.transform_response(model, response)
     }
 }
 
@@ -130,6 +136,14 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn request_from(value: serde_json::Value) -> AnthropicMessagesRequest {
+        serde_json::from_value(value).expect("valid request")
+    }
+
+    fn to_value(request: AnthropicMessagesRequest) -> serde_json::Value {
+        serde_json::to_value(request).expect("serializable request")
+    }
 
     #[test]
     fn url_appends_anthropic_and_messages_suffix() {
@@ -234,7 +248,7 @@ mod tests {
 
     #[test]
     fn transform_request_strips_scope_from_system_and_messages() {
-        let body = json!({
+        let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
             "system": [
@@ -257,12 +271,13 @@ mod tests {
                     ]
                 }
             ]
-        });
+        }));
 
-        let transformed = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_request(body)
-            .expect("request transforms")
-            .body;
+        let transformed = to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .transform_request(request)
+                .expect("request transforms"),
+        );
 
         assert_eq!(
             transformed["system"][0]["cache_control"],
@@ -280,66 +295,82 @@ mod tests {
 
     #[test]
     fn transform_request_is_idempotent_and_preserves_string_system() {
-        let body = json!({
+        let request = request_from(json!({
             "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
             "system": "plain string system",
             "messages": [{"role": "user", "content": "hi"}]
-        });
+        }));
         let once = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_request(body)
-            .expect("request transforms")
-            .body;
+            .transform_request(request)
+            .expect("request transforms");
         let twice = AZURE_ANTHROPIC_MESSAGES_CONFIG
             .transform_request(once.clone())
-            .expect("request transforms")
-            .body;
+            .expect("request transforms");
         assert_eq!(once, twice);
-        assert_eq!(once["system"], json!("plain string system"));
+        assert_eq!(to_value(once)["system"], json!("plain string system"));
+    }
+
+    #[test]
+    fn transform_request_preserves_all_supported_params() {
+        let body = json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": "be terse",
+            "metadata": {"user_id": "u1"},
+            "stop_sequences": ["STOP"],
+            "stream": false,
+            "temperature": 0.4,
+            "top_p": 0.9,
+            "top_k": 40,
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "auto"},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "service_tier": "auto",
+            "container": {"id": "c1"},
+            "mcp_servers": [{"type": "url", "url": "https://mcp.example", "name": "x"}],
+            "context_management": {"edits": []},
+            "output_format": {"type": "json_schema"},
+            "output_config": {"effort": "high"},
+            "speed": "fast",
+            "inference_geo": "us",
+            "litellm_metadata": {"trace": "abc"}
+        });
+        let transformed = to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .transform_request(request_from(body.clone()))
+                .expect("request transforms"),
+        );
+        assert_eq!(transformed, body);
     }
 
     #[test]
     fn transform_request_rejects_non_object_body() {
-        let err = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_request(json!("bad"))
+        let err = serde_json::from_value::<AnthropicMessagesRequest>(json!("bad"))
             .expect_err("non-object body should error");
-        assert_eq!(
-            err,
-            CoreError::InvalidType {
-                expected: "object",
-                actual: "string",
-            }
-        );
+        assert!(err.is_data());
     }
 
     #[test]
-    fn transform_response_passes_through_object() {
-        let response = json!({
+    fn transform_response_passes_through() {
+        let response: AnthropicMessagesResponse = serde_json::from_value(json!({
             "id": "msg_1",
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "hello"}],
             "model": "claude-sonnet-4-5",
             "stop_reason": "end_turn",
+            "stop_sequence": null,
             "usage": {"input_tokens": 1, "output_tokens": 2}
-        });
+        }))
+        .expect("valid response");
         let transformed = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_response("claude-sonnet-4-5", response.clone())
-            .expect("response transforms")
-            .into_json();
-        assert_eq!(transformed, response);
-    }
-
-    #[test]
-    fn transform_response_rejects_non_object() {
-        let err = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_response("claude-sonnet-4-5", json!([1, 2, 3]))
-            .expect_err("array response should error");
-        assert_eq!(
-            err,
-            CoreError::InvalidType {
-                expected: "object",
-                actual: "array",
-            }
-        );
+            .transform_response("claude-sonnet-4-5", response)
+            .expect("response transforms");
+        let value = serde_json::to_value(transformed).expect("serializable");
+        assert_eq!(value["stop_reason"], json!("end_turn"));
+        assert_eq!(value["stop_sequence"], json!(null));
+        assert_eq!(value["content"][0]["text"], json!("hello"));
     }
 }

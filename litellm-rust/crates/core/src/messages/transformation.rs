@@ -1,8 +1,6 @@
-use serde_json::Value;
+use crate::error::CoreResult;
 
-use crate::error::{json_type_name, CoreError, CoreResult};
-
-use super::types::{MessagesRequestData, MessagesResponseData};
+use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
@@ -44,29 +42,18 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         ]
     }
 
-    fn transform_request(&self, body: Value) -> CoreResult<MessagesRequestData> {
-        if !body.is_object() {
-            return Err(CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&body),
-            });
-        }
-        Ok(MessagesRequestData { body })
+    fn transform_request(
+        &self,
+        request: AnthropicMessagesRequest,
+    ) -> CoreResult<AnthropicMessagesRequest> {
+        Ok(request)
     }
 
     fn transform_response(
         &self,
         _model: &str,
-        response_json: Value,
-    ) -> CoreResult<MessagesResponseData> {
-        if !response_json.is_object() {
-            return Err(CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            });
-        }
-        Ok(MessagesResponseData {
-            body: response_json,
-        })
+        response: AnthropicMessagesResponse,
+    ) -> CoreResult<AnthropicMessagesResponse> {
+        Ok(response)
     }
 }

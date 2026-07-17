@@ -35,12 +35,13 @@ pub(super) async fn execute_messages_provider_call(
         });
     }
 
-    let response_json: Value = serde_json::from_str(&text).map_err(|err| {
+    let response = serde_json::from_str(&text).map_err(|err| {
         CoreError::InvalidResponse(format!("invalid messages response JSON: {err}"))
     })?;
-
-    Ok(request
+    let transformed = request
         .config
-        .transform_response(&request.model, response_json)?
-        .into_json())
+        .transform_response(&request.model, response)?;
+    serde_json::to_value(transformed).map_err(|err| {
+        CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
+    })
 }
