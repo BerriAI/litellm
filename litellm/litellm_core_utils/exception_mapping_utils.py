@@ -1827,6 +1827,57 @@ def _map_ollama_exception(
             llm_provider="ollama",
             model=model,
         )
+    elif hasattr(original_exception, "status_code"):
+        status_code = original_exception.status_code
+        response = getattr(original_exception, "response", None)
+        if status_code == 400 or status_code == 422:
+            raise BadRequestError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
+        elif status_code == 401:
+            raise AuthenticationError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
+        elif status_code == 404:
+            raise NotFoundError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
+        elif status_code == 408:
+            raise Timeout(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+            )
+        elif status_code == 429:
+            raise RateLimitError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
+        elif status_code == 503:
+            raise ServiceUnavailableError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
+        elif status_code >= 500:
+            raise InternalServerError(
+                message=f"OllamaException: {original_exception}",
+                llm_provider="ollama",
+                model=model,
+                response=response,
+            )
 
 
 def _map_vllm_exception(
