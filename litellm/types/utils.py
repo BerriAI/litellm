@@ -197,6 +197,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
+    # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
+    # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
+    prompt_cache_min_tokens: Optional[int]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
