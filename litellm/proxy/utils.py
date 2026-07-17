@@ -3323,7 +3323,24 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # A user seeded from default_internal_user_params
+                            # (or created via /user/new without an explicit
+                            # budget_reset_at) has budget_duration set but
+                            # budget_reset_at = NULL. `{"lt": reset_at}` never
+                            # matches NULL, so such users would never be reset
+                            # and their spend would accumulate for the lifetime
+                            # of the row, silently exceeding max_budget. Treat a
+                            # NULL budget_reset_at with a non-NULL budget_duration
+                            # as due, matching the budget-table query below.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
@@ -3409,7 +3426,18 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # Same NULL budget_reset_at gap as the user query
+                            # above: a team with a budget_duration but no
+                            # initialized budget_reset_at would never be reset.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id is not None:
