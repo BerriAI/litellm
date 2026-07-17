@@ -86,6 +86,9 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra semantic-router \
     --python python3
 
+ENV XDG_CACHE_HOME=/opt/prisma-cache \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma-cache/prisma-python/binaries
+
 RUN prisma generate --schema=./schema.prisma
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
@@ -100,7 +103,9 @@ USER root
 RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}" \
+    XDG_CACHE_HOME=/opt/prisma-cache \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma-cache/prisma-python/binaries
 
 # Copy only what runtime needs. The application is installed inside the venv;
 # the rest of the builder's /app is source and build metadata that must not
@@ -114,15 +119,19 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # working directory on sys.path; litellm/proxy/hooks resolves
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
-# Prisma binaries live in $HOME/.cache (default prisma-python location),
-# which is /root/.cache here. Copy only the Prisma subdirs — copying the
-# whole /root/.cache drags in the uv build cache (~660 MB, includes a
-# setuptools wheel that surfaces as a CVE finding even though it's not
-# on the runtime sys.path).
-COPY --from=builder /root/.cache/prisma /root/.cache/prisma
-COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
+# Prisma caches are baked at a fixed, UID-independent path
+# (XDG_CACHE_HOME and PRISMA_BINARY_CACHE_DIR pin them to
+# /opt/prisma-cache in both stages) so the proxy finds them offline under
+# any runtime UID instead of resolving $HOME-relative paths and
+# re-downloading (air-gapped installs, arbitrary-UID pod security
+# contexts). /opt is used rather than /app/.cache because deployments
+# with readOnlyRootFilesystem mount an emptyDir over /app/.cache, which
+# would shadow the baked-in engines. a+rX keeps them readable under any
+# UID. The uv build cache stays in /root/.cache, so it does not ship.
+COPY --from=builder /opt/prisma-cache /opt/prisma-cache
 
-RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
+RUN chmod -R a+rX /opt/prisma-cache && \
+    find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete
 
 EXPOSE 4000/tcp
