@@ -3759,7 +3759,7 @@ class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
 
 
 class BulkTeamMemberUpdateRequest(LiteLLMPydanticObjectBase):
-    user_ids: list[str] | None = Field(default=None, max_length=BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS)
+    user_ids: list[str] | None = Field(default=None)
     all_members_in_team: bool = False
     update_fields: TeamMemberBulkUpdateFields
 
