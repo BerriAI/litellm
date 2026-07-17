@@ -7711,6 +7711,65 @@ class Router:
             len(config.available_models),
         )
 
+    def _remove_deployment_from_strategy_registries(self, model_name: str, litellm_model: str | None) -> None:
+        """
+        Drop a model_name's strategy-router registration (auto / complexity /
+        adaptive / quality) when its deployment is removed from the router.
+
+        Every `init_*_router_deployment` raises "already exists" when the
+        model_name is still registered, so a removal path that cleans
+        `model_list` but not these registries makes the deployment
+        un-re-addable: the re-add dies before `_add_model_to_list_and_index_map`
+        (swallowed under `ignore_invalid_deployments`), the row disappears from
+        `/v1/models` & `/model/info`, and the stale registry object keeps
+        serving requests with its old config. See issue #33168.
+
+        `litellm_model` is the removed deployment's `litellm_params.model`;
+        registries are only touched when it carries the `auto_router/` prefix.
+        This guards against a REGULAR deployment that merely shares a strategy
+        router's public model_name evicting the strategy router when deleted.
+
+        For adaptive routers, the deployment's `AdaptiveRouterPostCallHook` is
+        also removed from the global callback lists — otherwise every
+        upsert/delete cycle leaks one hook (and a deleted router's hook keeps
+        firing forever).
+        """
+        litellm_model = litellm_model or ""
+        if not litellm_model.startswith("auto_router/"):
+            return
+
+        # scope the pop to the removed deployment's OWN strategy registry —
+        # model_names are only unique per registry, so a complexity router and
+        # a quality router may legally share a name; deleting one must not
+        # evict the other.
+        if litellm_model.startswith("auto_router/complexity_router"):
+            self.complexity_routers.pop(model_name, None)
+            return
+        if litellm_model.startswith("auto_router/quality_router"):
+            self.quality_routers.pop(model_name, None)
+            return
+        if not litellm_model.startswith("auto_router/adaptive_router"):
+            # plain auto_router/<name> (semantic router)
+            self.auto_routers.pop(model_name, None)
+            return
+
+        adaptive_router = self.adaptive_routers.pop(model_name, None)
+        if adaptive_router is not None:
+            from litellm.router_strategy.adaptive_router.hooks import (
+                AdaptiveRouterPostCallHook,
+            )
+
+            for _cb_list in (
+                litellm.callbacks,
+                litellm.success_callback,
+                litellm.failure_callback,
+                litellm._async_success_callback,
+                litellm._async_failure_callback,
+            ):
+                for _cb in list(_cb_list):
+                    if isinstance(_cb, AdaptiveRouterPostCallHook) and _cb.adaptive_router is adaptive_router:
+                        litellm.logging_callback_manager.remove_callback_from_all_lists(_cb)
+
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
         Check if the deployment is a quality-router deployment.
@@ -8243,9 +8302,30 @@ class Router:
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        # de-register any strategy router (auto/complexity/
+                        # adaptive/quality) tied to the removed deployment, so
+                        # the add_deployment below can re-register it instead
+                        # of dying on the init functions' "already exists"
+                        # check (which silently delists the model under
+                        # ignore_invalid_deployments). See issue #33168.
+                        self._remove_deployment_from_strategy_registries(
+                            model_name=_deployment_on_router.model_name,
+                            litellm_model=_deployment_on_router.litellm_params.model,
+                        )
 
             # if the model_id is not in router
-            self.add_deployment(deployment=deployment)
+            added = self.add_deployment(deployment=deployment)
+            # adaptive-router init is deferred out of _add_deployment (it needs
+            # the finalized model_list), so an upserted adaptive deployment must
+            # be re-registered here — its previous registration (and post-call
+            # hook) were removed above, and without this the deployment would
+            # stop routing until the next full set_model_list().
+            if (
+                added is not None
+                and self._is_adaptive_router_deployment(litellm_params=deployment.litellm_params)
+                and deployment.model_name not in self.adaptive_routers
+            ):
+                self.init_adaptive_router_deployment(deployment=deployment)
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -8276,6 +8356,25 @@ class Router:
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
+                # de-register any strategy router tied to this deployment —
+                # otherwise it keeps serving the deleted model as a ghost and
+                # blocks any future re-add under the same name (issue #33168)
+                if isinstance(item, dict):
+                    _removed_model_name = item.get("model_name")
+                    _removed_lp = item.get("litellm_params") or {}
+                    _removed_litellm_model = (
+                        _removed_lp.get("model")
+                        if isinstance(_removed_lp, dict)
+                        else getattr(_removed_lp, "model", None)
+                    )
+                else:
+                    _removed_model_name = getattr(item, "model_name", None)
+                    _removed_litellm_model = getattr(getattr(item, "litellm_params", None), "model", None)
+                if _removed_model_name:
+                    self._remove_deployment_from_strategy_registries(
+                        model_name=_removed_model_name,
+                        litellm_model=_removed_litellm_model,
+                    )
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
