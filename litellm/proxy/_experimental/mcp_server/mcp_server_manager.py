@@ -93,6 +93,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    ClientCredentialsConfig,
     CredError,
     IdJagConfig,
     PassthroughConfig,
@@ -2739,14 +2740,18 @@ class MCPServerManager:
                 )
                 if not conflicts:
                     return auth, extra_headers
-                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig)):
-                    # The resolver owns the per-user credential here (token_exchange's exchanged
-                    # token, authorization_code's stored token, id_jag's minted assertion). It is
-                    # authoritative: a guardrail such
-                    # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
-                    # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
-                    # exchanged token and rejects it). Drop the conflicting header so the resolved
-                    # token reaches upstream.
+                if isinstance(
+                    spec.config,
+                    (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig, ClientCredentialsConfig),
+                ):
+                    # The resolver owns the credential here (token_exchange's exchanged token,
+                    # authorization_code's stored token, id_jag's minted assertion,
+                    # client_credentials' gateway-minted M2M token). It is authoritative: a
+                    # guardrail such as MCPJWTSigner, static_headers, or any other injected
+                    # Authorization must NOT shadow it (otherwise the upstream gets e.g. the
+                    # signer's JWT instead of the minted token and rejects it, and for M2M the
+                    # one-shot 401 refetch is lost with it). Drop the conflicting header so the
+                    # resolved token reaches upstream.
                     return auth, _without_authorization(extra_headers)
                 # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
                 # header or static_headers) is intentional and wins; v1 applies those last.
