@@ -13,6 +13,10 @@ proxy buffers the response or fails to translate Converse's streaming
 envelope back to the Anthropic `message_*` event shape Claude Code
 expects.
 
+Bash is restricted to the exact command `echo pong` plus
+`--permission-mode dontAsk`; see `claude_code/_tool_use.py` for the
+security rationale.
+
 The (feature, provider) for this cell is inferred from the file path by
 `tests/e2e/claude_code/conftest.py`:
 
@@ -23,16 +27,9 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
-
 import pytest
 
-from claude_code._env import require_proxy
-from claude_code.cli_driver import (
-    ClaudeCLIError,
-    failure_diagnostic,
-    run_claude_models_parallel,
-)
+from claude_code._tool_use import run_tool_use_cell
 
 
 BEDROCK_CONVERSE_MODELS = [
@@ -41,99 +38,11 @@ BEDROCK_CONVERSE_MODELS = [
     "claude-opus-4-7-bedrock-converse",
 ]
 
-TOOL_USE_PROMPT = (
-    "Use the Bash tool to run the command `echo pong` and report what it printed."
-)
-# Bash is restricted to the exact command `echo pong` + `dontAsk`
-# permission mode; see `tool_use/test_anthropic.py` for the security
-# rationale.
-TOOL_USE_ARGS = [
-    "--allowed-tools",
-    "Bash(echo pong)",
-    "--permission-mode",
-    "dontAsk",
-    "--include-partial-messages",
-]
-
-
-def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
-    for event in events:
-        if event.get("type") != "assistant":
-            continue
-        message = event.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                return True
-    return False
-
-
-def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
-    """Count `input_json_delta` records among the `stream_event`
-    entries. Zero means the proxy collapsed the streamed tool input
-    into a single complete block instead of forwarding the incremental
-    deltas the upstream emitted."""
-    inner_events = (
-        event.get("event") for event in events if event.get("type") == "stream_event"
-    )
-    return sum(
-        1
-        for inner in inner_events
-        if isinstance(inner, Mapping)
-        and inner.get("type") == "content_block_delta"
-        and isinstance(inner.get("delta"), Mapping)
-        and inner["delta"].get("type") == "input_json_delta"
-    )
-
 
 @pytest.mark.covers("llm.messages.bedrock_converse.tool_use.stream.works")
 def test_tool_use_streaming_bedrock_converse(compat_result):
-    base_url, api_key = require_proxy(compat_result)
-
-    outcomes = run_claude_models_parallel(
+    run_tool_use_cell(
+        compat_result=compat_result,
         models=BEDROCK_CONVERSE_MODELS,
-        prompt=TOOL_USE_PROMPT,
-        base_url=base_url,
-        api_key=api_key,
-        extra_args=TOOL_USE_ARGS,
+        verify_streaming=True,
     )
-
-    failures = []
-    for model in BEDROCK_CONVERSE_MODELS:
-        outcome = outcomes[model]
-        if isinstance(outcome, ClaudeCLIError):
-            error = f"[{model}] {outcome}"
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        if outcome.exit_code != 0:
-            error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        if not _has_tool_use_event(outcome.events):
-            error = (
-                f"[{model}] no tool_use content block observed in stream-json events"
-            )
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        if _count_input_json_deltas(outcome.events) == 0:
-            error = (
-                f"[{model}] no input_json_delta stream events observed; proxy "
-                f"likely buffered the tool input into a complete block or "
-                f"stripped fine-grained tool streaming"
-            )
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        compat_result.add({"status": "pass"})
-
-    if failures:
-        pytest.fail("; ".join(failures), pytrace=False)
