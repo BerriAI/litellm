@@ -8653,6 +8653,12 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.TOGETHER_AI == provider:
+            from litellm.llms.together_ai.image_generation import (
+                get_together_ai_image_generation_config,
+            )
+
+            return get_together_ai_image_generation_config(model)
         return None
 
     @staticmethod
@@ -8800,6 +8806,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.TOGETHER_AI == provider:
+            from litellm.llms.together_ai.image_edit import (
+                get_together_ai_image_edit_config,
+            )
+
+            return get_together_ai_image_edit_config(model)
         return None
 
     @staticmethod
