@@ -1,6 +1,6 @@
 """Deterministic MCP upstreams for the mcp e2e suite.
 
-One process, one port, two streamable-http MCP mounts plus a deterministic
+One process, one port, five streamable-http MCP mounts plus a deterministic
 OAuth2 IdP, so the compose stack keeps a single `mcp-stub` service:
 
 - `/mcp` — anonymous. `echo` answers immediately so auth tests can assert an
@@ -10,7 +10,16 @@ OAuth2 IdP, so the compose stack keeps a single `mcp-stub` service:
   `max_concurrent_requests` cap must bound); `stats` reads those counters back,
   so tests observe upstream concurrency through the proxy itself and the stub
   needs no side-channel port.
-- `/oauthuser/mcp` — the interactive (authorization_code) upstream: rejects
+- `/second/mcp` — anonymous, with a deliberately disjoint tool set
+  (`second_ping`). Aggregate-routing tests register it as a second gateway
+  server; a call only this mount can answer proves which upstream served it.
+- `/apikey/mcp` — rejects any request whose `X-API-Key` is not exactly
+  UPSTREAM_API_KEY, the header the gateway injects for `auth_type: api_key`.
+- `/oauth/mcp` — rejects any request whose `Authorization` is not exactly
+  `Bearer OAUTH_ACCESS_TOKEN`. That token is only obtainable from
+  `/oauth/token`, so a served request proves the gateway ran the
+  client_credentials exchange rather than forwarding something it already had.
+- `/oauthuser/mcp` — the interactive (authorization_code) sibling: rejects
   anything but `Bearer OAUTH_USER_ACCESS_TOKEN`, which only the
   authorization_code grant hands out, so a served request proves the whole
   browser dance (authorize redirect, code, PKCE-verified token exchange) ran.
@@ -18,14 +27,15 @@ OAuth2 IdP, so the compose stack keeps a single `mcp-stub` service:
   client_id/response_type, records the one-time code with its PKCE challenge,
   and 302s straight back to the caller's redirect_uri with code and state (the
   "user" of this IdP always consents instantly).
-- `/oauth/token` — the token endpoint: authorization_code validates the code,
-  redirect_uri, client credentials, and (when a challenge was recorded) the
-  S256 code_verifier, then answers with OAUTH_USER_ACCESS_TOKEN +
-  OAUTH_USER_REFRESH_TOKEN; refresh_token re-issues OAUTH_USER_ACCESS_TOKEN
-  for the known refresh token.
+- `/oauth/token` — the token endpoint for all three grants:
+  client_credentials answers with OAUTH_ACCESS_TOKEN;
+  authorization_code validates the code, redirect_uri, client credentials,
+  and (when a challenge was recorded) the S256 code_verifier, then answers
+  with OAUTH_USER_ACCESS_TOKEN + OAUTH_USER_REFRESH_TOKEN; refresh_token
+  re-issues OAUTH_USER_ACCESS_TOKEN for the known refresh token.
 
-The guarded mount records the headers of the most recent authorized request;
-its `recorded_headers` tool reads them back through the proxy, so tests can
+The guarded mounts record the headers of the most recent authorized request;
+their `recorded_headers` tool reads them back through the proxy, so tests can
 assert exactly which credentials the gateway attached upstream (and that the
 caller's LiteLLM virtual key never left the gateway).
 
@@ -55,12 +65,20 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+UPSTREAM_API_KEY = "e2e-stub-upstream-api-key"
+OAUTH_CLIENT_ID = "e2e-stub-oauth-client-id"
+OAUTH_CLIENT_SECRET = "e2e-stub-oauth-client-secret"
+OAUTH_SCOPE = "tools:read"
+OAUTH_ACCESS_TOKEN = "e2e-stub-minted-access-token"
 OAUTH_USER_CLIENT_ID = "e2e-stub-user-client-id"
 OAUTH_USER_CLIENT_SECRET = "e2e-stub-user-client-secret"
 OAUTH_USER_ACCESS_TOKEN = "e2e-stub-user-access-token"
 OAUTH_USER_REFRESH_TOKEN = "e2e-stub-user-refresh-token"
 
 main_mcp = FastMCP("e2e-stub", host="0.0.0.0", port=8765, stateless_http=True)
+second_mcp = FastMCP("e2e-stub-second", host="0.0.0.0", port=8765, stateless_http=True)
+apikey_mcp = FastMCP("e2e-stub-apikey", host="0.0.0.0", port=8765, stateless_http=True)
+oauth_mcp = FastMCP("e2e-stub-oauth", host="0.0.0.0", port=8765, stateless_http=True)
 oauthuser_mcp = FastMCP("e2e-stub-oauthuser", host="0.0.0.0", port=8765, stateless_http=True)
 
 
@@ -109,6 +127,10 @@ def stats(marker: str) -> str:
     )
 
 
+@second_mcp.tool()
+def second_ping() -> str:
+    """Identify the /second upstream; no other mount serves this tool."""
+    return "pong-from-second"
 def _register_guarded_tools(server: FastMCP, mount: str) -> None:
     def echo(text: str) -> str:
         """Return `text` unchanged."""
@@ -122,6 +144,8 @@ def _register_guarded_tools(server: FastMCP, mount: str) -> None:
     _ = server.tool()(recorded_headers)
 
 
+_register_guarded_tools(apikey_mcp, "apikey")
+_register_guarded_tools(oauth_mcp, "oauth")
 _register_guarded_tools(oauthuser_mcp, "oauthuser")
 
 
@@ -216,6 +240,15 @@ async def oauth_token(request: Request) -> JSONResponse:
     exactly so a failure points at the precise field the proxy sent wrong."""
     form = await request.form()
     grant_type = form.get("grant_type")
+    if grant_type == "client_credentials":
+        granted = (
+            form.get("client_id") == OAUTH_CLIENT_ID
+            and form.get("client_secret") == OAUTH_CLIENT_SECRET
+            and form.get("scope") == OAUTH_SCOPE
+        )
+        if not granted:
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+        return JSONResponse({"access_token": OAUTH_ACCESS_TOKEN, "token_type": "Bearer", "expires_in": 3600})
     if grant_type == "authorization_code":
         return _authorization_code_grant(form)
     if grant_type == "refresh_token":
@@ -224,7 +257,7 @@ async def oauth_token(request: Request) -> JSONResponse:
 
 
 def build_app() -> Starlette:
-    servers = (main_mcp, oauthuser_mcp)
+    servers = (main_mcp, second_mcp, apikey_mcp, oauth_mcp, oauthuser_mcp)
     apps = {server.name: server.streamable_http_app() for server in servers}
 
     @contextlib.asynccontextmanager
@@ -247,6 +280,25 @@ def build_app() -> Starlette:
                     expected=f"Bearer {OAUTH_USER_ACCESS_TOKEN}",
                 ),
             ),
+            Mount(
+                "/oauth",
+                app=_require_header(
+                    apps["e2e-stub-oauth"],
+                    mount="oauth",
+                    header="authorization",
+                    expected=f"Bearer {OAUTH_ACCESS_TOKEN}",
+                ),
+            ),
+            Mount(
+                "/apikey",
+                app=_require_header(
+                    apps["e2e-stub-apikey"],
+                    mount="apikey",
+                    header="x-api-key",
+                    expected=UPSTREAM_API_KEY,
+                ),
+            ),
+            Mount("/second", app=apps["e2e-stub-second"]),
             Mount("/", app=apps["e2e-stub"]),
         ],
         lifespan=lifespan,
