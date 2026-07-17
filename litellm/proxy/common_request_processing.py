@@ -851,9 +851,12 @@ class ProxyBaseLLMRequestProcessing:
                 # If conversion fails, use original spend
                 pass
 
+        model_name = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
+            "x-litellm-model-name": model_name,
             "x-litellm-cache-key": cache_key,
             "x-litellm-model-api-base": (
                 api_base.split("?")[0] if api_base else None
@@ -1321,6 +1324,27 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    @staticmethod
+    def _get_deployment_model_name(
+        litellm_logging_obj: LiteLLMLoggingObj | None,
+    ) -> str | None:
+        """Extract the underlying deployment model string (e.g. ``azure/gpt-4o``).
+
+        The router rewrites the response ``model`` field to the model-group alias
+        the client requested, so neither the response body nor the existing
+        headers expose the concrete deployment model. The router records it under
+        ``litellm_params`` metadata as ``deployment``, so read it back from there.
+        """
+        litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+        if not isinstance(litellm_params, dict):
+            return None
+        for key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(key, {}) or {}
+            deployment = metadata.get("deployment")
+            if deployment:
+                return deployment
+        return None
 
     @staticmethod
     def _response_cost_from_logging_obj(
