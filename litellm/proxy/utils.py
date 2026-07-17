@@ -833,7 +833,7 @@ class ProxyLogging:
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
 
     def _parse_pre_mcp_call_hook_response(
         self,
@@ -3592,7 +3592,10 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
+            verbose_proxy_logger.debug(
+                "PrismaClient: insert_data: %s",
+                {**data, "token": self.hash_token(token=data["token"])} if data.get("token") is not None else data,
+            )
             if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -4097,11 +4100,22 @@ class PrismaClient:
             raise e
 
     def _get_engine_pid(self) -> int:
+        """Get the PID of the writer's engine subprocess, or 0 if unavailable.
+
+        Must never raise: prisma's ``_engine`` property raises
+        ``ClientNotConnectedError`` on a disconnected client, and an exception
+        escaping from the reconnect path would leave it unable to recover.
+        """
         try:
-            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            prisma_obj = self.writer_db._original_prisma
+            if prisma_obj.is_connected() is not True:
+                return 0
+            engine = prisma_obj._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                return process.pid
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -4527,6 +4541,8 @@ class PrismaClient:
                         "Writer healthy on probe; skipping recreate (engine "
                         "likely already replaced by a token refresh)."
                     )
+                    if isinstance(self.db, RoutingPrismaWrapper):
+                        self.db.mark_writer_recovered()
                     await self._start_engine_watcher()
                     return
                 except Exception as probe_err:
@@ -4719,6 +4735,11 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_writer_unavailable",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:

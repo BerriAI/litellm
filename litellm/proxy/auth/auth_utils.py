@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
@@ -975,6 +975,20 @@ def get_team_mcp_rpm_limit(
     return None
 
 
+def get_key_tag_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[dict[str, int]]:
+    """
+    Get the per-request-tag rpm limit configured on a given api key.
+
+    The returned dict is keyed by request tag, so each tag/group tracked on
+    the key gets its own independent RPM counter.
+    """
+    if user_api_key_dict.metadata:
+        return user_api_key_dict.metadata.get("tag_rpm_limit")
+    return None
+
+
 def get_project_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
@@ -1519,4 +1533,6 @@ def get_model_from_request(
 
 
 def abbreviate_api_key(api_key: str) -> str:
+    if len(api_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        return "sk-..."
     return f"sk-...{api_key[-4:]}"

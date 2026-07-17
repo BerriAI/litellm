@@ -715,6 +715,7 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
+    "https://api.meta.ai/v1",
 ]
 
 
@@ -781,6 +782,7 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
@@ -1494,6 +1496,7 @@ MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
 MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000))
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7))
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
+MINIMUM_CUSTOM_KEY_LENGTH = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
@@ -1504,6 +1507,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "budget_exceeded_throttle_percentage",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

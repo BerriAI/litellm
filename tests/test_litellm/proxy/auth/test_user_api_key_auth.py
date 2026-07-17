@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _check_key_model_budget_with_fallback,
     _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
@@ -3992,6 +3994,80 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_cli_session_token_authenticates_when_jwt_auth_enabled_without_license(monkeypatch):
+    """A lite login token is an encrypted (non-JWT) session blob. With
+    enable_jwt_auth on and no enterprise license (premium_user False), the JWT
+    premium gate used to fire for every request before the token was decoded, so
+    the CLI token 401'd with 'JWT Auth is an enterprise only feature' and was
+    never decrypted. The gate must apply only to actual JWTs; a non-JWT session
+    token has to keep authenticating on its own path regardless of license."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    cli_token = _mint_cli_session_token(monkeypatch)
+
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt = JWTHandler.is_jwt
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {cli_token}"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        result = await user_api_key_auth(
+            request=mock_request,
+            api_key=f"Bearer {cli_token}",
+        )
+
+    assert result.user_id == "cli-admin"
+    assert result.team_id == "cli-team"
+    assert result.token is not None and result.token.startswith("cli-session-")
+
+
+@pytest.mark.asyncio
+async def test_real_jwt_still_requires_license_when_jwt_auth_enabled(monkeypatch):
+    """Guard for the reorder above: the enterprise gate must still reject an
+    actual JWT when there is no license. Moving the premium check inside the
+    is_jwt branch must not open JWT auth to non-premium deployments."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.sig"
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt = JWTHandler.is_jwt
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(Exception) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+    message = str(getattr(exc_info.value, "message", exc_info.value))
+    assert "enterprise only feature" in message
+
+
+@pytest.mark.asyncio
 async def test_auth_path_caches_team_object_under_canonical_team_id_key():
     """Regression for LIT-4000: the auth builder must cache the team object under
     the canonical ``team_id:{id}`` key that ``get_team_object`` and
@@ -4084,3 +4160,358 @@ async def test_auth_path_caches_team_object_under_canonical_team_id_key():
     assert served is not None and served.team_id == team_id
     assert cache.get_cache(key=team_id) is None
     assert cache.get_cache(key=None) is None
+
+
+@pytest.mark.asyncio
+async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
+    """A cache-hit auth must not write the token back into the cache.
+
+    Re-writing on every auth let a replica holding a stale in-memory token
+    republish it to shared Redis with a fresh TTL on each request, so
+    /key/update and /key/delete never propagated across replicas or regional
+    Redis while the key kept calling (stale auth re-cache feedback loop).
+    Only the DB-load paths (IdentityStore._resolve_key / get_key_object) may
+    populate the cache.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-lit-cached-key-no-rewrite"
+    hashed_key = hash_token(api_key)
+
+    key_cache = UserApiKeyCache()
+    stale_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hashed_key,
+        metadata={"model_rpm_limit": {"gpt-5.4-mini": 3}},
+        last_refreshed_at=1000.0,
+    )
+    await key_cache.async_set_cache(
+        key=hashed_key, value=stale_token, model_type=UserAPIKeyAuth
+    )
+
+    fetch_from_db = AsyncMock(
+        side_effect=AssertionError("cache-hit auth must not touch the DB")
+    )
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "master_key": "sk-test-master",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with patch(
+            "litellm.proxy.auth.resolvers.store._fetch_key_object_from_db_with_reconnect",
+            fetch_from_db,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.wait(pending, timeout=5)
+
+        assert result.token == hashed_key
+        fetch_from_db.assert_not_called()
+
+        cached_after = await key_cache.async_get_cache(
+            key=hashed_key, model_type=UserAPIKeyAuth
+        )
+        assert cached_after is not None
+        assert cached_after.last_refreshed_at == 1000.0
+        assert cached_after.metadata == {"model_rpm_limit": {"gpt-5.4-mini": 3}}
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+class TestCheckKeyModelBudgetWithFallback:
+    """`_check_key_model_budget_with_fallback` must reroute a request to the
+    first configured `budget_fallbacks` entry still within its own budget,
+    and only raise `BudgetExceededError` when no fallback is available."""
+
+    def _make_request(self):
+        request = MagicMock()
+        request.scope = {}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_within_budget_does_not_reroute(self):
+        valid_token = UserAPIKeyAuth(
+            token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.return_value = True
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        await _check_key_model_budget_with_fallback(
+            valid_token=valid_token,
+            model_max_budget_limiter=limiter,
+            model_name="gpt-4o",
+            request_data=request_data,
+            request=request,
+        )
+
+        assert request_data["model"] == "gpt-4o"
+        limiter.get_fallback_model_within_budget.assert_not_awaited()
+        assert "parsed_body" not in request.scope
+
+    @pytest.mark.asyncio
+    async def test_exceeded_budget_reroutes_to_fallback(self):
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
+            current_cost=10, max_budget=5
+        )
+        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        await _check_key_model_budget_with_fallback(
+            valid_token=valid_token,
+            model_max_budget_limiter=limiter,
+            model_name="gpt-4o",
+            request_data=request_data,
+            request=request,
+        )
+
+        assert request_data["model"] == "gpt-4o-mini"
+        limiter.get_fallback_model_within_budget.assert_awaited_once_with(
+            user_api_key_dict=valid_token, model="gpt-4o"
+        )
+        # the rerouted model must be visible to a later, separate
+        # `_read_request_body` call on the same `request` (route handlers
+        # re-parse the body from this cache instead of reusing the dict).
+        cached_keys, cached_body = request.scope["parsed_body"]
+        assert cached_body["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_every_fallback_also_exceeded(self):
+        valid_token = UserAPIKeyAuth(
+            token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}
+        )
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        limiter.get_fallback_model_within_budget.return_value = None
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=request,
+            )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_fallback_not_authorized(self):
+        """If the fallback model is within budget but the key is not allowed
+        to call it, the original BudgetExceededError must be raised instead
+        of rerouting to an unauthorized model."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o"],
+            budget_fallbacks={"gpt-4o": ["restricted-model"]},
+        )
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            side_effect=ProxyException(
+                message="model not allowed",
+                type=ProxyErrorTypes.budget_exceeded,
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_key_model_budget_with_fallback(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    model_name="gpt-4o",
+                    request_data=request_data,
+                    request=request,
+                    llm_model_list=None,
+                    llm_router=None,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_reroute_succeeds_when_fallback_is_authorized(self):
+        """If the fallback model is within budget AND authorized, the request
+        must be rerouted to it."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
+            current_cost=10, max_budget=5
+        )
+        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            return_value=True,
+        ):
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=request,
+                llm_model_list=None,
+                llm_router=None,
+            )
+
+        assert request_data["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_fallback_blocked_by_team_models(self):
+        """If the key allows the fallback but the team does not, the original
+        BudgetExceededError must be raised."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "restricted-model"],
+            team_id="team-1",
+            team_models=["gpt-4o"],
+            budget_fallbacks={"gpt-4o": ["restricted-model"]},
+        )
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            return_value=True,
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_key_model_budget_with_fallback(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    model_name="gpt-4o",
+                    request_data=request_data,
+                    request=request,
+                    llm_model_list=None,
+                    llm_router=None,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_reroute_updates_path_params_model(self):
+        """On path-model routes (/openai/deployments/{model}/...) the fallback
+        must also update path_params so downstream logic does not revert to the
+        original path model."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
+            current_cost=10, max_budget=5
+        )
+        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+        request.scope["path_params"] = {"model": "gpt-4o"}
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            return_value=True,
+        ):
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=request,
+                llm_model_list=None,
+                llm_router=None,
+            )
+
+        assert request_data["model"] == "gpt-4o-mini"
+        assert request.scope["path_params"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_model_from_nested_field(self):
+        """Budget fallback must not attempt rewrite when the checked model
+        came from a nested field (e.g. session.model) rather than the
+        top-level request_data['model']."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        request_data = {"session": {"model": "gpt-4o"}}
+        request = self._make_request()
+
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=request,
+            )
+
+        assert exc_info.value is original_error
+        assert "model" not in request_data

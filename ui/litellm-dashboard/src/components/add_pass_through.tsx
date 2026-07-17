@@ -11,7 +11,7 @@ import NumericalInput from "./shared/numerical_input";
 import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
-import { passThroughItem } from "./pass_through_settings";
+import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
@@ -67,7 +67,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   };
 
   const addPassThrough = async (formValues: Record<string, any>) => {
-    console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
       // Remove auth field if not premium user
@@ -84,8 +83,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       if (selectedMethods && selectedMethods.length > 0) {
         formValues.methods = selectedMethods;
       }
-
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
 
@@ -384,7 +381,6 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 variant="primary"
                 loading={isLoading}
                 onClick={() => {
-                  console.log("Submit button clicked");
                   form.submit();
                 }}
               >

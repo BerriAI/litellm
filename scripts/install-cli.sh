@@ -11,12 +11,21 @@
 # Python itself (honouring litellm's requires-python), downloading a managed one
 # when the host has no suitable interpreter.
 #
+# To try an unreleased branch instead of the latest PyPI release (for example, to
+# QA a CLI feature before it ships), set LITELLM_CLI_REF to a branch, tag, or commit:
+#   curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install-cli.sh | \
+#     LITELLM_CLI_REF=<branch> sh
+#
 # NOTE: set -e without pipefail for POSIX sh compatibility (dash on Ubuntu/Debian
 # ignores the shebang when invoked as `sh` and does not support `pipefail`).
 set -eu
 
-# NOTE: before merging, this must stay as "litellm[cli]" to install from PyPI.
-LITELLM_PACKAGE="litellm[cli]"
+# Defaults to the PyPI release; LITELLM_CLI_REF opts into installing from source instead.
+if [ -n "${LITELLM_CLI_REF:-}" ]; then
+  LITELLM_PACKAGE="litellm[cli] @ git+https://github.com/BerriAI/litellm.git@${LITELLM_CLI_REF}"
+else
+  LITELLM_PACKAGE="litellm[cli]"
+fi
 UV_VERSION="0.10.9"
 
 # ── colours ────────────────────────────────────────────────────────────────
@@ -90,7 +99,11 @@ fi
 # otherwise download a managed one. Either way uv honours litellm's requires-python,
 # so a too-old (3.9) or too-new (3.14+) system Python is skipped, not forced.
 echo ""
-header "Installing litellm[cli]…"
+if [ -n "${LITELLM_CLI_REF:-}" ]; then
+  header "Installing litellm[cli] from ${LITELLM_CLI_REF}…"
+else
+  header "Installing litellm[cli]…"
+fi
 echo ""
 
 "$UV_BIN" tool install --python-preference system --force "${LITELLM_PACKAGE}" \

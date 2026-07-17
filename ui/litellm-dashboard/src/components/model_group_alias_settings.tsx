@@ -57,7 +57,6 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         },
       };
 
-      console.log("Saving model group alias:", aliasObject);
       await setCallbacksCall(accessToken, payload);
 
       if (onAliasUpdate) {

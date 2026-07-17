@@ -34,6 +34,20 @@ The suites run against a live proxy, so bring one up first. `docker-compose.yml`
    uv run pytest tests/e2e/llm_translation/ -v
    ```
 
+   The browser tests in the `management/` suite drive the dashboard the proxy serves at `/ui` through playwright, an optional dependency behind `importorskip` (the suite's API tests run without it). It lives in the `e2e-dev` dependency group; install it along with its browser:
+
+   ```bash
+   uv sync --inexact --group e2e-dev
+   uv run playwright install chromium
+   ```
+
+   They also need a proxy whose bundled UI contains the change under test. The published `main-latest` image ships the UI from the last release; to test local UI changes, build the image from your branch and point the compose stack at it:
+
+   ```bash
+   docker build -t litellm-local .
+   LITELLM_E2E_IMAGE=litellm-local docker compose up -d
+   ```
+
 4. Tear it down when you're done:
 
    ```bash
@@ -126,7 +140,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run basedpyright over your changes; the harness is fully typed and new code must not add `Any` or widen the budgets
+1. Run `make lint-e2e-basedpyright` (or `make pre-commit` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
 
 2. Add the models your test needs to the inline config in `docker-compose.yml`
 

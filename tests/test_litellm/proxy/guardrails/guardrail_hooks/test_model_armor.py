@@ -2205,21 +2205,20 @@ async def test_pre_call_file_id_reference_skipped_when_fail_open():
 
 
 @pytest.mark.asyncio
-async def test_pre_call_blocks_when_attachment_count_exceeds_cap():
-    """More attachments than the per-request cap fail closed by default to bound scan fan-out."""
-    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
-        MAX_FILE_ATTACHMENTS_PER_REQUEST,
-    )
-
-    guardrail = _make_guardrail()
-    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
-    block = {
-        "type": "file",
-        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
-    }
+async def test_pre_call_file_id_reference_passthrough_when_skip_unscannable_enabled():
+    """skip_unscannable_attachments lets a file_id reference through even with fail_on_error=True."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
     request_data = {
         "model": "gpt-4",
-        "messages": [{"role": "user", "content": [block] * (MAX_FILE_ATTACHMENTS_PER_REQUEST + 1)}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ],
         "metadata": {"guardrails": ["model-armor-test"]},
     }
 
@@ -2227,8 +2226,109 @@ async def test_pre_call_blocks_when_attachment_count_exceeds_cap():
         guardrail.async_handler,
         "post",
         AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+    assert _text_payloads_sent(mock_post) == ["summarize this"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_gs_uri_reference_passthrough_when_skip_unscannable_enabled():
+    """A gs:// document reference passes through when skip_unscannable_attachments is enabled."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"file_data": "gs://my-bucket/report.pdf", "filename": "report.pdf"},
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+
+
+def test_initialize_guardrail_forwards_skip_unscannable_attachments():
+    """skip_unscannable_attachments configured in litellm_params reaches the guardrail instance."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+        skip_unscannable_attachments=True,
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-test"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is True
+
+
+def test_initialize_guardrail_skip_unscannable_defaults_false():
+    """A config that omits skip_unscannable_attachments keeps the secure default (block)."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-default"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is False
+
+
+@pytest.mark.asyncio
+async def test_skip_unscannable_still_fails_closed_on_api_error():
+    """skip_unscannable_attachments only affects references; a real API error still fails closed."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True, fail_on_error=True)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(side_effect=Exception("model armor upstream 500")),
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(Exception) as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=MagicMock(spec=DualCache),
@@ -2236,8 +2336,35 @@ async def test_pre_call_blocks_when_attachment_count_exceeds_cap():
                 call_type="completion",
             )
 
-    assert exc_info.value.status_code == 400
-    assert "per-request scan limit" in str(exc_info.value.detail)
+    assert "model armor upstream 500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_every_attachment_without_a_count_cap():
+    """There is no per-request attachment cap: every scannable attachment is submitted to Model Armor."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    count = 25
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block] * count}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    mock_post = AsyncMock(return_value=_armor_response(blocked=False))
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert len(_byte_items_sent(mock_post)) == count
 
 
 @pytest.mark.asyncio
@@ -2940,3 +3067,127 @@ def test_accumulated_responses_are_redactable_as_a_list():
     assert "secret-one" not in blob
     assert "secret-two" not in blob
     assert blob.count("[REDACTED]") == 2
+
+
+def _mcp_synthetic_data(tool_name: str = "send_email", arguments: dict = None):
+    """Mirror ProxyLogging._convert_mcp_to_llm_format: an MCP tool call rendered as a
+    synthetic user message so the existing prompt-scanning path can inspect it."""
+    if arguments is None:
+        arguments = {"to": "user@example.com", "body": "some content"}
+    return {
+        "model": "mcp-tool-call",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Tool: {tool_name}\nArguments: {arguments}",
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+        "mcp_tool_name": tool_name,
+        "mcp_arguments": arguments,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_mcp_tool_call_when_configured_for_pre_mcp_call():
+    """A guardrail configured with mode `pre_mcp_call` must scan MCP tool calls.
+
+    Regression: async_pre_call_hook hardcoded its event-type gate to `pre_call`, so a
+    `pre_mcp_call` guardrail's own inner should_run_guardrail check returned False for an
+    MCP call (call_type=call_mcp_tool) and the scan was skipped entirely -- letting
+    sensitive content in tool arguments through unscanned. The gate must remap
+    call_mcp_tool -> pre_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call():
+    """A `pre_mcp_call` guardrail must NOT scan ordinary chat completions -- the remap is
+    scoped to MCP calls, so a `completion` call_type still fails the gate and is skipped."""
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_scans_mcp_tool_call_when_configured_for_during_mcp_call():
+    """A guardrail configured with mode `during_mcp_call` must scan MCP tool calls.
+
+    Regression: async_moderation_hook hardcoded its event-type gate to `during_call`, so a
+    `during_mcp_call` guardrail skipped MCP calls (call_type=call_mcp_tool). The gate must
+    remap call_mcp_tool -> during_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_skips_chat_traffic_when_configured_for_during_mcp_call():
+    """A `during_mcp_call` guardrail must NOT scan ordinary chat completions."""
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()

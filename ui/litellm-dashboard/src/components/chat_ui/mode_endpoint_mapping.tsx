@@ -46,10 +46,8 @@ export const litellmModeMapping: Record<ModelMode, EndpointType> = {
 
 export const getEndpointType = (mode: string): EndpointType => {
   // Check if the string mode exists as a key in ModelMode enum
-  console.log("getEndpointType:", mode);
   if (Object.values(ModelMode).includes(mode as ModelMode)) {
     const endpointType = litellmModeMapping[mode as ModelMode];
-    console.log("endpointType:", endpointType);
     return endpointType;
   }
 
