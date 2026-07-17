@@ -19,6 +19,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Awaitable,
+    Callable,
     ClassVar,
     Dict,
     List,
@@ -6101,6 +6102,7 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
+    get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -6118,10 +6120,8 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    # Surface context-window limits for OpenAI-compatible discovery clients.
-    # Only emitted when known, so wildcard routes and limitless backends stay clean.
     try:
-        model_cost_info: ModelInfo | None = litellm.get_model_info(model_id)
+        model_cost_info: ModelInfo | None = get_model_info(model_id)
     except Exception as e:
         verbose_proxy_logger.debug(
             "create_model_info_response: cost map lookup failed for %s: %s",

@@ -476,15 +476,31 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "response_cost" not in request_data
 
 
+from typing import cast
+
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.utils import ModelInfo
 
 
-def test_create_model_info_response_includes_max_tokens_from_cost_map():
+def _fake_model_info(**fields: int) -> ModelInfo:
+    return cast(ModelInfo, dict(fields))
+
+
+def _raise_unmapped(model_id: str) -> ModelInfo:
+    raise ValueError(f"This model isn't mapped yet: {model_id}")
+
+
+def test_create_model_info_response_includes_max_tokens_from_lookup():
     response = create_model_info_response(
-        model_id="gpt-4o", provider="openai", llm_router=None
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
     )
 
-    assert response["id"] == "gpt-4o"
+    assert response["id"] == "some-model"
     assert response["object"] == "model"
     assert response["max_input_tokens"] == 128000
     assert response["max_output_tokens"] == 16384
@@ -494,7 +510,12 @@ def test_create_model_info_response_does_not_call_router_group_info():
     router = MagicMock()
 
     response = create_model_info_response(
-        model_id="gpt-4o", provider="openai", llm_router=router
+        model_id="some-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
     )
 
     router.get_model_group_info.assert_not_called()
@@ -503,27 +524,36 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 def test_create_model_info_response_emits_integer_token_counts():
     response = create_model_info_response(
-        model_id="gpt-4o", provider="openai", llm_router=None
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
     )
 
-    assert response["max_input_tokens"] == 128000
     assert isinstance(response["max_input_tokens"], int)
-    assert response["max_output_tokens"] == 16384
     assert isinstance(response["max_output_tokens"], int)
 
 
 def test_create_model_info_response_omits_unknown_individual_limit():
     response = create_model_info_response(
-        model_id="text-embedding-3-small", provider="openai", llm_router=None
+        model_id="some-embedding",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=8191),
     )
 
     assert response["max_input_tokens"] == 8191
     assert "max_output_tokens" not in response
 
 
-def test_create_model_info_response_omits_limits_when_model_unknown():
+def test_create_model_info_response_omits_limits_when_lookup_raises():
     response = create_model_info_response(
-        model_id="openai/*", provider="openai", llm_router=None
+        model_id="openai/*",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
     )
 
     assert response["id"] == "openai/*"
@@ -533,7 +563,10 @@ def test_create_model_info_response_omits_limits_when_model_unknown():
 
 def test_create_model_info_response_no_router_keeps_base_fields():
     response = create_model_info_response(
-        model_id="totally-unknown-model-xyz", provider="openai", llm_router=None
+        model_id="totally-unknown-model-xyz",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
     )
 
     assert response == {
@@ -542,6 +575,17 @@ def test_create_model_info_response_no_router_keeps_base_fields():
         "created": response["created"],
         "owned_by": "openai",
     }
+
+
+def test_create_model_info_response_reads_real_cost_map():
+    response = create_model_info_response(
+        model_id="gpt-4o", provider="openai", llm_router=None
+    )
+
+    assert isinstance(response["max_input_tokens"], int)
+    assert response["max_input_tokens"] > 0
+    assert isinstance(response["max_output_tokens"], int)
+    assert response["max_output_tokens"] > 0
 
 
 class TestPostCallFailureHookLLMExceptionAlerting:
