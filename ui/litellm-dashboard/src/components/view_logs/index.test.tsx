@@ -76,7 +76,7 @@ describe("SpendLogsTable", () => {
 
     // Open the time range quick select dropdown (button shows current range like "Last 24 Hours")
     const quickSelectButton = screen.getByRole("button", {
-      name: /Last 24 Hours|Last 15 Minutes|Last Hour|Last 4 Hours|Last 7 Days/i,
+      name: /Last 24 Hours|Last 15 Minutes|Last Hour|Last 5 Hours|Last 7 Days/i,
     });
     await user.click(quickSelectButton);
 

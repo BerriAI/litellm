@@ -16,8 +16,8 @@ export const getTimeRangeDisplay = (isCustomDate: boolean, startTime: string, en
   if (diffMinutes >= 16 && diffMinutes < 61) return "Last Hour";
 
   const diffHours = now.diff(start, "hours");
-  if (diffHours >= 1 && diffHours < 5) return "Last 4 Hours";
-  if (diffHours >= 5 && diffHours < 25) return "Last 24 Hours";
+  if (diffHours >= 1 && diffHours < 6) return "Last 5 Hours";
+  if (diffHours >= 6 && diffHours < 25) return "Last 24 Hours";
   if (diffHours >= 25 && diffHours < 169) return "Last 7 Days";
   return `${start.format("MMM D")} - ${now.format("MMM D")}`;
 };
