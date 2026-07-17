@@ -2919,15 +2919,19 @@ class TestAzureAIDocumentWritePassthroughPermission:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.parametrize(
-        "method, operation",
-        [("PUT", "update"), ("DELETE", "delete")],
+        "method, operation, path",
+        [
+            ("PUT", "update", f"/azure_ai/indexes/{INDEX}?api-version=2024-07-01"),
+            ("DELETE", "delete", f"/azure_ai/indexes/{INDEX}?api-version=2024-07-01"),
+            ("POST", "create", "/azure_ai/indexes?api-version=2024-07-01"),
+        ],
     )
-    def test_team_cannot_manage_index_lifecycle_even_with_write_grant(self, method, operation):
+    def test_team_cannot_manage_index_lifecycle_even_with_write_grant(self, method, operation, path):
         with pytest.raises(HTTPException) as exc_info:
             is_allowed_to_call_vector_store_endpoint(
                 provider=LlmProviders.AZURE_AI,
                 index_name=self.INDEX,
-                request=self._request(method, f"/azure_ai/indexes/{self.INDEX}?api-version=2024-07-01"),
+                request=self._request(method, path),
                 user_api_key_dict=self._team_member(["read", "write"]),
             )
         assert exc_info.value.status_code == 403
