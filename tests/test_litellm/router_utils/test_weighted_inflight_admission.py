@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator, Callable
+from typing import cast
 
 import pytest
 
@@ -116,6 +118,8 @@ async def test_close_rejects_new_requests_and_releases_waiters(admission):
     assert admission.queued == 0
     with pytest.raises(AdmissionClosedError):
         await admission.acquire("interactive")
+    with pytest.raises(AdmissionClosedError):
+        await admission.try_acquire("interactive")
     await asyncio.gather(*(lease.release() for lease in leases))
 
 
@@ -145,6 +149,78 @@ async def test_stream_release_happens_on_close(admission):
     await wrapped.aclose()
 
     assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_release_happens_on_error(admission: WeightedInFlightAdmission):
+    lease = await admission.acquire("interactive")
+
+    async def stream():
+        yield "one"
+        raise RuntimeError("stream failed")
+
+    wrapped = cast(AsyncIterator[str], lease.wrap_async_iterator(stream()))
+    assert await anext(wrapped) == "one"
+    with pytest.raises(RuntimeError, match="stream failed"):
+        await anext(wrapped)
+
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_lease_context_manager_releases_permit(admission: WeightedInFlightAdmission):
+    async with await admission.acquire("interactive") as lease:
+        assert lease.admission_class == "interactive"
+        assert admission.active == 1
+
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_unknown_class_and_invalid_release_are_rejected(admission: WeightedInFlightAdmission):
+    with pytest.raises(ValueError, match="unknown admission class"):
+        await admission.acquire("missing")
+    with pytest.raises(ValueError, match="unknown admission class"):
+        await admission.try_acquire("missing")
+    with pytest.raises(RuntimeError, match="without an active permit"):
+        await admission.release("interactive")
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    (
+        (
+            lambda: WeightedInFlightAdmission(0, (AdmissionClass("interactive", 0, 0),)),
+            "capacity must be positive",
+        ),
+        (lambda: WeightedInFlightAdmission(1, ()), "at least one admission class"),
+        (
+            lambda: WeightedInFlightAdmission(1, (AdmissionClass("interactive", -1, 0),)),
+            "cannot be negative",
+        ),
+        (
+            lambda: WeightedInFlightAdmission(1, (AdmissionClass("interactive", 2, 0),)),
+            "cannot exceed capacity",
+        ),
+        (
+            lambda: WeightedInFlightAdmission(1, (AdmissionClass("interactive", 1, 0),), queue_timeout=-1),
+            "queue_timeout cannot be negative",
+        ),
+        (
+            lambda: WeightedInFlightAdmission(1, (AdmissionClass("interactive", 1, 0),), overflow="drop"),
+            "overflow must be",
+        ),
+        (
+            lambda: WeightedInFlightAdmission(
+                1, (AdmissionClass("interactive", 0, 0), AdmissionClass("interactive", 0, 1))
+            ),
+            "names must be unique",
+        ),
+    ),
+)
+def test_invalid_configuration_is_rejected(factory: Callable[[], WeightedInFlightAdmission], message: str):
+    with pytest.raises(ValueError, match=message):
+        factory()
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,16 @@ def router() -> Router:
 
 
 @pytest.mark.asyncio
+async def test_make_call_requires_configured_admission_class(router: Router):
+    router.weighted_inflight_admission_class = None
+
+    with pytest.raises(ValueError, match="weighted_inflight_admission_class is required"):
+        await router.make_call(lambda: "response")
+
+    assert router.weighted_inflight_admission.active == 0
+
+
+@pytest.mark.asyncio
 async def test_make_call_releases_lease_on_success(router: Router):
     async def original_function():
         return "response"
