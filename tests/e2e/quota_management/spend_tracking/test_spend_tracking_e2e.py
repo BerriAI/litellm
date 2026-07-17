@@ -41,6 +41,8 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
         "spend",
         "status",
         "cache_hit",
+        "call_type",
+        "custom_llm_provider",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
