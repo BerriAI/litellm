@@ -1220,9 +1220,27 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            key_tools = (
+            key_direct_tools = (
                 global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
                 if key_obj_perm
+                else None
+            )
+
+            # Tools granted through the key's toolsets restrict this server exactly
+            # as direct tool permissions do; union with any direct grants so the
+            # tool-level check sees the key's full effective tool scope
+            key_toolset_ids = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
+            key_toolset_tools = (
+                (await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=key_toolset_ids)).get(
+                    server_id
+                )
+                if key_toolset_ids
+                else None
+            )
+
+            key_tools = (
+                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
+                if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
             team_tools = (
@@ -1430,8 +1448,18 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
 
+            # servers referenced by the key's toolset grants are part of the key's
+            # scope on every path (list, call, REST), subject to the same team/org
+            # ceilings as any other key-level grant
+            toolset_ids = key_object_permission.mcp_toolsets or []
+            toolset_servers = (
+                list((await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)).keys())
+                if toolset_ids
+                else []
+            )
+
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for key: {str(e)}")

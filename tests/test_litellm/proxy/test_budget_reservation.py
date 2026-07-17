@@ -2279,6 +2279,7 @@ async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token
 def _drive_streaming_cancel(valid_token, iterator_hook):
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
     return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
@@ -2387,6 +2388,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=asyncio.CancelledError()
     )
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
 
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),

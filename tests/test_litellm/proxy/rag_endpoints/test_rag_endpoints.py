@@ -243,6 +243,91 @@ class TestRagIngestSSRFBlocked:
                     },
                 },
             )
-        assert (
-            response.status_code != 400
-        ), f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        assert response.status_code != 400, (
+            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        )
+
+
+def test_rag_query_returns_response_cost_header(client_internal_user):
+    """
+    /v1/rag/query must surface the completion cost via the
+    x-litellm-response-cost response header, like /v1/chat/completions does.
+    """
+    from litellm.types.utils import ModelResponse
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "The codename is AZURE-FALCON-42."},
+                "finish_reason": "stop",
+            }
+        ],
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 35, "completion_tokens": 14, "total_tokens": 49},
+    )
+    mock_response._hidden_params["response_cost"] = 3.45e-06
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ), patch("litellm.vector_store_registry", None), patch(
+        "litellm.proxy.proxy_server.prisma_client", None
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+
+
+def test_rag_query_stream_returns_event_stream(client_internal_user):
+    """
+    A stream=true /v1/rag/query must return an SSE response. Returning the raw
+    stream wrapper makes FastAPI try to serialize it, which raises and turns
+    every streaming RAG query into a 500; the stream then never drains, so its
+    single billing event (which carries the folded sub-call costs) never fires.
+    """
+    import litellm as litellm_module
+
+    async def fake_aquery(**kwargs):
+        return await litellm_module.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is the codename?"}],
+            mock_response="The codename is AZURE-FALCON-42.",
+            stream=True,
+            api_key="test-key",
+        )
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new=AsyncMock(side_effect=fake_aquery),
+    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert '"object":"chat.completion.chunk"' in response.text
+    assert "data: [DONE]" in response.text
