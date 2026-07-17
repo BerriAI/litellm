@@ -833,7 +833,7 @@ class ProxyLogging:
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
 
     def _parse_pre_mcp_call_hook_response(
         self,
@@ -2583,35 +2583,30 @@ class ProxyLogging:
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
 
-    def _release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+    async def _arelease_max_parallel_requests_on_disconnect(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict | None = None,
+    ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
-        response is cancelled mid-flight (client disconnect). Neither the
-        success nor failure logging callback fires on the resulting
-        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
-        leak.
+        response is cancelled mid-flight (client disconnect) and no logging
+        callback fired for it. Neither the success nor failure callback runs on
+        the resulting CancelledError / GeneratorExit, so the pre-call +1 would
+        otherwise leak.
 
-        Must be called from the outermost streaming generator (the one
-        Starlette drives and closes on disconnect). A nested iterator-hook
-        generator only receives GeneratorExit when it is garbage collected,
-        which is non-deterministic, so the refund cannot live there.
-
-        Scheduled fire-and-forget (no await) because awaiting is not
-        permitted while unwinding a GeneratorExit.
+        Awaited from the shielded streaming cleanup rather than scheduled
+        fire-and-forget, so the caller can make it the single owner of the
+        release: when a disconnect-time success event does fire (partial-spend
+        billing or a deferred-guardrail flush), that event's own limiter
+        callback releases the slot and this is not called at all. Two
+        concurrent releases of the same acquisition would otherwise race and
+        double-decrement under the limiter's in-memory fallback.
         """
         limiter = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
-        try:
-            asyncio.create_task(limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict))
-        except RuntimeError:
-            # No running event loop (e.g. interpreter/loop shutdown); the
-            # counter's window TTL will reclaim the slot.
-            verbose_proxy_logger.warning(
-                "parallel_request_limiter_v3: could not schedule "
-                "max_parallel_requests release on disconnect; no running "
-                "event loop. Slot will be reclaimed when its window TTL expires"
-            )
+        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """

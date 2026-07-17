@@ -3,7 +3,7 @@ import { Button } from "@tremor/react";
 import { Modal } from "antd";
 import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
 import AddPluginForm from "./add_plugin_form";
-import PluginTable from "./plugin_table";
+import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -17,7 +17,7 @@ interface ClaudeCodePluginsPanelProps {
 const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessToken, userRole }) => {
   const [pluginsList, setPluginsList] = useState<Plugin[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
   const [pluginToDelete, setPluginToDelete] = useState<{
     name: string;
@@ -28,7 +28,10 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchPlugins = async () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setIsLoading(false);
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -95,7 +98,6 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
             pluginsList={pluginsList}
             isLoading={isLoading}
             onDeleteClick={handleDeleteClick}
-            accessToken={accessToken}
             isAdmin={isAdmin}
             onPluginClick={(id) => {
               const skill = pluginsList.find((p) => p.id === id);

@@ -37,6 +37,7 @@ from capabilities import (
     CAPABILITIES,
     FILE_ID_SHAPE,
     Capability,
+    coverage_cells_for_lifecycle,
     matches_id_shape,
     raw_id_matches_provider,
 )
@@ -168,7 +169,17 @@ def assert_batch_object(batch: BatchObject) -> None:
     ), "batch.created_at missing"
 
 
-@pytest.mark.parametrize("cap", CAPABILITIES, ids=[c.id for c in CAPABILITIES])
+@pytest.mark.parametrize(
+    "cap",
+    [
+        pytest.param(
+            cap,
+            id=cap.id,
+            marks=pytest.mark.covers(*coverage_cells_for_lifecycle(cap)),
+        )
+        for cap in CAPABILITIES
+    ],
+)
 def test_batch_lifecycle(
     cap: Capability,
     client: BatchClient,
@@ -266,6 +277,7 @@ def test_batch_lifecycle(
         assert match.object == "batch"
 
 
+@pytest.mark.covers("llm.batches.openai.key_model_access_denied.nonstream.works")
 def test_batch_key_model_access_denied(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -301,6 +313,10 @@ def test_batch_key_model_access_denied(
     ), f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
 
 
+@pytest.mark.covers(
+    "llm.files.openai.upload.nonstream.works",
+    "llm.files.openai.delete.nonstream.works",
+)
 def test_file_upload_and_delete_outputs(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
