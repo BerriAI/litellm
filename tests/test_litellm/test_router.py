@@ -123,6 +123,39 @@ def test_set_model_group_info_wildcard_avoids_per_deployment_deepcopy():
     assert spy_is_match.call_count >= 1
 
 
+def test_pattern_router_copy_free_matching_helpers():
+    """
+    Regression for #33636: the router's wildcard pattern matching must expose deepcopy-free
+    paths. is_match reports membership, _find_matching_pattern returns the raw match, and
+    route_readonly / _shallow_renamed_deployments rename to the concrete model without the
+    copy.deepcopy that route performs, and without leaking the rename into the stored deployment.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-xxx"},
+            },
+        ],
+    )
+    pattern_router = router.pattern_router
+
+    assert pattern_router.is_match("openai/gpt-4o-mini") is True
+    assert pattern_router.is_match("anthropic/claude-3") is False
+
+    matched = pattern_router._find_matching_pattern("openai/gpt-4o-mini")
+    assert matched is not None
+    pattern_match, deployments = matched
+
+    renamed = pattern_router._shallow_renamed_deployments(pattern_match, deployments)
+    assert renamed[0]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+
+    readonly = pattern_router.route_readonly("openai/gpt-4o-mini")
+    assert readonly is not None
+    assert readonly[0]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+    assert deployments[0]["litellm_params"]["model"] == "openai/*"
+
+
 def test_router_model_group_encrypted_content_affinity_callback_registration():
     from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
         DeploymentAffinityCheck,
