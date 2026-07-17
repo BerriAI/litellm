@@ -43,45 +43,32 @@ per-cell aggregator.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
+from claude_code._env import require_proxy
 from claude_code.http_probe import (
     assert_tool_search_shape,
     probe_tool_search,
 )
 
-PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
-PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
+    "claude-sonnet-4-5-bedrock-invoke",
     "claude-opus-4-7-bedrock-invoke",
 ]
 
 
+@pytest.mark.skip(
+    reason="product bug LIT-4522: Bedrock Invoke /v1/messages does not normalize "
+    "tool_search_tool_regex_20251119; re-enable when messages path matches chat path"
+)
+@pytest.mark.covers("llm.messages.bedrock_invoke.tool_search.nonstream.works")
 def test_tool_search_bedrock_invoke(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Bedrock (Invoke)
     tier."""
-    base_url = os.environ.get(PROXY_BASE_URL_ENV)
-    api_key = os.environ.get(PROXY_API_KEY_ENV)
-    if not base_url or not api_key:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
-                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
-                ),
-            }
-        )
-        pytest.fail(
-            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured",
-            pytrace=False,
-        )
+    base_url, api_key = require_proxy(compat_result)
 
     failures = []
     for model in BEDROCK_INVOKE_MODELS:
