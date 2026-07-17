@@ -23,7 +23,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 google-cloud-auth = { version = "=1.9.0", default-features = false }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls = { version = "=0.23.41", default-features = false, features = ["ring"] }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"

@@ -70,15 +70,16 @@ fn credentials_cache() -> &'static Mutex<BoundedCache<AccessTokenCredentials>> {
     CACHE.get_or_init(|| Mutex::new(BoundedCache::new(VERTEX_CREDENTIALS_CACHE_CAPACITY)))
 }
 
-fn cache_key(credentials: Option<&str>) -> CacheKey {
+fn adc_cache_key() -> CacheKey {
     let mut hasher = Sha256::new();
-    match credentials {
-        None => hasher.update(b"adc"),
-        Some(raw) => {
-            hasher.update(b"inline:");
-            hasher.update(raw.trim().as_bytes());
-        }
-    }
+    hasher.update(b"adc");
+    hasher.finalize().into()
+}
+
+fn content_cache_key(contents: &str) -> CacheKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"inline:");
+    hasher.update(contents.trim().as_bytes());
     hasher.finalize().into()
 }
 
@@ -93,34 +94,46 @@ pub async fn mint_vertex_bearer(credentials: Option<&str>) -> CoreResult<String>
 }
 
 async fn resolve_credentials(credentials: Option<&str>) -> CoreResult<AccessTokenCredentials> {
-    let key = cache_key(credentials);
+    let (key, built) = match credentials {
+        None => (adc_cache_key(), None),
+        Some(raw) => {
+            let contents = load_credentials_contents(raw).await?;
+            (content_cache_key(&contents), Some(contents))
+        }
+    };
     if let Some(existing) = credentials_cache().lock().await.get(&key) {
         return Ok(existing);
     }
-    let built = build_credentials(credentials).await?;
-    Ok(credentials_cache().lock().await.get_or_insert(key, built))
+    let credentials = match built {
+        None => build_adc_credentials()?,
+        Some(contents) => build_from_json(parse_credentials_json(&contents)?)?,
+    };
+    Ok(credentials_cache()
+        .lock()
+        .await
+        .get_or_insert(key, credentials))
 }
 
-async fn build_credentials(credentials: Option<&str>) -> CoreResult<AccessTokenCredentials> {
-    match credentials {
-        None => AdcBuilder::default()
-            .with_scopes([CLOUD_PLATFORM_SCOPE])
-            .build_access_token_credentials()
-            .map_err(|_| CoreError::Auth("Failed to load Vertex ADC credentials".to_string())),
-        Some(raw) => build_from_json(load_credentials_json(raw).await?),
-    }
+fn build_adc_credentials() -> CoreResult<AccessTokenCredentials> {
+    AdcBuilder::default()
+        .with_scopes([CLOUD_PLATFORM_SCOPE])
+        .build_access_token_credentials()
+        .map_err(|_| CoreError::Auth("Failed to load Vertex ADC credentials".to_string()))
 }
 
-async fn load_credentials_json(raw: &str) -> CoreResult<Value> {
+async fn load_credentials_contents(raw: &str) -> CoreResult<String> {
     let trimmed = raw.trim();
-    let contents = if trimmed.starts_with('{') {
-        trimmed.to_string()
+    if trimmed.starts_with('{') {
+        Ok(trimmed.to_string())
     } else {
         tokio::fs::read_to_string(trimmed)
             .await
-            .map_err(|_| CoreError::Auth("Failed to read Vertex credentials file".to_string()))?
-    };
-    serde_json::from_str(&contents)
+            .map_err(|_| CoreError::Auth("Failed to read Vertex credentials file".to_string()))
+    }
+}
+
+fn parse_credentials_json(contents: &str) -> CoreResult<Value> {
+    serde_json::from_str(contents.trim())
         .map_err(|_| CoreError::Auth("Vertex credentials are not valid JSON".to_string()))
 }
 
@@ -159,28 +172,129 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn cache_key_distinguishes_adc_from_inline_and_matches_on_repeat() {
-        let adc = cache_key(None);
-        let inline = cache_key(Some("{\"type\":\"service_account\"}"));
+    fn content_cache_key_distinguishes_adc_from_inline_and_matches_on_repeat() {
+        let adc = adc_cache_key();
+        let inline = content_cache_key("{\"type\":\"service_account\"}");
         assert_ne!(adc, inline);
         assert_eq!(
             inline,
-            cache_key(Some("  {\"type\":\"service_account\"}  "))
+            content_cache_key("  {\"type\":\"service_account\"}  ")
         );
     }
 
     #[test]
-    fn cache_key_differs_for_distinct_credential_sources() {
-        let adc = cache_key(None);
-        let first = cache_key(Some(
-            "{\"type\":\"service_account\",\"client_email\":\"a\"}",
-        ));
-        let second = cache_key(Some(
-            "{\"type\":\"service_account\",\"client_email\":\"b\"}",
-        ));
+    fn content_cache_key_differs_for_distinct_credential_sources() {
+        let adc = adc_cache_key();
+        let first = content_cache_key("{\"type\":\"service_account\",\"client_email\":\"a\"}");
+        let second = content_cache_key("{\"type\":\"service_account\",\"client_email\":\"b\"}");
         assert_ne!(first, second);
         assert_ne!(adc, first);
         assert_ne!(adc, second);
+    }
+
+    #[tokio::test]
+    async fn file_backed_credentials_key_tracks_content_not_path() {
+        let path = std::env::temp_dir().join(format!(
+            "vertex-cred-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        tokio::fs::write(
+            &path,
+            b"{\"type\":\"service_account\",\"client_email\":\"old\"}",
+        )
+        .await
+        .expect("writes first credential file");
+        let first = load_credentials_contents(path.to_str().expect("utf-8 path"))
+            .await
+            .expect("reads first credential file");
+
+        tokio::fs::write(
+            &path,
+            b"{\"type\":\"service_account\",\"client_email\":\"new\"}",
+        )
+        .await
+        .expect("rotates credential file");
+        let second = load_credentials_contents(path.to_str().expect("utf-8 path"))
+            .await
+            .expect("reads rotated credential file");
+        tokio::fs::remove_file(&path).await.ok();
+
+        assert_ne!(
+            content_cache_key(&first),
+            content_cache_key(&second),
+            "rotating a credential file at the same path must not reuse the old cache entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_from_json_builds_service_account_credentials() {
+        build_from_json(json!({
+            "type": "service_account",
+            "project_id": "proj-1",
+            "private_key_id": "key-id",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
+            "client_email": "sa@proj-1.iam.gserviceaccount.com"
+        }))
+        .expect("service account dispatches and builds");
+    }
+
+    #[tokio::test]
+    async fn build_from_json_builds_authorized_user_credentials() {
+        build_from_json(json!({
+            "type": "authorized_user",
+            "client_id": "client-id.apps.googleusercontent.com",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-token"
+        }))
+        .expect("authorized user dispatches and builds");
+    }
+
+    #[tokio::test]
+    async fn build_from_json_builds_impersonated_service_account_credentials() {
+        build_from_json(json!({
+            "type": "impersonated_service_account",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/target@proj-1.iam.gserviceaccount.com:generateAccessToken",
+            "source_credentials": {
+                "type": "authorized_user",
+                "client_id": "client-id.apps.googleusercontent.com",
+                "client_secret": "client-secret",
+                "refresh_token": "refresh-token"
+            }
+        }))
+        .expect("impersonated service account dispatches and builds");
+    }
+
+    #[tokio::test]
+    async fn build_from_json_builds_external_account_for_all_standard_source_mechanisms() {
+        let base = |source: Value| {
+            json!({
+                "type": "external_account",
+                "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/pr",
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_url": "https://sts.googleapis.com/v1/token",
+                "credential_source": source
+            })
+        };
+
+        build_from_json(base(json!({"file": "/var/run/secrets/token"})))
+            .expect("file-sourced external account builds");
+        build_from_json(base(json!({
+            "url": "https://169.254.169.254/token",
+            "headers": {"Metadata": "true"},
+            "format": {"type": "json", "subject_token_field_name": "access_token"}
+        })))
+        .expect("url-sourced external account builds");
+        build_from_json(base(json!({
+            "executable": {"command": "/usr/bin/token-helper", "timeout_millis": 5000}
+        })))
+        .expect("executable-sourced external account builds");
+        build_from_json(base(json!({
+            "environment_id": "aws1",
+            "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
+            "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+        })))
+        .expect("aws-sourced external account builds");
     }
 
     #[test]
@@ -211,22 +325,24 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn load_credentials_json_reports_invalid_json_without_echoing_contents() {
-        let err = load_credentials_json("not-json-and-not-a-path{")
-            .await
+    #[test]
+    fn parse_credentials_json_reports_invalid_json_without_echoing_contents() {
+        let err = parse_credentials_json("{not-valid-json-secret-value")
             .expect_err("invalid json rejected");
         match err {
             CoreError::Auth(message) => {
-                assert!(!message.contains("not-json-and-not-a-path"), "{message}");
+                assert!(
+                    !message.contains("not-valid-json-secret-value"),
+                    "{message}"
+                );
             }
             other => panic!("expected auth error, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn load_credentials_json_missing_file_error_omits_attacker_controlled_path() {
-        let err = load_credentials_json("/attacker/controlled/secret-credentials-path.json")
+    async fn load_credentials_contents_missing_file_error_omits_attacker_controlled_path() {
+        let err = load_credentials_contents("/attacker/controlled/secret-credentials-path.json")
             .await
             .expect_err("missing file rejected");
         match err {
