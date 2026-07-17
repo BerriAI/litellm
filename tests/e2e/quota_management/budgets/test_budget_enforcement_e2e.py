@@ -141,19 +141,30 @@ class EndUserBudgetCase(_BudgetCase):
 
 
 class OrganizationBudgetCase(_BudgetCase):
+    """Org carries the tiny budget; the team under it and the key carry none, so
+    the org is the only entity that can block (the historically weak link). The
+    refusal must be a 429 budget_exceeded that names the org as the blocker."""
+
     def init(self) -> None:
-        # Org carries the tiny budget; the team under it has none, so a block here
-        # is org-level enforcement (the historically weak link).
-        org_id = self.client.create_org(
+        self._org_id = self.client.create_org(
             max_budget=3e-6, alias=f"e2e-budget-org-{unique_marker()}"
         )
-        self._undo.append(lambda: self.client.delete_org(org_id))
+        self._undo.append(lambda: self.client.delete_org(self._org_id))
         team_id = self.client.create_team(
-            alias=f"e2e-budget-team-{unique_marker()}", organization_id=org_id
+            alias=f"e2e-budget-team-{unique_marker()}", organization_id=self._org_id
         )
         self._undo.append(lambda: self.client.delete_team(team_id))
         self.key = self.client.generate_key(team_id=team_id)
         self._undo.append(lambda: self.client.delete_key(self.key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        assert f"Organization={self._org_id}" in blocked.body, (
+            f"refusal must name the org as the blocker, got: {blocked.body[:200]}"
+        )
 
 
 class TeamMemberBudgetCase(_BudgetCase):
