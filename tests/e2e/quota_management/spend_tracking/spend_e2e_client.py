@@ -11,7 +11,6 @@ helpers from one place.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -49,30 +48,12 @@ from models import (
 __all__ = [
     "SpendClient",
     "build_client",
-    "reset_spend_logs",
     "unique_marker",
     "unwrap",
     "is_ok",
     "SpendLogRow",
     "ProbeResult",
 ]
-
-
-def reset_spend_logs() -> None:
-    """Truncate LiteLLM_SpendLogs for a clean slate. No proxy endpoint deletes
-    spend logs (/global/spend/reset keeps them), so go to the DB directly. Uses
-    DATABASE_URL (default: the local docker postgres on its mapped host port; note
-    the in-container `@db` host isn't resolvable from the host, so default to
-    localhost).
-    """
-    import psycopg
-
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm",
-    )
-    with psycopg.connect(url) as conn:
-        _ = conn.execute('TRUNCATE TABLE "LiteLLM_SpendLogs"')
 
 
 def _chat_body(
