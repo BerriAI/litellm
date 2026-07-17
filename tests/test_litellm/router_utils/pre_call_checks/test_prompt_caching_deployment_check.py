@@ -15,7 +15,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 )
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_prompt_cache_min_tokens, token_counter
+from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
 OPUS_4_6_MIN_TOKENS = 4096
@@ -72,18 +72,35 @@ def _messages(word_count: int) -> List[AllMessageValues]:
     )
 
 
-def test_get_min_token_count_for_deployments_takes_max_across_mixed_group():
+def test_get_min_token_count_for_deployments_takes_min_across_mixed_group():
     """
-    A group may legally mix models whose real minimums differ, and one boolean gate decides for
-    every member. The threshold must be the highest minimum in the group: taking the lowest would
-    let a 1024-token prompt pin the Opus 4.5 deployment for a prefix Anthropic will never cache.
+    A group may legally mix models whose real minimums differ, and one gate decides for every
+    member. The threshold must be the lowest minimum in the group. This gate only decides whether
+    the cache lookup happens, so taking the highest would skip the lookup for a prefix the Sonnet
+    4.5 deployment genuinely cached and lose a hit it had earned.
     """
     assert get_prompt_cache_min_tokens(model="anthropic/claude-opus-4-5") == 4096
     assert get_prompt_cache_min_tokens(model="anthropic/claude-sonnet-4-5") == 1024
 
     deployments = _deployments("anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5")
 
-    assert _get_min_token_count_for_deployments(deployments) == 4096
+    assert _get_min_token_count_for_deployments(deployments) == 1024
+
+
+def test_write_gate_is_what_prevents_a_pin_below_the_model_minimum():
+    """
+    The invariant the read gate relies on. A deployment can only be pinned when the cache already
+    holds an entry for the prefix, and `async_log_success_event` writes entries against the real
+    deployment model. Opus 4.5 never records an entry for a prefix it will not cache, so no read
+    threshold is what keeps it from being pinned.
+    """
+    messages = _messages(word_count=1400)
+
+    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-5", use_default_image_token_count=True)
+    assert 1024 < token_count < 4096
+
+    assert is_prompt_caching_valid_prompt(model="anthropic/claude-opus-4-5", messages=messages) is False
+    assert is_prompt_caching_valid_prompt(model="anthropic/claude-sonnet-4-5", messages=messages) is True
 
 
 def test_get_min_token_count_for_deployments_falls_back_to_default_for_empty_group():
