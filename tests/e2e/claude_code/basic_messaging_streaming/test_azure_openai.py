@@ -19,14 +19,12 @@ The (feature, provider) for this cell is inferred from the file path by
                        feature_id                     provider
 
 Every GPT cell exercises the three GPT-5.6 tiers; the cell only goes
-green if all three pass. Cells are opt-in via COMPAT_GPT_CELLS=1 (see
-`claude_code._gpt_cells`).
+green if all three pass.
 """
 
 from __future__ import annotations
 
 from claude_code._basic_messaging import run_basic_messaging_cell
-from claude_code._gpt_cells import skip_unless_gpt_cells_enabled
 
 AZURE_OPENAI_MODELS = [
     "gpt-5-6-sol-azure-openai",
@@ -38,7 +36,6 @@ AZURE_OPENAI_MODELS = [
 def test_basic_messaging_streaming_azure_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply from each GPT-5.6 tier."""
-    skip_unless_gpt_cells_enabled()
     run_basic_messaging_cell(
         compat_result=compat_result,
         models=AZURE_OPENAI_MODELS,

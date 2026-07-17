@@ -17,9 +17,6 @@ Bash is restricted to the exact command `echo pong` plus
 `--permission-mode dontAsk`; see `tool_use/test_anthropic.py` for the
 security rationale.
 
-GPT cells are opt-in via COMPAT_GPT_CELLS=1 (see
-`claude_code._gpt_cells`).
-
 The (feature, provider) for this cell is inferred from the file path by
 `tests/e2e/claude_code/conftest.py`:
 
@@ -30,20 +27,16 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping, Sequence
 
 import pytest
 
-from claude_code._gpt_cells import skip_unless_gpt_cells_enabled
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
     run_claude_models_parallel,
 )
-
-PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
-PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 AZURE_OPENAI_MODELS = [
     "gpt-5-6-sol-azure-openai",
@@ -96,28 +89,13 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 
 
 def test_tool_use_streaming_azure_openai(compat_result):
-    skip_unless_gpt_cells_enabled()
-    base_url = os.environ.get(PROXY_BASE_URL_ENV)
-    api_key = os.environ.get(PROXY_API_KEY_ENV)
-    if not base_url or not api_key:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
-                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
-                ),
-            }
-        )
-        pytest.fail(
-            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
-        )
+    proxy = require_proxy(compat_result)
 
     outcomes = run_claude_models_parallel(
         models=AZURE_OPENAI_MODELS,
         prompt=TOOL_USE_PROMPT,
-        base_url=base_url,
-        api_key=api_key,
+        base_url=proxy.base_url,
+        api_key=proxy.api_key,
         extra_args=TOOL_USE_ARGS,
     )
 

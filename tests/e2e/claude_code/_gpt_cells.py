@@ -16,15 +16,16 @@ cover "OpenAI plus the big three clouds":
                                            carries only the open-weight
                                            gpt-oss MaaS models
 
-Live GPT cells are opt-in via `COMPAT_GPT_CELLS=1`. The cron VM that
-runs the scheduled suite and publishes the matrix must be provisioned
-with the GPT-route credentials (`OPENAI_API_KEY` with available
-quota, `AZURE_API_BASE` + `AZURE_API_KEY` with gpt-5.6
-deployments, and Bedrock Mantle model access) before these cells can
-pass, so until the flag is set each live cell skips and its matrix
+The openai and azure_openai columns run unconditionally, like every
+other live column: the environments that run the suite carry
+`OPENAI_API_KEY` and `AZURE_API_BASE` + `AZURE_API_KEY` pointing at a
+resource with gpt-5.6 deployments. The bedrock_mantle column is
+opt-in via `COMPAT_MANTLE_CELLS=1` because the AWS account is still
+waiting on the Bedrock Mantle allowlist for the `openai.gpt-5.6-*`
+models; until the flag is set each Mantle cell skips and its matrix
 cell publishes as `not_tested` instead of a credential-shaped red.
-The `vertex_ai_gpt` column ignores the flag: its cells report a
-static `not_applicable` and never touch the network.
+The `vertex_ai_gpt` column needs no flag either way: its cells report
+a static `not_applicable` and never touch the network.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import os
 
 import pytest
 
-GPT_CELLS_ENV = "COMPAT_GPT_CELLS"
+MANTLE_CELLS_ENV = "COMPAT_MANTLE_CELLS"
 
 VERTEX_AI_GPT_NOT_APPLICABLE_REASON = (
     "GCP Vertex AI does not offer OpenAI's closed-weight GPT-5.6 family "
@@ -43,18 +44,18 @@ VERTEX_AI_GPT_NOT_APPLICABLE_REASON = (
 )
 
 
-def skip_unless_gpt_cells_enabled() -> None:
-    """Skip the calling test unless `COMPAT_GPT_CELLS` opts GPT cells in.
+def skip_unless_mantle_cells_enabled() -> None:
+    """Skip the calling test unless `COMPAT_MANTLE_CELLS` opts the
+    Bedrock Mantle cells in.
 
     A skipped cell is recorded as `not_tested` in the published matrix
     (see the skip handling in `tests/e2e/claude_code/conftest.py`),
-    which is the honest state for an environment that has no GPT-route
-    credentials yet.
+    which is the honest state while the AWS account has no Mantle
+    access to the GPT-5.6 models yet.
     """
-    if os.environ.get(GPT_CELLS_ENV, "").strip().lower() in {"1", "true", "yes"}:
+    if os.environ.get(MANTLE_CELLS_ENV, "").strip().lower() in {"1", "true", "yes"}:
         return
     pytest.skip(
-        f"GPT-5.6 cells are opt-in; set {GPT_CELLS_ENV}=1 once the proxy has "
-        "OpenAI / Azure OpenAI / Bedrock Mantle credentials for the "
-        "gpt-5-6-* aliases"
+        f"Bedrock Mantle GPT-5.6 cells are opt-in; set {MANTLE_CELLS_ENV}=1 "
+        "once the AWS account is allowlisted for the openai.gpt-5.6-* models"
     )
