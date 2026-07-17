@@ -63,10 +63,7 @@ async def _get_redis_cache_index_info_with_ttl() -> Any:
     current_time = time.time()
     cached_time = _redis_cache_index_info.get("timestamp", 0)
 
-    if (
-        "index_info" in _redis_cache_index_info
-        and (current_time - cached_time) < _REDIS_CACHE_INDEX_INFO_TTL_SECONDS
-    ):
+    if "index_info" in _redis_cache_index_info and (current_time - cached_time) < _REDIS_CACHE_INDEX_INFO_TTL_SECONDS:
         return _redis_cache_index_info["index_info"]
 
     try:
