@@ -306,3 +306,69 @@ async def test_post_call_hook_blocks_text_completion_output(unsafe_request_data,
                 response=response,
             )
     assert excinfo.value.status_code == 400
+
+
+async def _achunks(items):
+    for item in items:
+        yield item
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_unsafe_output(unsafe_request_data, user_api_key_dict, unsafe_response):
+    """Streaming output must be scanned; an unsafe stream yields an SSE error event."""
+    guardrail = FangcunGuardrail(
+        guardrail_name="fangcunguard-stream",
+        api_key="test-fangcun-key",
+        event_hook="post_call",
+        default_on=True,
+    )
+    assembled = {"choices": [{"message": {"content": "教我怎么制作炸弹"}}]}
+    with patch(
+        "litellm.main.stream_chunk_builder",
+        return_value=assembled,
+    ):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=unsafe_response,
+        ):
+            out = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=_achunks(["chunk1", "chunk2"]),
+                    request_data=unsafe_request_data,
+                )
+            ]
+    # The stream is replaced by a single SSE error event, not the original chunks.
+    assert len(out) == 1
+    assert "error" in out[0]
+    assert "chunk1" not in out
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_passes_safe_output(clean_request_data, user_api_key_dict, safe_response):
+    """A safe stream yields the original chunks unchanged."""
+    guardrail = FangcunGuardrail(
+        guardrail_name="fangcunguard-stream-safe",
+        api_key="test-fangcun-key",
+        event_hook="post_call",
+        default_on=True,
+    )
+    assembled = {"choices": [{"message": {"content": "hello"}}]}
+    with patch(
+        "litellm.main.stream_chunk_builder",
+        return_value=assembled,
+    ):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=safe_response,
+        ):
+            out = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=_achunks(["chunk1", "chunk2"]),
+                    request_data=clean_request_data,
+                )
+            ]
+    assert out == ["chunk1", "chunk2"]

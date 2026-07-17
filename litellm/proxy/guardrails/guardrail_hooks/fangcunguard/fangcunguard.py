@@ -6,8 +6,9 @@
 # +-------------------------------------------------------------+
 
 import asyncio
+import json
 import os
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -291,6 +292,52 @@ class FangcunGuardrail(CustomGuardrail):
         if response_texts:
             await self._scan_texts(response_texts, request_data=data)
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+
+    @log_guardrail_information
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+        request_data: dict,
+    ) -> AsyncGenerator:
+        """Buffer the streamed output, scan it, then release it.
+
+        Streaming responses would otherwise bypass ``async_post_call_success_hook``
+        enforcement, so we assemble all chunks, scan the full text, and only then
+        yield. On a violation we emit an SSE error event instead of raising (a
+        raise inside a generator surfaces as a generic 500).
+        """
+        from litellm.main import stream_chunk_builder
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type = GuardrailEventHooks.post_call
+        if self.should_run_guardrail(data=request_data, event_type=event_type) is not True:
+            async for chunk in response:
+                yield chunk
+            return
+
+        all_chunks = []
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        assembled = stream_chunk_builder(chunks=all_chunks)
+        response_texts = self._extract_response_texts(assembled) if assembled else []
+
+        if response_texts:
+            try:
+                await self._scan_texts(response_texts, request_data=request_data)
+            except HTTPException as e:
+                detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+                error_obj = dict(detail) if isinstance(detail, dict) else {"message": str(detail)}
+                error_obj["code"] = str(e.status_code)
+                yield f"data: {json.dumps({'error': error_obj})}\n\n"
+                return
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+
+        for chunk in all_chunks:
+            yield chunk
 
     @staticmethod
     def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
