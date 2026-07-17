@@ -1096,8 +1096,8 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             # Verify that tools from the working server are returned
             assert len(result.tools) == 1
             assert result.tools[0].name == "working_tool_1"
-            assert result.outcomes["working_server"].tag == "ok"
-            assert result.outcomes["failing_server"].tag == "internal"
+            assert result.outcomes["working"].tag == "ok"
+            assert result.outcomes["failing"].tag == "internal"
 
             # Verify failure logging
             mock_logger.exception.assert_any_call(
@@ -1191,8 +1191,8 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
 
             # Verify that empty list is returned
             assert len(result.tools) == 0
-            assert result.outcomes["failing_server1"].tag == "internal"
-            assert result.outcomes["failing_server2"].tag == "internal"
+            assert result.outcomes["failing1"].tag == "internal"
+            assert result.outcomes["failing2"].tag == "internal"
 
             # Verify failure logging for both servers
             mock_logger.exception.assert_any_call(
@@ -7512,10 +7512,34 @@ async def test_aggregate_listing_reports_per_server_outcomes():
         )
 
     assert [tool.name for tool in listing.tools] == ["working_tool_1"]
-    assert listing.outcomes["working_server"].tag == "ok"
-    assert listing.outcomes["working_server"].tool_count == 1
-    assert listing.outcomes["broken_server"].tag == "upstream_error"
-    assert listing.outcomes["broken_server"].status_code == 500
+    assert listing.outcomes["working"].tag == "ok"
+    assert listing.outcomes["working"].tool_count == 1
+    assert listing.outcomes["broken"].tag == "upstream_error"
+    assert listing.outcomes["broken"].status_code == 500
+    assert "working_server" not in listing.outcomes
+    assert "broken_server" not in listing.outcomes
+
+
+@pytest.mark.asyncio
+async def test_outcome_keys_use_display_prefix_never_canonical_names():
+    """Outcome keys are client-visible and must use the same display naming (alias or short prefix)
+    the caller already sees on tool names: keying them by canonical server_name would let any
+    authenticated caller enumerate internal server names the alias scheme deliberately hides."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _aggregate_server_key
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MagicMock()
+    server.alias = "public-alias"
+    server.server_name = "internal-canonical-name"
+    server.name = "internal-canonical-name"
+    server.short_prefix = None
+    server.server_id = "srv-1"
+
+    key = _aggregate_server_key(server)
+    assert key == "public-alias"
+    assert "internal-canonical-name" not in key
 
 
 @pytest.mark.asyncio

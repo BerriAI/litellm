@@ -32,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    get_server_prefix,
     merge_mcp_headers,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -640,7 +641,7 @@ if MCP_AVAILABLE:
                 status_code=list_fault_http_status(fault),
                 detail={
                     "error": fault.tag,
-                    "message": f"Failed to list tools from server {server.name}",
+                    "message": f"Failed to list tools from server {get_server_prefix(server)}",
                 },
             ) from e
         except Exception as e:
@@ -854,7 +855,11 @@ if MCP_AVAILABLE:
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(f"{server.name}: {str(e)}")
+                        errors.append(
+                            f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
+                            if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
+                            else f"{get_server_prefix(server)}: {str(e)}"
+                        )
                         continue
 
                 if errors and not list_tools_result:
