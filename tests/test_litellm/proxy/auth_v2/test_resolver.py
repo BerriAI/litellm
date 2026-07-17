@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import pytest
+from prisma import Json
+from scim2_models import Group as ScimGroup
+from scim2_models import GroupMember as ScimGroupMember
 
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth_v2.authorization import Role
@@ -75,6 +78,45 @@ async def test_api_key_resolves_to_principal_with_db_role():
     assert principal.user is not None and principal.user.id == "u-1"
     # role comes from the key's user_role mapped through the DB role map
     assert principal.roles == [Role.ORG_ADMIN]
+
+
+async def test_api_key_role_falls_back_to_owning_user():
+    # get_key_object does not join the user's role onto the token, so a key with a
+    # user_id but no user_role must resolve the role from the user table
+    raw = "sk-live-noroll"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-7")
+    user = LiteLLM_UserTable(user_id="u-7", user_role="proxy_admin")
+    store = _store({hash_token(raw): key, "u-7": user})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.roles == [Role.PLATFORM_ADMIN]
+
+
+async def test_api_key_role_fails_closed_when_owning_user_unresolvable():
+    # key carries a user_id but no user_role, and the user cannot be resolved
+    # (cache miss + unusable prisma stub): the role lookup must fail closed to no
+    # role rather than raising or inheriting one
+    raw = "sk-live-orphan"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-missing")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.user is not None and principal.user.id == "u-missing"
+    assert principal.roles == []
+
+
+async def test_service_account_key_without_user_has_no_role():
+    # a key with no user_id never consults the user table and stays role-less
+    raw = "sk-live-svc"
+    key = UserAPIKeyAuth(token=hash_token(raw), key_alias="ci-bot")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
+    assert principal.roles == []
 
 
 async def test_api_key_principal_carries_project_and_end_user():
@@ -171,3 +213,73 @@ async def test_mtls_credential_resolves_to_service_account():
     assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
     assert principal.user is None
     assert principal.subject == "CN=svc-a,O=Co"
+
+
+class _FakeTeamTable:
+    """Minimal stand-in for the prisma team table.
+
+    Mirrors the one prisma behavior the group methods depend on: a Json-wrapped
+    write is stored as its plain Python value and read back the same way. Storing
+    the raw value would let a regression that forgets the Json wrapper pass here
+    while failing against a real database.
+    """
+
+    def __init__(self) -> None:
+        self.rows: Dict[str, dict] = {}
+
+    @staticmethod
+    def _norm(data: dict) -> dict:
+        return {k: (v.data if isinstance(v, Json) else v) for k, v in data.items()}
+
+    async def find_unique(self, where):
+        return self.rows.get(where["team_id"])
+
+    async def create(self, data):
+        row = self._norm(data)
+        self.rows[row["team_id"]] = row
+        return row
+
+    async def update(self, where, data):
+        self.rows[where["team_id"]].update(self._norm(data))
+        return self.rows[where["team_id"]]
+
+    async def find_many(self, **kwargs):
+        return list(self.rows.values())
+
+    async def delete(self, where):
+        return self.rows.pop(where["team_id"], None)
+
+
+class _FakeTeamPrisma:
+    def __init__(self) -> None:
+        self.db = type("_Db", (), {"litellm_teamtable": _FakeTeamTable()})()
+
+
+async def test_group_upsert_round_trips_members_through_json():
+    store = DbResolver(_FakeTeamPrisma(), _FakeCache())
+    created = await store.upsert_group(
+        ScimGroup(
+            display_name="eng",
+            members=[ScimGroupMember(value="u-1"), ScimGroupMember(value="u-2")],
+        )
+    )
+
+    assert created.id is not None
+    assert created.display_name == "eng"
+    assert [m.value for m in created.members] == ["u-1", "u-2"]
+
+    fetched = await store.get_group(created.id)
+    assert fetched is not None
+    assert [m.value for m in fetched.members] == ["u-1", "u-2"]
+
+
+async def test_group_list_and_delete():
+    store = DbResolver(_FakeTeamPrisma(), _FakeCache())
+    a = await store.upsert_group(ScimGroup(display_name="a"))
+    await store.upsert_group(ScimGroup(display_name="b"))
+
+    assert {g.display_name for g in await store.list_groups(None)} == {"a", "b"}
+
+    await store.delete_group(a.id)
+    assert await store.get_group(a.id) is None
+    assert {g.display_name for g in await store.list_groups(None)} == {"b"}

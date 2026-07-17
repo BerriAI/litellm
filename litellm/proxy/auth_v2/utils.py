@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from scim2_models import Email, Name
+from scim2_models import Email, GroupMember, Name
 from scim2_models import Group as ScimGroup
 from scim2_models import User as ScimUser
 
@@ -84,13 +84,14 @@ def db_user_to_scim(user: "LiteLLM_UserTable") -> ScimUser:
 
 
 def scim_group_to_db(group: ScimGroup) -> Dict[str, object]:
-    members = [
-        {"user_id": member.value, "role": "user"} for member in (group.members or [])
-    ]
+    members = [{"user_id": member.value, "role": "user"} for member in (group.members or [])]
     return {"team_alias": group.display_name, "members_with_roles": members}
 
 
 def db_team_to_scim(team: "LiteLLM_TeamTable") -> ScimGroup:
     result = ScimGroup(display_name=team.team_alias or team.team_id)
     result.id = team.team_id
+    members = [GroupMember(value=member.user_id) for member in (team.members_with_roles or []) if member.user_id]
+    if members:
+        result.members = members
     return result

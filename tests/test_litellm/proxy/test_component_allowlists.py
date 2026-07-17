@@ -49,6 +49,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from backend.routers import ADMIN_PREFIX
 from backend.routes.allowlist import (
     BACKEND_EXACT_PATHS,
     BACKEND_MOUNT_PATHS,
@@ -86,7 +87,7 @@ for _key, _previous in _PRE_DB_ENV.items():
         os.environ[_key] = _previous
 
 
-def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
+def _component_paths(routes, exact_paths, path_prefixes, keep_prefixes=()) -> set[str]:
     """Reproduce ``gateway.main._is_gateway_route`` / ``backend.main._is_backend_route``."""
     out: set[str] = set()
     for route in routes:
@@ -95,7 +96,9 @@ def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
         path = getattr(route, "path", None)
         if path is None:
             continue
-        if path in exact_paths or any(path.startswith(p) for p in path_prefixes):
+        if any(path == p or path.startswith(p + "/") for p in keep_prefixes):
+            out.add(path)
+        elif path in exact_paths or any(path.startswith(p) for p in path_prefixes):
             out.add(path)
     return out
 
@@ -111,7 +114,10 @@ def test_gateway_plus_backend_covers_full_app():
         app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
     )
     backend_paths = _component_paths(
-        app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
+        app.router.routes,
+        BACKEND_EXACT_PATHS,
+        BACKEND_PATH_PREFIXES,
+        keep_prefixes=(ADMIN_PREFIX,),
     )
 
     uncovered = all_paths - (gateway_paths | backend_paths)

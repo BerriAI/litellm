@@ -20,18 +20,29 @@ DatabaseURLSettings.from_env().apply_to_env()
 
 from litellm.proxy.proxy_server import app
 
+from backend.routers import ADMIN_PREFIX
 from backend.routes.allowlist import (
     BACKEND_EXACT_PATHS,
     BACKEND_MOUNT_PATHS,
     BACKEND_PATH_PREFIXES,
 )
 
+_ADMIN_PREFIX = ADMIN_PREFIX + "/"
+
 
 def _is_backend_route(route) -> bool:
-    """Keep the route on the backend if its path is in the management surface."""
+    """Keep the route on the backend if it is an explicit admin route or its path
+    is in the (legacy, allowlisted) management surface.
+
+    The explicit ``backend.routers`` admin routes are the source of truth and are
+    always kept; the allowlist covers the remaining proxy management surface that
+    has not been migrated onto explicit routers yet.
+    """
     path = getattr(route, "path", None)
     if path is None:
         return False
+    if path == ADMIN_PREFIX or path.startswith(_ADMIN_PREFIX):
+        return True
     if isinstance(route, Mount):
         # The dashboard UI static mounts are served by the dedicated UI container.
         # Only Mounts in the backend allowlist (e.g. swagger docs) remain on backend.
