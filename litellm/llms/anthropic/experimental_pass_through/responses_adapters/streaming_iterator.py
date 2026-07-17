@@ -64,7 +64,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _make_error_chunk(self, message: str) -> Dict[str, Any]:
+    def _make_error_chunk(self, message: str) -> dict[str, Any]:
         return {
             "type": "error",
             "error": {"type": "api_error", "message": message},
