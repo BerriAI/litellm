@@ -162,6 +162,7 @@ def _get_model_from_request_context(
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
+        request=request,
     )
 
 
