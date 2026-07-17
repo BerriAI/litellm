@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
@@ -143,7 +144,27 @@ class Client:
 
 
 class Error:
+    """OTel-defined error attribute keys, from the semconv ``error.*`` registry.
+    ``MESSAGE`` is marked *Deprecated* upstream in favor of domain-specific
+    error message keys plus ``exception.message`` on the exception event, but
+    is still defined and stamped by litellm's v1 integration; keeping it here
+    for byte-for-byte parity."""
+
     TYPE: Final = "error.type"
+    MESSAGE: Final = "error.message"
+
+
+class LiteLLMError:
+    """LiteLLM-specific error attribute keys. Emitted under the ``error.*``
+    namespace (not ``litellm.*``) for byte-for-byte compat with the v1
+    integration in ``opentelemetry.py``; consumers reading these keys on v1
+    spans read the same keys on v2 spans. OTel semconv does not define any of
+    these three, and per its extension rules a namespace may carry additional
+    vendor keys as long as they don't collide with defined names."""
+
+    CODE: Final = "error.code"
+    STACK_TRACE: Final = "error.stack_trace"
+    LLM_PROVIDER: Final = "error.llm_provider"
 
 
 class ExceptionEvent:
@@ -159,6 +180,19 @@ class ExceptionEvent:
     NAME: Final = "exception"
     TYPE: Final = "exception.type"
     MESSAGE: Final = "exception.message"
+    STACKTRACE: Final = "exception.stacktrace"
+
+
+class GenAIEvent:
+    """GenAI semconv event names, from the GenAI registry's *events* section.
+
+    ``gen_ai.client.operation.exception`` is defined as a log-based event
+    (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
+    span via the trace/span ids — the semconv-compliant home for GenAI failure
+    details, unlike the deprecated ``error.message`` span attribute.
+    """
+
+    OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
 class Server:

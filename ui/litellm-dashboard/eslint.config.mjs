@@ -17,6 +17,7 @@ const eslintConfig = [
     rules: {
       "unused-imports/no-unused-imports": "error",
       "@typescript-eslint/no-explicit-any": "warn",
+      "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-unused-expressions": "off",
       "@typescript-eslint/ban-ts-comment": "off",

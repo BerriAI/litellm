@@ -485,6 +485,74 @@ def test_build_span_exporter_variants():
         OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
     )
     assert "OTLPSpanExporter" in type(http_exporter).__name__
+
+
+def test_otlp_logs_endpoint_normalization():
+    norm = providers._otlp_logs_endpoint
+    # A base endpoint gets the signal path appended (the common OTLP env shape).
+    assert norm("http://collector:4318") == "http://collector:4318/v1/logs"
+    assert norm("http://collector:4318/") == "http://collector:4318/v1/logs"
+    # An already-correct path is left intact.
+    assert norm("http://collector:4318/v1/logs") == "http://collector:4318/v1/logs"
+    # A sibling signal's path is rewritten to logs, so one OTEL_ENDPOINT works
+    # for every signal rather than POSTing events at the traces path.
+    assert norm("http://collector:4318/v1/traces") == "http://collector:4318/v1/logs"
+    assert norm("http://collector:4318/v1/metrics") == "http://collector:4318/v1/logs"
+    assert norm(None) is None
+
+
+def test_build_log_exporter_variants():
+    from opentelemetry.sdk._logs.export import ConsoleLogExporter, InMemoryLogExporter
+
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="console")),
+        ConsoleLogExporter,
+    )
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="in_memory")),
+        InMemoryLogExporter,
+    )
+    # An unrecognized kind falls back to console rather than dropping events.
+    assert isinstance(
+        providers.build_log_exporter(OpenTelemetryV2Config(exporter="unknown")),
+        ConsoleLogExporter,
+    )
+    http_exporter = providers.build_log_exporter(
+        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
+    )
+    assert "OTLPLogExporter" in type(http_exporter).__name__
+
+
+def test_build_logger_provider_picks_processor_by_exporter_kind():
+    """Console and in-memory exporters export synchronously (tests depend on it);
+    every other destination gets the batch processor."""
+    from opentelemetry.sdk._logs.export import (
+        BatchLogRecordProcessor,
+        ConsoleLogExporter,
+        InMemoryLogExporter,
+        SimpleLogRecordProcessor,
+    )
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+
+    def processor_of(provider):
+        return provider._multi_log_record_processor._log_record_processors[0]
+
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=InMemoryLogExporter())),
+        SimpleLogRecordProcessor,
+    )
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=ConsoleLogExporter())),
+        SimpleLogRecordProcessor,
+    )
+    http_exporter = providers.build_log_exporter(
+        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
+    )
+    assert isinstance(
+        processor_of(providers.build_logger_provider(cfg, log_exporter=http_exporter)),
+        BatchLogRecordProcessor,
+    )
     grpc_exporter = providers.build_span_exporter(
         OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317")
     )
@@ -579,13 +647,10 @@ def _exception_event(span):
 
 
 def test_error_message_recorded_as_full_exception_event_untruncated():
-    """Regression for the Elasticsearch keyword/ignore_above:1024 truncation.
-
-    A long error message must survive intact on the standard ``exception``
-    event under ``exception.message`` — not get dropped onto a bare string
-    attribute that backends dynamic-map to a 1024-char ``keyword``. The SDK
-    must not truncate it either, so a 5000-char message stays 5000 chars.
-    """
+    """The ``exception`` event carries the full untruncated message under
+    ``exception.message`` so backends that dynamic-map unknown string span
+    attrs to ``keyword`` (e.g. Elasticsearch with a 1024-char ``ignore_above``)
+    still see it in full via the semconv-recognized event field."""
     from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
 
     long_message = "boom: " + "x" * 5000
@@ -596,11 +661,106 @@ def test_error_message_recorded_as_full_exception_event_untruncated():
     assert len(event.attributes[ExceptionEvent.MESSAGE]) == len(long_message) > 1024
     assert event.attributes[ExceptionEvent.TYPE] == "litellm.APIError"
 
-    # error.type stays a low-cardinality attribute; the message does NOT become a
-    # bare string attribute (which is what got truncated).
+    # error.type stays a low-cardinality attribute; the exception EVENT field
+    # ``exception.message`` never becomes a bare string attribute.
     assert span.attributes[Error.TYPE] == "litellm.APIError"
     assert ExceptionEvent.MESSAGE not in span.attributes
     assert span.status.description == long_message
+
+
+def test_error_details_stamped_as_span_attributes_for_labels_ingest():
+    """OTel-defined keys and litellm-specific detail keys both ride span
+    attributes so backends that flatten attrs into label indexes (Elastic APM
+    ``labels.*``, Datadog span tags) render them. The exception event with the
+    full untruncated message stays alongside — both places, matching v1's
+    shape."""
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
+    from litellm.integrations.otel.emitter import SpanEmitter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg)
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=SpanError(
+            error_type="litellm.BadRequestError",
+            message="400: violated moderation policy",
+            code="400",
+            stack_trace="File proxy_server.py line 8570 ...",
+            llm_provider="openai",
+        ),
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+
+    # OTel-defined keys (from the ``error.*`` semconv registry).
+    assert span.attributes[Error.TYPE] == "litellm.BadRequestError"
+    assert span.attributes[Error.MESSAGE] == "400: violated moderation policy"
+    # LiteLLM-specific detail keys — vendor-namespaced under ``error.*``
+    # for v1-parity, not defined by OTel semconv.
+    assert span.attributes[LiteLLMError.CODE] == "400"
+    assert span.attributes[LiteLLMError.STACK_TRACE] == "File proxy_server.py line 8570 ..."
+    assert span.attributes[LiteLLMError.LLM_PROVIDER] == "openai"
+
+    # The exception event carries the same message on the span too.
+    event = _exception_event(span)
+    assert event.attributes[ExceptionEvent.MESSAGE] == "400: violated moderation policy"
+
+
+def test_error_details_omitted_when_span_error_carries_only_message():
+    """A guardrail-shape error (message only, no code/traceback/provider) must
+    not pollute the span with empty-string detail attributes. Only the keys
+    that carry real data land."""
+    from litellm.integrations.otel.model.semconv import Error, LiteLLMError
+
+    span = _emit_error_span("guardrail rejected", error_type="ContentFilter")
+
+    assert span.attributes[Error.TYPE] == "ContentFilter"
+    assert span.attributes[Error.MESSAGE] == "guardrail rejected"
+    # LiteLLM-specific detail keys aren't stamped when the SpanError doesn't
+    # carry them.
+    assert LiteLLMError.CODE not in span.attributes
+    assert LiteLLMError.STACK_TRACE not in span.attributes
+    assert LiteLLMError.LLM_PROVIDER not in span.attributes
+
+
+def test_v2_error_attribute_keys_match_v1_error_attributes_byte_for_byte():
+    """v1 (``opentelemetry.py``) and v2 (``otel/`` package) stamp identical
+    span-attribute keys so consumers reading ``labels.error_message`` don't
+    care which integration produced the span. Renaming either side is a
+    breaking change for downstream dashboards; this test locks the vocabulary."""
+    from litellm.integrations._types.open_inference import ErrorAttributes
+    from litellm.integrations.otel.model.semconv import Error, LiteLLMError
+
+    assert Error.TYPE == ErrorAttributes.ERROR_TYPE
+    assert Error.MESSAGE == ErrorAttributes.ERROR_MESSAGE
+    assert LiteLLMError.CODE == ErrorAttributes.ERROR_CODE
+    assert LiteLLMError.STACK_TRACE == ErrorAttributes.ERROR_STACK_TRACE
+    assert LiteLLMError.LLM_PROVIDER == ErrorAttributes.ERROR_LLM_PROVIDER
+
+
+def test_error_message_falls_back_to_error_type_when_message_absent():
+    """A ``SpanError(error_type=..., message=None)`` still renders on the span:
+    the resolved message is the error_type, and it lands on ``error.message``,
+    the exception event, and the span-status description in lockstep so a
+    single-source-of-truth view isn't inconsistent."""
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
+
+    span = _emit_error_span(message=None, error_type="RateLimitError")
+
+    assert span.attributes[Error.MESSAGE] == "RateLimitError"
+    assert _exception_event(span).attributes[ExceptionEvent.MESSAGE] == "RateLimitError"
+    assert span.status.description == "RateLimitError"
 
 
 def test_success_span_records_no_exception_event():
@@ -627,6 +787,177 @@ def test_success_span_records_no_exception_event():
     engine.emit(SpanRole.LLM_CALL, data)
     (span,) = exporter.get_finished_spans()
     assert all(e.name != ExceptionEvent.NAME for e in span.events)
+
+
+def _engine_with_event_recorder():
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    from litellm.integrations.otel.emitter import SpanEmitter
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    provider, span_exporter = providers.in_memory_provider(cfg)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider))
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg, event_recorder=recorder)
+    return engine, span_exporter, log_exporter
+
+
+def _llm_call_data(error):
+    return LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=error,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+
+
+def test_operation_exception_log_event_emitted_on_failed_llm_call():
+    """A failed LLM call records the GenAI semconv ``gen_ai.client.operation.exception``
+    event on the logs signal: severity WARN, the full ``exception.*`` trio (including
+    the stacktrace, which span-side only exists under a vendor key), correlated to
+    the failed span via trace/span ids. The span-side error surface stays intact."""
+    from opentelemetry._logs.severity import SeverityNumber
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.LLM_CALL,
+        _llm_call_data(
+            SpanError(
+                error_type="RateLimitError",
+                message="rate limited",
+                code="429",
+                stack_trace="Traceback (most recent call last) ...",
+                llm_provider="openai",
+            )
+        ),
+    )
+    (span,) = span_exporter.get_finished_spans()
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+
+    assert record.attributes["event.name"] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.severity_number == SeverityNumber.WARN
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "rate limited"
+    assert record.attributes[ExceptionEvent.STACKTRACE] == "Traceback (most recent call last) ..."
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+
+    assert [e.name for e in span.events] == [ExceptionEvent.NAME]
+    assert span.attributes["error.type"] == "RateLimitError"
+
+
+def test_operation_exception_log_event_omits_absent_stacktrace():
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+
+    engine, _, log_exporter = _engine_with_event_recorder()
+    engine.emit(SpanRole.LLM_CALL, _llm_call_data(SpanError(error_type="APIError", message="boom")))
+    (log,) = log_exporter.get_finished_logs()
+
+    assert ExceptionEvent.STACKTRACE not in log.log_record.attributes
+    assert log.log_record.attributes[ExceptionEvent.MESSAGE] == "boom"
+
+
+def test_operation_exception_log_event_always_carries_required_pair():
+    """``exception.type`` and ``exception.message`` are the semconv-required pair:
+    they ride the event even when the recorder is handed empty strings, so an
+    event is never emitted with no required field. Only the stacktrace is
+    conditional."""
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+    from opentelemetry.trace import INVALID_SPAN_CONTEXT
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    log_exporter = InMemoryLogExporter()
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider))
+
+    recorder.record_operation_exception(
+        span_context=INVALID_SPAN_CONTEXT,
+        error_type="",
+        message="",
+        stack_trace="",
+        timestamp_ns=None,
+    )
+    (log,) = log_exporter.get_finished_logs()
+    attributes = log.log_record.attributes
+    assert attributes[ExceptionEvent.TYPE] == ""
+    assert attributes[ExceptionEvent.MESSAGE] == ""
+    assert ExceptionEvent.STACKTRACE not in attributes
+
+
+def test_operation_exception_log_event_not_emitted_on_success():
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
+
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_operation_exception_log_event_only_for_llm_call_role():
+    """The event is scoped to GenAI client operations; a failed guardrail span
+    keeps its span-side error surface but records no GenAI exception event."""
+    engine, span_exporter, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData("presidio", status="failure", error=SpanError(error_type="X", message="denied")),
+    )
+    (span,) = span_exporter.get_finished_spans()
+
+    assert span.attributes["error.type"] == "X"
+    assert log_exporter.get_finished_logs() == ()
+
+
+def test_resolve_logger_provider_honors_explicit_noop_optout(monkeypatch):
+    """A ``NoOpLoggerProvider`` global is an explicit operator opt-out from the logs
+    signal: resolve to ``None`` so no recorder (and so no event) is ever built,
+    rather than emitting into a provider that drops everything."""
+    from opentelemetry import _logs
+    from opentelemetry._logs import NoOpLoggerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    tracer_provider, _ = providers.in_memory_provider(cfg)
+    monkeypatch.setattr(_logs, "get_logger_provider", lambda: NoOpLoggerProvider())
+
+    assert providers.resolve_logger_provider(cfg) is None
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider)
+    assert logger._emitter._event_recorder is None
+
+
+def test_resolve_logger_provider_reuses_operator_sdk_global(monkeypatch):
+    """Events ride an operator-configured logs pipeline rather than a second one
+    built by litellm, so they land wherever the operator's other logs land."""
+    from opentelemetry import _logs
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    operator_provider = providers.build_logger_provider(cfg, log_exporter=InMemoryLogExporter())
+    monkeypatch.setattr(_logs, "get_logger_provider", lambda: operator_provider)
+
+    assert providers.resolve_logger_provider(cfg) is operator_provider
+
+
+def test_operation_exception_event_keys_are_pinned():
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    assert GenAIEvent.OPERATION_EXCEPTION == "gen_ai.client.operation.exception"
+    assert ExceptionEvent.STACKTRACE == "exception.stacktrace"
 
 
 # --- service taxonomy: which calls become spans, and of what kind ----------- #

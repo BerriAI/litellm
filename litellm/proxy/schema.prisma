@@ -419,6 +419,7 @@ model LiteLLM_VerificationToken {
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_fallbacks Json @default("{}")
     budget_id String?
     organization_id String?
     object_permission_id String?
@@ -512,6 +513,7 @@ model LiteLLM_DeletedVerificationToken {
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    budget_fallbacks        Json     @default("{}")
     router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?

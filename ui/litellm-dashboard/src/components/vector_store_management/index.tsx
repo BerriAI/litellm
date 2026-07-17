@@ -44,7 +44,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     if (!accessToken) return;
     try {
       const response = await vectorStoreListCall(accessToken);
-      console.log("List vector stores response:", response);
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
@@ -56,7 +55,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     if (!accessToken) return;
     try {
       const response = await credentialListCall(accessToken);
-      console.log("List credentials response:", response);
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
@@ -115,7 +113,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   };
 
   const handleVectorStoreCreated = (vectorStoreId: string) => {
-    console.log("Vector store created:", vectorStoreId);
     fetchVectorStores();
     // Optionally switch to the manage tab
   };

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
 import { setToken } from "@/utils/mcpTokenStore";
 import CreateMCPServer from "./create_mcp_server";
+import { selectAntOption } from "./testUtils";
 
 vi.mock("../networking", () => ({
   createMCPServer: vi.fn(),
@@ -99,45 +100,6 @@ const defaultProps = {
 
 /** Helper: get the server_name input by its Ant Form id */
 const getServerNameInput = () => document.getElementById("server_name") as HTMLInputElement;
-
-/** Helper: select a dropdown option by opening a select near a label and clicking an option */
-async function selectAntOption(labelText: string, optionText: string) {
-  const label = screen.getByText(labelText);
-  // First try to find a .ant-form-item ancestor (standard form fields)
-  let select: Element | null = null;
-  const formItem = label.closest(".ant-form-item");
-  if (formItem) {
-    select = formItem.querySelector(".ant-select");
-  }
-  // If not found, try .ant-collapse-content ancestor (auth type is inside a Collapse panel)
-  if (!select) {
-    const collapseContent = label.closest(".ant-collapse-item");
-    if (collapseContent) {
-      select = collapseContent.querySelector(".ant-select");
-    }
-  }
-  // Fallback: look for a sibling or nearby select
-  if (!select) {
-    const parent = label.closest("div");
-    select = parent?.querySelector(".ant-select") ?? null;
-  }
-  act(() => {
-    fireEvent.mouseDown(select!.querySelector(".ant-select-selector")!);
-  });
-
-  await waitFor(() => {
-    const options = document.querySelectorAll(".ant-select-item-option");
-    expect(options.length).toBeGreaterThan(0);
-  });
-
-  const option = Array.from(document.querySelectorAll(".ant-select-item-option")).find((el) =>
-    el.textContent?.includes(optionText),
-  );
-  expect(option).toBeTruthy();
-  act(() => {
-    fireEvent.click(option!);
-  });
-}
 
 describe("CreateMCPServer", () => {
   beforeEach(() => {
@@ -710,6 +672,84 @@ describe("CreateMCPServer", () => {
       expect(payload.token_validation).toBeUndefined();
     });
 
+    it("includes credentials.token_endpoint_auth_method in payload when client_secret_basic is selected", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
+    });
+
+    it("omits token_endpoint_auth_method from credentials when left blank", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
+    });
+
     it("persists access + refresh token to the DB on submit for OBO mode", async () => {
       // "Authorize & Fetch" produced a token before submit.
       oauthHook.tokenResponse = {
@@ -896,6 +936,22 @@ describe("CreateMCPServer", () => {
       rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
       const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
       expect(reopenedUrlInput.value).toBe("");
+    });
+
+    it("does not reset an in-flight OAuth resume when mounted with the modal closed (post-redirect restore)", () => {
+      // After the "Authorize & Fetch Token" redirect the page reloads and this
+      // component mounts with isModalVisible=false while useMcpOAuthFlow is still
+      // exchanging the authorization code. Calling reset() during that mount bumps
+      // the hook's reset version and the fetched token is silently discarded, so
+      // the user sees no Connection Status / Tool Configuration and must authorize
+      // again after saving.
+      const { rerender } = render(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).not.toHaveBeenCalled();
+
+      // A real open -> closed transition must still reset (the #30000 leak fix).
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+      expect(oauthHook.reset).toHaveBeenCalled();
     });
   });
 

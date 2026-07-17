@@ -94,6 +94,41 @@ async def test_chunk_processor_logs_on_client_disconnect():
 
 
 @pytest.mark.asyncio
+async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_error():
+    """A 4xx/5xx upstream response is already logged as a failure by the caller
+    before this generator starts; scheduling success logging here too would
+    double-log the same request in SpendLogs."""
+    chunks = [b'{"error": "denied"}']
+    response = _make_streaming_response(chunks)
+    response.status_code = 403
+
+    mock_logging_obj = MagicMock()
+    mock_passthrough_handler = MagicMock()
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        received = []
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=mock_logging_obj,
+            endpoint_type=EndpointType.GENERIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=mock_passthrough_handler,
+            url_route="/bedrock/model/claude/invoke-with-response-stream",
+        ):
+            received.append(chunk)
+
+        await asyncio.sleep(0)
+
+    assert received == chunks
+    mock_route.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
     response = _make_streaming_response([])
 

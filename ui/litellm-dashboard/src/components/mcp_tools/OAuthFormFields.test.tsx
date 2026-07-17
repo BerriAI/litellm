@@ -91,6 +91,47 @@ describe("OAuthFormFields", () => {
     });
   });
 
+  describe("token endpoint auth method selector", () => {
+    it("renders directly below the Token URL field in interactive mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      const tokenUrlLabel = screen.getByText("Token URL (optional)");
+      const authMethodLabel = screen.getByText("Token Endpoint Auth Method (optional)");
+      expect(tokenUrlLabel.compareDocumentPosition(authMethodLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("renders directly below the Token URL field in M2M mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      const tokenUrlLabel = screen.getByText("Token URL");
+      const authMethodLabel = screen.getByText("Token Endpoint Auth Method (optional)");
+      expect(tokenUrlLabel.compareDocumentPosition(authMethodLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("offers client_secret_basic and client_secret_post options", async () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      const authMethodLabel = screen.getByText("Token Endpoint Auth Method (optional)");
+      const selector = authMethodLabel.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+      await act(async () => {
+        fireEvent.mouseDown(selector);
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Client Secret Basic")).toBeInTheDocument();
+        expect(screen.getByText("Client Secret Post")).toBeInTheDocument();
+      });
+    });
+  });
+
   // ── token_validation_json inline JSON validator ──────────────────────────────
 
   describe("token_validation_json validation", () => {

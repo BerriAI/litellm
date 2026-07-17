@@ -1838,6 +1838,7 @@ if MCP_AVAILABLE:
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                         user_api_key_auth=user_api_key_auth,
+                        oauth2_headers=oauth2_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -1860,7 +1861,8 @@ if MCP_AVAILABLE:
                     # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
                     # intentionally not done here: raising from this list handler cannot produce a
                     # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-                    # error), so that belongs in a request-scope preemptive check, tracked separately.
+                    # error). Single-server routes surface it via the request-scope preemptive
+                    # check in _raise_preemptive_401_for_unauthenticated_servers instead.
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
                     return []
                 except Exception as e:
@@ -2692,12 +2694,18 @@ if MCP_AVAILABLE:
 
             # Forward named client headers to OpenAPI tool upstream requests.
             # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # OAuth2 M2M: never take Authorization from the caller (matches
-            # _prepare_mcp_server_headers for managed MCP).
+            # The strip decision is centralized in _should_strip_caller_authorization so this
+            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
+            # (token_exchange's raw subject token, authorization_code's stored token) must never
+            # have the caller's Authorization forwarded verbatim upstream.
             forwarded_headers: Optional[Dict[str, str]] = None
             if mcp_server and mcp_server.extra_headers and raw_headers:
                 normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization = bool(mcp_server.has_client_credentials)
+                skip_caller_authorization = _should_strip_caller_authorization(
+                    mcp_server=mcp_server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
                 for header_name in mcp_server.extra_headers:
                     if not isinstance(header_name, str):
                         continue
@@ -3464,6 +3472,36 @@ if MCP_AVAILABLE:
                     status_code=401,
                     detail="Unauthorized",
                     headers={"www-authenticate": authorization_uri},
+                )
+
+            # token_exchange (OBO): the caller supplied no subject token. Challenge at connect
+            # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
+            # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
+            # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
+            # header lost, so the discovery flow needs this pre-emptive challenge.
+            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                    raise_token_exchange_challenge,
+                )
+                from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+
+                raise_token_exchange_challenge(server, root_path=get_server_root_path())
+
+            # token_exchange (OBO) with a subject present: run the exchange here at the transport
+            # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
+            # public status) instead of the session opening and list_tools masking the failure as
+            # an empty tool list. Gated to single-server routes; the multi-server aggregate keeps
+            # absorbing per-server auth failures so one bad server cannot 401 the whole connect.
+            if (
+                server
+                and server.auth_type == MCPAuth.oauth2_token_exchange
+                and oauth2_headers
+                and len(mcp_servers or []) == 1
+            ):
+                await global_mcp_server_manager.preflight_token_exchange(
+                    server=server,
+                    oauth2_headers=oauth2_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into

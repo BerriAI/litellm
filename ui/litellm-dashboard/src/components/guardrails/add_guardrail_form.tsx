@@ -594,18 +594,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
        * the selected provider and ONLY pass those recognised params.
        ******************************/
 
-      console.log("values: ", JSON.stringify(values));
-
       // Use pre-fetched provider params to copy recognised params
       // Skip for providers that handle their own litellm_params (llm_as_a_judge, tool_permission, content filter, PII)
       if (providerParams && selectedProvider && guardrailProvider !== "llm_as_a_judge") {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-        console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
 
         const allowedParams = new Set<string>();
-
-        console.log("providerSpecificParams: ", JSON.stringify(providerSpecificParams));
 
         // Add root-level parameters (like api_key, api_base, api_version)
         Object.keys(providerSpecificParams).forEach((paramName) => {
@@ -621,7 +616,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           });
         }
 
-        console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
@@ -639,7 +633,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         throw new Error("No access token available");
       }
 
-      console.log("Sending guardrail data:", JSON.stringify(guardrailData));
       await createGuardrailCall(accessToken, guardrailData);
 
       NotificationsManager.success("Guardrail created successfully");
@@ -917,8 +910,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       return null;
     }
 
-    console.log("guardrail_provider_map: ", guardrail_provider_map);
-    console.log("selectedProvider: ", selectedProvider);
     const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
     const providerFields = providerParams && providerParams[providerKey];
 

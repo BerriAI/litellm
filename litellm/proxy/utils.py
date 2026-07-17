@@ -4526,6 +4526,8 @@ class PrismaClient:
                         "Writer healthy on probe; skipping recreate (engine "
                         "likely already replaced by a token refresh)."
                     )
+                    if isinstance(self.db, RoutingPrismaWrapper):
+                        self.db.mark_writer_recovered()
                     await self._start_engine_watcher()
                     return
                 except Exception as probe_err:
@@ -4718,6 +4720,11 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_writer_unavailable",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:

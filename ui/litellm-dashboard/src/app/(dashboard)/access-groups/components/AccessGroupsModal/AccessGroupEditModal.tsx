@@ -52,9 +52,7 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
           },
         );
       })
-      .catch((info) => {
-        console.log("Validate Failed:", info);
-      });
+      .catch((info) => {});
   };
 
   return (

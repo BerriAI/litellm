@@ -299,7 +299,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         try {
           await createGuardrailCall(accessToken, guardrailDef);
           createdGuardrails.push(guardrailName);
-          console.log(`Successfully created guardrail: ${guardrailName}`);
         } catch (error) {
           console.error(`Failed to create guardrail "${guardrailName}":`, error);
           failedGuardrails.push(guardrailName);

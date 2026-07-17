@@ -387,7 +387,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   useEffect(() => {
     let userApiKey = apiKeySource === "session" ? accessToken : apiKey;
     if (!userApiKey || !token || !userRole || !userID) {
-      console.log("userApiKey or token or userRole or userID is missing = ", userApiKey, token, userRole, userID);
       return;
     }
 
@@ -395,12 +394,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const loadModels = async () => {
       try {
         if (!userApiKey) {
-          console.log("userApiKey is missing");
           return;
         }
         const uniqueModels = await fetchAvailableModels(userApiKey);
-
-        console.log("Fetched models:", uniqueModels);
 
         setModelInfo(uniqueModels);
 
@@ -960,7 +956,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     } catch (error) {
       if (signal.aborted) {
-        console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
         updateTextUI("assistant", "Error fetching response:" + error);
@@ -1009,7 +1004,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }
 
   const onModelChange = (value: string) => {
-    console.log(`selected ${value}`);
     setSelectedModel(value);
 
     setShowCustomModelInput(value === "custom");
