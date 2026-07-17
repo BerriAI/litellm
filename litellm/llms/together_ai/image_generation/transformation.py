@@ -29,7 +29,7 @@ else:
 
 class TogetherAIImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return ["n", "size", "response_format"]
+        return ["n", "size", "response_format", "quality", "style", "user"]
 
     def map_openai_params(
         self,

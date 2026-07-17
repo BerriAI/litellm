@@ -1,4 +1,3 @@
-import json
 from typing import Optional
 
 import httpx
@@ -66,6 +65,17 @@ def test_map_openai_params_maps_size_to_width_height():
         drop_params=False,
     )
     assert mapped == {"width": 1792, "height": 1024, "n": 2}
+
+
+def test_map_openai_params_passes_unmapped_supported_params_verbatim():
+    config = TogetherAIImageGenerationConfig()
+    mapped = config.map_openai_params(
+        non_default_params={"quality": "hd", "style": "vivid", "user": "user-123"},
+        optional_params={},
+        model="black-forest-labs/FLUX.1-kontext-pro",
+        drop_params=False,
+    )
+    assert mapped == {"quality": "hd", "style": "vivid", "user": "user-123"}
 
 
 def test_map_openai_params_maps_b64_json_response_format_to_base64():
