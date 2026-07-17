@@ -55,6 +55,16 @@ class TestLaunchProxy:
         assert "--host" in args
         assert args[args.index("--host") + 1] == "127.0.0.1"
 
+    def test_forwards_debug_flags(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        log_path = tmp_path / "proxy.log"
+
+        with patch.object(process_module.subprocess, "Popen") as mock_popen:
+            launch_proxy(config_path, 12345, log_path, debug=True, detailed_debug=True)
+
+        args = mock_popen.call_args[0][0]
+        assert args[-2:] == ("--debug", "--detailed_debug")
+
 
 class TestPidRecordRoundTrip:
     def test_write_then_read_round_trips(self, tmp_path):

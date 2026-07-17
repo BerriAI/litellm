@@ -171,8 +171,8 @@ class TestBuildGeneratedModelList:
 class TestBuildGeneratedProxyConfig:
     def test_embeds_master_key_under_general_settings(self):
         config = _base_config()
-        proxy_config = build_generated_proxy_config(config, "sk-master-123")
-        assert proxy_config["general_settings"] == {"master_key": "sk-master-123"}
+        proxy_config = build_generated_proxy_config(config, "sk-1234")
+        assert proxy_config["general_settings"] == {"master_key": "sk-1234"}
         assert proxy_config["model_list"] == build_generated_model_list(config)
 
 

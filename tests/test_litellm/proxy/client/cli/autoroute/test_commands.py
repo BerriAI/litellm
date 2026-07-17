@@ -136,8 +136,6 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
         monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 54321)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
-        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
-
         captured = {}
 
         def fake_wait(self, timeout=None):
@@ -154,7 +152,7 @@ class TestUpCommand:
         assert captured["backup_existed"] is True
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:54321"
-        assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
+        assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-1234"
         assert "apiKeyHelper" not in captured["settings"]
         assert captured["settings_mode"] == 0o600
 
@@ -164,8 +162,37 @@ class TestUpCommand:
         assert json.loads(claude_settings_path.read_text()) == original_settings
 
         written_config = yaml.safe_load(config_path.read_text())
-        assert written_config["general_settings"]["master_key"] == "fixed-master-key"
+        assert written_config["general_settings"]["master_key"] == "sk-1234"
         assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+        assert f"Config: {config_path}" in result.output
+        assert f"Log: {log_path}" in result.output
+        assert "Port: 54321" in result.output
+        assert "Master key: sk-1234" in result.output
+
+    def test_passes_debug_flags_to_proxy(self, monkeypatch, tmp_path):
+        config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        fake_process = FakeProcess(pid=99999)
+        launch_kwargs = {}
+        monkeypatch.setattr(
+            commands_module,
+            "launch_proxy",
+            lambda *args, **kwargs: launch_kwargs.update(kwargs) or fake_process,
+        )
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 54321)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+        monkeypatch.setattr("threading.Event.wait", lambda self, timeout=None: True)
+
+        result = self.runner.invoke(up, ["--debug", "--detailed-debug"])
+
+        assert result.exit_code == 0, result.output
+        assert launch_kwargs == {"debug": True, "detailed_debug": True}
 
     def test_teardown_reports_clean_error_when_backup_is_corrupt(self, monkeypatch, tmp_path):
         """A corrupt backup at teardown time (e.g. a concurrent process wrote garbage to it) must
@@ -181,7 +208,6 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
         monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 65432)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
-        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
         def fake_wait(self, timeout=None):
             backup_path.write_text("not json at all {{{")
@@ -211,8 +237,6 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "poll_liveliness", _raise_launch_error)
         monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 12345)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
-        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
-
         result = self.runner.invoke(up)
 
         assert result.exit_code != 0
@@ -236,8 +260,6 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
         monkeypatch.setattr(commands_module, "allocate_free_port", lambda: 23456)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
-        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
-
         result = self.runner.invoke(up)
 
         assert result.exit_code != 0
