@@ -32,6 +32,66 @@ def force_local_model_cost(monkeypatch):
     litellm.model_cost = get_model_cost_map(url=litellm.model_cost_map_url)
 
 
+def test_validate_environment_sets_session_affinity_from_litellm_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-123"
+
+
+def test_validate_environment_sets_session_affinity_from_metadata_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"metadata": {"session_id": "metadata-session-123"}},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "metadata-session-123"
+
+
+def test_validate_environment_does_not_set_session_affinity_without_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert "x-session-affinity" not in headers
+
+
+def test_validate_environment_preserves_explicit_session_affinity_header():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={"x-session-affinity": "explicit-session"},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "explicit-session"
+
+
 def test_handle_message_content_with_tool_calls():
     config = FireworksAIConfig()
     message = Message(

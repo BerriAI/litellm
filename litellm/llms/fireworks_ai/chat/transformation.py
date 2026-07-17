@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException
+from ..common_utils import FireworksAIMixin, FireworksAIException
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -70,7 +70,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
-class FireworksAIConfig(OpenAIGPTConfig):
+class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
