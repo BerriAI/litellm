@@ -14809,6 +14809,7 @@ class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
     type: Literal["Float", "Boolean", "Select"]
     description: str
     options: NotRequired[tuple[str, ...]]
+    tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
@@ -14822,6 +14823,7 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec
     },
     "enable_anthropic_prompt_caching": {
         "type": "Boolean",
+        "tab": "prompt_caching",
         "description": (
             "Automatically add Anthropic cache_control breakpoints to the system prompt and the "
             "trailing turn, for Anthropic and Bedrock Claude models that support prompt caching. "
@@ -14836,6 +14838,7 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec
     "anthropic_prompt_caching_ttl": {
         "type": "Select",
         "options": ("5m", "1h"),
+        "tab": "prompt_caching",
         "description": (
             "Cache lifetime for the breakpoints added by 'enable_anthropic_prompt_caching'. "
             "Leave empty for Anthropic's 5m default. 1h suits long agentic sessions but doubles "
@@ -15093,6 +15096,7 @@ async def get_config_list(
                 stored_in_db=stored_in_db_litellm,
                 field_default_value=default_value,
                 field_options=list(spec.get("options", ())) or None,
+                field_tab=spec.get("tab"),
                 nested_fields=None,
             )
         )

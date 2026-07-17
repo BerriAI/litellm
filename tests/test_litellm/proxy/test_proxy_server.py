@@ -9019,6 +9019,12 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["anthropic_prompt_caching_ttl"]["field_type"] == "Select"
         assert fields["anthropic_prompt_caching_ttl"]["field_value"] == "1h"
         assert fields["anthropic_prompt_caching_ttl"]["field_options"] == ["5m", "1h"]
+
+        # Both caching fields carry their sub-tab so the Admin UI can render them on a
+        # dedicated Prompt Caching tab, while ungrouped fields stay on General.
+        assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
+        assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
+        assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
     finally:
         app.dependency_overrides.clear()
 

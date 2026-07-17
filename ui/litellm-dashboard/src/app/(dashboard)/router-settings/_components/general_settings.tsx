@@ -7,6 +7,7 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
+  Title,
   Text,
   Button,
   Icon,
@@ -21,6 +22,11 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
+
+const PROMPT_CACHING_TAB = "prompt_caching";
+const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
+const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
+
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -34,6 +40,7 @@ interface generalSettingsItem {
   field_description: string;
   stored_in_db: boolean | null;
   field_options?: string[] | null;
+  field_tab?: string | null;
 }
 
 const SettingValueEditor: React.FC<{
@@ -81,6 +88,71 @@ const SettingValueEditor: React.FC<{
     );
   }
   return null;
+};
+
+const PromptCachingPanel: React.FC<{
+  accessToken: string;
+  settings: generalSettingsItem[];
+  onChange: (fieldName: string, newValue: any) => void;
+}> = ({ accessToken, settings, onChange }) => {
+  const enableSetting = settings.find((s) => s.field_name === ENABLE_ANTHROPIC_PROMPT_CACHING);
+  const ttlSetting = settings.find((s) => s.field_name === ANTHROPIC_PROMPT_CACHING_TTL);
+
+  // The two rows come from the same registry the General tab reads; if they
+  // are not loaded yet there is nothing to render.
+  if (!enableSetting) {
+    return null;
+  }
+
+  const enabled = enableSetting.field_value === true || enableSetting.field_value === "true";
+
+  // Apply immediately: a toggle and a dropdown are direct controls, so there is
+  // no separate Update button. Clearing the ttl resets it to the provider default.
+  const persist = (fieldName: string, value: any) => {
+    onChange(fieldName, value);
+    if (value === "" || value === null || value === undefined) {
+      deleteConfigFieldSetting(accessToken, fieldName);
+    } else {
+      updateConfigFieldSetting(accessToken, fieldName, value);
+    }
+  };
+
+  return (
+    <Card>
+      <Title>Prompt Caching</Title>
+      <Text className="mt-2">
+        Automatically inject Anthropic prompt caching for every Anthropic and Bedrock Claude model, so clients that
+        never set <span className="font-mono">cache_control</span> themselves still get cached prompts. This is a single
+        gateway-wide switch; there is no per-model setup.
+      </Text>
+
+      <div className="mt-6 flex items-start justify-between gap-8">
+        <div className="max-w-2xl">
+          <Text className="font-medium">Automatic Anthropic prompt caching</Text>
+          <p className="mt-1 text-xs text-gray-500">{enableSetting.field_description}</p>
+        </div>
+        <Switch checked={enabled} onChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
+      </div>
+
+      {ttlSetting && (
+        <div className="mt-6 flex items-start justify-between gap-8">
+          <div className="max-w-2xl">
+            <Text className={`font-medium ${enabled ? "" : "text-gray-400"}`}>Cache lifetime (TTL)</Text>
+            <p className="mt-1 text-xs text-gray-500">{ttlSetting.field_description}</p>
+          </div>
+          <AntdSelect
+            allowClear
+            disabled={!enabled}
+            style={{ minWidth: "10rem" }}
+            placeholder="5m (default)"
+            value={ttlSetting.field_value || undefined}
+            options={(ttlSetting.field_options ?? []).map((option) => ({ label: option, value: option }))}
+            onChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+          />
+        </div>
+      )}
+    </Card>
+  );
 };
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
@@ -156,6 +228,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           <Tab value="1">Loadbalancing</Tab>
           <Tab value="2">Routing Groups</Tab>
           <Tab value="3">Fallbacks</Tab>
+          <Tab value="5">Prompt Caching</Tab>
           <Tab value="4">General</Tab>
         </TabList>
         <TabPanels className="px-8 py-6">
@@ -167,6 +240,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           </TabPanel>
           <TabPanel>
             <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
+          </TabPanel>
+          <TabPanel>
+            <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
           </TabPanel>
           <TabPanel>
             <Card>
@@ -181,7 +257,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                 </TableHead>
                 <TableBody>
                   {generalSettings
-                    .filter((value) => value.field_type !== "TypedDictionary")
+                    .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
                     .map((value, index) => (
                       <TableRow key={index}>
                         <TableCell>
