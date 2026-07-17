@@ -246,11 +246,7 @@ class TestDataDogLogDelivery:
         """One successful STREAMED /v1/messages call must reach real DataDog
         as exactly one log event whose payload carries the model, the token
         counts aggregated across the stream, stream=true, and a response cost
-        equal to the /spend/logs row for the same call.
-
-        The non-streaming messages route double-logs today (LIT-4447); the
-        streamed path verified clean during evidence probing, so this test is
-        strict and expected green."""
+        equal to the /spend/logs row for the same call."""
         _assert_datadog_configured(client)
 
         key = client.key_with_alias(f"dd-stream-messages-{unique_marker()}", models=[CHEAP_ANTHROPIC_MODEL])
