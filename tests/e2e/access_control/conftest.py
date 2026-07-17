@@ -1,4 +1,4 @@
-"""Access-control suite client fixture; lifecycle/skip/marker live in the parent conftest."""
+"""Access-control suite client fixture; lifecycle/liveness gate/marker live in the parent conftest."""
 
 import pytest
 
