@@ -786,9 +786,11 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
     "model,expected_mode,expected_input,expected_output,expected_cache_read",
     [
         ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
+        # Azure's GPT-5.5 snapshot is 2026-04-24 (OpenAI's is 2026-04-23); the
+        # Azure dated deployment string must use Azure's version, not OpenAI's.
+        ("azure/gpt-5.5-2026-04-24", "chat", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.5-pro", "responses", 3e-5, 1.8e-4, 3e-6),
-        ("azure/gpt-5.5-pro-2026-04-23", "responses", 3e-5, 1.8e-4, 3e-6),
+        ("azure/gpt-5.5-pro-2026-04-24", "responses", 3e-5, 1.8e-4, 3e-6),
     ],
 )
 def test_azure_gpt55_entries_present_with_correct_pricing(
@@ -837,6 +839,51 @@ def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
     assert m.get("supports_none_reasoning_effort") is expected_none
     assert m.get("supports_minimal_reasoning_effort") is expected_minimal
     assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+
+
+@pytest.mark.parametrize(
+    "base_model,dated_model",
+    [
+        ("azure/gpt-5.5", "azure/gpt-5.5-2026-04-24"),
+        ("azure/us/gpt-5.5", "azure/us/gpt-5.5-2026-04-24"),
+        ("azure/eu/gpt-5.5", "azure/eu/gpt-5.5-2026-04-24"),
+        ("azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-24"),
+        ("azure/gpt-5.5-pro", "azure/gpt-5.5-pro-2026-04-24"),
+    ],
+)
+def test_azure_gpt55_dated_variant_uses_azure_snapshot_and_matches_base(
+    base_model, dated_model
+):
+    """Azure GPT-5.5 dated deployments use Azure's 2026-04-24 snapshot.
+
+    The Azure GPT-5.5 family ships as version 2026-04-24 (OpenAI's snapshot is
+    2026-04-23); the day-0 entries wrongly copied OpenAI's date. Guard that the
+    OpenAI-dated Azure keys never come back, that the Azure-dated keys exist,
+    and that pinning a dated Azure variant keeps the exact reasoning_effort
+    capability profile of its floating alias.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    wrong_dated = dated_model.replace("2026-04-24", "2026-04-23")
+    assert (
+        wrong_dated not in litellm.model_cost
+    ), f"{wrong_dated} uses OpenAI's snapshot date; Azure ships 2026-04-24"
+    assert dated_model in litellm.model_cost, f"{dated_model} missing from cost map"
+
+    base = litellm.model_cost[base_model]
+    dated = litellm.model_cost[dated_model]
+    for flag in (
+        "supports_none_reasoning_effort",
+        "supports_minimal_reasoning_effort",
+        "supports_xhigh_reasoning_effort",
+        "supports_low_reasoning_effort",
+    ):
+        assert dated.get(flag) == base.get(flag), (
+            f"{dated_model} has {flag}={dated.get(flag)!r}, but {base_model} "
+            f"has {flag}={base.get(flag)!r}. Dated Azure snapshots must inherit "
+            f"the base model's reasoning_effort capability profile."
+        )
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching():
