@@ -56,6 +56,16 @@ class RedisClusterCache(RedisCache):
         async_redis_cluster_client = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)  # type: ignore
 
+    async def disconnect(self):
+        if self.redis_async_redis_cluster_client is not None:
+            await self.redis_async_redis_cluster_client.aclose()
+        try:
+            self.redis_client.close()
+        except Exception as e:
+            from litellm._logging import verbose_logger
+
+            verbose_logger.debug("Error closing sync Redis Cluster client: %s", e)
+
     async def test_connection(self) -> dict:
         """
         Test the Redis Cluster connection.
