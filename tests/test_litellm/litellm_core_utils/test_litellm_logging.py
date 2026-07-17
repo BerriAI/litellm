@@ -3609,6 +3609,33 @@ def test_handle_anthropic_messages_response_logging_translates_bare_responses_ap
     assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
 
 
+def test_transform_usage_objects_responses_api_keeps_prompt_and_completion_tokens():
+    """Regression for #33688. Non-streaming /v1/responses logging runs the result
+    through _transform_usage_objects, which swaps the ResponseAPIUsage for a chat
+    Usage carrying prompt_tokens/completion_tokens. Serializing the returned
+    ResponsesAPIResponse must preserve those fields; before the SerializeAsAny fix
+    the ResponseAPIUsage-typed field silently dropped them, leaving only
+    total_tokens for downstream loggers (custom callbacks, Prometheus)."""
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aresponses",
+        litellm_call_id="test-call-id",
+        start_time=time.time(),
+        function_id="test-fn",
+    )
+
+    result = logging_obj._transform_usage_objects(
+        result=_responses_api_response_with_text("hello world")
+    )
+
+    serialized_usage = result.model_dump()["usage"]
+    assert serialized_usage["prompt_tokens"] == 11
+    assert serialized_usage["completion_tokens"] == 7
+    assert serialized_usage["total_tokens"] == 18
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
