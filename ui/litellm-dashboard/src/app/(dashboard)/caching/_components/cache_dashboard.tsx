@@ -13,14 +13,19 @@ import {
   TabPanels,
   Text,
 } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Card as ChartCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { RefreshIcon } from "@heroicons/react/outline";
-import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
+import {
+  adminGlobalCacheActivity,
+  adminGlobalPromptCacheActivity,
+  cachingHealthCheckCall,
+  PromptCacheActivityItem,
+} from "@/components/networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
@@ -70,6 +75,13 @@ type uiData = {
   "Generated Completion Tokens": number;
 };
 
+type promptCacheUiData = {
+  name: string;
+  "Uncached Input Tokens": number;
+  "Cache Read Input Tokens": number;
+  "Cache Creation Input Tokens": number;
+};
+
 interface CacheHealthResponse {
   status?: string;
   cache_type?: string;
@@ -102,6 +114,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [data, setData] = useState<cacheDataItem[]>([]);
+  const [promptCacheData, setPromptCacheData] = useState<PromptCacheActivityItem[]>([]);
   const [cachedResponses, setCachedResponses] = useState("0");
   const [cachedTokens, setCachedTokens] = useState("0");
   const [cacheHitRatio, setCacheHitRatio] = useState("0");
@@ -125,6 +138,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         formatDateWithoutTZ(dateValue.to),
       );
       setData(response);
+      const promptCacheResponse = await adminGlobalPromptCacheActivity(
+        accessToken,
+        formatDateWithoutTZ(dateValue.from),
+        formatDateWithoutTZ(dateValue.to),
+      );
+      setPromptCacheData(promptCacheResponse);
     };
     fetchData();
 
@@ -148,6 +167,14 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     );
 
     setData(new_cache_data);
+
+    let new_prompt_cache_data = await adminGlobalPromptCacheActivity(
+      accessToken,
+      formatDateWithoutTZ(startTime),
+      formatDateWithoutTZ(endTime),
+    );
+
+    setPromptCacheData(new_prompt_cache_data);
   };
 
   useEffect(() => {
@@ -223,6 +250,36 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
     setFilteredData(processedData);
   }, [selectedApiKeys, selectedModels, dateValue, data]);
+
+  const { promptCacheChart, promptCacheReadTokens, promptCacheCreationTokens } = useMemo(() => {
+    const rows = promptCacheData
+      .filter((item) => selectedApiKeys.length === 0 || selectedApiKeys.includes(item.api_key))
+      .filter((item) => selectedModels.length === 0 || (item.model !== null && selectedModels.includes(item.model)));
+
+    const byModel = new Map<string, promptCacheUiData>();
+    for (const item of rows) {
+      const cacheRead = item.cache_read_input_tokens || 0;
+      const cacheCreation = item.cache_creation_input_tokens || 0;
+      const uncached = Math.max((item.prompt_tokens || 0) - cacheRead - cacheCreation, 0);
+      const name = item.model || "Unknown";
+      const existing = byModel.get(name);
+      byModel.set(name, {
+        name,
+        "Uncached Input Tokens": (existing?.["Uncached Input Tokens"] ?? 0) + uncached,
+        "Cache Read Input Tokens": (existing?.["Cache Read Input Tokens"] ?? 0) + cacheRead,
+        "Cache Creation Input Tokens": (existing?.["Cache Creation Input Tokens"] ?? 0) + cacheCreation,
+      });
+    }
+
+    const sum = (pick: (item: PromptCacheActivityItem) => number) =>
+      rows.reduce((total, item) => total + (pick(item) || 0), 0);
+
+    return {
+      promptCacheChart: Array.from(byModel.values()),
+      promptCacheReadTokens: valueFormatterNumbers(sum((item) => item.cache_read_input_tokens)),
+      promptCacheCreationTokens: valueFormatterNumbers(sum((item) => item.cache_creation_input_tokens)),
+    };
+  }, [selectedApiKeys, selectedModels, promptCacheData]);
 
   const handleRefreshClick = () => {
     // Update the 'lastRefreshed' state to the current date and time
@@ -381,6 +438,56 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   valueFormatter={valueFormatterNumbers}
                   categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
                   colors={["sky", "teal"]}
+                  yAxisWidth={48}
+                />
+              </CardContent>
+            </ChartCard>
+
+            <div className="mt-8">
+              <p className="text-tremor-title font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                Provider Prompt Caching
+              </p>
+              <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mt-1">
+                Input tokens cached by the provider (e.g. Anthropic prompt caching). Tracked separately from
+                LiteLLM&apos;s response cache above.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 mt-4">
+              <Card>
+                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+                  Cache Read Input Tokens
+                </p>
+                <div className="mt-2 flex items-baseline space-x-2.5">
+                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                    {promptCacheReadTokens}
+                  </p>
+                </div>
+              </Card>
+              <Card>
+                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+                  Cache Creation Input Tokens
+                </p>
+                <div className="mt-2 flex items-baseline space-x-2.5">
+                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                    {promptCacheCreationTokens}
+                  </p>
+                </div>
+              </Card>
+            </div>
+
+            <ChartCard className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">Prompt Cache Input Tokens by Model</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <BarChart
+                  data={promptCacheChart}
+                  stack={true}
+                  index="name"
+                  valueFormatter={valueFormatterNumbers}
+                  categories={["Uncached Input Tokens", "Cache Read Input Tokens", "Cache Creation Input Tokens"]}
+                  colors={["sky", "teal", "indigo"]}
                   yAxisWidth={48}
                 />
               </CardContent>

@@ -4,15 +4,28 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
-const { adminGlobalCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
+const { adminGlobalCacheActivity, adminGlobalPromptCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
   adminGlobalCacheActivity: vi.fn(),
+  adminGlobalPromptCacheActivity: vi.fn(),
   cachingHealthCheckCall: vi.fn(),
 }));
 
 vi.mock("@/components/networking", () => ({
   adminGlobalCacheActivity,
+  adminGlobalPromptCacheActivity,
   cachingHealthCheckCall,
 }));
+
+const promptCacheActivity = [
+  {
+    api_key: "sk-1",
+    model: "claude-haiku-4-5",
+    prompt_tokens: 80000,
+    cache_read_input_tokens: 71000,
+    cache_creation_input_tokens: 4000,
+    api_requests: 12,
+  },
+];
 
 const cacheActivity = [
   {
@@ -46,8 +59,12 @@ const findChartCards = async () => {
     expect(document.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
   });
   const cards = Array.from(document.querySelectorAll('[data-slot="card"]'));
-  expect(cards).toHaveLength(2);
-  return { requestsCard: cards[0] as HTMLElement, tokensCard: cards[1] as HTMLElement };
+  expect(cards).toHaveLength(3);
+  return {
+    requestsCard: cards[0] as HTMLElement,
+    tokensCard: cards[1] as HTMLElement,
+    promptCacheCard: cards[2] as HTMLElement,
+  };
 };
 
 const barFills = (card: HTMLElement) =>
@@ -67,6 +84,23 @@ describe("CacheDashboard cache analytics charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     adminGlobalCacheActivity.mockResolvedValue(cacheActivity);
+    adminGlobalPromptCacheActivity.mockResolvedValue(promptCacheActivity);
+  });
+
+  it("surfaces provider prompt-cache read/creation tokens the response-cache view omits", async () => {
+    renderDashboard();
+    const { promptCacheCard } = await findChartCards();
+
+    expect(screen.getByText("Provider Prompt Caching")).toBeInTheDocument();
+    expect(screen.getByText("71K")).toBeInTheDocument();
+
+    expect(within(promptCacheCard).getByText("Prompt Cache Input Tokens by Model")).toBeInTheDocument();
+    expect(legendFillByCategory(promptCacheCard)).toEqual({
+      "Uncached Input Tokens": "var(--color-sky-500, #0ea5e9)",
+      "Cache Read Input Tokens": "var(--color-teal-500, #14b8a6)",
+      "Cache Creation Input Tokens": "var(--color-indigo-500, #6366f1)",
+    });
+    expect(within(promptCacheCard).getAllByText("claude-haiku-4-5").length).toBeGreaterThan(0);
   });
 
   it("renders both chart card titles", async () => {

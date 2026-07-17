@@ -4385,6 +4385,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/global/activity/cache_hits/prompt_caching": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Prompt Cache Activity */
+        get: operations["get_prompt_cache_activity_global_activity_cache_hits_prompt_caching_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/global/activity/exceptions": {
         parameters: {
             query?: never;
@@ -29590,6 +29607,21 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheActivityRow */
+        PromptCacheActivityRow: {
+            /** Api Key */
+            api_key: string;
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Model */
+            model?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -40189,6 +40221,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prompt_cache_activity_global_activity_cache_hits_prompt_caching_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing prompt-cache usage */
+                start_date?: string | null;
+                /** @description Time till which to view prompt-cache usage */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptCacheActivityRow"][];
                 };
             };
             /** @description Validation Error */

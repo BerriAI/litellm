@@ -2163,6 +2163,27 @@ export const adminGlobalCacheActivity = async (
   }
 };
 
+export interface PromptCacheActivityItem {
+  api_key: string;
+  model: string | null;
+  prompt_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  api_requests: number;
+}
+
+export const adminGlobalPromptCacheActivity = async (
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
+): Promise<PromptCacheActivityItem[]> => {
+  const query = startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined;
+  return await apiClient.get<PromptCacheActivityItem[]>(`/global/activity/cache_hits/prompt_caching`, {
+    accessToken,
+    query,
+  });
+};
+
 export const adminGlobalActivityPerModel = async (
   accessToken: string,
   startTime: string | undefined,
