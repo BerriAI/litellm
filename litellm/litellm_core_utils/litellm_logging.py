@@ -38,6 +38,7 @@ from litellm import (
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
 from litellm.exceptions import (
+    BudgetExceededError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -4597,6 +4598,10 @@ class StandardLoggingPayloadSetup:
             user_api_key_spend=None,
             user_api_key_max_budget=None,
             user_api_key_budget_reset_at=None,
+            user_api_key_user_spend=None,
+            user_api_key_user_max_budget=None,
+            user_api_key_team_spend=None,
+            user_api_key_team_max_budget=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_org_alias=None,
@@ -4943,6 +4948,7 @@ class StandardLoggingPayloadSetup:
 
         rate_limit_category = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
+        budget_error = original_exception if isinstance(original_exception, BudgetExceededError) else None
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
@@ -4952,6 +4958,10 @@ class StandardLoggingPayloadSetup:
             error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
+            error_budget_entity_type=budget_error.entity_type if budget_error else None,
+            error_budget_entity_id=budget_error.entity_id if budget_error else None,
+            error_budget_limit=budget_error.max_budget if budget_error else None,
+            error_budget_spend=budget_error.current_cost if budget_error else None,
         )
 
     @staticmethod
@@ -5428,6 +5438,10 @@ def get_standard_logging_metadata(
         user_api_key_spend=None,
         user_api_key_max_budget=None,
         user_api_key_budget_reset_at=None,
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_org_alias=None,
@@ -5527,6 +5541,10 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         user_api_key_team_id=str("test_team"),
         user_api_key_user_id=str("test_user"),
         user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_org_id=None,
         spend_logs_metadata=None,
         requester_ip_address=str("127.0.0.1"),
