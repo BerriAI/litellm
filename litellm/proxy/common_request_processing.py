@@ -151,6 +151,80 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
+def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return False
+    return (
+        getattr(logging_obj, "_on_deferred_stream_complete", None) is not None
+        and getattr(logging_obj, "_deferred_stream_complete_args", None) is not None
+    )
+
+
+async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
+    """
+    A client disconnect throws GeneratorExit/CancelledError into the streaming
+    generator, so neither the success nor the failure logging callback fires
+    and the chunks already streamed (plus any sub-call cost folded into the
+    logging object) would never reach spend tracking. Assemble the partial
+    response from the wrapper's collected chunks and dispatch success logging
+    for it; dispatch_success_handlers dedups against a natural end-of-stream
+    dispatch via has_dispatched_final_stream_success.
+
+    Awaited directly by the shielded cleanup rather than scheduled with
+    create_task: the client is already gone so the extra latency is harmless,
+    and an unrooted task could be garbage-collected before it bills.
+
+    Returns True when a disconnect-time success event owns the request's
+    max_parallel_requests slot release (one was dispatched here, or one had
+    already been dispatched for this stream), so the caller can skip the
+    explicit slot release and avoid a double release. Returns False when no
+    success event fired (logging disabled, nothing streamed, or assembly
+    failed) and the caller must release the slot itself.
+    """
+    if litellm.disable_streaming_logging is True:
+        return False
+    logging_obj = request_data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return False
+    if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
+        # A natural end-of-stream success event already fired and released the
+        # slot; do not bill again, and let the caller skip the slot release.
+        return True
+    chunks: object = getattr(response, "chunks", None)
+    if not isinstance(chunks, list) or not chunks:
+        return False
+    verbose_proxy_logger.debug(
+        "Billing partial streamed spend for %s chunks after client disconnect, litellm_call_id=%s",
+        len(chunks),
+        request_data.get("litellm_call_id"),
+    )
+    messages: object = getattr(response, "messages", None)
+    try:
+        partial_response = litellm.stream_chunk_builder(
+            chunks=chunks,
+            messages=messages if isinstance(messages, list) else None,
+            logging_obj=logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to assemble partial streamed response for disconnect billing: %s", e)
+        return False
+    if partial_response is None:
+        return False
+    try:
+        await logging_obj.dispatch_success_handlers(
+            partial_response,
+            cache_hit=False,
+            start_time=None,
+            end_time=None,
+            prefer_async_handlers=True,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
+        return False
+    return True
+
+
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
     pending_tasks = [task for task in tasks if not task.done()]
     for task in pending_tasks:
@@ -2575,6 +2649,8 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         stream_completed: bool = False,
         client_disconnected: bool = False,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
             should_record_client_disconnect = client_disconnected or (not stream_completed)
@@ -2586,7 +2662,28 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
+                deferred_stream_logging_armed = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging._fire_deferred_stream_logging(request_data)
+                # A disconnect-time success event (the deferred-guardrail flush
+                # above, or the partial-spend billing below) releases the
+                # request's max_parallel_requests slot through the limiter's
+                # own success callback. Release the slot explicitly only when
+                # no such event fires, so exactly one release happens; two
+                # concurrent releases would race and double-decrement under the
+                # limiter's in-memory fallback.
+                success_event_owns_slot_release = deferred_stream_logging_armed
+                if not deferred_stream_logging_armed:
+                    success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
+                        request_data, response
+                    )
+                if (
+                    not success_event_owns_slot_release
+                    and proxy_logging_obj is not None
+                    and user_api_key_dict is not None
+                ):
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
+                        user_api_key_dict, request_data
+                    )
 
             if hasattr(response, "aclose"):
                 try:
@@ -2675,12 +2772,13 @@ class ProxyBaseLLMRequestProcessing:
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
-            # callbacks that release the pre-call max_parallel_requests +1;
-            # release it here. This is the outermost generator Starlette closes
-            # on disconnect, so the nested iterator hook (which only sees
-            # GeneratorExit on GC) cannot own the refund.
+            # callbacks that release the pre-call max_parallel_requests +1.
+            # Flag the disconnect; the shielded cleanup in `finally` owns the
+            # slot release so it can coordinate with disconnect-time success
+            # billing and release exactly once. This is the outermost generator
+            # Starlette closes on disconnect, so the nested iterator hook (which
+            # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
-                proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
                 client_disconnected = True
             if not delivered_chunk:
                 from litellm.proxy.spend_tracking.budget_reservation import (
@@ -2723,6 +2821,8 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 stream_completed=stream_completed,
                 client_disconnected=client_disconnected,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
     @staticmethod

@@ -1,6 +1,6 @@
 """Spend-tracking suite's `client` fixture and driver-model registration.
 
-The shared lifecycle (resources/scoped_key), proxy liveness skip, and e2e marker
+The shared lifecycle (resources/scoped_key), proxy liveness gate, and e2e marker
 live in the parent tests/e2e/conftest.py. SpendClient exposes the shared Gateway
 (GatewayProvider), so the `resources` fixture cleans up keys and customers this
 suite creates.
