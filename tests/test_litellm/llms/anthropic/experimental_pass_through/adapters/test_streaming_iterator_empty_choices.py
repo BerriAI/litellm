@@ -9,7 +9,7 @@ OpenAI-compatible upstreams can emit streaming chunks with ``choices=[]``
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
