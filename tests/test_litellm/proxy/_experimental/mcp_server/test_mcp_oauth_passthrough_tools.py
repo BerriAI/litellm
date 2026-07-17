@@ -273,6 +273,7 @@ def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
     return MCPServer(
         server_id=server_id,
         name=name,
+        alias=name,
         url=f"https://{name}/mcp",
         transport=MCPTransport.http,
         **kwargs,

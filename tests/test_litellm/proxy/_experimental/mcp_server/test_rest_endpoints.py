@@ -966,7 +966,8 @@ class TestListToolsRestAPI:
 
         assert exc_info.value.status_code == 502
         assert exc_info.value.detail["error"] == "upstream_error"
-        assert "flaky" in exc_info.value.detail["message"]
+        assert "server-1" in exc_info.value.detail["message"]
+        assert "flaky" not in exc_info.value.detail["message"]
 
     async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
         """The multi-server aggregate listing degrades a server whose upstream

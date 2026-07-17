@@ -1766,12 +1766,11 @@ if MCP_AVAILABLE:
             _mcp_gateway_server_name.reset(server_name_token)
 
     def _aggregate_server_key(server: MCPServer) -> str:
-        return str(
-            getattr(server, "server_name", None)
-            or getattr(server, "alias", None)
-            or getattr(server, "name", None)
-            or "unknown"
-        )
+        """The client-visible key for a server in listing outcomes and spend metadata: the same
+        display prefix (alias, or the short prefix when that mode is enabled) the caller already
+        sees on the tool names. Canonical internal server names never key a caller-readable
+        surface; when the display naming deliberately hides them, the outcome keys must too."""
+        return get_server_prefix(server) or "unknown"
 
     async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
