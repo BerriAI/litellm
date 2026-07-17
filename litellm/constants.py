@@ -1302,6 +1302,10 @@ STANDARD_CUSTOMER_ID_HEADERS = [
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
+# Max spend-log rows fetched to reconstruct a single Responses API session
+# (previous_response_id). Bounds how much the Prisma query engine buffers when a
+# session_id maps to a large number of rows; keeps the most recent N.
+MAX_RESPONSES_API_SESSION_SPEND_LOGS = int(os.getenv("MAX_RESPONSES_API_SESSION_SPEND_LOGS", 1000))
 DEFAULT_SOFT_BUDGET = float(
     os.getenv("DEFAULT_SOFT_BUDGET", 50.0)
 )  # by default all litellm proxy keys have a soft budget of 50.0

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_RESPONSES_API_SESSION_SPEND_LOGS
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -268,19 +269,28 @@ class ResponsesSessionHandler:
         if prisma_client is None:
             return []
 
+        # Bounded to the most recent MAX_RESPONSES_API_SESSION_SPEND_LOGS rows. Without
+        # a LIMIT this SELECT * over LiteLLM_SpendLogs pulls the entire session, which
+        # can make the Prisma query engine buffer a very large session into memory when
+        # a session_id maps to many rows. The inner query takes the most recent N
+        # (ORDER BY endTime DESC LIMIT); the outer re-sorts them ASC for replay.
         query = """
             WITH matching_session AS (
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
                 WHERE request_id = $1
             )
-            SELECT *
-            FROM "LiteLLM_SpendLogs"
-            WHERE session_id IN (SELECT session_id FROM matching_session)
+            SELECT * FROM (
+                SELECT *
+                FROM "LiteLLM_SpendLogs"
+                WHERE session_id IN (SELECT session_id FROM matching_session)
+                ORDER BY "endTime" DESC
+                LIMIT $2
+            ) recent_session_logs
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs = await prisma_client.db.query_raw(query, previous_response_id)
+        spend_logs = await prisma_client.db.query_raw(query, previous_response_id, MAX_RESPONSES_API_SESSION_SPEND_LOGS)
 
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",
