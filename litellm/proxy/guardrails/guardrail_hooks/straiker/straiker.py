@@ -4,7 +4,7 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 from urllib.parse import urlsplit
 
 import httpx
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME = "straiker"
+DEFAULT_BLOCK_MESSAGE = "Content violates policy"
 DEFAULT_API_BASE = "https://api.prod.straiker.ai"
 DEFAULT_MAX_PAYLOAD_BYTES = 524288
 WEBHOOK_PATH = "/api/v1/detect/webhook"
@@ -248,9 +249,8 @@ class StraikerGuardrail(CustomGuardrail):
 
     def _build_application(self, request_data: dict) -> StraikerWebhookApplication:
         meta = _merged_metadata(request_data)
-        agent_id = _as_optional_str(meta.get("agent_id"))
         return StraikerWebhookApplication(
-            source=agent_id or self.source,
+            source=self.source,
             name=_as_optional_str(meta.get("app_name")),
         )
 
@@ -323,9 +323,10 @@ class StraikerGuardrail(CustomGuardrail):
 
     async def _post_webhook(self, payload: dict) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
-            body_bytes = len(json.dumps(payload, default=str).encode("utf-8"))
+            body = json.dumps(payload).encode("utf-8")
         except (TypeError, ValueError, OverflowError) as error:
             return None, _WebhookFailure(f"request serialization failed: {error}", is_unreachable=False)
+        body_bytes = len(body)
         if body_bytes > self.max_payload_bytes:
             return None, _WebhookFailure(
                 f"payload {body_bytes}B exceeds max_payload_bytes {self.max_payload_bytes}",
@@ -352,7 +353,7 @@ class StraikerGuardrail(CustomGuardrail):
 
         for attempt in range(attempts):
             try:
-                resp = await self.async_handler.post(url, json=payload, headers=headers, timeout=self.timeout)
+                resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
                 if resp.status_code == 200:
                     try:
                         body = resp.json()
@@ -408,6 +409,7 @@ class StraikerGuardrail(CustomGuardrail):
         self,
         *,
         inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
         input_type: Literal["request", "response"],
         error: str,
         is_unreachable: bool,
@@ -426,10 +428,10 @@ class StraikerGuardrail(CustomGuardrail):
         )
         if fail_open:
             return inputs
-        raise GuardrailRaisedException(
-            guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
+        self._block(
+            request_data=request_data,
+            input_type=input_type,
             message=f"Straiker detection unavailable: {error}",
-            should_wrap_with_default_message=False,
         )
 
     def _block(
@@ -437,9 +439,8 @@ class StraikerGuardrail(CustomGuardrail):
         *,
         request_data: dict,
         input_type: Literal["request", "response"],
-        blocked_reason: str | None,
-    ) -> None:
-        message = blocked_reason or "Content violates policy"
+        message: str,
+    ) -> NoReturn:
         if input_type == "request":
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
@@ -482,12 +483,19 @@ class StraikerGuardrail(CustomGuardrail):
             )
             payload = envelope.model_dump(mode="json", exclude_none=True)
         except (ValidationError, TypeError, ValueError) as error:
-            return self._fail(inputs=inputs, input_type=input_type, error=str(error), is_unreachable=False)
+            return self._fail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
+                error=str(error),
+                is_unreachable=False,
+            )
 
         parsed, failure = await self._post_webhook(payload)
         if failure is not None:
             return self._fail(
                 inputs=inputs,
+                request_data=request_data,
                 input_type=input_type,
                 error=failure.message,
                 is_unreachable=failure.is_unreachable,
@@ -496,6 +504,7 @@ class StraikerGuardrail(CustomGuardrail):
         if parsed is None:
             return self._fail(
                 inputs=inputs,
+                request_data=request_data,
                 input_type=input_type,
                 error="empty response from Straiker",
                 is_unreachable=False,
@@ -514,9 +523,17 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         if parsed.action == "BLOCKED":
-            self._block(request_data=request_data, input_type=input_type, blocked_reason=parsed.blocked_reason)
+            self._block(
+                request_data=request_data,
+                input_type=input_type,
+                message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+            )
         if parsed.action == "GUARDRAIL_INTERVENED":
             if input_type == "response" and _is_streamed_request(request_data):
-                self._block(request_data=request_data, input_type=input_type, blocked_reason=parsed.blocked_reason)
+                self._block(
+                    request_data=request_data,
+                    input_type=input_type,
+                    message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                )
             return self._intervened_inputs(inputs, parsed)
         return inputs

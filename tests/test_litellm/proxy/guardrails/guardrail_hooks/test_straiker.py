@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -56,7 +57,7 @@ def _logging_obj() -> MagicMock:
 
 
 def _posted_payload(g: StraikerGuardrail) -> dict:
-    return g.async_handler.post.call_args.kwargs["json"]
+    return json.loads(g.async_handler.post.call_args.kwargs["content"])
 
 
 def test_registry_membership():
@@ -206,7 +207,7 @@ async def test_request_envelope_transport_and_shape():
     assert payload["request"]["texts"] == ["hello world"]
     assert payload["context"]["litellm_call_id"] == "call-123"
     assert payload["identity"]["litellm_key"] == "team-key"
-    assert payload["application"] == {"source": "chatbot-app", "name": "Chatbot"}
+    assert payload["application"] == {"source": "LiteLLM Gateway", "name": "Chatbot"}
     assert "session_id" not in payload["application"]
     assert "user_name" not in payload["application"]
     assert "user_role" not in payload["application"]
@@ -235,7 +236,7 @@ async def test_webhook_metadata_session_id_and_opaque_passthrough():
         logging_obj=_logging_obj(),
     )
     payload = _posted_payload(g)
-    assert payload["application"] == {"source": "chatbot-app", "name": "Chatbot"}
+    assert payload["application"] == {"source": "LiteLLM Gateway", "name": "Chatbot"}
     assert payload["identity"]["litellm_key"] == "team-key"
     assert payload["context"]["session_id"] == "sess-from-litellm"
     assert "session_id" not in payload["metadata"]
@@ -377,7 +378,7 @@ async def test_identity_end_user_absent_without_resolved_metadata():
 
 
 @pytest.mark.asyncio
-async def test_application_source_from_agent_id():
+async def test_application_source_ignores_caller_supplied_agent_id():
     g = _make_guardrail(source="litellm")
     g.async_handler.post.return_value = _mock_response("NONE")
     await g.apply_guardrail(
@@ -386,7 +387,7 @@ async def test_application_source_from_agent_id():
         input_type="request",
         logging_obj=_logging_obj(),
     )
-    assert _posted_payload(g)["application"] == {"source": "analytics-app", "name": "Analytics"}
+    assert _posted_payload(g)["application"] == {"source": "litellm", "name": "Analytics"}
 
 @pytest.mark.asyncio
 async def test_request_block_raises_guardrail_exception_with_reason():
@@ -485,6 +486,25 @@ async def test_response_envelope_and_block_replaces_response():
     assert payload["response"]["texts"] == ["secret"]
     assert payload["response"]["finish_reason"] == "stop"
     assert payload["request"]["structured_messages"] == [{"role": "user", "content": "original prompt"}]
+
+
+@pytest.mark.asyncio
+async def test_post_call_fail_closed_raises_modify_response_exception():
+    g = _make_guardrail(unreachable_fallback="fail_closed")
+    g.async_handler.post.side_effect = httpx.ConnectError("boom")
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=Message(content="secret", role="assistant"))],
+        model="gpt-4o-mini",
+    )
+    request_data = {"model": "gpt-4o-mini", "response": response}
+    with pytest.raises(ModifyResponseException) as exc:
+        await g.apply_guardrail(
+            inputs={"texts": ["secret"], "model": "gpt-4o-mini"},
+            request_data=request_data,
+            input_type="response",
+            logging_obj=_logging_obj(),
+        )
+    assert exc.value.original_response is response
 
 
 @pytest.mark.asyncio
