@@ -13614,6 +13614,47 @@
           "title": "MCPCredentials",
           "type": "object"
         },
+        "MCPRestToolCallRequest": {
+          "additionalProperties": true,
+          "description": "Request body for ``POST /mcp-rest/tools/call``.\n\nDeclared so the generated OpenAPI spec documents the fields a client must\nsend; the handler still reads the raw JSON body. Extra keys are allowed\nbecause the same route also serves the tool-search / tool-call virtual-tool\nflows, which carry a different payload shape.",
+          "example": {
+            "arguments": {
+              "query": "coffee near me"
+            },
+            "name": "google_maps-getPlaces",
+            "server_id": "17a4490465f74d3696caf12b30220166"
+          },
+          "properties": {
+            "arguments": {
+              "additionalProperties": true,
+              "description": "Tool arguments matching the tool's inputSchema. Pass {} when the tool takes no arguments.",
+              "title": "Arguments",
+              "type": "object"
+            },
+            "name": {
+              "description": "Name of the MCP tool to invoke, as returned by GET /mcp-rest/tools/list.",
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "MCP server the tool belongs to (UUID, server_name, or alias). Required when calling a tool on a specific server.",
+              "title": "Server Id"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPRestToolCallRequest",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -14111,6 +14152,23 @@
         "post": {
           "description": "REST API to call a specific MCP tool with the provided arguments",
           "operationId": "call_tool_rest_api_mcp_rest_tools_call_post_2",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MCPRestToolCallRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -17521,6 +17579,47 @@
           "title": "MCPCredentials",
           "type": "object"
         },
+        "MCPRestToolCallRequest": {
+          "additionalProperties": true,
+          "description": "Request body for ``POST /mcp-rest/tools/call``.\n\nDeclared so the generated OpenAPI spec documents the fields a client must\nsend; the handler still reads the raw JSON body. Extra keys are allowed\nbecause the same route also serves the tool-search / tool-call virtual-tool\nflows, which carry a different payload shape.",
+          "example": {
+            "arguments": {
+              "query": "coffee near me"
+            },
+            "name": "google_maps-getPlaces",
+            "server_id": "17a4490465f74d3696caf12b30220166"
+          },
+          "properties": {
+            "arguments": {
+              "additionalProperties": true,
+              "description": "Tool arguments matching the tool's inputSchema. Pass {} when the tool takes no arguments.",
+              "title": "Arguments",
+              "type": "object"
+            },
+            "name": {
+              "description": "Name of the MCP tool to invoke, as returned by GET /mcp-rest/tools/list.",
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "MCP server the tool belongs to (UUID, server_name, or alias). Required when calling a tool on a specific server.",
+              "title": "Server Id"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPRestToolCallRequest",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -18018,6 +18117,23 @@
         "post": {
           "description": "REST API to call a specific MCP tool with the provided arguments",
           "operationId": "call_tool_rest_api_mcp_rest_tools_call_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MCPRestToolCallRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {

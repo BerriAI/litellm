@@ -2654,3 +2654,62 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "server-uuid",
             "alias": None,
         }
+
+
+class TestToolsCallOpenAPIDocumentation:
+    """Regression coverage for issue #32121: POST /mcp-rest/tools/call must
+    document its request body (server_id / name / arguments) in the OpenAPI
+    spec, both on the live route and in the served lazy-feature snapshot."""
+
+    def test_route_documents_request_body(self):
+        from fastapi.openapi.utils import get_openapi
+
+        routes = [
+            r
+            for r in rest_endpoints.router.routes
+            if getattr(r, "path", "") == "/mcp-rest/tools/call"
+            and "POST" in getattr(r, "methods", set())
+        ]
+        assert routes, "POST /mcp-rest/tools/call route not registered"
+
+        spec = get_openapi(title="t", version="1", routes=routes)
+        operation = spec["paths"]["/mcp-rest/tools/call"]["post"]
+        assert "requestBody" in operation
+
+        schema = spec["components"]["schemas"]["MCPRestToolCallRequest"]
+        assert {"server_id", "name", "arguments"} <= set(schema["properties"])
+        assert schema["required"] == ["name"]
+        assert schema["additionalProperties"] is True
+
+    def test_request_model_requires_name_and_allows_extra_keys(self):
+        from pydantic import ValidationError
+
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            MCPRestToolCallRequest,
+        )
+
+        parsed = MCPRestToolCallRequest.model_validate(
+            {"name": "mcp_tool_search", "arguments": {"query": "x"}, "extra": "kept"}
+        )
+        assert parsed.name == "mcp_tool_search"
+        assert parsed.arguments == {"query": "x"}
+        assert parsed.model_dump()["extra"] == "kept"
+
+        assert MCPRestToolCallRequest(name="demo").arguments == {}
+
+        with pytest.raises(ValidationError):
+            MCPRestToolCallRequest.model_validate({"arguments": {}})
+
+    def test_served_snapshot_documents_request_body(self):
+        from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+        snapshot = load_snapshot()
+        assert snapshot is not None
+
+        for fragment_name in ("mcp_rest", "mcp_app"):
+            fragment = snapshot[fragment_name]
+            post = fragment["paths"]["/mcp-rest/tools/call"]["post"]
+            schema = post["requestBody"]["content"]["application/json"]["schema"]
+            refs = [entry.get("$ref") for entry in schema.get("anyOf", [])] or [schema.get("$ref")]
+            assert "#/components/schemas/MCPRestToolCallRequest" in refs
+            assert "MCPRestToolCallRequest" in fragment["components"]["schemas"]

@@ -27299,6 +27299,43 @@ export interface components {
             transport: "sse" | "http" | "stdio";
         };
         /**
+         * MCPRestToolCallRequest
+         * @description Request body for ``POST /mcp-rest/tools/call``.
+         *
+         *     Declared so the generated OpenAPI spec documents the fields a client must
+         *     send; the handler still reads the raw JSON body. Extra keys are allowed
+         *     because the same route also serves the tool-search / tool-call virtual-tool
+         *     flows, which carry a different payload shape.
+         * @example {
+         *       "arguments": {
+         *         "query": "coffee near me"
+         *       },
+         *       "name": "google_maps-getPlaces",
+         *       "server_id": "17a4490465f74d3696caf12b30220166"
+         *     }
+         */
+        MCPRestToolCallRequest: {
+            /**
+             * Arguments
+             * @description Tool arguments matching the tool's inputSchema. Pass {} when the tool takes no arguments.
+             */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Name
+             * @description Name of the MCP tool to invoke, as returned by GET /mcp-rest/tools/list.
+             */
+            name: string;
+            /**
+             * Server Id
+             * @description MCP server the tool belongs to (UUID, server_name, or alias). Required when calling a tool on a specific server.
+             */
+            server_id?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * MCPSemanticFilterSettings
          * @description Configuration for MCP Semantic Tool Filter
          */
@@ -43015,7 +43052,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MCPRestToolCallRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

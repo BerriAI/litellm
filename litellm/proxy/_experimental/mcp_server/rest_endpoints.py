@@ -16,7 +16,8 @@ from typing import (
 )
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
@@ -63,6 +64,42 @@ def _connection_error_message(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"Failed to connect to MCP server: it returned HTTP {exc.response.status_code}."
     return "Failed to connect to MCP server. Check proxy logs for details."
+
+
+class MCPRestToolCallRequest(BaseModel):
+    """Request body for ``POST /mcp-rest/tools/call``.
+
+    Declared so the generated OpenAPI spec documents the fields a client must
+    send; the handler still reads the raw JSON body. Extra keys are allowed
+    because the same route also serves the tool-search / tool-call virtual-tool
+    flows, which carry a different payload shape.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
+            "example": {
+                "server_id": "17a4490465f74d3696caf12b30220166",
+                "name": "google_maps-getPlaces",
+                "arguments": {"query": "coffee near me"},
+            }
+        },
+    )
+
+    name: str = Field(
+        description="Name of the MCP tool to invoke, as returned by GET /mcp-rest/tools/list.",
+    )
+    arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description="Tool arguments matching the tool's inputSchema. Pass {} when the tool takes no arguments.",
+    )
+    server_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "MCP server the tool belongs to (UUID, server_name, or alias). "
+            "Required when calling a tool on a specific server."
+        ),
+    )
 
 
 if MCP_AVAILABLE:
@@ -879,6 +916,7 @@ if MCP_AVAILABLE:
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
         request: Request,
+        body: Optional[MCPRestToolCallRequest] = Body(default=None),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
