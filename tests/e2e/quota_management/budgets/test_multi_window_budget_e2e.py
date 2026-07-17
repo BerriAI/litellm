@@ -41,7 +41,7 @@ def test_short_window_blocks_then_resets(
     key = client.generate_key(
         models=[MODEL],
         budget_limits=[
-            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=3e-6),
+            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=1e-9),
             BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
         ],
     )

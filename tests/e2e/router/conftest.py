@@ -61,7 +61,9 @@ def _model_is_servable(gateway: Gateway, model_name: str) -> bool:
 
 
 def _router_is_callable(gateway: Gateway) -> bool:
-    """True when a short chat against the virtual router is accepted (not Invalid model name)."""
+    """True only when a short chat against the virtual router succeeds; every error
+    (the Invalid-model-name reload race, but also 401, 5xx, and network) counts as
+    not-callable so infra/auth blips can't be mistaken for a working router."""
     key = gateway.generate_key(KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-probe"))
     try:
         result = gateway.chat(
@@ -74,10 +76,7 @@ def _router_is_callable(gateway: Gateway) -> bool:
         )
     finally:
         gateway.delete_key(key)
-    if isinstance(result, Success):
-        return True
-    body = getattr(result, "body", "") or ""
-    return "Invalid model name" not in body
+    return isinstance(result, Success)
 
 
 @pytest.fixture(scope="session", autouse=True)
