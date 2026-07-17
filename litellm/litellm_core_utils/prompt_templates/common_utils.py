@@ -1250,7 +1250,7 @@ def normalize_image_data_url_mime_type(url: str) -> str:
 def _normalize_image_mime_type_in_content_item(
     content_item: OpenAIMessageContentListBlock,
 ) -> OpenAIMessageContentListBlock:
-    if content_item["type"] != "image_url":
+    if content_item.get("type") != "image_url":
         return content_item
     image_url = content_item.get("image_url")
     if isinstance(image_url, str):
@@ -1270,7 +1270,7 @@ def _normalize_image_mime_type_in_content_item(
 
 
 def _normalize_image_mime_types_in_message(message: AllMessageValues) -> AllMessageValues:
-    if message["role"] != "user":
+    if message.get("role") != "user":
         return message
     content = message.get("content")
     if not isinstance(content, list):

@@ -275,6 +275,38 @@ class TestMetaImageMimeNormalization:
         out = asyncio.run(cfg._transform_messages(messages=messages, model="muse-spark-1.1", is_async=True))
         assert out[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{PNG_BASE64}"
 
+    def test_content_item_without_type_passthrough(self):
+        cfg = litellm.ProviderConfigManager.get_provider_chat_config(
+            model="muse-spark-1.1", provider=litellm.LlmProviders.META
+        )
+        assert cfg is not None
+        out = cfg.transform_request(
+            model="muse-spark-1.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "hi"},
+                        {"type": "image_url", "image_url": {"url": f"data:binary/octet-stream;base64,{PNG_BASE64}"}},
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        content = out["messages"][0]["content"]
+        assert content[0] == {"text": "hi"}
+        assert content[1]["image_url"]["url"] == f"data:image/png;base64,{PNG_BASE64}"
+
+    def test_message_without_role_passthrough(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            normalize_image_data_url_mime_types_in_messages,
+        )
+
+        messages = [{"content": [{"type": "text", "text": "hi"}]}]
+        assert normalize_image_data_url_mime_types_in_messages(messages) == messages
+
     def test_string_content_passthrough(self):
         cfg = litellm.ProviderConfigManager.get_provider_chat_config(
             model="muse-spark-1.1", provider=litellm.LlmProviders.META
