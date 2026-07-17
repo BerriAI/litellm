@@ -6149,6 +6149,21 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "sambanova":
+            if "SAMBANOVA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("SAMBANOVA_API_KEY")
+        elif custom_llm_provider == "hyperbolic":
+            if "HYPERBOLIC_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("HYPERBOLIC_API_KEY")
+        elif custom_llm_provider == "lambda_ai":
+            if "LAMBDA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("LAMBDA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
