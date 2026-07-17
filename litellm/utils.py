@@ -60,6 +60,7 @@ from litellm._lazy_imports import (
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
 )
@@ -2852,7 +2853,7 @@ def get_optional_params_transcription(
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
-    drop_params = passed_params.pop("drop_params")
+    drop_params = normalize_drop_params(passed_params.pop("drop_params"))
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
@@ -2960,7 +2961,7 @@ def get_optional_params_image_gen(
     model = passed_params.pop("model", None)
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     provider_config = passed_params.pop("provider_config", None)
-    drop_params = passed_params.pop("drop_params", None)
+    drop_params = normalize_drop_params(passed_params.pop("drop_params", None))
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
@@ -3084,7 +3085,7 @@ def get_optional_params_embeddings(
     custom_llm_provider = passed_params.pop("custom_llm_provider", None)
     special_params = passed_params.pop("kwargs")
 
-    drop_params = passed_params.pop("drop_params", None)
+    drop_params = normalize_drop_params(passed_params.pop("drop_params", None))
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     allowed_openai_params = passed_params.pop("allowed_openai_params", None) or []
     # Remove function objects from passed_params to avoid JSON serialization errors
@@ -3797,6 +3798,8 @@ def get_optional_params(
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
+    drop_params = normalize_drop_params(drop_params)
+    passed_params["drop_params"] = drop_params
     # Remove base_model from passed_params so it doesn't interfere with
     # non_default_params / _check_valid_arg — it's a routing hint, not an
     # OpenAI param.

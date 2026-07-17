@@ -5,6 +5,7 @@ import pytest
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     map_finish_reason,
+    normalize_drop_params,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
 )
@@ -201,3 +202,24 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("True", True),
+        (" TRUE ", True),
+        ("false", False),
+        ("False", False),
+        (None, None),
+        ("yes", None),
+        ("", None),
+        (1, None),
+        (0, None),
+    ],
+)
+def test_normalize_drop_params(value, expected):
+    assert normalize_drop_params(value) is expected
