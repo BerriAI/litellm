@@ -242,6 +242,14 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
+        model_group = (kwargs.get("standard_logging_object") or {}).get("model_group")
+        if isinstance(model_group, str) and model_group:
+            safe_set_attribute(
+                span,
+                "langfuse.observation.model.name",
+                model_group,
+            )
+
     @staticmethod
     def _get_langfuse_otel_host() -> Optional[str]:
         """
