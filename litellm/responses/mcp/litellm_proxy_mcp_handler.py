@@ -478,17 +478,25 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> bool:
         """Check if we should auto-execute tool calls.
 
-        Only auto-execute tools if user passed a MCP tool with require_approval set to "never".
-
-
+        Auto-execution requires EVERY MCP reference to opt in with
+        ``require_approval="never"``. A single reference that requires approval
+        ("always", "manual", the object form, or an unset value) disables
+        auto-execution for the whole request. This fails closed: when an
+        approval-required reference shares a request with a "never" one, the
+        model's tool calls are returned to the caller instead of being run, so
+        an approval-gated tool can never be invoked without approval. Returns
+        False for an empty list.
         """
-        for tool in mcp_tools_with_litellm_proxy:
-            if isinstance(tool, dict):
-                if tool.get("require_approval") == "never":
-                    return True
-            elif getattr(tool, "require_approval", None) == "never":
-                return True
-        return False
+        references = list(mcp_tools_with_litellm_proxy or [])
+        if not references:
+            return False
+        for tool in references:
+            approval = (
+                tool.get("require_approval") if isinstance(tool, dict) else getattr(tool, "require_approval", None)
+            )
+            if approval != "never":
+                return False
+        return True
 
     @staticmethod
     def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:
