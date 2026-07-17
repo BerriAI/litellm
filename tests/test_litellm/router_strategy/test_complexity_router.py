@@ -3179,3 +3179,65 @@ class TestEscalationKeywords:
             messages=[{"role": "user", "content": "LITELLM ESCALATE still not good"}],
         )
         assert again.model == "claude-sonnet-4-20250514"  # MEDIUM bumped to COMPLEX
+
+    def test_blank_escalation_keywords_are_stripped(self):
+        """Blank/whitespace-only phrases are dropped so `"" in message` can't escalate
+        every request; surrounding whitespace on real phrases is trimmed."""
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["", "  "],
+        ).escalation_keywords == []
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["  LITELLM ESCALATE  ", ""],
+        ).escalation_keywords == ["LITELLM ESCALATE"]
+
+    @pytest.mark.asyncio
+    async def test_blank_escalation_keyword_does_not_escalate_everything(
+        self, mock_router_instance, basic_config
+    ):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": [""]},
+        )
+        assert router.escalation_keywords == []
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    def test_escalated_pin_stays_on_same_model_at_ceiling(self, mock_router_instance):
+        """At the highest configured tier escalation keeps the exact pinned model, even
+        when that tier's pool has peers `get_model_for_tier` could randomly pick instead."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}
+            },
+        )
+        for pinned in ("o1-a", "o1-b", "o1-c"):
+            assert router._escalated_pin(pinned) == pinned
+
+    @pytest.mark.asyncio
+    async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]},
+                "session_affinity": True,
+            },
+        )
+        cache_key = router._get_session_affinity_cache_key("session-top", {})
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="o1-b")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("session-top"),
+            messages=[{"role": "user", "content": "LITELLM ESCALATE do better"}],
+        )
+        assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c

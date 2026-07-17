@@ -716,7 +716,10 @@ class ComplexityRouter(CustomLogger):
         pinned_tier = self._tier_for_model(pinned_model)
         if pinned_tier is None:
             return None
-        return self.get_model_for_tier(self._escalate_tier(pinned_tier))
+        escalated_tier = self._escalate_tier(pinned_tier)
+        if escalated_tier == pinned_tier:
+            return pinned_model
+        return self.get_model_for_tier(escalated_tier)
 
     def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.

@@ -413,6 +413,13 @@ class ComplexityRouterConfig(BaseModel):
                 coerced[key] = item
         return coerced
 
+    @field_validator("escalation_keywords")
+    @classmethod
+    def _normalize_escalation_keywords(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [stripped for keyword in value if (stripped := keyword.strip())]
+
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
