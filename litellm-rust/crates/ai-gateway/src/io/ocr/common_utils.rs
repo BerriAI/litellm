@@ -515,11 +515,12 @@ pub(super) async fn poll_document_intelligence(
         AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS,
     ));
     loop {
-        if start.elapsed() > timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             return Err(CoreError::Timeout);
         }
 
-        let mut request_builder = http_client().get(operation_url);
+        let mut request_builder = http_client().get(operation_url).timeout(remaining);
         for (key, value) in headers {
             if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
                 request_builder = request_builder.header(key, value);
@@ -544,7 +545,11 @@ pub(super) async fn poll_document_intelligence(
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
         }
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Err(CoreError::Timeout);
+        }
+        tokio::time::sleep(remaining.min(Duration::from_secs(retry_after))).await;
     }
 }
 

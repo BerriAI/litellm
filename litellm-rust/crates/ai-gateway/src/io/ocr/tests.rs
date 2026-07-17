@@ -366,8 +366,21 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
             .await
             .expect("writes post response");
 
-        let (mut poll_socket, _) = listener.accept().await.expect("accepts poll request");
-        let poll_request = read_http_headers(&mut poll_socket).await;
+        let (mut running_socket, _) = listener.accept().await.expect("accepts running poll");
+        let running_request = read_http_headers(&mut running_socket).await;
+        let running_body = r#"{"status":"running"}"#;
+        let running_response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nretry-after: 0\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            running_body.len(),
+            running_body
+        );
+        running_socket
+            .write_all(running_response.as_bytes())
+            .await
+            .expect("writes running response");
+
+        let (mut poll_socket, _) = listener.accept().await.expect("accepts completed poll");
+        let completed_request = read_http_headers(&mut poll_socket).await;
         let response_body = r#"{"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":1,"lines":[{"content":"ok"}]}]}}"#;
         let poll_response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -378,7 +391,7 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
             .write_all(poll_response.as_bytes())
             .await
             .expect("writes poll response");
-        (post_request, poll_request)
+        (post_request, running_request, completed_request)
     });
 
     let response = ocr(OcrRequest {
@@ -399,19 +412,74 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
 
     assert_eq!(response["pages"][0]["markdown"], "ok");
 
-    let (post_request, poll_request) = server.await.expect("server task completes");
+    let (post_request, running_request, completed_request) =
+        server.await.expect("server task completes");
     assert!(
         post_request
             .to_ascii_lowercase()
             .contains("ocp-apim-subscription-key: di-key"),
         "{post_request}"
     );
-    assert!(
-        poll_request
-            .to_ascii_lowercase()
-            .contains("ocp-apim-subscription-key: di-key"),
-        "{poll_request}"
-    );
+    for poll_request in [running_request, completed_request] {
+        assert!(
+            poll_request
+                .to_ascii_lowercase()
+                .contains("ocp-apim-subscription-key: di-key"),
+            "{poll_request}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn document_intelligence_retry_after_respects_polling_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let operation_url = format!("http://{addr}/operations/1");
+
+    tokio::spawn(async move {
+        let (mut post_socket, _) = listener.accept().await.expect("accepts post request");
+        read_http_headers(&mut post_socket).await;
+        let post_response = format!(
+            "HTTP/1.1 202 Accepted\r\noperation-location: {operation_url}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        post_socket
+            .write_all(post_response.as_bytes())
+            .await
+            .expect("writes post response");
+
+        let (mut poll_socket, _) = listener.accept().await.expect("accepts poll request");
+        read_http_headers(&mut poll_socket).await;
+        let body = r#"{"status":"running"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nretry-after: 60\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        poll_socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes poll response");
+    });
+
+    let error = ocr(OcrRequest {
+        model: "prebuilt-read",
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("di-key"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: "azure_ai/doc-intelligence",
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_millis(100)),
+    })
+    .await
+    .expect_err("polling deadline should bound retry-after");
+
+    assert_eq!(error, CoreError::Timeout);
 }
 
 #[test]
