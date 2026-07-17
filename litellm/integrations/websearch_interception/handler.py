@@ -17,6 +17,7 @@ from litellm.anthropic_interface import messages as anthropic_messages
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
+    collect_rewritten_tool_names,
     get_litellm_web_search_tool,
     get_litellm_web_search_tool_openai,
     get_litellm_web_search_tool_responses,
@@ -24,6 +25,7 @@ from litellm.integrations.websearch_interception.tools import (
     is_web_search_tool,
     is_web_search_tool_chat_completion,
     is_web_search_tool_responses,
+    rewrite_web_search_tool_choice,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
@@ -290,6 +292,20 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         kwargs["tools"] = converted_tools
 
+        # A request like Claude Code's web-search call carries
+        # ``tool_choice={"type": "tool", "name": "web_search"}``; renaming
+        # the tool above without renaming the choice leaves the provider
+        # with a dangling reference and a "Tool 'web_search' not found"
+        # 400 (issue #30822). Keep the two in lockstep, scoped to the
+        # exact names we just renamed in ``tools`` so we don't hijack a
+        # Cowork-style ``tool_choice={"name": "WebSearch"}`` that
+        # legitimately points at a client-side tool we left alone.
+        if "tool_choice" in kwargs:
+            rewritten_names = collect_rewritten_tool_names(tools)
+            kwargs["tool_choice"] = rewrite_web_search_tool_choice(
+                kwargs["tool_choice"], rewritten_names
+            )
+
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
             kwargs["stream"] = False
@@ -457,6 +473,15 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if "tool_choice" in kwargs:
             kwargs["tool_choice"] = self._sync_forced_tool_choice(kwargs.get("tool_choice"), converted_tools)
+
+        # Direct litellm.acompletion callers reach this path without the
+        # deployment hook running, so the same scoped tool_choice rewrite
+        # has to be applied here too (issue #30822).
+        if "tool_choice" in kwargs:
+            rewritten_names = collect_rewritten_tool_names(tools)
+            kwargs["tool_choice"] = rewrite_web_search_tool_choice(
+                kwargs["tool_choice"], rewritten_names
+            )
 
         # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
