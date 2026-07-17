@@ -108,13 +108,18 @@ def test_set_model_group_info_wildcard_avoids_per_deployment_deepcopy():
         wraps=router.pattern_router.route,
     ) as spy_route, patch.object(
         router.pattern_router,
+        "route_readonly",
+        wraps=router.pattern_router.route_readonly,
+    ) as spy_route_readonly, patch.object(
+        router.pattern_router,
         "is_match",
         wraps=router.pattern_router.is_match,
     ) as spy_is_match:
         info = router.get_model_group_info("openai/gpt-4o-mini")
 
     assert info is not None
-    assert spy_route.call_count <= 1
+    assert spy_route.call_count == 0
+    assert spy_route_readonly.call_count >= 1
     assert spy_is_match.call_count >= 1
 
 

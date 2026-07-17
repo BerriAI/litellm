@@ -8742,7 +8742,7 @@ class Router:
         total_itpm: Optional[int] = None
         total_otpm: Optional[int] = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
-        model_list = self.get_model_list(model_name=model_group)
+        model_list = self.get_model_list(model_name=model_group, readonly_wildcard_deployments=True)
         if model_list is None:
             return None
         is_wildcard_group = self.pattern_router.is_match(model_group)
@@ -9638,12 +9638,19 @@ class Router:
         return returned_models
 
     def get_model_list(
-        self, model_name: Optional[str] = None, team_id: Optional[str] = None
+        self,
+        model_name: Optional[str] = None,
+        team_id: Optional[str] = None,
+        readonly_wildcard_deployments: bool = False,
     ) -> Optional[List[DeploymentTypedDict]]:
         """
         Includes router model_group_alias'es as well
 
         if team_id specified, returns matching team-specific models
+
+        readonly_wildcard_deployments: when True, wildcard matches share nested deployment
+        structures (e.g. model_info) by reference instead of being deep-copied. Only pass True
+        from read-only callers that never mutate the returned deployments.
         """
         # Note: model_list and model_group_alias are always initialized in __init__
         # so hasattr checks are unnecessary
@@ -9655,11 +9662,16 @@ class Router:
         returned_models.extend(self.get_model_list_from_model_alias(model_name=model_name))
 
         if len(returned_models) == 0:  # check if wildcard route
-            potential_wildcard_models = self.pattern_router.route(model_name) or []
+            route_wildcard = (
+                self.pattern_router.route_readonly if readonly_wildcard_deployments else self.pattern_router.route
+            )
+            potential_wildcard_models = route_wildcard(model_name) or []
 
             ## check for team-specific wildcard models
             if team_id is not None and team_id in self.team_pattern_routers:
-                potential_team_only_wildcard_models = self.team_pattern_routers[team_id].route(model_name) or []
+                team_router = self.team_pattern_routers[team_id]
+                route_team_wildcard = team_router.route_readonly if readonly_wildcard_deployments else team_router.route
+                potential_team_only_wildcard_models = route_team_wildcard(model_name) or []
                 potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:

@@ -119,18 +119,50 @@ class PatternMatchRouter:
         """
         if request is None:
             return None
-
-        sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
-        regex_filtered_model_names = (
-            [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
-        )
-        for pattern, llm_deployments in sorted_patterns:
-            if filtered_model_names is not None and pattern not in regex_filtered_model_names:
-                continue
-            pattern_match = re.match(pattern, request)
-            if pattern_match:
-                return pattern_match, llm_deployments
+        try:
+            sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
+            regex_filtered_model_names = (
+                [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
+            )
+            for pattern, llm_deployments in sorted_patterns:
+                if filtered_model_names is not None and pattern not in regex_filtered_model_names:
+                    continue
+                pattern_match = re.match(pattern, request)
+                if pattern_match:
+                    return pattern_match, llm_deployments
+        except Exception as e:
+            verbose_router_logger.debug(f"Error in PatternMatchRouter._find_matching_pattern: {str(e)}")
         return None
+
+    def _shallow_renamed_deployments(self, matched_pattern: Match, deployments: list[dict]) -> list[dict]:
+        return [
+            {
+                **deployment,
+                "litellm_params": {
+                    **deployment["litellm_params"],
+                    "model": PatternMatchRouter.set_deployment_model_name(
+                        matched_pattern=matched_pattern,
+                        litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
+                    ),
+                },
+            }
+            for deployment in deployments
+        ]
+
+    def route_readonly(self, request: str | None, filtered_model_names: list[str] | None = None) -> list[dict] | None:
+        """
+        Like ``route``, but returns shallow copies that share nested deployment structures
+        (notably the potentially large ``model_info``) by reference instead of deep-copying them.
+
+        Only for read-only consumers that never mutate the returned deployments. Deep-copying
+        every matched deployment for every model group is what pegged CPU on GET /v1/models
+        for wildcard routes (see #33636).
+        """
+        matched = self._find_matching_pattern(request, filtered_model_names)
+        if matched is None:
+            return None
+        pattern_match, llm_deployments = matched
+        return self._shallow_renamed_deployments(pattern_match, llm_deployments)
 
     def is_match(self, request: str | None, filtered_model_names: list[str] | None = None) -> bool:
         """
@@ -139,11 +171,7 @@ class PatternMatchRouter:
         Use this instead of ``route(...) is not None`` when only the boolean result is needed;
         ``route`` deep-copies every matched deployment, which is expensive on hot paths.
         """
-        try:
-            return self._find_matching_pattern(request, filtered_model_names) is not None
-        except Exception as e:
-            verbose_router_logger.debug(f"Error in PatternMatchRouter.is_match: {str(e)}")
-            return False
+        return self._find_matching_pattern(request, filtered_model_names) is not None
 
     def route(self, request: Optional[str], filtered_model_names: Optional[List[str]] = None) -> Optional[List[Dict]]:
         """
@@ -159,16 +187,11 @@ class PatternMatchRouter:
         Returns:
             Optional[List[Deployment]]: llm deployments
         """
-        try:
-            matched = self._find_matching_pattern(request, filtered_model_names)
-            if matched is None:
-                return None
-            pattern_match, llm_deployments = matched
-            return self._return_pattern_matched_deployments(matched_pattern=pattern_match, deployments=llm_deployments)
-        except Exception as e:
-            verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
-
-        return None  # No matching pattern found
+        matched = self._find_matching_pattern(request, filtered_model_names)
+        if matched is None:
+            return None
+        pattern_match, llm_deployments = matched
+        return self._return_pattern_matched_deployments(matched_pattern=pattern_match, deployments=llm_deployments)
 
     @staticmethod
     def set_deployment_model_name(

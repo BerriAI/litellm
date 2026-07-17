@@ -13,6 +13,15 @@ def _openai_wildcard_router() -> PatternMatchRouter:
     return router
 
 
+def _openai_wildcard_router_with_model_info(model_info: dict) -> PatternMatchRouter:
+    router = PatternMatchRouter()
+    router.add_pattern(
+        "openai/*",
+        {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": model_info},
+    )
+    return router
+
+
 def test_is_match_reports_membership_without_deepcopy():
     """
     Regression for #33636: is_match must report pattern membership without the
@@ -48,3 +57,39 @@ def test_route_still_copies_matched_deployments():
     assert deployments is not None
     assert deployments[0]["litellm_params"]["model"] == "openai/gpt-4o-mini"
     assert spy_deepcopy.call_count >= 1
+
+
+def test_route_readonly_renames_without_deepcopy():
+    """
+    Regression for #33636: route_readonly rewrites the deployment model to the concrete
+    requested name (same as route) but must not deep-copy the deployment, which is what
+    pegged CPU on GET /v1/models for wildcard routes.
+    """
+    router = _openai_wildcard_router()
+
+    with patch.object(copy_module, "deepcopy", wraps=copy_module.deepcopy) as spy_deepcopy:
+        deployments = router.route_readonly("openai/gpt-4o-mini")
+
+    assert deployments is not None
+    assert deployments[0]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+    assert spy_deepcopy.call_count == 0
+
+
+def test_route_readonly_shares_model_info_but_isolates_model_rename():
+    model_info = {"max_input_tokens": 128000, "nested": {"a": 1}}
+    router = _openai_wildcard_router_with_model_info(model_info)
+    stored = router.patterns["openai/(.*)"][0]
+
+    deployments = router.route_readonly("openai/gpt-4o-mini")
+    assert deployments is not None
+    result = deployments[0]
+
+    assert result["model_info"] is model_info
+    assert result["litellm_params"]["model"] == "openai/gpt-4o-mini"
+    assert stored["litellm_params"]["model"] == "openai/*"
+
+
+def test_route_readonly_returns_none_for_no_match():
+    router = _openai_wildcard_router()
+    assert router.route_readonly("anthropic/claude-3") is None
+    assert router.route_readonly(None) is None
