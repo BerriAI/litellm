@@ -2938,6 +2938,100 @@ class TestUpdateDBModelClearPricing:
         assert info["cache_creation_input_token_cost"] == 0.000003
 
 
+class TestStripServerComputedModelInfoOnSave:
+    """`access_via_team_ids` and `direct_access` are computed per-request by the
+    model-listing endpoints for display. The Admin UI round-trips the whole
+    `model_info` it received on save, so both the update and create paths must
+    strip these server-computed fields before persisting - otherwise
+    `model_info` grows O(number of teams) on every save and goes stale.
+    """
+
+    def test_update_db_model_strips_server_computed_fields(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-0",
+                    access_via_team_ids=[f"team-{i}" for i in range(1438)],
+                    direct_access=True,
+                    base_model="azure/gpt-4o",
+                )
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "access_via_team_ids" not in info
+        assert "direct_access" not in info
+        # legitimate, admin-supplied model_info survives
+        assert info["base_model"] == "azure/gpt-4o"
+
+    def test_update_db_model_strips_fields_already_in_db_row(self):
+        """A row polluted by a previous UI save is cleaned up on the next save,
+        even when the patch itself doesn't mention the stale fields."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(
+                id="dep-stale",
+                access_via_team_ids=["team-a", "team-b"],
+                direct_access=False,
+            ),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_name="openai/*"),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "access_via_team_ids" not in info
+        assert "direct_access" not in info
+
+    @pytest.mark.asyncio
+    async def test_add_model_to_db_strips_server_computed_fields(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _add_model_to_db,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        model_params = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(
+                id="dep-new",
+                access_via_team_ids=["team-a", "team-b", "team-c"],
+                direct_access=True,
+                base_model="azure/gpt-4o",
+            ),
+        )
+
+        model_response = await _add_model_to_db(
+            model_params=model_params,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+            prisma_client=MagicMock(),
+            new_encryption_key="sk-test-salt-key",
+            should_create_model_in_db=False,
+        )
+
+        assert model_response is not None
+        assert model_response.model_info is not None
+        assert "access_via_team_ids" not in model_response.model_info
+        assert "direct_access" not in model_response.model_info
+        assert model_response.model_info["base_model"] == "azure/gpt-4o"
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""

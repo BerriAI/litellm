@@ -444,6 +444,8 @@ SPECIAL_MODEL_INFO_PARAMS = [
     "cache_creation_input_token_cost",
 ]
 
+SERVER_COMPUTED_MODEL_INFO_FIELDS = frozenset({"access_via_team_ids", "direct_access"})
+
 
 class Deployment(BaseModel):
     model_name: str

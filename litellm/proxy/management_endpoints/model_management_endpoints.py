@@ -56,6 +56,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
+    SERVER_COMPUTED_MODEL_INFO_FIELDS,
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
@@ -153,10 +154,11 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         prisma_compatible_model_dict["litellm_params"] = json.dumps(merged_deployment_dict["litellm_params"])
 
     if "model_info" in merged_deployment_dict:
-        model_info = merged_deployment_dict["model_info"]
-        for key, value in model_info.items():
-            if isinstance(value, datetime.datetime):
-                model_info[key] = value.isoformat()
+        model_info = {
+            key: (value.isoformat() if isinstance(value, datetime.datetime) else value)
+            for key, value in merged_deployment_dict["model_info"].items()
+            if key not in SERVER_COMPUTED_MODEL_INFO_FIELDS
+        }
         prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
 
     if updated_patch.blocked is not None:
@@ -484,8 +486,12 @@ async def _add_model_to_db(
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
         "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-        "model_info": model_params.model_info.model_dump_json(  # type: ignore
-            exclude_none=True
+        "model_info": json.dumps(
+            {
+                k: v
+                for k, v in model_params.model_info.model_dump(mode="json", exclude_none=True).items()
+                if k not in SERVER_COMPUTED_MODEL_INFO_FIELDS
+            }
         ),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
