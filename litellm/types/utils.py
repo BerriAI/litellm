@@ -2384,7 +2384,7 @@ class TranscriptionUsageTokensObject(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: Optional[TranscriptionUsageInputTokenDetailsObject] = None
 
 
 class TranscriptionResponse(OpenAIObject):

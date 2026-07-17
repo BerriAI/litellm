@@ -5,6 +5,8 @@ import time
 import traceback
 from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
 
+from pydantic import ValidationError
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -50,6 +52,26 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+def _parse_transcription_usage(
+    usage: dict,
+) -> Optional[Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]]:
+    usage_type = usage.get("type")
+    model = (
+        TranscriptionUsageDurationObject
+        if usage_type == "duration"
+        else TranscriptionUsageTokensObject
+        if usage_type == "tokens"
+        else None
+    )
+    if model is None:
+        return None
+    try:
+        return model.model_validate(usage)
+    except ValidationError as e:
+        verbose_logger.debug(f"Dropping unparseable transcription usage {usage}: {e}")
+        return None
 
 
 def _normalize_images_for_message(
@@ -827,14 +849,7 @@ def convert_to_model_response_object(
                     setattr(model_response_object, key, response_object[key])
 
             if "usage" in response_object and response_object["usage"] is not None:
-                tr_usage_object: Optional[Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]] = (
-                    None
-                )
-
-                if response_object["usage"].get("type", None) == "duration":
-                    tr_usage_object = TranscriptionUsageDurationObject(**response_object["usage"])
-                elif response_object["usage"].get("type", None) == "tokens":
-                    tr_usage_object = TranscriptionUsageTokensObject(**response_object["usage"])
+                tr_usage_object = _parse_transcription_usage(response_object["usage"])
                 if tr_usage_object is not None:
                     setattr(model_response_object, "usage", tr_usage_object)
 
