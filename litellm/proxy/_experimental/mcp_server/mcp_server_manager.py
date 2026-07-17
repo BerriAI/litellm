@@ -192,6 +192,7 @@ class MCPToolRouteResolved:
     """Exactly one MCP server serves the tool name."""
 
     server: MCPServer
+    kind: Literal["resolved"] = "resolved"
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +200,7 @@ class MCPToolRouteNotFound:
     """No MCP server serves the tool name."""
 
     tool_name: str
+    kind: Literal["not_found"] = "not_found"
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +209,7 @@ class MCPToolRouteAmbiguous:
 
     tool_name: str
     server_ids: frozenset[str]
+    kind: Literal["ambiguous"] = "ambiguous"
 
 
 MCPToolRoute = Union[MCPToolRouteResolved, MCPToolRouteNotFound, MCPToolRouteAmbiguous]
@@ -1550,11 +1553,13 @@ class MCPServerManager:
             openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        self.tool_name_to_mcp_server_ids_mapping = {
+        surviving = {
             tool_name: remaining
             for tool_name, owner_ids in self.tool_name_to_mcp_server_ids_mapping.items()
             if (remaining := owner_ids - {server.server_id})
         }
+        self.tool_name_to_mcp_server_ids_mapping.clear()
+        self.tool_name_to_mcp_server_ids_mapping.update(surviving)
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """

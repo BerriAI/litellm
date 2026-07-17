@@ -358,8 +358,6 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
-        MCPToolRouteAmbiguous,
-        MCPToolRouteResolved,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
         _should_strip_caller_authorization,
@@ -2629,7 +2627,7 @@ if MCP_AVAILABLE:
                     name,
                     allowed_server_ids=frozenset(server.server_id for server in allowed_mcp_servers),
                 )
-                if isinstance(route, MCPToolRouteAmbiguous):
+                if route.kind == "ambiguous":
                     candidates = sorted(
                         server.name
                         for server in (
@@ -2648,7 +2646,7 @@ if MCP_AVAILABLE:
                             ),
                         },
                     )
-                mcp_server = route.server if isinstance(route, MCPToolRouteResolved) else None
+                mcp_server = route.server if route.kind == "resolved" else None
             else:
                 mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
             if mcp_server is None and requested_server is not None:

@@ -3948,7 +3948,7 @@ class TestMCPServerManager:
 
         route = manager.resolve_tool_route("echo")
 
-        assert type(route).__name__ == "MCPToolRouteAmbiguous"
+        assert route.kind == "ambiguous"
         assert route.server_ids == frozenset({"id-alpha", "id-zulu"})
 
     def test_resolve_tool_route_resolves_sole_owner(self):
@@ -3959,13 +3959,13 @@ class TestMCPServerManager:
 
         route = manager.resolve_tool_route("echo")
 
-        assert type(route).__name__ == "MCPToolRouteResolved"
+        assert route.kind == "resolved"
         assert route.server is alpha
 
     def test_resolve_tool_route_reports_unknown_tool(self):
         manager = MCPServerManager()
 
-        assert type(manager.resolve_tool_route("nothing_serves_this")).__name__ == "MCPToolRouteNotFound"
+        assert manager.resolve_tool_route("nothing_serves_this").kind == "not_found"
 
     def test_cleanup_withdraws_only_departing_server_from_shared_tool_name(self):
         """Removing one server must leave a co-owned tool name routable to the survivor."""
