@@ -33,6 +33,7 @@ _TEAM_READY_SLEEP_SECONDS = 0.4
 
 class UserNewBody(BaseModel):
     max_budget: float
+    budget_duration: str | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -51,6 +52,7 @@ class CustomerNewBody(BaseModel):
 class OrgNewBody(BaseModel):
     organization_alias: str
     max_budget: float
+    budget_duration: str | None = None
 
 
 class OrgNewResponse(BaseModel):
@@ -69,6 +71,7 @@ class TeamMember(BaseModel):
 class TeamNewBody(BaseModel):
     team_alias: str
     max_budget: float | None = None
+    budget_duration: str | None = None
     organization_id: str | None = None
     budget_limits: list[BudgetWindow] | None = None
 
@@ -244,12 +247,12 @@ class BudgetClient:
 
     # ---- internal user --------------------------------------------------
 
-    def create_user(self, *, max_budget: float) -> str:
+    def create_user(self, *, max_budget: float, budget_duration: str | None = None) -> str:
         return unwrap(
             self.gateway.transport.post(
                 "/user/new",
                 headers=self.gateway.transport.master,
-                json=UserNewBody(max_budget=max_budget),
+                json=UserNewBody(max_budget=max_budget, budget_duration=budget_duration),
                 response_type=UserNewResponse,
             )
         ).user_id
@@ -275,12 +278,16 @@ class BudgetClient:
 
     # ---- organization ---------------------------------------------------
 
-    def create_org(self, *, max_budget: float, alias: str) -> str:
+    def create_org(self, *, max_budget: float, alias: str, budget_duration: str | None = None) -> str:
         return unwrap(
             self.gateway.transport.post(
                 "/organization/new",
                 headers=self.gateway.transport.master,
-                json=OrgNewBody(organization_alias=alias, max_budget=max_budget),
+                json=OrgNewBody(
+                    organization_alias=alias,
+                    max_budget=max_budget,
+                    budget_duration=budget_duration,
+                ),
                 response_type=OrgNewResponse,
             )
         ).organization_id
@@ -300,6 +307,7 @@ class BudgetClient:
         *,
         alias: str,
         max_budget: float | None = None,
+        budget_duration: str | None = None,
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
@@ -310,6 +318,7 @@ class BudgetClient:
                 json=TeamNewBody(
                     team_alias=alias,
                     max_budget=max_budget,
+                    budget_duration=budget_duration,
                     organization_id=organization_id,
                     budget_limits=budget_limits,
                 ),
