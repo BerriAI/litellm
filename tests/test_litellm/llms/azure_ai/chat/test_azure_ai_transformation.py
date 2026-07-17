@@ -262,3 +262,82 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_transform_messages_strips_anthropic_replay_fields():
+    """Regression: Anthropic /v1/messages adapter attaches ``thinking_blocks``
+    (and ``provider_specific_fields`` / ``cache_control``) to the OpenAI-format
+    assistant messages it builds when replaying Claude Code turns. Azure AI
+    Foundry hosted model backends with strict chat-message schemas (e.g.
+    Fireworks GLM) reject them with
+    ``Extra inputs are not permitted, field: 'messages[n].thinking_blocks'``.
+    ``_transform_messages`` must drop them before the request is sent.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {},
+                }
+            ],
+            "reasoning_content": "internal reasoning",
+            "provider_specific_fields": {"thought_signature": "sig"},
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    out = config._transform_messages(messages, model="glm-5.2")
+
+    assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
+    assert "provider_specific_fields" not in out[1]
+    assert "cache_control" not in out[1]
+    assert out[1]["content"] == "I can help."
+
+
+def test_transform_request_drops_thinking_blocks_for_fireworks_model():
+    """End-to-end of the reported scenario: a Fireworks model deployed on Azure
+    AI Foundry receives a replayed assistant turn carrying ``thinking_blocks``.
+    The outgoing request payload built by ``transform_request`` must not carry
+    it, or the Fireworks backend 400s with
+    ``Extra inputs are not permitted, field: 'messages[2].thinking_blocks'``.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {},
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    payload = config.transform_request(
+        model="glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    for message in payload["messages"]:
+        assert "thinking_blocks" not in message
+        assert "reasoning_content" not in message
+        assert "provider_specific_fields" not in message
+        assert "cache_control" not in message

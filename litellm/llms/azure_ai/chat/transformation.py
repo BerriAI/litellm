@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
+    filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -26,6 +27,34 @@ from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
+
+
+_OUTPUT_ONLY_MESSAGE_FIELDS: Tuple[str, ...] = (
+    "thinking_blocks",
+    "reasoning_content",
+    "provider_specific_fields",
+)
+
+
+def _strip_unsupported_message_fields(message: AllMessageValues) -> None:
+    """Remove input-forbidden fields from a chat message before it is sent to
+    an Azure AI Foundry hosted model.
+
+    Azure AI Foundry fronts many OpenAI-compatible backends (Fireworks,
+    Mistral, xAI, ...) whose chat-message schemas set ``additionalProperties:
+    false``. LiteLLM-internal / output-only fields that the Anthropic
+    ``/v1/messages`` adapter attaches when replaying assistant turns from an
+    Anthropic-format client (e.g. Claude Code) are not part of that schema and
+    trigger ``400 Extra inputs are not permitted, field:
+    'messages[n].<field>'``. ``cache_control`` is an Anthropic prompt-caching
+    annotation with the same problem. ``thinking_blocks`` and
+    ``reasoning_content`` are output-only; ``provider_specific_fields`` carries
+    Anthropic thought signatures. None are valid OpenAI input, so drop them.
+    """
+    filter_value_from_dict(cast(dict, message), "cache_control")
+    m = cast(dict, message)
+    for field in _OUTPUT_ONLY_MESSAGE_FIELDS:
+        m.pop(field, None)
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -171,6 +200,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             2. If message contains an image or audio, send as is (user-intended)
         """
         for message in messages:
+            _strip_unsupported_message_fields(message)
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue
