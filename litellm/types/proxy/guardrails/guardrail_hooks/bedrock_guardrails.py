@@ -19,6 +19,7 @@ class BedrockContentItem(TypedDict, total=False):
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
+    outputScope: Literal["INTERVENTIONS", "FULL"]
 
 
 class BedrockGuardrailUsage(TypedDict, total=False):

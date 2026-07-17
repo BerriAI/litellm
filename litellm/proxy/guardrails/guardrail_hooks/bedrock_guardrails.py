@@ -82,6 +82,11 @@ from litellm.types.utils import (
 
 GUARDRAIL_NAME = "bedrock"
 _BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
+# ApplyGuardrail `outputScope` controls how much of the assessed content AWS
+# returns: "INTERVENTIONS" (default) only returns intervened content; "FULL"
+# returns the entire output including detected and non-detected entries, which
+# is what admins need to observe why a guardrail did or did not fire.
+_BEDROCK_OUTPUT_SCOPE_VALUES = frozenset({"INTERVENTIONS", "FULL"})
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH = "/guardrail-checks/invoke"
 # InvokeGuardrailChecks accepts at most 10 content blocks per message. A message with
@@ -179,6 +184,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
+        outputScope: Optional[Literal["INTERVENTIONS", "FULL"]] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -195,6 +201,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.content_filter_threshold = content_filter_threshold
         self.prompt_attack_threshold = prompt_attack_threshold
         self.pii_confidence_threshold = pii_confidence_threshold
+
+        # ApplyGuardrail `outputScope`. None leaves it unset so AWS applies its
+        # default ("INTERVENTIONS"); "FULL" returns the full assessment detail
+        # (detected and non-detected entries) needed for observability.
+        if outputScope is not None and outputScope not in _BEDROCK_OUTPUT_SCOPE_VALUES:
+            raise ValueError(
+                f"BedrockGuardrail: outputScope must be one of {sorted(_BEDROCK_OUTPUT_SCOPE_VALUES)} "
+                f"or omitted; got {outputScope!r}."
+            )
+        self.output_scope: Optional[Literal["INTERVENTIONS", "FULL"]] = outputScope
 
         # store kwargs as optional_params
         self.optional_params = kwargs
@@ -765,6 +781,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
+        if self.output_scope is not None:
+            bedrock_request_data["outputScope"] = self.output_scope
         bedrock_guardrail_response: BedrockGuardrailResponse = BedrockGuardrailResponse()
         api_key: Optional[str] = None
         if request_data:
